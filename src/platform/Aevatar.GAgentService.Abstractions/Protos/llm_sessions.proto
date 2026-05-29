@@ -435,6 +435,7 @@ message ChatRunSubRunTerminalObserved {
   string service_id = 5;
   string endpoint_id = 6;
   google.protobuf.Timestamp observed_at = 7;
+  bool completion_observed = 8;
 }
 
 message ChatRunSubRunTerminalFoldedEvent {
@@ -444,6 +445,11 @@ message ChatRunSubRunTerminalFoldedEvent {
   string result_json = 4;
   int32 llm_round = 5;
   google.protobuf.Timestamp observed_at = 6;
+  string status = 7;
+  string actor_id = 8;
+  string service_id = 9;
+  string endpoint_id = 10;
+  bool completion_observed = 11;
 }
 
 message ChatRunToolResultReady {
@@ -453,6 +459,11 @@ message ChatRunToolResultReady {
   string tool_name = 4;
   string result_json = 5;
   int32 llm_round = 6;
+  string status = 7;
+  string actor_id = 8;
+  string service_id = 9;
+  string endpoint_id = 10;
+  bool completion_observed = 11;
 }
 
 message TerminateChatRunRequested {

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions.Responses;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -67,7 +68,7 @@ public sealed class QueryReadModelToolSource : IAgentToolSource
         Task.FromResult<IReadOnlyList<IAgentTool>>([new QueryReadModelTool(_dispatcher)]);
 }
 
-internal sealed class InvokeGAgentTool : IAevatarInvocationTool
+internal sealed class InvokeGAgentTool : IAevatarInvocationChatRunTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -85,9 +86,15 @@ internal sealed class InvokeGAgentTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeGAgentAsync(argumentsJson, ct);
+
+    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct = default) =>
+        _dispatcher.InvokeGAgentForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
-internal sealed class InvokeTeamTool : IAevatarInvocationTool
+internal sealed class InvokeTeamTool : IAevatarInvocationChatRunTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -105,9 +112,15 @@ internal sealed class InvokeTeamTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeTeamAsync(argumentsJson, ct);
+
+    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct = default) =>
+        _dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
-internal sealed class StartWorkflowTool : IAevatarInvocationTool
+internal sealed class StartWorkflowTool : IAevatarInvocationChatRunTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -126,6 +139,12 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.StartWorkflowAsync(argumentsJson, ct);
+
+    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct = default) =>
+        _dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
 internal sealed class ObserveRunTool : IAevatarInvocationTool

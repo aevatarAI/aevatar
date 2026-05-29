@@ -30,20 +30,23 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             BuildRequest(),
             toolCall,
             toolCall.ArgumentsJson,
-            (_, _) => Task.FromResult("""
-                {
-                  "run_id": "team-command",
-                  "status": "RunFinished",
-                  "result": {
-                    "completion_status": "RunFinished",
-                    "completion_observed": true,
-                    "events": [{ "type": "run_finished" }]
-                  },
-                  "service_id": "service-1",
-                  "endpoint_id": "entry",
-                  "wait": "complete"
-                }
-                """),
+            (request, _) => Task.FromResult(request with
+            {
+                ToolExecutionResultJson = """{"opaque":"llm-facing"}""",
+                RunId = "team-command",
+                Status = "RunFinished",
+                CompletionResultJson = """
+                    {
+                      "completion_status": "RunFinished",
+                      "completion_observed": true,
+                      "events": [{ "type": "run_finished" }]
+                    }
+                    """,
+                ServiceId = "service-1",
+                EndpointId = "entry",
+                WaitMode = ChatRunSubRunWaitMode.Complete,
+                CompletionObserved = true,
+            }),
             llmRound: 1);
 
         using var resultDocument = System.Text.Json.JsonDocument.Parse(result);
@@ -80,15 +83,15 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             BuildRequest(),
             toolCall,
             toolCall.ArgumentsJson,
-            (_, _) => Task.FromResult("""
-                {
-                  "run_id": "wf-command",
-                  "status": "streaming",
-                  "stream_topic": "aevatar://actors/workflow-actor/runs/wf-command",
-                  "actor_id": "workflow-actor",
-                  "wait": "complete"
-                }
-                """),
+            (request, _) => Task.FromResult(request with
+            {
+                ToolExecutionResultJson = """{"opaque":"workflow-dispatch"}""",
+                RunId = "wf-command",
+                Status = "streaming",
+                StreamTopic = "aevatar://actors/workflow-actor/runs/wf-command",
+                ActorId = "workflow-actor",
+                WaitMode = ChatRunSubRunWaitMode.Complete,
+            }),
             llmRound: 1);
 
         result.Should().Contain("completion_not_observed");
@@ -128,15 +131,15 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             BuildRequest(),
             toolCall,
             toolCall.ArgumentsJson,
-            (_, _) => Task.FromResult("""
-                {
-                  "run_id": "call_gagent_name",
-                  "status": "streaming",
-                  "stream_topic": "aevatar://actors/actor-from-name/runs/call_gagent_name",
-                  "actor_id": "actor-from-name",
-                  "wait": "complete"
-                }
-                """),
+            (request, _) => Task.FromResult(request with
+            {
+                ToolExecutionResultJson = """{"opaque":"gagent-dispatch"}""",
+                RunId = "call_gagent_name",
+                Status = "streaming",
+                StreamTopic = "aevatar://actors/actor-from-name/runs/call_gagent_name",
+                ActorId = "actor-from-name",
+                WaitMode = ChatRunSubRunWaitMode.Complete,
+            }),
             llmRound: 1);
 
         result.Should().Contain("resolved actor completed");
@@ -144,7 +147,8 @@ public sealed class ChatRunToolCompletionCoordinatorTests
         harness.TerminalQuery.LastCorrelationId.Should().Be("call_gagent_name");
         harness.ChatRunPort.ObservationRequests.Should().HaveCount(2);
         harness.ChatRunPort.ObservationRequests[0].ToolExecutionResultJson.Should().BeEmpty();
-        harness.ChatRunPort.ObservationRequests[1].ToolExecutionResultJson.Should().Contain("actor-from-name");
+        harness.ChatRunPort.ObservationRequests[1].ToolExecutionResultJson.Should().Be("""{"opaque":"gagent-dispatch"}""");
+        harness.ChatRunPort.ObservationRequests[1].ActorId.Should().Be("actor-from-name");
         harness.ChatRunPort.ObservedTerminals.Should().ContainSingle().Which.ActorId.Should().Be("actor-from-name");
     }
 
@@ -229,6 +233,11 @@ public sealed class ChatRunToolCompletionCoordinatorTests
                     ToolName = request.ToolCall.Name,
                     ResultJson = observed.ResultJson,
                     LlmRound = request.LlmRound,
+                    Status = observed.Status,
+                    ActorId = observed.ActorId,
+                    ServiceId = observed.ServiceId,
+                    EndpointId = observed.EndpointId,
+                    CompletionObserved = observed.CompletionObserved,
                 });
         }
 

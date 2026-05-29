@@ -9,6 +9,7 @@ public sealed record ChatRunStartRequest(
     IReadOnlyList<ChatMessage> Messages,
     TimeSpan? IdleTtl = null);
 
+// Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
 public sealed record ChatRunToolCompletionRequest(
     string ResponseId,
     string? ModelName,
@@ -16,7 +17,26 @@ public sealed record ChatRunToolCompletionRequest(
     ToolCall ToolCall,
     string ArgumentsJson,
     string ToolExecutionResultJson,
-    int LlmRound);
+    int LlmRound,
+    string RunId = "",
+    string StreamTopic = "",
+    string ActorId = "",
+    string ServiceId = "",
+    string EndpointId = "",
+    string ScopeId = "",
+    ChatRunSubRunWaitMode WaitMode = ChatRunSubRunWaitMode.Unspecified,
+    string Status = "",
+    string CompletionResultJson = "",
+    bool CompletionObserved = false,
+    string ErrorCode = "");
+
+// Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+public interface IChatRunToolCompletionControlExecutor
+{
+    Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct = default);
+}
 
 public sealed record ChatRunToolCompletionResult(
     string ActorId,

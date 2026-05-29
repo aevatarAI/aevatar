@@ -293,18 +293,28 @@ public sealed class ChatRunActorTests
                     ArgumentsJson = """{"actor_id":"actor-1","wait":"complete"}""",
                 },
                 """{"actor_id":"actor-1","wait":"complete"}""",
-                """{"run_id":"run_publish","actor_id":"actor-1","stream_topic":"aevatar://actors/actor-1/runs/run_publish","wait":"complete"}""",
-                1));
+                """{"opaque":"tool-output"}""",
+                1,
+                RunId: "run_publish",
+                StreamTopic: "aevatar://actors/actor-1/runs/run_publish",
+                ActorId: "actor-1",
+                WaitMode: ChatRunSubRunWaitMode.Complete));
         await port.ObserveSubRunTerminalAsync(actorId, new ChatRunSubRunTerminalObserved
         {
             RunId = "run_publish",
+            Status = "RunFinished",
             ResultJson = """{"run_id":"run_publish","content":"published"}""",
+            ActorId = "actor-1",
+            CompletionObserved = true,
         });
 
         var published = await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
         published.RunId.Should().Be("run_publish");
         published.CallerToolCallId.Should().Be("call_publish");
         published.ResultJson.Should().Contain("published");
+        published.Status.Should().Be("RunFinished");
+        published.ActorId.Should().Be("actor-1");
+        published.CompletionObserved.Should().BeTrue();
 
         var actor = await runtime.GetAsync(actorId);
         ((ChatRunActor)actor!.Agent).State.ActiveSubRunSubscriptions.Should().BeEmpty();
