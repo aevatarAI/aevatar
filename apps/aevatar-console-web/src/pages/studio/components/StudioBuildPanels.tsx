@@ -1006,7 +1006,12 @@ export type StudioWorkflowBuildPanelProps = {
   readonly workflowName: string;
   readonly runPrompt: string;
   readonly onRunPromptChange: (value: string) => void;
-  readonly buildWorkflowYamls: () => Promise<string[]>;
+  readonly buildWorkflowYamls: (
+    draft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ) => Promise<string[]>;
   readonly runMetadata?: Record<string, string>;
   readonly dryRunRouteLabel?: string;
   readonly dryRunModelLabel?: string;
@@ -1232,6 +1237,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       return;
     }
 
+    const currentStepDraft = stepDraftRef.current;
+
     if (!scopeId) {
       const visibleMessage = 'Resolve the current workspace before running the workflow draft.';
       setWorkflowRunError(visibleMessage);
@@ -1269,7 +1276,16 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         {
           metadata: runMetadata,
           prompt: runPrompt,
-          workflowYamls: await buildWorkflowYamls(),
+          workflowYamls: await buildWorkflowYamls(
+            currentStepDraft &&
+              selectedStepDraftSeed &&
+              !areStepInspectorDraftsEqual(currentStepDraft, selectedStepDraftSeed)
+              ? {
+                  stepId: selectedStepId,
+                  draft: currentStepDraft,
+                }
+              : null,
+          ),
         },
         controller.signal,
       );
@@ -1315,6 +1331,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     runMetadata,
     runPrompt,
     scopeId,
+    selectedStepDraftSeed,
+    selectedStepId,
   ]);
 
   const handleInsertStep = React.useCallback(async (stepType: string) => {

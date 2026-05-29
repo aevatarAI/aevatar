@@ -7008,6 +7008,40 @@ describe("StudioPage", () => {
     ).toHaveValue("Continue this workflow in Studio");
   });
 
+  it("runs workflow dry-run with pending step prompt edits", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByText("DAG Canvas")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockLastWorkflowBuildPanelProps?.buildWorkflowYamls).toEqual(
+        expect.any(Function)
+      );
+    });
+
+    const workflowYamls = await mockLastWorkflowBuildPanelProps.buildWorkflowYamls({
+      stepId: "draft_step",
+      draft: {
+        kind: "step",
+        id: "draft_step",
+        type: "llm_call",
+        targetRole: "assistant",
+        next: "approve_step",
+        parametersText: JSON.stringify(
+          {
+            prompt_prefix: "Translate the input to English.",
+          },
+          null,
+          2
+        ),
+        branchesText: "{}",
+      },
+    });
+
+    expect(workflowYamls).toEqual([
+      expect.stringContaining("prompt_prefix: Translate the input to English."),
+    ]);
+  });
+
   it("shows the published template graph in the Studio editor", async () => {
     renderStudioPage("/studio?focus=template%3Apublished-demo&tab=workflows");
 

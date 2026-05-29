@@ -69,6 +69,15 @@ type AppliedStepDraft = {
   readonly parametersText: string;
 };
 
+type BuildWorkflowYamlsForTest = (
+  draft?: {
+    readonly stepId: string;
+    readonly draft: {
+      readonly parametersText: string;
+    };
+  } | null,
+) => Promise<string[]>;
+
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
     streamDraftRun: jest.fn(),
@@ -257,12 +266,14 @@ function buildWorkflowYaml(document: WorkflowBuildHarnessDocument): string {
 }
 
 function WorkflowBuildHarness({
+  buildWorkflowYamlsOverride,
   initialDocumentOverride,
   onApplyStepDraftOverride,
   onContinueToBind,
   onSaveDraft,
   runtimePrimitivesOverride,
 }: {
+  readonly buildWorkflowYamlsOverride?: BuildWorkflowYamlsForTest;
   readonly initialDocumentOverride?: WorkflowBuildHarnessDocument;
   readonly onApplyStepDraftOverride?: (draft: any) => Promise<void>;
   readonly onContinueToBind: jest.Mock;
@@ -303,7 +314,7 @@ function WorkflowBuildHarness({
   return (
     <StudioWorkflowBuildPanel
       availableStepTypes={['llm_call', 'human_approval', 'connector_call']}
-      buildWorkflowYamls={async () => [draftYaml]}
+      buildWorkflowYamls={buildWorkflowYamlsOverride ?? (async () => [draftYaml])}
       canSaveWorkflow
       draftYaml={draftYaml}
       dryRunModelLabel="gpt-5.4-mini"
@@ -1300,6 +1311,43 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(pendingDraft.stepId).toBe('draft_step');
     expect(JSON.parse(pendingDraft.draft.parametersText)).toEqual({
       prompt_prefix: 'Classify the refund request before answering.',
+    });
+  });
+
+  it('passes unsaved llm_call prompt edits to workflow dry-run YAMLs', async () => {
+    const buildWorkflowYamls = jest.fn<
+      Promise<string[]>,
+      Parameters<BuildWorkflowYamlsForTest>
+    >(async () => ['name: workflow-demo']);
+
+    render(
+      <WorkflowBuildHarness
+        buildWorkflowYamlsOverride={buildWorkflowYamls}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    const promptPrefixInput = await screen.findByLabelText(
+      'Parameter Prompt instruction',
+    );
+    fireEvent.change(promptPrefixInput, {
+      target: {
+        value: 'Translate the input to English.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    await waitFor(() => {
+      expect(buildWorkflowYamls).toHaveBeenCalledTimes(1);
+    });
+    const pendingDraft = buildWorkflowYamls.mock.calls.at(0)?.[0];
+    if (!pendingDraft) {
+      throw new Error('Expected Run to pass the pending step draft.');
+    }
+    expect(pendingDraft.stepId).toBe('draft_step');
+    expect(JSON.parse(pendingDraft.draft.parametersText)).toEqual({
+      prompt_prefix: 'Translate the input to English.',
     });
   });
 

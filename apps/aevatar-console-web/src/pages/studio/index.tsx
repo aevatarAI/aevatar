@@ -4310,8 +4310,57 @@ const StudioPage: React.FC = () => {
     [availableStepTypes],
   );
 
-  const buildWorkflowYamlBundle = useCallback(async (): Promise<string[]> => {
-    const rootYaml = draftYaml.trim();
+  const buildWorkflowYamlBundle = useCallback(async (
+    pendingStepDraft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ): Promise<string[]> => {
+    let rootYaml = draftYaml.trim();
+    let rootDocument: StudioWorkflowDocument | null | undefined =
+      activeWorkflowDocument;
+
+    if (pendingStepDraft) {
+      const currentStepId = pendingStepDraft.stepId.trim();
+      if (!currentStepId) {
+        throw new Error('Select a workflow step before running its draft changes.');
+      }
+
+      const document =
+        cloneStudioWorkflowDocument(
+          activeWorkflowDocument ||
+            parsedWorkflowDocument ||
+            activeWorkflowFile?.document ||
+            null,
+        ) ||
+        cloneStudioWorkflowDocument(
+          (
+            await studioApi.parseYaml({
+              yaml: rootYaml,
+              availableWorkflowNames: workflowNames,
+              availableStepTypes,
+            })
+          ).document as StudioWorkflowDocument | null,
+        );
+      if (!document) {
+        throw new Error('Load a workflow draft before running its draft changes.');
+      }
+
+      const result = applyStepInspectorDraft(
+        document,
+        currentStepId,
+        pendingStepDraft.draft,
+      );
+      const serialized = await studioApi.serializeYaml({
+        document: result.document,
+        availableWorkflowNames: workflowNames,
+        availableStepTypes,
+      });
+
+      rootYaml = serialized.yaml.trim();
+      rootDocument = serialized.document;
+    }
+
     if (!rootYaml) {
       throw new Error('Workflow YAML is required.');
     }
@@ -4331,7 +4380,7 @@ const StudioPage: React.FC = () => {
       {
         workflowName: activeWorkflowName.trim() || draftWorkflowName.trim(),
         yaml: rootYaml,
-        document: activeWorkflowDocument,
+        document: rootDocument,
       },
     ];
 
@@ -4394,13 +4443,16 @@ const StudioPage: React.FC = () => {
     return bundle;
   }, [
     activeWorkflowDocument,
+    activeWorkflowFile?.document,
     activeWorkflowName,
     availableStepTypes,
     draftWorkflowName,
     draftYaml,
     normalizeWorkflowYamlForRuntime,
+    parsedWorkflowDocument,
     resolvedStudioScopeId,
     visibleWorkflowSummaries,
+    workflowNames,
   ]);
   const recentPromptHistory = useMemo(
     () => promptHistory.slice(0, 3),
