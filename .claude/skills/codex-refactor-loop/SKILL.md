@@ -2485,10 +2485,17 @@ Bash(
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
 8. **All user-facing output is in 中文 by default** (per Auric 2026-05-19 "默认工作语言中文吧, 不双语了"). Every GitHub issue body, PR description, design notification, and any natural-language artifact uses 中文 as the working language. Code identifiers, file paths, log markers, CLI commands, and proto/yaml structure stay original (English). English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
-9. **gh pr merge 前应优先 CI 全 required check 绿,但 auto-refact-dev 已无 branch protection**(per Auric 2026-05-30 "auto-refact-dev 分支可以不 push 保护")。2026-05-25 一度加了 8 required check + `enforce_admins=true`,2026-05-30 删除以便 skill/daemon 直 push + 紧急 hotfix 不被拦。当前规则:
-    - controller 默认仍 verify `gh pr checks <PR> --required --json bucket --jq 'all(.[]; .bucket == "pass")'` == `true` 再 merge cluster PR
-    - skill / daemon / hotfix commit 可直 push 到 `auto-refact-dev`(无 protection)
-    - 事故记录(2026-05-25):11 个 cluster PR 在 reviewer 3/3 approve 后 squash merge,没等 GitHub Actions CI → trunk 5 个 integration test 挂(hotfix `ef7962d` 修)。**今后 controller 仍应等 CI 而非直 merge cluster PR**;只有 skill / daemon / hotfix 路径允许直 push。
+9. **gh pr merge 前 verify CI green(无 required check 后改用 fail==0 + pending==0 判定)**(per Auric 2026-05-30 "auto-refact-dev 分支可以不 push 保护")。auto-refact-dev branch protection 已删,`--required` 查询返回 `no required checks reported`,`mergeStateStatus=UNKNOWN`。**新 CI verify 方法**:
+    ```bash
+    fail=$(gh pr checks $PR --json bucket --jq '[.[]|select(.bucket=="fail")]|length')
+    pending=$(gh pr checks $PR --json bucket --jq '[.[]|select(.bucket=="pending")]|length')
+    pass=$(gh pr checks $PR --json bucket --jq '[.[]|select(.bucket=="pass")]|length')
+    [ "$fail" -eq 0 ] && [ "$pending" -eq 0 ] && [ "$pass" -gt 0 ] && echo OK || echo WAIT
+    ```
+    - 仍**等 CI 完成**(fail=0 + pending=0 + pass>0)才 merge cluster PR(防 2026-05-25 trunk break)
+    - skill / daemon / hotfix commit 可直 push 到 `auto-refact-dev`(无 protection 拦)
+    - **禁用** `gh pr checks <PR> --required ...`(已无 required check)
+    - 事故记录(2026-05-25):11 个 cluster PR 在 reviewer 3/3 approve 后 squash merge,没等 GitHub Actions CI → trunk 5 个 integration test 挂(hotfix `ef7962d` 修)。今后 controller 必须 verify fail==0 + pending==0 + pass>0 再 merge。
 
 10. **本地必须跑 full slnx test verify 后才出 DONE marker**(强制,per Auric 2026-05-27 "一次次反复修不好的原因是什么?为什么不本地一次修好?非要让 ci 发现问题?"). **CI 是 fault detector,不是 fix-loop driver**。所有 `sync` / `fix` / `implement` / `test-add` codex 在打 DONE marker 之前**必须**跑 full slnx test:
     ```bash
