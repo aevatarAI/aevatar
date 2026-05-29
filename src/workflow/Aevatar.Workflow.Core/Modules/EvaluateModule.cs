@@ -31,7 +31,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var p = envelope.Payload;
-        // Refactor (issue1247-first): Old: live TextMessageEndEvent/ChatResponseEvent frames completed evaluate steps. New: only committed WorkflowRoleReplyRecordedEvent completes pending evaluate steps.
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames completed evaluate steps.
+        //   New principle: only committed WorkflowRoleReplyRecordedEvent completes pending evaluate steps.
         return p != null &&
                (p.Is(StepRequestEvent.Descriptor) ||
                 p.Is(WorkflowRoleReplyRecordedEvent.Descriptor));

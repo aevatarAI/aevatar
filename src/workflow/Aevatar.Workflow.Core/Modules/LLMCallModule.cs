@@ -41,7 +41,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
-        // Refactor (issue1247-first): Old: live TextMessageEndEvent/ChatResponseEvent frames completed workflow steps. New: only committed WorkflowRoleReplyRecordedEvent can complete pending LLM steps.
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames completed workflow steps.
+        //   New principle: only committed WorkflowRoleReplyRecordedEvent can complete pending LLM steps.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
                 payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor) ||
