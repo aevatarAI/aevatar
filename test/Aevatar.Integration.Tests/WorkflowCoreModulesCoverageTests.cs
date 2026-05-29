@@ -1070,7 +1070,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_RoleReplyRecorded_ShouldCompleteMatchingPendingStep()
+    public async Task LLMCallModule_LiveFramesShouldNotCompleteAndRoleReplyShouldCompleteMatchingPendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1088,6 +1088,17 @@ public sealed class WorkflowCoreModulesCoverageTests
         ctx.Published.Clear();
 
         var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text", attempt: 1);
+        await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = textSessionId,
+                Content = "a1",
+            }, publisherId: "role-worker-1"),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
         await module.HandleAsync(
             Envelope(new WorkflowRoleReplyRecordedEvent
             {
@@ -1119,23 +1130,33 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat", attempt: 1);
         await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = chatSessionId,
+                Content = "a2",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
             Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = chatSessionId,
                 Content = "a2",
-                RoleActorId = "role-worker-2",
             }),
             ctx,
             CancellationToken.None);
 
         var chatCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         chatCompleted.StepId.Should().Be("llm-chat");
-        chatCompleted.WorkerId.Should().Be("role-worker-2");
+        chatCompleted.WorkerId.Should().Be("test-publisher");
         chatCompleted.Output.Should().Be("a2");
     }
 
     [Fact]
-    public async Task LLMCallModule_WhenRolePublishesInternalFailureMarker_ShouldPublishFailedStepCompleted()
+    public async Task LLMCallModule_WhenCommittedRoleReplyHasInternalFailureMarker_ShouldPublishFailedStepCompleted()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();

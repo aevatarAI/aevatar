@@ -26,14 +26,47 @@ public static class StreamForwardingRules
         };
     }
 
+    public static StreamForwardingBinding CreateCommittedFactsObserverBinding(
+        string sourceStreamId,
+        string targetStreamId,
+        StreamForwardingMode forwardingMode = StreamForwardingMode.HandleThenForward)
+    {
+        // Refactor (issue1271/first-slice): Old pattern: committed facts could stop at the child stream.
+        // New principle: committed observer publications must follow the same runtime forwarding contract.
+        // This binding lets parent observers receive child committed facts without introducing a second
+        // projection path or a process-local actor/session registry.
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
+
+        return new StreamForwardingBinding
+        {
+            SourceStreamId = sourceStreamId,
+            TargetStreamId = targetStreamId,
+            ForwardingMode = forwardingMode,
+            DirectionFilter =
+            [
+                TopologyAudience.Unspecified,
+            ],
+        };
+    }
+
     public static bool Matches(StreamForwardingBinding binding, EventEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var direction = envelope.Route.GetTopologyAudience();
+        var isObserverPublication = envelope.Route.IsObserverPublication();
+        var direction = isObserverPublication
+            ? TopologyAudience.Unspecified
+            : envelope.Route.GetTopologyAudience();
         if (binding.DirectionFilter.Count > 0 && !binding.DirectionFilter.Contains(direction))
             return false;
+
+        if (isObserverPublication &&
+            envelope.Route.GetObserverAudience() != ObserverAudience.CommittedFacts)
+        {
+            return false;
+        }
 
         if (binding.EventTypeFilter.Count == 0)
             return true;

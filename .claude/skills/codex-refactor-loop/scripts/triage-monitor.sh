@@ -48,8 +48,9 @@ while true; do
       jq --arg n "$issue" --arg ts "$ts" '. + {($n): $ts}' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
       # Materialize triage codex prompt(每 issue 一份)
       prompt_file="$REPO_ROOT/.refactor-loop/prompts/triage-issue-${issue}.md"
-      sed "s/#560/#${issue}/g; s/issue 560/issue ${issue}/g; s/Author: loning/Author: ${author}/g" \
-          "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" \
+      # Refactor (#1172): envsubst first so ${ISSUE_NUMBER}/${AUTHOR} placeholders don't fail spawn-codex placeholder guard
+      ISSUE_NUMBER="$issue" AUTHOR="$author" envsubst < "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" \
+          | sed "s/#560/#${issue}/g; s/issue 560/issue ${issue}/g; s/Author: loning/Author: ${author}/g" \
           > "$prompt_file" 2>/dev/null || cp "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" "$prompt_file"
       # Spawn triage codex(nohup disown — daemon 自己派,不需 harness 跟踪;codex 自己 update GitHub)
       log_file="$REPO_ROOT/.refactor-loop/logs/triage-issue-${issue}.log"

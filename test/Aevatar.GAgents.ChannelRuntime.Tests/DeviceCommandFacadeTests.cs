@@ -143,6 +143,7 @@ public sealed class DeviceCommandFacadeTests
         capturedEnvelope!.Id.Should().Be("cmd-1");
         var inbound = capturedEnvelope.Payload.Unpack<DeviceInbound>();
         inbound.EventId.Should().Be("evt-3");
+        capturedEnvelope.Payload.TypeUrl.Should().EndWith("/aevatar.gagents.household.DeviceInbound");
         DeviceInbound.Descriptor.FullName.Should().Be("aevatar.gagents.household.DeviceInbound");
         await actorRuntime.DidNotReceiveWithAnyArgs().CreateAsync(default!, default, default);
         await dispatchPort.Received(1).DispatchAsync(

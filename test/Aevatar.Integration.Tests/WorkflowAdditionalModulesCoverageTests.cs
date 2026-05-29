@@ -1017,6 +1017,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             }),
             ctx,
             CancellationToken.None);
+        await llmCall.HandleAsync(
+            Envelope(new WorkflowRoleReplyRecordedEvent
+            {
+                SessionId = llmSessionId,
+                Content = sensitiveLlmOutput,
+                RoleActorId = $"{ctx.AgentId}:worker_a",
+            }),
+            ctx,
+            CancellationToken.None);
 
         var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
         messages.Should().Contain(message =>
@@ -1102,6 +1111,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             {
                 SessionId = sessionId,
                 Content = sensitiveLlmOutput,
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new WorkflowRoleReplyRecordedEvent
+            {
+                SessionId = sessionId,
+                Content = sensitiveLlmOutput,
+                RoleActorId = $"{ctx.AgentId}:worker_a",
             }),
             ctx,
             CancellationToken.None);
@@ -1906,6 +1924,17 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = firstSessionId,
+                Content = "score: 3.5",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
             Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = firstSessionId,
@@ -1934,6 +1963,17 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
         var secondSessionId = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
         ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = secondSessionId,
+                Content = "5",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
 
         await module.HandleAsync(
             Envelope(new WorkflowRoleReplyRecordedEvent
@@ -2133,10 +2173,21 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await evaluate.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = evaluateChat.SessionId,
+                Content = "3",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await evaluate.HandleAsync(
             Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = evaluateChat.SessionId,
                 Content = "3",
+                RoleActorId = $"{ctx.AgentId}:judge",
             }),
             ctx,
             CancellationToken.None);
@@ -2165,10 +2216,21 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await reflect.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = reflectChat.SessionId,
+                Content = "PASS",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await reflect.HandleAsync(
             Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = reflectChat.SessionId,
                 Content = "PASS",
+                RoleActorId = $"{ctx.AgentId}:reviewer",
             }),
             ctx,
             CancellationToken.None);
@@ -2195,6 +2257,17 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
         var firstCritiqueSession = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
         ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = firstCritiqueSession,
+                Content = "PASS",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
 
         await module.HandleAsync(
             Envelope(new WorkflowRoleReplyRecordedEvent
@@ -2236,6 +2309,16 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
         var improveSession = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
         ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = improveSession,
+                Content = "draft-2-better",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Should().BeEmpty();
 
         await module.HandleAsync(
             Envelope(new WorkflowRoleReplyRecordedEvent

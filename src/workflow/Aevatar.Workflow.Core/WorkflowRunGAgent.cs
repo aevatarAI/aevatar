@@ -543,21 +543,28 @@ public sealed class WorkflowRunGAgent
 
         await PersistDomainEventAsync(artifactFact, CancellationToken.None);
 
-        if (artifactFact is not WorkflowRoleReplyRecordedEvent)
+        if (artifactFact is not WorkflowRoleReplyRecordedEvent roleReply)
             return;
 
-        // Refactor (iter170/cluster-1247-first):
-        //   Old pattern: live role frames were the module completion fallback; the actor re-entered itself with direct HandleEventAsync.
-        //   New principle: committed role reply facts are admitted through the runtime-neutral dispatch port before the module pipeline consumes them.
-        await _dispatchPort.DispatchAsync(Id, new EventEnvelope
+        await DispatchCommittedRoleReplyArtifactAsync(roleReply, envelope);
+    }
+
+    // Refactor (issue1271/first-slice):
+    //   Old pattern: LLM-like modules completed steps from live TextMessageEndEvent / ChatResponseEvent frames.
+    //   New principle: child role committed facts are first persisted as WorkflowRoleReplyRecordedEvent.
+    //   The same fact is then fed through the existing workflow module bridge for SessionId reconciliation.
+    // Refactor (iter170/cluster-1247-first):
+    //   Old pattern: the actor re-entered itself with inline handling/publish fallback.
+    //   New principle: committed role reply facts are admitted through the runtime-neutral dispatch port before the module pipeline consumes them.
+    private Task DispatchCommittedRoleReplyArtifactAsync(WorkflowRoleReplyRecordedEvent roleReply, EventEnvelope sourceEnvelope) =>
+        _dispatchPort.DispatchAsync(Id, new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(artifactFact),
+            Payload = Any.Pack(roleReply),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
-            Propagation = envelope.Propagation?.Clone(),
+            Propagation = sourceEnvelope.Propagation?.Clone(),
         }, CancellationToken.None);
-    }
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
     {

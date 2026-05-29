@@ -20,7 +20,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
     private static readonly string ActorId = ResponseAgentToolStateIds.BuildActorId(ScopeId, OwnerSubject);
 
     [Fact]
-    public async Task ProjectAsync_ShouldMaterializeTodoTaskWebState_AndQueryCache()
+    public async Task ProjectAsync_ShouldMaterializeTodoWebState_AndQueryCache()
     {
         var store = new RecordingDocumentStore<ResponsesAgentToolStateCurrentStateReadModel>(x => x.Id);
         var projector = new ResponsesAgentToolStateCurrentStateProjector(
@@ -40,16 +40,12 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         var doc = await store.GetAsync(ActorId);
         doc.Should().NotBeNull();
         doc!.Todos.Should().ContainSingle(x => x.Id == "todo-1");
-        doc.Tasks.Should().ContainSingle(x => x.TaskId == "task_1");
         doc.WebTraces.Should().ContainSingle(x => x.TraceId == "trace-1");
         doc.WebCacheEntries.Should().ContainSingle(x => x.CacheKey == "cache-1");
 
         var snapshot = await reader.GetAsync(ScopeId, OwnerSubject);
         snapshot.Should().NotBeNull();
         snapshot!.Todos.Should().ContainSingle(x => x.Content == "Ship");
-        snapshot.Tasks.Should().ContainSingle(x => x.ChildActorId == "child-1");
-        snapshot.Tasks[0].ArgumentsJson.Should().Be("{}");
-        snapshot.Tasks[0].ResultJson.Should().Be("""{"status":"accepted"}""");
         snapshot.WebTraces.Should().ContainSingle(x => x.TraceId == "trace-1");
         snapshot.WebTraces[0].Result.Fetch.Content.Should().Be("fresh");
 
@@ -81,7 +77,6 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
 
         persisted.Should().NotBeNull();
         persisted!.Todos[0].Content = "Store changed";
-        persisted.Tasks[0].ChildActorId = "child-2";
         persisted.WebCacheEntries[0].HitCount = 9;
 
         var second = await new ResponsesAgentToolStateQueryReader(store).GetAsync(ScopeId, OwnerSubject);
@@ -89,13 +84,11 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         first.Should().NotBeNull();
         second.Should().NotBeNull();
         first!.Todos.Should().ContainSingle(x => x.Content == "Ship");
-        first.Tasks.Should().ContainSingle(x => x.ChildActorId == "child-1");
         first.WebCacheEntries.Should().ContainSingle(x => x.HitCount == 0);
         second.Should().NotBeSameAs(first);
         second!.ActorId.Should().Be(ActorId);
         second.StateVersion.Should().Be(4);
         second.Todos.Should().ContainSingle(x => x.Id == "todo-1" && x.Content == "Store changed");
-        second.Tasks.Should().ContainSingle(x => x.TaskId == "task_1" && x.ChildActorId == "child-2");
         second.WebCacheEntries.Should().ContainSingle(x => x.CacheKey == "cache-1" && x.HitCount == 9);
     }
 
@@ -179,18 +172,6 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             Content = "Ship",
             Status = "pending",
             SourceResponseId = "resp_1",
-            CreatedAt = Timestamp.FromDateTimeOffset(observedAt),
-            UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
-        });
-        state.TaskTraces.Add(new ResponsesTaskTrace
-        {
-            TaskId = "task_1",
-            SourceResponseId = "resp_1",
-            ChildActorId = "child-1",
-            Description = "summarize",
-            Status = ResponsesAgentToolTaskStatus.Accepted,
-            Arguments = ResponsesJsonValues.ParseBoundaryPayload("{}"),
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"status":"accepted"}"""),
             CreatedAt = Timestamp.FromDateTimeOffset(observedAt),
             UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
         });

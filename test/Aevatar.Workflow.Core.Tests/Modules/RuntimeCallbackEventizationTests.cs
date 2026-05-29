@@ -763,6 +763,7 @@ public class RuntimeCallbackEventizationTests
         {
             SessionId = chatRequest.SessionId,
             Content = "ok",
+            RoleActorId = "role-worker",
         });
 
         await FluentActions

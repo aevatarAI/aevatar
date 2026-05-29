@@ -184,6 +184,19 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
         _entity.State.LastReasoningTs.Should().Be(previousLastReasoningTs);
     }
 
+    [Fact]
+    public void HouseholdEntity_DeviceInboundHandler_ShouldConsumeTypedPayloadsOnly()
+    {
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../agents/Aevatar.GAgents.Household/HouseholdEntity.cs"));
+        var source = File.ReadAllText(sourcePath);
+
+        source.Should().NotContain("JsonDocument.Parse");
+        source.Should().NotContain("evt.PayloadJson");
+        source.Should().Contain("switch (evt.PayloadCase)");
+    }
+
     // ─── Test doubles ───
 
     private sealed class InMemoryEventStoreForHouseholdTests : IEventStore
