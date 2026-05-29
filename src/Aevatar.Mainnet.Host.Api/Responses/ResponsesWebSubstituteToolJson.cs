@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -29,27 +30,21 @@ internal static class ResponsesWebSubstituteToolJson
         };
     }
 
+    // Refactor (iter161-cluster-001 #1251-first):
+    //   Old pattern: shared Abstractions rendered Web result JSON before Host boundary handling.
+    //   New principle: Host owns final external JSON rendering from typed Web result branches.
     public static string ToBoundaryJson(ResponsesWebSubstituteToolExecutionResult result) =>
         result.ResultCase switch
         {
+            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedCached => ResponsesWebResultBoundaryJson.ToBoundaryJson(result.TypedCached),
+            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedError => ResponsesWebResultBoundaryJson.ToBoundaryJson(result.TypedError),
+            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedSearch => ResponsesWebResultBoundaryJson.ToBoundaryJson(result.TypedSearch),
             ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Cached => ToBoundaryJson(result.Cached),
             ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Error => ToBoundaryJson(result.Error),
-            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Fetch => ToBoundaryJson(result.Fetch),
+            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Fetch => ResponsesWebResultBoundaryJson.ToBoundaryJson(result.Fetch),
             ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Search => ToBoundaryJson(result.Search),
             _ => "{}",
         };
-
-    private static string ToBoundaryJson(ResponsesWebFetchToolOutput output)
-    {
-        var value = new Value { StructValue = new Struct() };
-        value.StructValue.Fields["url"] = Value.ForString(output.Url);
-        value.StructValue.Fields["status_code"] = Value.ForNumber(output.StatusCode);
-        value.StructValue.Fields["content_type"] = Value.ForString(output.ContentType);
-        value.StructValue.Fields["content"] = Value.ForString(output.Content);
-        if (!string.IsNullOrWhiteSpace(output.RedirectUrl))
-            value.StructValue.Fields["redirect_url"] = Value.ForString(output.RedirectUrl);
-        return ToBoundaryJson(value);
-    }
 
     private static string ToBoundaryJson(Value? value)
     {

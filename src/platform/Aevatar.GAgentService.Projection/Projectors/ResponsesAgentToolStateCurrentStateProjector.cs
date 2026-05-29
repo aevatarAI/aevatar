@@ -83,6 +83,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 Query = trace.Query,
                 CacheHit = trace.CacheHit,
                 Result = trace.Result?.Clone(),
+                TypedResult = trace.TypedResult?.Clone(),
                 ObservedAt = trace.ObservedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             }).ToList(),
             WebCacheEntries = state.WebCacheEntries.Select(static entry => new ResponsesWebCacheEntryReadModel
@@ -92,6 +93,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 Url = entry.Url,
                 Query = entry.Query,
                 Result = entry.Result?.Clone(),
+                TypedResult = entry.TypedResult?.Clone(),
                 CachedAt = entry.CachedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                 LastHitAt = entry.LastHitAt?.ToDateTimeOffset(),
                 HitCount = entry.HitCount,
