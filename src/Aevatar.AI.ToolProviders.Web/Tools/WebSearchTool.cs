@@ -1,8 +1,5 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.ToolProviders.Web.Tools;
 
@@ -63,12 +60,6 @@ public sealed class WebSearchTool : IAgentTool
 
         var maxResults = Math.Clamp(args.Int("max_results") ?? _options.MaxSearchResults, 1, 20);
         var result = await _client.SearchAsync(token, query, maxResults, ct);
-        return ToBoundaryJson(result);
-    }
-
-    private static string ToBoundaryJson(Value value)
-    {
-        using var document = JsonDocument.Parse(JsonFormatter.Default.Format(value));
-        return JsonSerializer.Serialize(document.RootElement);
+        return WebToolResultBoundaryJson.ToBoundaryJson(result);
     }
 }
