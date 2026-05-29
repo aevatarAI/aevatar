@@ -352,6 +352,25 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     [Fact]
+    public void RetiredActorCleanupHostedService_ShouldNotReintroduceEventStoreMarkerLeaseOrPolling()
+    {
+        // Refactor (issue1287-first):
+        //   Old pattern: hosted cleanup used EventStore marker lease state and polling cadence.
+        //   New principle: source stays on BackgroundService trigger + per-target revalidation.
+        var source = File.ReadAllText(GetRetiredActorCleanupHostedServiceSourcePath());
+        var code = StripLineComments(source);
+
+        code.Should().NotContain("MarkerStreamId");
+        code.Should().NotContain("CleanupLease");
+        code.Should().NotContain("AppendMarkerAsync");
+        code.Should().NotContain("ReadMarkerAsync");
+        code.Should().NotContain("ReleaseLeaseAsync");
+        code.Should().NotContain("Task.Delay");
+        code.Should().NotContain("WaitPollMilliseconds");
+        code.Should().NotContain("InProgressTimeoutSeconds");
+    }
+
+    [Fact]
     public async Task StartAsync_ShouldDeleteMatchingReadModels()
     {
         var eventStore = new InMemoryEventStore();
@@ -732,6 +751,27 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
         throw new FileNotFoundException(
             $"Could not locate ScheduledRetiredActorSpec.cs from {AppContext.BaseDirectory}");
+    }
+
+    private static string GetRetiredActorCleanupHostedServiceSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "src",
+                "Aevatar.Foundation.Runtime.Hosting",
+                "Maintenance",
+                "RetiredActorCleanupHostedService.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException(
+            $"Could not locate RetiredActorCleanupHostedService.cs from {AppContext.BaseDirectory}");
     }
 
     private sealed class StubActorTypeProbe(IReadOnlyDictionary<string, string?> typeNames) : IActorTypeProbe

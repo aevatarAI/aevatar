@@ -15,6 +15,9 @@ public sealed class RetiredActorCleanupOptions
 
     public bool CleanupReadModels { get; init; } = true;
 
+    // Refactor (issue1287-first):
+    //   Old pattern: options included marker lease timeouts and polling cadence.
+    //   New principle: options only gate idempotent cleanup actions; no lease timing remains.
     public static RetiredActorCleanupOptions FromConfiguration(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);

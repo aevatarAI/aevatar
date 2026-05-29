@@ -47,7 +47,6 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
     private readonly RetiredActorCleanupOptions _options;
     private readonly ILogger<RetiredActorCleanupHostedService> _logger;
     private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private Task? _cleanupTask;
 
     public RetiredActorCleanupHostedService(
         IEnumerable<IRetiredActorSpec> specs,
@@ -76,6 +75,9 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
 
     public Task Completion => _completion.Task;
 
+    // Refactor (issue1287-first):
+    //   Old pattern: startup completion was coordinated through persisted marker lease state.
+    //   New principle: host lifecycle owns one asynchronous pass; callers observe Completion honestly.
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!_options.Enabled)
@@ -91,8 +93,7 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
             return Task.CompletedTask;
         }
 
-        _cleanupTask = RunCleanupPassAfterStartupAsync(stoppingToken);
-        return _cleanupTask;
+        return RunCleanupPassAfterStartupAsync(stoppingToken);
     }
 
     private static async Task YieldStartupAsync()
@@ -100,6 +101,9 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
         await Task.Yield();
     }
 
+    // Refactor (issue1287-first):
+    //   Old pattern: cleanup implied a startup ordering invariant with module hosted services.
+    //   New principle: yield one host turn, then run an idempotent pass fenced per target.
     private async Task RunCleanupPassAfterStartupAsync(CancellationToken ct)
     {
         try
@@ -137,6 +141,9 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
         }
     }
 
+    // Refactor (issue1287-first):
+    //   Old pattern: one completed marker covered the entire spec.
+    //   New principle: every discovered and static target is independently revalidated and cleaned.
     private async Task RunSpecAsync(IRetiredActorSpec spec, CancellationToken ct)
     {
         try
@@ -158,6 +165,9 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
         }
     }
 
+    // Refactor (issue1287-first):
+    //   Old pattern: marker ownership decided whether destructive cleanup could proceed.
+    //   New principle: probe immediately before cleanup, then probe again before destruction/reset.
     private async Task CleanupTargetAsync(IRetiredActorSpec spec, RetiredActorTarget target, CancellationToken ct)
     {
         var candidate = await RevalidateTargetForCleanupAsync(target, ct).ConfigureAwait(false);
@@ -202,6 +212,9 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
             revalidation.CleanupReason);
     }
 
+    // Refactor (issue1287-first):
+    //   Old pattern: stale marker state represented cleanup truth.
+    //   New principle: runtime type and durable stream presence are the only cleanup facts.
     private async Task<CleanupTargetRevalidation> RevalidateTargetForCleanupAsync(
         RetiredActorTarget target,
         CancellationToken ct)
