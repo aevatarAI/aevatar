@@ -4,6 +4,8 @@ using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Web;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.AI.Tests;
 
@@ -48,7 +50,75 @@ public sealed class ToolProviderHttpClientOwnershipTests
         client.Dispose();
         var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
 
-        result.Should().Be("""{"items":[]}""");
+        result.KindCase.Should().Be(ProtoValue.KindOneofCase.StructValue);
+        result.StructValue.Fields.Should().ContainKey("items");
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
+        request.Headers.Authorization!.Parameter.Should().Be("token-1");
+    }
+
+    [Fact]
+    public async Task WebApiClient_SearchAsync_ShouldReturnErrorValue_WhenNoBackendConfigured()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"items":[]}"""),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(new WebToolOptions(), http);
+
+        var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
+
+        result.KindCase.Should().Be(ProtoValue.KindOneofCase.StructValue);
+        result.StructValue.Fields.Should().ContainKey("error");
+        result.StructValue.Fields["error"].StringValue.Should().Be(
+            "No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions.");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WebApiClient_SearchAsync_ShouldMapEmptyBodyToEmptyStruct()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(string.Empty),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                SearchApiBaseUrl = "https://search.test",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
+
+        result.KindCase.Should().Be(ProtoValue.KindOneofCase.StructValue);
+        result.StructValue.Fields.Should().BeEmpty();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
+        request.Headers.Authorization!.Parameter.Should().Be("token-1");
+    }
+
+    [Fact]
+    public async Task WebApiClient_SearchAsync_ShouldMapNonJsonBodyToStringValue()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("plain text result"),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                SearchApiBaseUrl = "https://search.test",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
+
+        result.KindCase.Should().Be(ProtoValue.KindOneofCase.StringValue);
+        result.StringValue.Should().Be("plain text result");
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
         request.Headers.Authorization!.Parameter.Should().Be("token-1");

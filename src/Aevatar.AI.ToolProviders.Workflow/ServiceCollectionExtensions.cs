@@ -8,7 +8,7 @@ namespace Aevatar.AI.ToolProviders.Workflow;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers workflow inspection tools (workflow_status, workflow_artifact_query, actor_inspect, event_query).
+    /// Registers workflow inspection tools (workflow_status, workflow_artifact_query, workflow_actor_current_state, event_query).
     /// Requires IWorkflowExecutionQueryApplicationService to be registered.
     /// </summary>
     // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):

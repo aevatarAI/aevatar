@@ -118,6 +118,28 @@ public sealed class ScopeGAgentAguiEventMapperTests
     }
 
     [Fact]
+    public void TryMapExplicitSessionObservation_ShouldOnlyMapWrappedAguiEvent()
+    {
+        ScopeGAgentAguiEventMapper.TryMapExplicitSessionObservation(
+            BuildEventEnvelope(new AiTextContent { Delta = "d", SessionId = "s1" }))
+            .Should()
+            .BeNull();
+
+        var wrapped = new AGUIEvent
+        {
+            TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+            {
+                MessageId = "m1",
+                Delta = "hello",
+            },
+        };
+
+        ScopeGAgentAguiEventMapper.TryMapExplicitSessionObservation(BuildEventEnvelope(wrapped))
+            .Should()
+            .BeEquivalentTo(wrapped);
+    }
+
+    [Fact]
     public void TryMap_ShouldHandleUnknownPayloadAndWrappedAguiEvent()
     {
         ScopeGAgentAguiEventMapper.TryMap(new EventEnvelope

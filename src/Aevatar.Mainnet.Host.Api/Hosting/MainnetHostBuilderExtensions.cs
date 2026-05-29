@@ -139,6 +139,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
+        builder.Services.TryAddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
+        builder.Services.TryAddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.Services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();

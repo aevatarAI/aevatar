@@ -318,7 +318,7 @@ public sealed class ChatRunToolCompletionCoordinatorTests
 
     private sealed class RecordingWorkflowQueryService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
         public string? LastActorId { get; private set; }
         public WorkflowActorSnapshot? Snapshot { get; set; }
 
@@ -336,30 +336,30 @@ public sealed class ChatRunToolCompletionCoordinatorTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             LastActorId = actorId;
             return Task.FromResult(Snapshot);
         }
 
-        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default) =>
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default) =>
             Task.FromResult<WorkflowRunReport?>(null);
 
         public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(
-            string workflowRunId,
+            string actorId,
             int take = 200,
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowRunTimelineExportItem>>([]);
 
         public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> ListWorkflowRunGraphExportEdgesAsync(
-            string workflowRunId,
+            string actorId,
             int take = 200,
             WorkflowRunGraphExportQueryOptions? options = null,
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowRunGraphExportEdge>>([]);
 
         public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(
-            string workflowRunId,
+            string actorId,
             int depth = 2,
             int take = 200,
             WorkflowRunGraphExportQueryOptions? options = null,

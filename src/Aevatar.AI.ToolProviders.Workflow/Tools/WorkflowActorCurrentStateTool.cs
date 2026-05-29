@@ -5,15 +5,15 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 namespace Aevatar.AI.ToolProviders.Workflow.Tools;
 
 /// <summary>
-/// Inspects actor state via committed projections (readmodel).
+/// Reads workflow actor current state via committed projections (readmodel).
 /// Never reads actor internals directly.
 /// </summary>
-public sealed class ActorInspectTool : IAgentTool
+public sealed class WorkflowActorCurrentStateTool : IAgentTool
 {
     private readonly IWorkflowExecutionQueryApplicationService _queryService;
     private readonly WorkflowToolOptions _options;
 
-    public ActorInspectTool(
+    public WorkflowActorCurrentStateTool(
         IWorkflowExecutionQueryApplicationService queryService,
         WorkflowToolOptions options)
     {
@@ -21,15 +21,14 @@ public sealed class ActorInspectTool : IAgentTool
         _options = options;
     }
 
-    public string Name => "actor_inspect";
+    public string Name => "workflow_actor_current_state";
 
-    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
-    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
-    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: workflow tooling exposed actor_inspect with actor_id snapshot semantics.
+    //   New principle: workflow tooling exposes workflow actor current-state readmodel semantics by actor_id.
     public string Description =>
-        "Inspect actor state via the projection readmodel. " +
-        "Shows actor snapshots (status, output, step counts), " +
-        "and registered agents. " +
+        "Read workflow actor current state via the projection readmodel. " +
+        "Shows workflow actor status, output, step counts, and registered agents. " +
         "All data is from committed projections, not live actor internals.";
 
     public string ParametersSchema => """
@@ -39,11 +38,11 @@ public sealed class ActorInspectTool : IAgentTool
             "action": {
               "type": "string",
               "enum": ["snapshot", "list", "agents"],
-              "description": "Action: 'snapshot' (default) actor state, 'list' all actors, 'agents' registered agents"
+              "description": "Action: 'snapshot' (default) workflow actor current state, 'list' all workflow actors, 'agents' registered agents"
             },
             "actor_id": {
               "type": "string",
-              "description": "Actor ID (required for 'snapshot')"
+              "description": "Workflow actor ID (required for 'snapshot')"
             },
             "take": {
               "type": "integer",
@@ -63,8 +62,8 @@ public sealed class ActorInspectTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        if (!_queryService.ActorQueryEnabled)
-            return """{"error":"Actor query endpoints are not enabled on this deployment."}""";
+        if (!_queryService.WorkflowActorCurrentStateQueryEnabled)
+            return """{"error":"Workflow actor current-state query is not enabled on this deployment."}""";
 
         try
         {
@@ -75,7 +74,7 @@ public sealed class ActorInspectTool : IAgentTool
             {
                 "list" or "agents" => await ListAgentsAsync(ct),
                 "snapshot" => await GetSnapshotAsync(args, ct),
-                _ => JsonSerializer.Serialize(new { error = $"Unsupported actor_inspect action '{action}'" }),
+                _ => JsonSerializer.Serialize(new { error = $"Unsupported workflow_actor_current_state action '{action}'" }),
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -89,11 +88,11 @@ public sealed class ActorInspectTool : IAgentTool
     {
         var actorId = args.Str("actor_id");
         if (string.IsNullOrWhiteSpace(actorId))
-            return """{"error":"'actor_id' is required. Use action='list' to find actors."}""";
+            return """{"error":"'actor_id' is required. Use action='list' to find workflow actors."}""";
 
-        var snapshot = await _queryService.GetActorSnapshotAsync(actorId, ct);
+        var snapshot = await _queryService.GetWorkflowActorCurrentStateAsync(actorId, ct);
         if (snapshot == null)
-            return JsonSerializer.Serialize(new { error = $"No snapshot found for actor '{actorId}'" });
+            return JsonSerializer.Serialize(new { error = $"No current state found for workflow actor '{actorId}'" });
 
         return JsonSerializer.Serialize(new
         {

@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Queries;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
@@ -29,7 +30,7 @@ public sealed record ResponsesWebTraceResult(
     string TraceId,
     string CacheKey,
     bool CacheHit,
-    string ResultJson);
+    Value Result);
 
 public sealed record ResponsesWebTraceInput(
     string TraceId,
@@ -38,4 +39,4 @@ public sealed record ResponsesWebTraceInput(
     string Url,
     string Query,
     bool CacheHit,
-    string ResultJson);
+    Value Result);
