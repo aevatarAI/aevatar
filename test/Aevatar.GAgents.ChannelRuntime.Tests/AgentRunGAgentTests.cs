@@ -482,13 +482,10 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_WhenTargetRefUsesGAgentToolHint_OverridesTargetActorId()
+    public async Task HandleStartAsync_WhenTargetRefUsesGAgentToolHint_DoesNotOverrideTargetActorId()
     {
-        // Regression: NeedsLlmReplyEvent.TargetRef carries the chat-route
-        // boundary decision from ConversationGAgent into the run actor.
-        // Before this fix the field was written + persisted but no consumer
-        // read it. GAgent tool-hint actor_id must redirect the reply target so per-bot
-        // routing rules (e.g. /daily → specialized agent X) actually take effect.
+        // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill
+        // only. actor_id inside prefilled arguments must not redirect the run target.
         var originalTarget = Substitute.For<IActor>();
         originalTarget.Id.Returns("conversation:original");
         var forwardedTarget = Substitute.For<IActor>();
@@ -520,10 +517,10 @@ public sealed class AgentRunGAgentTests
             TargetRef = GAgentToolHint("conversation:forwarded"),
         });
 
-        originalHandled.Should().BeEmpty();
-        forwardedHandled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor),
-            "GAgent tool hints rewrite the run actor reply target to the routed actor");
-        runtime.State.TargetActorId.Should().Be("conversation:forwarded");
+        originalHandled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor),
+            "tool hints are prefill and do not rewrite the run actor reply target");
+        forwardedHandled.Should().BeEmpty();
+        runtime.State.TargetActorId.Should().Be("conversation:original");
     }
 
     [Fact]

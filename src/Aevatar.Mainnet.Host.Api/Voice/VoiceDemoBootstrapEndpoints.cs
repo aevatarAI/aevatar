@@ -5,7 +5,6 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Scheduled;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
@@ -19,7 +18,6 @@ internal static class VoiceDemoBootstrapEndpoints
 {
     private const string VoiceModuleName = "voice_presence_openai";
     private const string RouteRuleId = "voice-demo";
-    private const string InvokeGAgentToolName = "aevatar_invoke_gagent";
 
     public static IEndpointRouteBuilder MapVoiceDemoBootstrapEndpoints(this IEndpointRouteBuilder app)
     {
@@ -102,51 +100,26 @@ internal static class VoiceDemoBootstrapEndpoints
                 NyxUserId = scopeId,
                 Platform = OwnerScope.NyxIdPlatform,
             },
-            DefaultTarget = existing?.DefaultTarget.Clone() ?? ForwardToDemoActor(actorId),
+            DefaultTarget = existing?.DefaultTarget.Clone() ?? new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime },
+                },
+            },
         };
 
         if (existing is not null)
         {
+            // Refactor (issue1321-first): remove the stale voice-demo rule that used
+            // tool_choice_hint as actor addressing; policy-aware /ws/voice now fails closed.
             command.Rules.AddRange(existing.Rules
                 .Where(static rule => !string.Equals(rule.RuleId, RouteRuleId, StringComparison.Ordinal))
                 .Select(static rule => rule.Clone()));
         }
 
-        command.Rules.Add(new ChatRouteRule
-        {
-            RuleId = RouteRuleId,
-            Priority = 1000,
-            Match = new ChatRouteMatch
-            {
-                SourceKind = ChatSourceKind.Voice,
-            },
-            Action = ForwardToDemoActor(actorId),
-            Description = "route browser voice demo to the current user's mainnet agent",
-        });
-
         return await routePolicyCommandPort.UpsertAsync(scopeId, command, ct);
     }
-
-    private static ChatRouteAction ForwardToDemoActor(string actorId) =>
-        new()
-        {
-            ForwardToModel = new ForwardToModel
-            {
-                ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime },
-                ToolChoiceHint = new ChatRouteToolChoiceHint
-                {
-                    ToolName = InvokeGAgentToolName,
-                    PrefilledArguments = new Struct
-                    {
-                        Fields =
-                        {
-                            ["actor_id"] = Value.ForString(actorId),
-                            ["voice_module_name"] = Value.ForString(VoiceModuleName),
-                        },
-                    },
-                },
-            },
-        };
 
     private static bool TryResolveScopeId(ClaimsPrincipal user, out string scopeId)
     {
