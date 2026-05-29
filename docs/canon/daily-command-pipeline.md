@@ -162,8 +162,8 @@ QA 关注点：
    - `TrySendImmediateLarkReactionAsync()`（line 58 附近）→ fire-and-forget 发 ✓ emoji，不等待成功；前置条件不满足时静默跳过
    - 路由到 `TryHandleAgentBuilderAsync()`
 
-2. `NyxRelayAgentBuilderFlow.TryResolve(evt, out decision)`
-   - 文件：`agents/Aevatar.GAgents.Authoring.Lark/NyxRelayAgentBuilderFlow.cs`
+2. `AgentBuilderCardFlow.TryResolveAsync(evt, userConfigQueryPort, ct)`
+   - 文件：`agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderCardFlow.cs`
    - 校验：`evt.Text` 必须以 `/` 开头；`chat_type == "p2p"`（私聊）；命令必须在已知列表里
    - 已知命令：`/agents /agent-status /run-agent /disable-agent /enable-agent /delete-agent`
    - `/daily` 与其他未知 slash（如 `/goal`）是 Ornn skill shortcut：本路由放行给 LLM reply path，不走 `agent_builder`
@@ -195,7 +195,7 @@ QA 关注点：
 | d | `delete_agent` 先要求 `confirm=true`，再 disable runner、撤销 NyxID API key、通过 `IUserAgentCatalogCommandPort.TombstoneAsync` 派发 tombstone | 未确认 / agent 不存在 / command dispatch failure |
 | e | 所有 lifecycle/delete command ACK 都是 accepted-only；状态变化、删除可见性与执行结果通过后续 `/agent-status`、`/agents` 或推送观察 | — |
 
-6. `NyxRelayAgentBuilderFlow.FormatToolResult(...)` / `AgentBuilderCardFlow.FormatToolResult(...)`
+6. `AgentBuilderCardFlow.FormatToolResult(...)`
    - 把 agent management tool JSON 渲染成 Lark 可接受的 `MessageContent`
    - lifecycle 文案明确使用 accepted / propagating 语义，不承诺 readmodel 已刷新
 
@@ -465,7 +465,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 ### 12.1 单元测试 — 命令解析层（已有底子）
 
-文件：`test/Aevatar.GAgents.ChannelRuntime.Tests/NyxRelayAgentBuilderFlowTests.cs`
+文件：`test/Aevatar.GAgents.ChannelRuntime.Tests/AgentBuilderCardFlowTests.cs`
 
 应覆盖：
 - ✅ `/daily` 不带任何参数 → agent-builder router fall through，由 LLM reply path 处理 Ornn skill shortcut
@@ -672,7 +672,7 @@ Lark 开发者后台：
 | 关注点 | 文件 |
 |--------|------|
 | Webhook ingress | `agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs` |
-| 命令解析与路由 | `agents/Aevatar.GAgents.Authoring.Lark/NyxRelayAgentBuilderFlow.cs` |
+| 命令解析与路由 | `agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderCardFlow.cs` |
 | `/daily` shortcut 改写 | `agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs` |
 | Conversation LLM reply | `agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs` |
 | Ornn skill bridge | `src/Aevatar.AI.ToolProviders.Ornn/`、`src/Aevatar.AI.ToolProviders.Skills/UseSkillTool.cs` |
