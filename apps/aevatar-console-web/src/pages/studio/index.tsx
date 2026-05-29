@@ -5217,35 +5217,53 @@ const StudioPage: React.FC = () => {
     async (
       savedWorkflow: StudioWorkflowFile,
       options?: {
+        readonly document?: StudioWorkflowDocument | null;
         readonly layout?: unknown;
+        readonly selectedNodeId?: string;
+        readonly yaml?: string;
       },
     ) => {
+      const hasDocumentOverride = options?.document !== undefined;
+      const nextWorkflow: StudioWorkflowFile = {
+        ...savedWorkflow,
+        document: hasDocumentOverride ? options.document ?? null : savedWorkflow.document,
+        yaml: options?.yaml ?? savedWorkflow.yaml,
+      };
+
       queryClient.setQueryData(
-        ['studio-workflow', workflowWorkspaceContextKey, savedWorkflow.workflowId],
-        savedWorkflow,
+        ['studio-workflow', workflowWorkspaceContextKey, nextWorkflow.workflowId],
+        nextWorkflow,
       );
       await queryClient.invalidateQueries({
         queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
       });
 
-      setSelectedWorkflowId(savedWorkflow.workflowId);
+      setSelectedWorkflowId(nextWorkflow.workflowId);
       setSelectedScriptId('');
       setTemplateWorkflow('');
       setBuildSurface('editor');
       setStudioSurface('build');
       setDraftSourceKey(
-        `workflow:${workflowWorkspaceContextKey}:${savedWorkflow.workflowId}`,
+        `workflow:${workflowWorkspaceContextKey}:${nextWorkflow.workflowId}`,
       );
-      setDraftYaml(savedWorkflow.yaml);
-      setDraftWorkflowName(savedWorkflow.name);
-      setDraftFileName(savedWorkflow.fileName);
-      setDraftDirectoryId(savedWorkflow.directoryId);
+      setDraftYaml(nextWorkflow.yaml);
+      setDraftWorkflowName(nextWorkflow.name);
+      setDraftFileName(nextWorkflow.fileName);
+      setDraftDirectoryId(nextWorkflow.directoryId);
       setDraftWorkflowLayout(
-        savedWorkflow.layout ||
+        nextWorkflow.layout ||
           options?.layout ||
           draftWorkflowLayout ||
-          buildStudioWorkflowLayout(savedWorkflow.name, workflowGraph.nodes),
+          buildStudioWorkflowLayout(nextWorkflow.name, workflowGraph.nodes),
       );
+      if (hasDocumentOverride) {
+        setEditableWorkflowDocument(
+          cloneStudioWorkflowDocument(options.document ?? null),
+        );
+      }
+      if (options?.selectedNodeId !== undefined) {
+        setSelectedGraphNodeId(options.selectedNodeId);
+      }
       setSaveNotice(null);
       setRunNotice(null);
     },
@@ -5272,8 +5290,10 @@ const StudioPage: React.FC = () => {
         readonly draft: StudioStepInspectorDraft;
       } | null,
     ): Promise<{
+      readonly document?: StudioWorkflowDocument | null;
       readonly yaml: string;
       readonly layout: unknown;
+      readonly selectedNodeId?: string;
     } | null> => {
       if (!pendingStepDraft) {
         return {
@@ -5319,8 +5339,10 @@ const StudioPage: React.FC = () => {
       setSelectedGraphNodeId(result.nodeId);
 
       return {
+        document: serialized.document,
         yaml: serialized.yaml,
         layout: nextLayout,
+        selectedNodeId: result.nodeId,
       };
     },
     [
@@ -5380,7 +5402,10 @@ const StudioPage: React.FC = () => {
       });
 
       await applySavedWorkflowSelection(savedWorkflow, {
-        layout: draftWorkflowLayout,
+        document: savePayload.document,
+        layout: savePayload.layout,
+        selectedNodeId: savePayload.selectedNodeId,
+        yaml: savePayload.yaml,
       });
       const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
         routeSelectedBackendMemberKey,

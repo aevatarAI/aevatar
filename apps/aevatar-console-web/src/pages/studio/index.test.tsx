@@ -4983,6 +4983,14 @@ describe("StudioPage", () => {
       expect(mockLastWorkflowBuildPanelProps?.onSaveDraft).toEqual(expect.any(Function));
       expect(mockLastWorkflowBuildPanelProps?.canSaveWorkflow).toBe(true);
     });
+    const staleWorkflowDocument = mockCloneValue(mockWorkflowDocument) as any;
+    staleWorkflowDocument.steps[0].parameters = {};
+    const staleWorkflowResponse = {
+      ...mockWorkflowFile,
+      yaml: mockBuildWorkflowYaml(staleWorkflowDocument),
+      document: staleWorkflowDocument,
+    };
+    (studioApi.saveWorkflow as jest.Mock).mockResolvedValueOnce(staleWorkflowResponse);
     (studioApi.serializeYaml as jest.Mock).mockClear();
     await act(async () => {
       await mockLastWorkflowBuildPanelProps.onSaveDraft({
@@ -5029,6 +5037,17 @@ describe("StudioPage", () => {
           yaml: expect.stringContaining(
             "prompt_prefix: Classify the refund request before answering."
           ),
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockLastWorkflowBuildPanelProps?.draftYaml).toContain(
+        "prompt_prefix: Classify the refund request before answering."
+      );
+      expect(mockLastWorkflowBuildPanelProps?.workflowGraph.steps[0].parameters).toEqual(
+        expect.objectContaining({
+          prompt_prefix: "Classify the refund request before answering.",
         })
       );
     });
