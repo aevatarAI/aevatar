@@ -33,7 +33,7 @@ public class DeviceEventEndpointsTests
     }
 
     [Fact]
-    public void ParseCallbackPayload_nyxid_format_returns_device_inbound()
+    public void ParseCallbackPayload_known_temperature_maps_to_sensor_payload()
     {
         // NyxID's actual CallbackPayload format (sender.platform_id, nested conversation)
         var innerEvent = JsonSerializer.Serialize(new
@@ -42,6 +42,10 @@ public class DeviceEventEndpointsTests
             source = "temperature-sensor",
             event_type = "temperature_change",
             timestamp = "2026-04-09T10:00:00Z",
+            temperature = 28.5,
+            humidity = 65.0,
+            light_level = 70.0,
+            motion = true,
         });
 
         var payload = JsonSerializer.Serialize(new
@@ -64,14 +68,22 @@ public class DeviceEventEndpointsTests
         inbound.EventType.Should().Be("temperature_change");
         inbound.Timestamp.Should().Be("2026-04-09T10:00:00Z");
         inbound.DeviceId.Should().Be("device-42");
-        inbound.PayloadJson.Should().Be(innerEvent);
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Sensor);
+        inbound.Sensor.Temperature.Should().Be(28.5);
+        inbound.Sensor.Humidity.Should().Be(65.0);
+        inbound.Sensor.LightLevel.Should().Be(70.0);
+        inbound.Sensor.MotionDetected.Should().BeTrue();
     }
 
     [Fact]
     public void ParseCallbackPayload_legacy_sender_id_also_works()
     {
         // Backward compat: if sender uses "id" instead of "platform_id"
-        var innerEvent = JsonSerializer.Serialize(new { event_id = "evt-002" });
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-002",
+            event_type = "motion_detected",
+        });
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -83,6 +95,30 @@ public class DeviceEventEndpointsTests
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
         inbound.DeviceId.Should().Be("legacy-device-1");
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.Motion.Detected.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_motion_detected_explicit_false_maps_to_false()
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-003",
+            event_type = "motion_detected",
+            motion = false,
+        });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = innerEvent },
+            sender = new { id = "device-3" },
+        });
+
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.Motion.Detected.Should().BeFalse();
     }
 
     [Fact]
@@ -128,10 +164,14 @@ public class DeviceEventEndpointsTests
     }
 
     [Fact]
-    public void ParseCallbackPayload_with_partial_inner_event_uses_defaults()
+    public void ParseCallbackPayload_unknown_event_type_throws_without_raw_payload()
     {
-        // Inner event JSON that lacks some optional fields
-        var innerEvent = JsonSerializer.Serialize(new { event_id = "evt-partial" });
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-unknown",
+            event_type = "unknown_type",
+            payload = new { foo = "bar" },
+        });
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -140,12 +180,61 @@ public class DeviceEventEndpointsTests
         });
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
-        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
-        inbound.EventId.Should().Be("evt-partial");
-        inbound.Source.Should().BeEmpty();
-        inbound.EventType.Should().BeEmpty();
-        inbound.Timestamp.Should().BeEmpty();
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_known_speech_maps_to_speech_payload()
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-speech",
+            source = "microphone",
+            event_type = "speech_detected",
+            text = "Turn on the lights",
+        });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = innerEvent },
+            sender = new { id = "device-8" },
+        });
+
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Speech);
+        inbound.Speech.Text.Should().Be("Turn on the lights");
+    }
+
+    [Theory]
+    [InlineData("person_detected")]
+    [InlineData("scene_summary")]
+    public void ParseCallbackPayload_known_camera_maps_to_camera_payload(string eventType)
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = $"evt-{eventType}",
+            source = "camera-analyzer",
+            event_type = eventType,
+            description = "Person standing near the front door",
+        });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = innerEvent },
+            sender = new { platform_id = "camera-1" },
+        });
+
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.EventType.Should().Be(eventType);
+        inbound.Source.Should().Be("camera-analyzer");
+        inbound.DeviceId.Should().Be("camera-1");
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera);
+        inbound.Camera.SceneDescription.Should().Be("Person standing near the front door");
     }
 
     // ─── HMAC Verification Tests ───
