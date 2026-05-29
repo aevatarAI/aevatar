@@ -1646,9 +1646,11 @@ const ScopeInvokePage: React.FC = () => {
                         <Alert
                           description={
                             invokeResult.error ||
-                            (invokeResult.status === 'running'
-                              ? 'Invocation in progress.'
-                              : 'Invocation completed.')
+                            (invokeResult.status === 'accepted'
+                              ? 'Invocation accepted. Completion is still pending; continue in Runs to observe progress.'
+                              : invokeResult.status === 'running'
+                                ? 'Invocation in progress.'
+                                : 'Invocation completed.')
                           }
                           showIcon
                           title={`${
@@ -1661,8 +1663,7 @@ const ScopeInvokePage: React.FC = () => {
                           type={
                             invokeResult.status === 'error'
                               ? 'error'
-                              : invokeResult.status === 'success' ||
-                                  invokeResult.status === 'accepted'
+                              : invokeResult.status === 'success'
                                 ? 'success'
                                 : 'info'
                           }

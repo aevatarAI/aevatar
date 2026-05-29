@@ -597,6 +597,14 @@ describe('ScopeInvokePage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Output' }));
 
+    const acceptedDescription = await screen.findByText(
+      'Invocation accepted. Completion is still pending; continue in Runs to observe progress.',
+    );
+    const acceptedAlert = acceptedDescription.closest('.ant-alert');
+
+    expect(screen.queryByText('Invocation completed.')).not.toBeInTheDocument();
+    expect(acceptedAlert).toHaveClass('ant-alert-info');
+    expect(acceptedAlert).not.toHaveClass('ant-alert-success');
     expect(await screen.findByText('Invocation Receipt')).toBeTruthy();
     expect(await screen.findByText(/"accepted": true/)).toBeTruthy();
   });
