@@ -47,8 +47,7 @@ public sealed class AgentBuilderCardFlowTests
     [Fact]
     public void FormatToolResult_ListAgents_ReturnsSingleCardWithoutPerAgentButtons()
     {
-        // Refactor (issue1305): the old relay-specific runner now uses AgentBuilderCardFlow, so
-        // the text-command path must keep the consolidated `/agents` card contract.
+        // Refactor (issue1305): Old pattern: NyxRelayAgentBuilderFlow had separate list rendering semantics from AgentBuilderCardFlow. New principle: unified AgentBuilderCardFlow keeps the consolidated `/agents` card contract.
         var decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
         var result = AgentBuilderCardFlow.FormatToolResult(
             decision,
@@ -80,6 +79,50 @@ public sealed class AgentBuilderCardFlowTests
         result.Actions.Should().NotContain(a => a.ActionId == "agent_status");
         result.Actions.Should().NotContain(a => a.Arguments.ContainsKey("agent_id"));
         result.Actions.Select(a => a.ActionId).Should().BeEquivalentTo(new[] { "list_agents" });
+    }
+
+    [Theory]
+    [InlineData("/agent-status skill-runner-1", "agent_status", "skill-runner-1")]
+    [InlineData("/run-agent skill-runner-2", "run_agent", "skill-runner-2")]
+    [InlineData("/disable-agent skill-runner-3", "disable_agent", "skill-runner-3")]
+    [InlineData("/enable-agent skill-runner-4", "enable_agent", "skill-runner-4")]
+    public async Task TryResolveAsync_SimpleAgentTextCommand_ReturnsToolCall(
+        string text,
+        string expectedAction,
+        string expectedAgentId)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            RegistrationScopeId = "scope-1",
+            Text = text,
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be(expectedAction);
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be(expectedAction);
+        body.RootElement.GetProperty("agent_id").GetString().Should().Be(expectedAgentId);
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_SimpleAgentTextCommand_WithoutAgentId_ReturnsUsage()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/agent-status",
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Be("Usage: /agent-status <agent_id>");
     }
 
     [Fact]

@@ -174,8 +174,7 @@ public static class AgentBuilderCardFlow
         if (!IsKnownTextCommand(command))
             return false;
 
-        // Refactor (issue1305): Agent-builder slash routing now lives in the card flow; unknown
-        // slash commands still fall through to Ornn/LLM handling.
+        // Refactor (issue1305): Old pattern: agent-builder routing split across NyxRelayAgentBuilderFlow + AgentBuilderCardFlow. New principle: single AgentBuilderCardFlow routes all agent-builder slash commands via TryResolveSimpleAgentAction.
         if (!IsPrivateChat(evt.ChatType))
         {
             decision = AgentBuilderFlowDecision.DirectReply(BuildPrivateChatRestrictionReply(command));
