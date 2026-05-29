@@ -1,6 +1,8 @@
+using Aevatar.Foundation.Runtime.Maintenance;
+
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
-internal sealed class OrleansAgentProxy : IAgent
+internal sealed class OrleansAgentProxy : IAgent, IRetiredActorCleanupCoordinatorActor
 {
     private static readonly IReadOnlyList<Type> EmptySubscribedTypes = Array.Empty<Type>();
     private readonly IRuntimeActorGrain _grain;
@@ -36,4 +38,24 @@ internal sealed class OrleansAgentProxy : IAgent
 
     public Task DeactivateAsync(CancellationToken ct = default) =>
         _grain.DeactivateAsync();
+
+    public Task<RetiredActorCleanupLeaseHandle?> TryAcquireLeaseAsync(
+        RetiredActorCleanupAcquireCommand command,
+        CancellationToken ct = default) =>
+        _grain.TryAcquireRetiredActorCleanupLeaseAsync(command, ct);
+
+    public Task<bool> CheckLeaseAsync(
+        RetiredActorCleanupCheckCommand command,
+        CancellationToken ct = default) =>
+        _grain.CheckRetiredActorCleanupLeaseAsync(command, ct);
+
+    public Task ReleaseLeaseAsync(
+        RetiredActorCleanupReleaseCommand command,
+        CancellationToken ct = default) =>
+        _grain.ReleaseRetiredActorCleanupLeaseAsync(command, ct);
+
+    public Task RecordFailureAsync(
+        RetiredActorCleanupFailureCommand command,
+        CancellationToken ct = default) =>
+        _grain.RecordRetiredActorCleanupFailureAsync(command, ct);
 }

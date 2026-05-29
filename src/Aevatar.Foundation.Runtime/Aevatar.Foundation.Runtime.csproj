@@ -26,5 +26,7 @@
     <Protobuf Include="runtime_callback_scheduler_state.proto"
               GrpcServices="None"
               AdditionalImportDirs="..\Aevatar.Foundation.Abstractions" />
+    <Protobuf Include="Maintenance\retired_actor_cleanup_coordinator.proto"
+              GrpcServices="None" />
   </ItemGroup>
 </Project>

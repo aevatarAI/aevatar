@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package aevatar.runtime.hosting.maintenance;
+package aevatar.runtime.maintenance;
 
-option csharp_namespace = "Aevatar.Foundation.Runtime.Hosting.Maintenance";
+option csharp_namespace = "Aevatar.Foundation.Runtime.Maintenance";
 
 import "google/protobuf/timestamp.proto";
 

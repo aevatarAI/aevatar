@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Foundation.Runtime.Maintenance;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
@@ -583,6 +584,33 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_ShouldRecordCoordinatorFailure_WhenCleanupThrowsAfterAcquire()
+    {
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["channel-bot-registration-store"] =
+                "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent, Aevatar.GAgents.ChannelRuntime",
+        });
+        var coordinator = new RecordingCleanupCoordinator();
+        var service = CreateService(
+            typeProbe,
+            new ThrowingDestroyActorRuntime(),
+            new RecordingStreamProvider(),
+            eventStore,
+            CreateChannelRuntimeSpec(),
+            coordinator: coordinator);
+
+        var act = () => service.StartAsync(CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("destroy failed");
+        coordinator.FailureSpecIds.Should().ContainSingle(CreateChannelRuntimeSpec().SpecId);
+        coordinator.ReleasedSpecIds.Should().BeEmpty();
+    }
+
+    [Fact]
     public void RetiredActorCleanupHostedService_ShouldNotOwnMarkerStreamLease()
     {
         // Refactor (issue1056/r3-consensus): Old pattern: hosted service
@@ -775,7 +803,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         }
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private class RecordingActorRuntime : IActorRuntime
     {
         public List<string> DestroyedActorIds { get; } = [];
 
@@ -786,7 +814,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task DestroyAsync(string id, CancellationToken ct = default)
+        public virtual Task DestroyAsync(string id, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             DestroyedActorIds.Add(id);
@@ -802,6 +830,12 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class ThrowingDestroyActorRuntime : RecordingActorRuntime
+    {
+        public override Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new InvalidOperationException("destroy failed");
     }
 
     private class RecordingStreamProvider : IStreamProvider

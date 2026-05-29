@@ -1,4 +1,4 @@
-namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
+namespace Aevatar.Foundation.Runtime.Maintenance;
 
 public interface IRetiredActorCleanupCoordinatorPort
 {
@@ -16,6 +16,25 @@ public interface IRetiredActorCleanupCoordinatorPort
     Task RecordFailureAsync(
         RetiredActorCleanupLeaseHandle lease,
         Exception exception,
+        CancellationToken ct = default);
+}
+
+public interface IRetiredActorCleanupCoordinatorActor
+{
+    Task<RetiredActorCleanupLeaseHandle?> TryAcquireLeaseAsync(
+        RetiredActorCleanupAcquireCommand command,
+        CancellationToken ct = default);
+
+    Task<bool> CheckLeaseAsync(
+        RetiredActorCleanupCheckCommand command,
+        CancellationToken ct = default);
+
+    Task ReleaseLeaseAsync(
+        RetiredActorCleanupReleaseCommand command,
+        CancellationToken ct = default);
+
+    Task RecordFailureAsync(
+        RetiredActorCleanupFailureCommand command,
         CancellationToken ct = default);
 }
 

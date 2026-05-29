@@ -1,4 +1,5 @@
 using Orleans.Concurrency;
+using Aevatar.Foundation.Runtime.Maintenance;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
@@ -53,4 +54,24 @@ public interface IRuntimeActorGrain : IGrainWithStringKey
     Task DeactivateAsync();
 
     Task PurgeAsync();
+
+    Task<RetiredActorCleanupLeaseHandle?> TryAcquireRetiredActorCleanupLeaseAsync(
+        RetiredActorCleanupAcquireCommand command,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("This runtime actor does not expose the retired actor cleanup coordinator contract.");
+
+    Task<bool> CheckRetiredActorCleanupLeaseAsync(
+        RetiredActorCleanupCheckCommand command,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("This runtime actor does not expose the retired actor cleanup coordinator contract.");
+
+    Task ReleaseRetiredActorCleanupLeaseAsync(
+        RetiredActorCleanupReleaseCommand command,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("This runtime actor does not expose the retired actor cleanup coordinator contract.");
+
+    Task RecordRetiredActorCleanupFailureAsync(
+        RetiredActorCleanupFailureCommand command,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("This runtime actor does not expose the retired actor cleanup coordinator contract.");
 }

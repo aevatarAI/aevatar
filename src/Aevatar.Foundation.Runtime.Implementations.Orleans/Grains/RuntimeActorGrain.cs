@@ -13,6 +13,7 @@ using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Runtime.Maintenance;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
@@ -419,6 +420,54 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         // permanently failed.
         _identityResolutionAttempted = false;
         await _state.ClearStateAsync();
+    }
+
+    public async Task<RetiredActorCleanupLeaseHandle?> TryAcquireRetiredActorCleanupLeaseAsync(
+        RetiredActorCleanupAcquireCommand command,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var coordinator = await GetRetiredActorCleanupCoordinatorAsync(ct);
+        return await coordinator.TryAcquireLeaseAsync(command, ct);
+    }
+
+    public async Task<bool> CheckRetiredActorCleanupLeaseAsync(
+        RetiredActorCleanupCheckCommand command,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var coordinator = await GetRetiredActorCleanupCoordinatorAsync(ct);
+        return await coordinator.CheckLeaseAsync(command, ct);
+    }
+
+    public async Task ReleaseRetiredActorCleanupLeaseAsync(
+        RetiredActorCleanupReleaseCommand command,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var coordinator = await GetRetiredActorCleanupCoordinatorAsync(ct);
+        await coordinator.ReleaseLeaseAsync(command, ct);
+    }
+
+    public async Task RecordRetiredActorCleanupFailureAsync(
+        RetiredActorCleanupFailureCommand command,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var coordinator = await GetRetiredActorCleanupCoordinatorAsync(ct);
+        await coordinator.RecordFailureAsync(command, ct);
+    }
+
+    private async Task<IRetiredActorCleanupCoordinatorActor> GetRetiredActorCleanupCoordinatorAsync(CancellationToken ct)
+    {
+        if (_agent == null && !_identityResolutionAttempted)
+            await ResumeFromPersistedIdentityAsync(ct);
+
+        if (_agent is IRetiredActorCleanupCoordinatorActor coordinator)
+            return coordinator;
+
+        throw new InvalidOperationException(
+            $"Actor '{this.GetPrimaryKeyString()}' does not expose the retired actor cleanup coordinator contract.");
     }
 
     private async Task<AgentImplementation?> BindAgentByKindAsync(string kind, CancellationToken ct = default)

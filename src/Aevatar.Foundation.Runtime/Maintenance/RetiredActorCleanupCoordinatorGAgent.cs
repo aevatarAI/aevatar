@@ -2,10 +2,11 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
+namespace Aevatar.Foundation.Runtime.Maintenance;
 
 // Refactor (issue1056/r3-consensus): Old pattern: RetiredActorCleanupHostedService
 // owned a hidden EventStore marker state machine for per-spec leases.
@@ -13,7 +14,7 @@ namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 // epoch fencing, stale takeover, owner release, and stale release ignore.
 [GAgent(AgentKind)]
 public sealed class RetiredActorCleanupCoordinatorGAgent
-    : GAgentBase<RetiredActorCleanupCoordinatorState>
+    : GAgentBase<RetiredActorCleanupCoordinatorState>, IRetiredActorCleanupCoordinatorActor
 {
     public const string AgentKind = "foundation.retired-actor-cleanup-coordinator";
 
@@ -141,35 +142,52 @@ public sealed class RetiredActorCleanupCoordinatorGAgent
 
     public static RetiredActorCleanupCoordinatorState ApplyEvent(
         RetiredActorCleanupCoordinatorState current,
-        IMessage evt)
+        IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<RetiredActorCleanupLeaseAcquiredEvent>(ApplyAcquired)
+            .On<RetiredActorCleanupLeaseReleasedEvent>(ApplyReleased)
+            .On<RetiredActorCleanupLeaseFailureRecordedEvent>(ApplyFailureRecorded)
+            .OrCurrent();
+
+    private static RetiredActorCleanupCoordinatorState ApplyAcquired(
+        RetiredActorCleanupCoordinatorState current,
+        RetiredActorCleanupLeaseAcquiredEvent evt)
     {
         var next = current.Clone();
-        switch (evt)
+        if (evt.Lease != null)
+            next.Leases[evt.Lease.SpecId] = evt.Lease.Clone();
+        return next;
+    }
+
+    private static RetiredActorCleanupCoordinatorState ApplyReleased(
+        RetiredActorCleanupCoordinatorState current,
+        RetiredActorCleanupLeaseReleasedEvent evt)
+    {
+        var next = current.Clone();
+        if (next.Leases.TryGetValue(evt.SpecId, out var releaseRecord) &&
+            IsSameLease(releaseRecord, evt.Epoch, evt.Token, evt.OwnerId))
         {
-            case RetiredActorCleanupLeaseAcquiredEvent acquired when acquired.Lease != null:
-                next.Leases[acquired.Lease.SpecId] = acquired.Lease.Clone();
-                break;
-            case RetiredActorCleanupLeaseReleasedEvent released:
-                if (next.Leases.TryGetValue(released.SpecId, out var releaseRecord) &&
-                    IsSameLease(releaseRecord, released.Epoch, released.Token, released.OwnerId))
-                {
-                    releaseRecord.Status = RetiredActorCleanupLeaseStatus.Released;
-                    releaseRecord.ReleasedAt = released.ReleasedAt?.Clone();
-                    next.Leases[released.SpecId] = releaseRecord;
-                }
+            releaseRecord.Status = RetiredActorCleanupLeaseStatus.Released;
+            releaseRecord.ReleasedAt = evt.ReleasedAt?.Clone();
+            next.Leases[evt.SpecId] = releaseRecord;
+        }
 
-                break;
-            case RetiredActorCleanupLeaseFailureRecordedEvent failure:
-                if (next.Leases.TryGetValue(failure.SpecId, out var failureRecord) &&
-                    IsSameLease(failureRecord, failure.Epoch, failure.Token, failure.OwnerId))
-                {
-                    failureRecord.Status = RetiredActorCleanupLeaseStatus.Failed;
-                    failureRecord.ReleasedAt = failure.FailedAt?.Clone();
-                    failureRecord.LastError = failure.Error ?? string.Empty;
-                    next.Leases[failure.SpecId] = failureRecord;
-                }
+        return next;
+    }
 
-                break;
+    private static RetiredActorCleanupCoordinatorState ApplyFailureRecorded(
+        RetiredActorCleanupCoordinatorState current,
+        RetiredActorCleanupLeaseFailureRecordedEvent evt)
+    {
+        var next = current.Clone();
+        if (next.Leases.TryGetValue(evt.SpecId, out var failureRecord) &&
+            IsSameLease(failureRecord, evt.Epoch, evt.Token, evt.OwnerId))
+        {
+            failureRecord.Status = RetiredActorCleanupLeaseStatus.Failed;
+            failureRecord.ReleasedAt = evt.FailedAt?.Clone();
+            failureRecord.LastError = evt.Error ?? string.Empty;
+            next.Leases[evt.SpecId] = failureRecord;
         }
 
         return next;

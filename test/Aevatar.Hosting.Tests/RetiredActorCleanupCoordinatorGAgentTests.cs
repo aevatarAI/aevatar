@@ -1,7 +1,9 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Foundation.Runtime.Maintenance;
 using Aevatar.Foundation.Runtime.Persistence;
 using FluentAssertions;
 using Google.Protobuf;
@@ -12,6 +14,39 @@ namespace Aevatar.Hosting.Tests;
 
 public sealed class RetiredActorCleanupCoordinatorGAgentTests
 {
+    [Fact]
+    public async Task Port_ShouldAcquireRejectTakeOverCheckReleaseAndRecordFailure_ThroughCoordinatorActor()
+    {
+        await using var services = new ServiceCollection()
+            .AddAevatarRuntime()
+            .AddRetiredActorCleanup()
+            .BuildServiceProvider();
+        var port = services.GetRequiredService<IRetiredActorCleanupCoordinatorPort>();
+        var now = Now();
+
+        var first = await port.TryAcquireAsync("spec-a", "owner-a", now, now.AddMinutes(1));
+        var competing = await port.TryAcquireAsync("spec-a", "owner-b", now.AddSeconds(10), now.AddMinutes(2));
+        var takeover = await port.TryAcquireAsync("spec-a", "owner-b", now.AddMinutes(2), now.AddMinutes(7));
+        var firstStillValid = await port.CheckAsync(first!);
+        var takeoverValid = await port.CheckAsync(takeover!);
+        await port.ReleaseAsync(first!);
+        takeoverValid = takeoverValid && await port.CheckAsync(takeover);
+        await port.ReleaseAsync(takeover);
+
+        first.Should().NotBeNull();
+        first!.Epoch.Should().Be(1);
+        competing.Should().BeNull();
+        takeover.Should().NotBeNull();
+        takeover!.Epoch.Should().Be(2);
+        firstStillValid.Should().BeFalse();
+        takeoverValid.Should().BeTrue();
+        (await port.CheckAsync(takeover!)).Should().BeFalse();
+
+        var failed = await port.TryAcquireAsync("spec-failure", "owner-a", now, now.AddMinutes(5));
+        await port.RecordFailureAsync(failed!, new InvalidOperationException("cleanup failed"));
+        (await port.CheckAsync(failed!)).Should().BeFalse();
+    }
+
     [Fact]
     public async Task TryAcquireLeaseAsync_ShouldGrantFirstAcquire()
     {
@@ -138,7 +173,7 @@ public sealed class RetiredActorCleanupCoordinatorGAgentTests
                 services.GetRequiredService<IEventSourcingBehaviorFactory<RetiredActorCleanupCoordinatorState>>(),
             Services = services,
         };
-        SetId(agent, RetiredActorCleanupCoordinatorEnvelopeFactory.CoordinatorActorId);
+        SetId(agent, RetiredActorCleanupCoordinatorPort.CoordinatorActorId);
         return agent;
     }
 
