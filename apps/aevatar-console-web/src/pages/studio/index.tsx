@@ -8920,40 +8920,18 @@ const StudioPage: React.FC = () => {
           if (memberImplementationKind === 'gagent') {
             const memberKey =
               selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey;
-            pinnedRouteBackendMemberIdRef.current =
-              selectedMemberId || readMemberIdFromMemberKey(normalizedMemberKey);
-            setPinnedRouteBackendMemberId(
-              selectedMemberId || readMemberIdFromMemberKey(normalizedMemberKey),
-            );
-            setSelectedWorkflowId('');
-            setSelectedScriptId('');
-            setTemplateWorkflow('');
-            if (studioSurface !== 'build') {
-              if (studioSurface === 'observe') {
-                setSelectedExecutionId('');
-              }
-              history.push(
-                buildStudioRoute({
-                  scopeId: resolvedStudioScopeId || undefined,
-                  teamId: routeState.teamId || undefined,
-                  returnTo: routeState.returnTo || undefined,
-                  memberKey,
-                  step: currentLifecycleStep,
-                }),
-              );
-              return;
-            }
-
             history.push(
               buildStudioRoute({
                 scopeId: resolvedStudioScopeId || undefined,
                 teamId: routeState.teamId || undefined,
-                returnTo: routeState.returnTo || undefined,
                 memberKey,
                 step: 'build',
                 tab: 'gagents',
               }),
             );
+            setSelectedWorkflowId('');
+            setSelectedScriptId('');
+            setTemplateWorkflow('');
             setBuildSurface('gagent');
             setStudioSurface('build');
             return;
@@ -8971,11 +8949,6 @@ const StudioPage: React.FC = () => {
         const selectedScriptIdForMember = trimOptional(
           selectedPublishedMember?.matchedScript?.script?.scriptId,
         );
-        const selectedMemberImplementationKind =
-          normalizeStudioMemberBindingImplementationKind(
-            selectedMemberSummary?.implementationKind ||
-              selectedPublishedMember?.revision?.implementationKind,
-          );
         const selectedMemberOwnerKey =
           selectedWorkflowIdForMember
             ? buildWorkflowMemberKeyFromSummary(selectedPublishedMember?.matchedWorkflow)
@@ -9038,35 +9011,6 @@ const StudioPage: React.FC = () => {
             }),
           );
           openScopeScript(selectedScriptIdForMember);
-          return;
-        }
-
-        if (selectedMemberImplementationKind === 'gagent') {
-          const memberKey =
-            selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey;
-          const actorTypeName = trimOptional(
-            selectedPublishedMember?.revision?.staticActorTypeName,
-          );
-          if (actorTypeName) {
-            setSelectedGAgentTypeName((current) =>
-              trimOptional(current) === actorTypeName ? current : actorTypeName,
-            );
-          }
-          setSelectedWorkflowId('');
-          setSelectedScriptId('');
-          setTemplateWorkflow('');
-          setBuildSurface('gagent');
-          setStudioSurface('build');
-          history.push(
-            buildStudioRoute({
-              scopeId: resolvedStudioScopeId || undefined,
-              teamId: routeState.teamId || undefined,
-              returnTo: routeState.returnTo || undefined,
-              memberKey,
-              step: 'build',
-              tab: 'gagents',
-            }),
-          );
           return;
         }
 
