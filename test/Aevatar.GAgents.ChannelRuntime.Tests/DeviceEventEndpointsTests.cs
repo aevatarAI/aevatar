@@ -186,6 +186,34 @@ public class DeviceEventEndpointsTests
         inbound.Speech.Text.Should().Be("Turn on the lights");
     }
 
+    [Theory]
+    [InlineData("person_detected")]
+    [InlineData("scene_summary")]
+    public void ParseCallbackPayload_known_camera_maps_to_camera_payload(string eventType)
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = $"evt-{eventType}",
+            source = "camera-analyzer",
+            event_type = eventType,
+            description = "Person standing near the front door",
+        });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = innerEvent },
+            sender = new { platform_id = "camera-1" },
+        });
+
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.EventType.Should().Be(eventType);
+        inbound.Source.Should().Be("camera-analyzer");
+        inbound.DeviceId.Should().Be("camera-1");
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera);
+        inbound.Camera.SceneDescription.Should().Be("Person standing near the front door");
+    }
+
     // ─── HMAC Verification Tests ───
 
     private static DeviceRegistrationEntry MakeRegistration(string hmacKey = "test-secret") => new()

@@ -192,7 +192,9 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
         try
         {
-            // Refactor (issue1255-first): Old: actor parsed DeviceInbound.PayloadJson based on event_type. New: actor consumes typed DeviceInbound payload cases only.
+            // Refactor (issue1255-first):
+            //   Old pattern: actor parsed DeviceInbound.PayloadJson based on event_type.
+            //   New principle: actor consumes typed DeviceInbound payload cases only.
             switch (evt.PayloadCase)
             {
                 case DeviceInbound.PayloadOneofCase.Sensor:

@@ -192,7 +192,9 @@ public static class DeviceEventEndpoints
                      : string.Empty;
         }
 
-        // Refactor (issue1255-first): Old: pass content.text through as DeviceInbound.PayloadJson. New: terminate JSON here and map known events to typed Protobuf payloads.
+        // Refactor (issue1255-first):
+        //   Old pattern: pass content.text through as DeviceInbound.PayloadJson.
+        //   New principle: terminate JSON here and map known events to typed Protobuf payloads.
         using var innerDoc = JsonDocument.Parse(contentText);
         var inner = innerDoc.RootElement;
 
