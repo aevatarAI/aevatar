@@ -129,11 +129,9 @@ describe('ServicesPage', () => {
     expect(await screen.findByText('无公开入口')).toBeTruthy();
     expect(await screen.findByText('查找服务')).toBeTruthy();
     expect(await screen.findByText('Service Alpha')).toBeTruthy();
-    expect(screen.getByText('团队 / Tenant')).toBeTruthy();
-    expect(screen.getByText('结果数量')).toBeTruthy();
+    expect(screen.getByText('Team / Tenant')).toBeTruthy();
+    expect(screen.getByText('Result window')).toBeTruthy();
     expect(screen.getByRole('button', { name: '重置' })).toBeTruthy();
-    expect(screen.queryByText('Team / Tenant')).toBeNull();
-    expect(screen.queryByText('Result window')).toBeNull();
     expect(screen.getByText('Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、Deployments 或 Topology。')).toBeTruthy();
     expect(screen.getByText('服务目录')).toBeTruthy();
     expect(screen.getByText('按行扫描状态、部署和入口，点击行或按钮在抽屉里查看详情。')).toBeTruthy();
