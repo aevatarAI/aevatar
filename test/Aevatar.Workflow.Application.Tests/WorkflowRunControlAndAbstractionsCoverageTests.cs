@@ -108,22 +108,43 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
                 string.Empty));
     }
 
-    [Theory]
-    [InlineData(null, null)]
-    [InlineData("", null)]
-    [InlineData(" ", null)]
-    [InlineData("cmd-1", "cmd-1")]
-    public void WorkflowRunControlCommandBase_ShouldExposeCorrelationIdOnlyWhenCommandIdExists(
-        string? commandId,
-        string? expectedCorrelationId)
+    [Fact]
+    public void WorkflowRunControlCommandBase_ShouldKeepCorrelationIdExplicit()
     {
-        var resume = new WorkflowResumeCommand("actor-1", "run-1", "step-1", commandId, true, "approved");
-        var signal = new WorkflowSignalCommand("actor-1", "run-1", "approve", commandId, "payload");
-        var stop = new WorkflowStopCommand("actor-1", "run-1", commandId, "stop");
+        var resume = new WorkflowResumeCommand("actor-1", "run-1", "step-1", "cmd-1", true, "approved");
+        var signal = new WorkflowSignalCommand("actor-1", "run-1", "approve", "cmd-2", "payload");
+        var stop = new WorkflowStopCommand("actor-1", "run-1", "cmd-3", "stop");
 
-        resume.CorrelationId.Should().Be(expectedCorrelationId);
-        signal.CorrelationId.Should().Be(expectedCorrelationId);
-        stop.CorrelationId.Should().Be(expectedCorrelationId);
+        resume.CorrelationId.Should().BeNull();
+        signal.CorrelationId.Should().BeNull();
+        stop.CorrelationId.Should().BeNull();
+
+        var explicitResume = new WorkflowResumeCommand(
+            "actor-1",
+            "run-1",
+            "step-1",
+            "cmd-4",
+            true,
+            "approved",
+            CorrelationId: "corr-4");
+        var explicitSignal = new WorkflowSignalCommand(
+            "actor-1",
+            "run-1",
+            "approve",
+            "cmd-5",
+            "payload",
+            CorrelationId: "corr-5");
+        var explicitStop = new WorkflowStopCommand(
+            "actor-1",
+            "run-1",
+            "cmd-6",
+            "stop",
+            CorrelationId: "corr-6");
+
+        // Refactor (issue1326): Control command correlation is caller-provided context, not derived from command id.
+        explicitResume.CorrelationId.Should().Be("corr-4");
+        explicitSignal.CorrelationId.Should().Be("corr-5");
+        explicitStop.CorrelationId.Should().Be("corr-6");
         resume.Headers.Should().BeNull();
         signal.Headers.Should().BeNull();
         stop.Headers.Should().BeNull();
