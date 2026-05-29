@@ -74,46 +74,6 @@ gh issue view <N> --json comments --jq '
 
 输出格式稳定,易于直接判断派什么。
 
-If this repository snapshot is missing `.refactor-loop/host.env`, missing `.refactor-loop/logs/`, prompts, or GitHub state, keep the stable entrypoint as:
-
-```bash
-bash .claude/skills/codex-refactor-loop/scripts/peek.sh
-```
-
-`peek.sh` must degrade to a local read-only process/log/status snapshot and may delegate to:
-
-```bash
-bash .claude/skills/codex-refactor-loop/scripts/visible-loop-health.sh
-```
-
-The helper does not call GitHub and does not write loop state. It only reports host.env, peek, logs, prompts, runs, repo-scoped `spawn-codex.sh` process counts, recent local markers, visible-loop marker summaries, and monitor file status from the current git root. Use it as the degraded helper behind `peek.sh`; it does not replace the controller's later GitHub status synchronization when the full loop environment is available.
-
-For local visible worker logs, the safe marker summary helper is:
-
-```bash
-bash .claude/skills/codex-refactor-loop/scripts/visible-loop-log-summary.sh .refactor-loop/logs/visible-*.log
-```
-
-It treats a log as finished only when `tail -5` contains exact `EXIT=0`; reports `DONE_AT=` only from that tail; and only then reports the latest real `VISIBLE_WORKER_DONE:<role>:<ok|blocked>:<reason>` marker. It filters prompt placeholders such as `<role>`, `<ok|blocked>`, `<reason>`, `EXIT=$?`, and template-only values, so degraded visible-loop wakeups do not mistake prompt echoes for completed worker output.
-
-For process-only visible-loop helper changes, run the local read-only smoke command instead of repeating manual checks:
-
-```bash
-bash .claude/skills/codex-refactor-loop/scripts/visible-loop-smoke.sh /Users/abigaildeng/Documents/Playground/aevatar/.refactor-loop/logs
-```
-
-The smoke runner performs `git diff --check`, `bash -n` over the local shell helpers, `portable-timeout.sh --select`, a forced shell-fallback timeout success check, visible worker log summaries when logs are available, and capped degraded `peek.sh` / `visible-loop-health.sh` output. It does not call GitHub, does not write loop state, and does not modify tracked files.
-
-For visible-loop PR readiness, use these read-only threshold guards before preparing external GitHub content:
-
-```bash
-bash .claude/skills/codex-refactor-loop/scripts/visible-loop-prompt-guard.sh /Users/abigaildeng/Documents/Playground/aevatar/.refactor-loop/prompts/visible-*.md
-bash .claude/skills/codex-refactor-loop/scripts/visible-loop-batch-files.sh 10
-bash .claude/skills/codex-refactor-loop/scripts/visible-loop-pr-body-check.sh <pr-body-file>
-```
-
-`visible-loop-prompt-guard.sh` checks visible worker prompts for unresolved placeholders outside intentional marker examples, risky raw `@` mentions, and missing `⟦AI:AUTO-LOOP⟧` instructions when a prompt describes GitHub / PR / comment / body content. `visible-loop-batch-files.sh` uses `git ls-files -m -o --exclude-standard .claude/skills/codex-refactor-loop` as the stable scoped count for the process batch; the current PR threshold is 10 meaningful tracked or prospective tracked files. `visible-loop-pr-body-check.sh` validates a local PR body draft for the AI automation pipeline sections, required base branch, validation evidence, browser/runtime evidence or an explicit not-applicable note, and user dirty-workspace protection; it never calls GitHub. `visible-loop-smoke.sh` runs the prompt guard when visible prompts are discoverable, reports the 10-file threshold as readiness status, and only runs the PR body check when a body path is supplied.
-
 ### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的" + 2026-05-21 "没有并行 codex 就有问题")
 
 **铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 codex 在跑**。`ps codex exec | wc -l == 0` AND `gh issue list --label "🔍 design-solving"` non-empty → **P0 bug**(no-gap-violation)。

@@ -25,9 +25,6 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TIMEOUT_WRAPPER="$SCRIPT_DIR/portable-timeout.sh"
-
 CD=""
 PROMPT=""
 PROMPT_TEXT=""
@@ -73,11 +70,6 @@ if [[ ! -f "$PROMPT" ]]; then
   exit 2
 fi
 
-if [[ ! -x "$TIMEOUT_WRAPPER" ]]; then
-  echo "timeout wrapper is not executable: $TIMEOUT_WRAPPER" >&2
-  exit 2
-fi
-
 # Project-wide minimum codex timeout: 3600s (1 hour). See CLAUDE.md
 # "Codex CLI 调用规范". Shorter timeouts cause codex to truncate
 # deep-scan / multi-file refactor work and inflate the controller's
@@ -120,7 +112,7 @@ ARGS+=(-)
 # Run with a hard wall-clock timeout. The harness watches the process; codex exits naturally
 # on completion. Append EXIT/DONE_AT footers so controller can post-mortem from log alone.
 set +e
-"$TIMEOUT_WRAPPER" "$TIMEOUT" codex "${ARGS[@]}" < "$PROMPT" > "$LOG" 2>&1
+timeout "$TIMEOUT" codex "${ARGS[@]}" < "$PROMPT" > "$LOG" 2>&1
 EXIT=$?
 set -e
 

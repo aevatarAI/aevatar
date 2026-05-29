@@ -1,313 +1,314 @@
 #!/usr/bin/env bash
-# Stable read-only controller visibility entrypoint for codex-refactor-loop.
+# peek.sh — controller wakeup 快速 sweep
 #
-# This script intentionally prefers a local process/log snapshot. It does not
-# fetch, push, post comments, change labels, or call GitHub. When key loop
-# directories are missing, it delegates to visible-loop-health.sh as a degraded
-# helper so controller wakeups still have one stable command to run.
+# per Auric 2026-05-21 "主动发现问题" + "codex 可以执行得很好,为什么你做不到":
+# controller 每 wakeup 第一动作应该用这个 script 一眼看全状态,
+# 避免人工 grep / parse 出错(pr1_num empty bug 那种)。
+#
+# 输出:
+#   1. 活跃 codex 数 + 每个的 log 名(harness-tracked vs detached 分别标)
+#   2. 完成 markers + 推荐下一步路由(per skill route table)
+#   3. 每个 open auto-loop PR 的 CI + reviewer 状态
+#   4. monitor zero_streak 最大值(过去 10 tick)
+#
+# Usage: bash .claude/skills/codex-refactor-loop/scripts/peek.sh
+#
+# ⟦AI:AUTO-LOOP⟧
 
-set -euo pipefail
+set -e
+cd /Users/auric/aevatar
+git fetch origin --quiet 2>/dev/null
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-helper_script="$script_dir/visible-loop-health.sh"
-log_summary_script="$script_dir/visible-loop-log-summary.sh"
-script_git_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || true)"
-pwd_git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+echo "═══════════════ peek $(date -u +%H:%M:%SZ) ═══════════════"
 
-repo_root="${REPO_ROOT:-${script_git_root:-$pwd_git_root}}"
-host_env_status="missing"
-
-if [[ -n "$repo_root" && -f "$repo_root/.refactor-loop/host.env" ]]; then
-  host_env_status="present"
-  set +e +u
-  # shellcheck disable=SC1090
-  source "$repo_root/.refactor-loop/host.env"
-  source_rc=$?
-  set -euo pipefail
-  if [[ "$source_rc" -eq 0 ]]; then
-    host_env_status="loaded"
-    repo_root="${REPO_ROOT:-$repo_root}"
+# 0. CRITICAL: maintainer 评论(non-AI 即非 sentinel)
+# per Auric 2026-05-21 漏读 #720 4h+ + 2026-05-22 #779 8h 漏读事故
+# 规则:
+#   (a) 最近 12h 任何 issue/PR 的 maintainer 评论 — 显示
+#   (b) stuck-label issue 的 LATEST maintainer 评论 — 无论多久都显示(避免漏读)
+echo ""
+echo "▍🚨 maintainer 评论(read first — 漏读 = controller bug):"
+{
+  gh issue list --label "auto-loop" --state open --json number 2>/dev/null | python3 -c "import json,sys; [print(f'i{x[\"number\"]}') for x in json.load(sys.stdin)]" 2>/dev/null
+  gh pr list --label "auto-loop" --state open --json number 2>/dev/null | python3 -c "import json,sys; [print(f'p{x[\"number\"]}') for x in json.load(sys.stdin)]" 2>/dev/null
+} | while read item; do
+  kind=$(echo "$item" | cut -c1)
+  num=$(echo "$item" | cut -c2-)
+  [ -z "$num" ] && continue
+  if [ "$kind" = "i" ]; then
+    raw=$(gh issue view "$num" --json comments 2>/dev/null)
   else
-    host_env_status="load-failed"
+    raw=$(gh pr view "$num" --json comments 2>/dev/null)
   fi
+  echo "$raw" | python3 -c "
+import json, sys
+from datetime import datetime, timezone
+try:
+    data = json.load(sys.stdin)
+    cs = data.get('comments', [])
+except: sys.exit(0)
+# non-AI = not AI sentinel, not status banner prefix, not codecov bot
+non_ai = [c for c in cs if '⟦AI:AUTO-LOOP⟧' not in (c.get('body','') or '')
+          and not (c.get('body','') or '').lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))
+          and not (c.get('author',{}) or {}).get('login','').endswith('[bot]')]
+if not non_ai: sys.exit(0)
+last = max(non_ai, key=lambda c: c.get('createdAt',''))
+# Find latest AI reply (any AI sentinel or status banner)
+ai = [c for c in cs if c.get('createdAt','') > last.get('createdAt','') and
+      ('⟦AI:AUTO-LOOP⟧' in (c.get('body','') or '') or (c.get('body','') or '').lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘')))]
+has_ai_reply = bool(ai)
+ts_str = last.get('createdAt','').rstrip('Z')
+try:
+    ts = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+except: sys.exit(0)
+delta_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+# 12h cutoff OR no AI reply since(无回应必显示,无论多久)
+if delta_h > 12 and has_ai_reply: sys.exit(0)
+flag = '⏰ no-AI-reply' if not has_ai_reply else ''
+author = (last.get('author', {}) or {}).get('login', '?')
+body = (last.get('body','') or '').replace('\n',' ')[:200]
+print(f'  {flag} [{author}] ${num} ${kind} ({delta_h:.1f}h ago): {body}')
+" 2>/dev/null
+done
+
+# 1. Active codex
+n=$(ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | wc -l | tr -d ' ')
+echo ""
+echo "▍活跃 codex: ${n}"
+if [ "$n" -gt 0 ]; then
+  ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | \
+    sed -E 's/.*--log [^ ]*\/([^ ]+)\.log.*/  • \1/' | sort
 fi
 
-if [[ -z "$repo_root" ]]; then
-  echo "codex_refactor_loop_peek"
-  echo "status=degraded"
-  echo "reason=not inside a git repository and REPO_ROOT is unset"
-  if [[ -x "$helper_script" ]]; then
-    echo "delegated_helper=$helper_script"
-    bash "$helper_script" || true
-  else
-    echo "delegated_helper=missing path=$helper_script"
-  fi
-  exit 0
-fi
-
-refactor_dir="$repo_root/.refactor-loop"
-log_dir="$refactor_dir/logs"
-prompt_dir="$refactor_dir/prompts"
-run_dir="$refactor_dir/runs"
-
-path_status() {
-  local path="$1"
-  if [[ -d "$path" ]]; then
-    echo "present"
-  else
-    echo "missing"
-  fi
-}
-
-file_status() {
-  local path="$1"
-  if [[ -f "$path" ]]; then
-    echo "present"
-  else
-    echo "missing"
-  fi
-}
-
-count_files() {
-  local dir="$1"
-  if [[ ! -d "$dir" ]]; then
-    echo 0
-    return
-  fi
-  find "$dir" -type f 2>/dev/null | wc -l | tr -d ' '
-}
-
-tail_exit_line() {
-  local file="$1"
-  tail -5 "$file" 2>/dev/null | grep -E "^EXIT=[0-9]+$" | tail -1 || true
-}
-
-tail_exit_code() {
-  local file="$1"
-  local line
-  line="$(tail_exit_line "$file")"
-  if [[ -z "$line" ]]; then
-    echo "none"
-  else
-    echo "${line#EXIT=}"
-  fi
-}
-
-marker_from_log() {
-  local file="$1"
-  grep -hE "^[+]?(AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE):" "$file" 2>/dev/null \
-    | grep -vE "<reason>|<id>|<status>|<category>|<framing>|<role>|<verdict>|round-N" \
-    | sed -E 's/^[+]+//' \
-    | tail -1 \
-    | head -c 180 \
-    || true
-}
-
-route_hint() {
-  local marker="$1"
+# 2. Recently finished markers (last 60 min) + routing hint
+echo ""
+echo "▍最近 60 min 完成 codex(marker → 推荐下一步):"
+find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while read f; do
+  base=$(basename "$f" .log)
+  # Skip in-progress (no EXIT line)
+  exit_line=$(grep "^EXIT=" "$f" 2>/dev/null | tail -1)
+  [ -z "$exit_line" ] && continue
+  marker=$(grep -hE "^[+]?(AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE):" "$f" 2>/dev/null | sed -E 's/^[+]+//' | tail -1 | head -c 100)
+  [ -z "$marker" ] && continue
+  # Routing hint
+  hint=""
   case "$marker" in
-    IMPLEMENT_DONE:*:ok*) echo "commit/push/open PR, then spawn 3 reviewers" ;;
-    IMPLEMENT_DONE:*:partial|IMPLEMENT_DONE:*:blocked) echo "inspect blocker, then re-prompt or reflect" ;;
-    IMPLEMENT_BLOCKED:*) echo "inspect blocker, then meta-reflect" ;;
-    FIX_DONE:*) echo "commit/push, then spawn reviewer round r+1" ;;
-    FIX_BLOCKED:*) echo "meta-reflect before more fix work" ;;
-    REVIEW_DONE:*:approve) echo "wait for remaining reviewers; merge only with consensus and green checks" ;;
-    REVIEW_DONE:*:comment) echo "advisory review; wait for remaining reviewers" ;;
-    REVIEW_DONE:*:reject) echo "wait for remaining reviewers, then spawn fix round r+1" ;;
-    SOLVER_DONE:*) echo "wait for 3 solvers in the same round, then spawn meta-judge" ;;
-    META_JUDGE_DONE:consensus:*) echo "spawn implementation codex" ;;
-    META_JUDGE_DONE:converge:*) echo "spawn next solver round with convergence framing" ;;
-    META_JUDGE_DONE:escalate:*) echo "spawn reflector or re-judge legacy escalation output" ;;
-    META_RESOLVED:retry-fix:*) echo "spawn implement or fix codex, depending on PR state" ;;
-    META_RESOLVED:re-design:*) echo "close stale PR path and start a fresh design round" ;;
-    META_RESOLVED:re-cluster:*) echo "close stale PR path and re-run audit split" ;;
-    META_RESOLVED:drop:*) echo "close issue as intentionally dropped" ;;
-    META_RESOLVED:escalate-human:*) echo "only now label human-blocked and post a decision banner" ;;
-    AUDIT_DONE:*) echo "validate evidence, open design issues, then dispatch implementation" ;;
-    AUDIT_INCOMPLETE:*) echo "re-dispatch audit for missing evidence" ;;
-    TEST_ADD_DONE:*) echo "commit/push test additions and wait for CI" ;;
-    *) echo "" ;;
+    IMPLEMENT_DONE:*:ok*)    hint="→ commit/push + open PR + 3 reviewer r1" ;;
+    IMPLEMENT_DONE:*:partial|IMPLEMENT_DONE:*:blocked) hint="→ inspect + re-prompt or escalate" ;;
+    IMPLEMENT_BLOCKED:*)     hint="→ inspect blocker + meta-reflect" ;;
+    FIX_DONE:*)              hint="→ commit/push + 3 reviewer r+1" ;;
+    FIX_BLOCKED:*)           hint="→ meta-reflect" ;;
+    REVIEW_DONE:*:approve)   hint="→ wait other 2 reviewers,then merge if all approve / mixed: ≥2 approve + 0 reject = merge" ;;
+    REVIEW_DONE:*:comment)   hint="→ advisory; wait other reviewers" ;;
+    REVIEW_DONE:*:reject)    hint="→ wait other 2 reviewers,then fix r+1" ;;
+    SOLVER_DONE:*)           hint="→ wait other 2 solvers,then meta-judge" ;;
+    META_JUDGE_DONE:consensus:*) hint="→ implement codex (worktree + spawn)" ;;
+    META_JUDGE_DONE:converge:*)  hint="→ re-spawn 3 solver with convergence question" ;;
+    META_JUDGE_DONE:escalate:philosophy:*) hint="→ label escalate-human + ASCII problem banner" ;;
+    META_JUDGE_DONE:escalate:*)  hint="→ reflector codex" ;;
+    META_RESOLVED:retry-fix:*)   hint="→ implement codex(or fix r+1 if PR exists)" ;;
+    META_RESOLVED:re-design:*)   hint="→ close PR + Phase 9 fresh round" ;;
+    META_RESOLVED:re-cluster:*)  hint="→ close PR + audit re-split" ;;
+    META_RESOLVED:drop:*)        hint="→ close PR + close issue wontfix" ;;
+    META_RESOLVED:escalate-human:*) hint="→ label 🆘 + push notify" ;;
+    AUDIT_DONE:*)            hint="→ 验证 cluster evidence + 开 design issues + 派 implement" ;;
+    AUDIT_INCOMPLETE:*)      hint="→ re-dispatch audit with missing pieces" ;;
+    TEST_ADD_DONE:*)         hint="→ commit/push 等 CI" ;;
   esac
-}
+  echo "  • ${base}: ${marker}"
+  [ -n "$hint" ] && echo "    ${hint}"
+done
 
-print_process_snapshot() {
-  local repo_scoped=0
-  local loop_like=0
-  local direct_codex=0
-  local line
-  local scoped_lines=()
-  local unscoped_lines=()
+# 3. Open auto-loop PRs + state
+echo ""
+echo "▍Open auto-loop PRs:"
+gh pr list --label "auto-loop" --state open --json number,title --jq '.[]' | while IFS= read -r line; do
+  num=$(echo "$line" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['number'])" 2>/dev/null)
+  title=$(echo "$line" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['title'][:60])" 2>/dev/null)
+  [ -z "$num" ] && continue
+  fail=$(gh pr checks "$num" --json bucket --jq '[.[] | select(.bucket=="fail") | 1] | length' 2>/dev/null)
+  pending=$(gh pr checks "$num" --json bucket --jq '[.[] | select(.bucket=="pending") | 1] | length' 2>/dev/null)
+  pass=$(gh pr checks "$num" --json bucket --jq '[.[] | select(.bucket=="pass") | 1] | length' 2>/dev/null)
+  state=$(gh pr view "$num" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null)
+  echo "  • PR #${num} [${state}] CI: fail=${fail} pending=${pending} pass=${pass} — ${title}"
+done
 
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    if [[ "$line" == *"codex exec"* ]]; then
-      direct_codex=$((direct_codex + 1))
-    fi
-    if [[ "$line" == *"spawn-codex.sh"* ]] &&
-       { [[ "$line" == *".refactor-loop/logs/"* ]] || [[ "$line" == *".refactor-loop/prompts/"* ]]; }; then
-      loop_like=$((loop_like + 1))
-      if [[ "$line" == *"$repo_root"* ]]; then
-        repo_scoped=$((repo_scoped + 1))
-        scoped_lines+=("$line")
-      else
-        unscoped_lines+=("$line")
-      fi
-    fi
-  done < <(ps -eo command= 2>/dev/null || ps -ef 2>/dev/null || true)
+# 4. Monitor recent zero_streak max
+echo ""
+echo "▍Monitor zero_streak (过去 10 tick):"
+tail -10 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | \
+  grep -oE "zero_streak=[0-9]+" | sort -t= -k2 -rn | head -1 | sed 's/^/  最大: /'
+zero_now=$(tail -1 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | grep -oE "zero_streak=[0-9]+" | head -1)
+[ -n "$zero_now" ] && echo "  当前: ${zero_now}"
 
-  echo "active_codex:"
-  echo "  repo_scoped_spawn_codex=$repo_scoped"
-  echo "  loop_like_spawn_codex=$loop_like"
-  echo "  direct_codex_exec=$direct_codex"
-
-  if [[ "${#scoped_lines[@]}" -gt 0 ]]; then
-    echo "active_repo_scoped_logs:"
-    printf '%s\n' "${scoped_lines[@]}" \
-      | sed -E 's/[[:space:]]+/ /g; s#.*--log ([^ ]*/)?([^/ ]+)\.log.*#  \2#' \
-      | sort \
-      | head -10
+# 5. Mergeable PRs (per reviewer consensus + CI green)
+echo ""
+echo "▍可合并 PR(controller 应立即 merge):"
+gh pr list --label "auto-loop" --state open --json number,title --jq '.[].number' 2>/dev/null | while read pr_num; do
+  [ -z "$pr_num" ] && continue
+  # CI must have 0 fail + 0 pending
+  fail=$(gh pr checks "$pr_num" --json bucket --jq '[.[] | select(.bucket=="fail") | 1] | length' 2>/dev/null)
+  pending=$(gh pr checks "$pr_num" --json bucket --jq '[.[] | select(.bucket=="pending") | 1] | length' 2>/dev/null)
+  [ "$fail" != "0" ] || [ "$pending" != "0" ] && continue
+  state=$(gh pr view "$pr_num" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null)
+  # Reviewer consensus: latest round per role, count approve/reject/comment
+  # find latest round N for this PR
+  max_round=0
+  for r in 1 2 3 4 5 6; do
+    cnt=$(ls .refactor-loop/logs/review-pr${pr_num}-*-r${r}.log 2>/dev/null | wc -l | tr -d ' ')
+    [ "$cnt" -ge 3 ] && max_round=$r
+  done
+  [ "$max_round" = "0" ] && continue
+  approve=0; comment=0; reject=0
+  for role in architect tests quality; do
+    f=".refactor-loop/logs/review-pr${pr_num}-${role}-r${max_round}.log"
+    [ -f "$f" ] || continue
+    v=$(grep -hE "^[+]?REVIEW_DONE:" "$f" 2>/dev/null | sed -E 's/^[+]+//; s/.*:([a-z]+)\s*$/\1/' | tail -1)
+    case "$v" in
+      approve) approve=$((approve+1)) ;;
+      comment) comment=$((comment+1)) ;;
+      reject)  reject=$((reject+1)) ;;
+    esac
+  done
+  # Merge rule: 0 reject AND >= 2 approve (mixed comment OK)
+  if [ "$reject" = "0" ] && [ "$approve" -ge 2 ]; then
+    echo "  ✅ PR #${pr_num} [${state}] r${max_round}: approve=${approve} comment=${comment} reject=0 — gh pr merge ${pr_num} --admin --squash --delete-branch"
   fi
+done
 
-  if [[ "$repo_scoped" -eq 0 && "${#unscoped_lines[@]}" -gt 0 ]]; then
-    echo "unscoped_loop_like_processes:"
-    printf '  %s\n' "${unscoped_lines[@]}" | sed -E 's/[[:space:]]+/ /g' | head -5
-  fi
-}
+# 5b. Stale-label detection on CLOSED issues/PRs(per Auric 2026-05-21 "状态、PR跟issues的关联状态有问题")
+echo ""
+echo "▍Stale labels(已 CLOSED 但还挂 in-flight phase 标签):"
+gh issue list --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
+  [ -z "$num" ] || [ -z "$labels" ] && continue
+  echo "  ⚠️ closed issue #${num} 仍挂: ${labels}  → controller 应清理 + 加 🎉 phase:merged"
+done
+gh pr list --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘") or startswith("🚀"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
+  [ -z "$num" ] || [ -z "$labels" ] && continue
+  echo "  ⚠️ closed PR #${num} 仍挂: ${labels}"
+done
 
-print_active_logs() {
-  if [[ ! -d "$log_dir" ]]; then
-    echo "active_logs_last_10m:"
-    echo "  unavailable: logs directory missing"
-    return
-  fi
-
-  local found=0
-  local file
-  echo "active_logs_last_10m:"
-  while IFS= read -r file; do
-    [[ -f "$file" ]] || continue
-    [[ "$(tail_exit_code "$file")" == "none" ]] || continue
-    found=1
-    echo "  $(basename "$file")"
-  done < <(find "$log_dir" -name "*.log" -type f -mmin -10 2>/dev/null | sort || true)
-
-  if [[ "$found" -eq 0 ]]; then
-    echo "  none"
-  fi
-}
-
-print_recent_markers() {
-  if [[ ! -d "$log_dir" ]]; then
-    echo "recent_finished_markers_last_60m:"
-    echo "  unavailable: logs directory missing"
-    return
-  fi
-
-  local found=0
-  local file
-  local exit_code
-  local marker
-  local hint
-  echo "recent_finished_markers_last_60m:"
-  while IFS= read -r file; do
-    [[ -f "$file" ]] || continue
-    exit_code="$(tail_exit_code "$file")"
-    [[ "$exit_code" != "none" ]] || continue
-    marker="$(marker_from_log "$file")"
-    [[ -n "$marker" ]] || continue
-    found=1
-    echo "  $(basename "$file"): exit=$exit_code marker=$marker"
-    if [[ "$exit_code" == "0" ]]; then
-      hint="$(route_hint "$marker")"
-      [[ -z "$hint" ]] || echo "    next=$hint"
+# 5c. Linkage check:open issues phase:implementing 但没对应 in-flight PR / open PRs 没对应 design issue
+echo ""
+echo "▍Issue/PR linkage 不一致:"
+gh issue list --label "🛠️ phase:implementing" --state open --json number,title --jq '.[] | "\(.number)|\(.title)"' 2>/dev/null | while IFS='|' read -r num title; do
+  [ -z "$num" ] && continue
+  # 找 closes #num 的 open PR
+  pr_count=$(gh pr list --label "auto-loop" --state open --search "in:body Closes #${num}" --json number --jq 'length' 2>/dev/null || echo 0)
+  if [ "$pr_count" = "0" ]; then
+    # 还要找 closed PR 是否已 merge
+    merged_pr=$(gh pr list --label "auto-loop" --state merged --search "in:body Closes #${num}" --json number --jq '.[0].number' 2>/dev/null)
+    if [ -z "$merged_pr" ] || [ "$merged_pr" = "null" ]; then
+      echo "  ⚠️ issue #${num} [🛠️ implementing] 无对应 in-flight 或 merged PR(implement codex 失败/未派?)"
     else
-      echo "    next=inspect failed log before routing"
+      echo "  ⚠️ issue #${num} [🛠️ implementing] PR #${merged_pr} 已 merged 但 issue 未关 — controller 应 gh issue close"
     fi
-  done < <(find "$log_dir" -name "*.log" -type f -mmin -60 2>/dev/null | sort || true)
+  fi
+done
 
-  if [[ "$found" -eq 0 ]]; then
-    echo "  none"
+# 5d. Spawn drop detection: 3 solver artifact 完整但对应 judge log 没有
+echo ""
+echo "▍Spawn drop(solver 完成 N 但 judge 漏派):"
+for f in .refactor-loop/runs/phase9-issue*-r*-minimal.md; do
+  [ -f "$f" ] || continue
+  base=$(basename "$f" -minimal.md)
+  issue=$(echo "$base" | sed -E 's/phase9-issue([0-9]+)-r.*/\1/')
+  round=$(echo "$base" | sed -E 's/.*-r([0-9]+)/\1/')
+  s_min="$f"
+  s_str=".refactor-loop/runs/${base}-structural.md"
+  s_del=".refactor-loop/runs/${base}-delete.md"
+  judge_log=".refactor-loop/logs/${base}-judge.log"
+  if [ -f "$s_str" ] && [ -f "$s_del" ] && [ ! -f "$judge_log" ]; then
+    issue_state=$(gh issue view "$issue" --json state --jq '.state' 2>/dev/null)
+    [ "$issue_state" = "OPEN" ] || continue  # only flag if issue still open
+    echo "  ⚠️ issue #${issue} r${round} 3 solver done 但 judge log 不存在(需重派 judge)"
+  fi
+done
+
+# 6. Drift detection: phase:* label set but no log file being actively written for that issue/PR
+echo ""
+echo "▍Drift(label vs codex 不一致):"
+active_logs_file=$(mktemp)
+# 用 log 文件最近活跃来判断:no EXIT= 末行 + mtime < 10 min = codex 在跑
+for f in .refactor-loop/logs/*.log; do
+  [ -f "$f" ] || continue
+  # mtime > 10 min: 没在更新
+  [ -n "$(find "$f" -mmin -10)" ] || continue
+  # 已有 EXIT=:已完成
+  if grep -q "^EXIT=" "$f" 2>/dev/null; then continue; fi
+  basename "$f" .log >> "$active_logs_file"
+done
+check_drift() {
+  local kind="$1" num="$2" phase="$3"
+  case "$phase" in
+    *design-solving* | *implementing* | *fixing* | *reviewing*) ;;
+    *) return ;;
+  esac
+  if ! grep -qE "(pr${num}|issue${num})" "$active_logs_file" 2>/dev/null; then
+    echo "  ⚠️ ${kind} #${num} label=${phase} 但 0 codex referencing"
   fi
 }
+gh issue list --label "auto-loop" --state open --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀"))) | first)"' 2>/dev/null | while IFS='|' read -r num phase; do
+  [ -z "$num" ] || [ -z "$phase" ] && continue
+  check_drift issue "$num" "$phase"
+done
+gh pr list --label "auto-loop" --state open --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀"))) | first)"' 2>/dev/null | while IFS='|' read -r num phase; do
+  [ -z "$num" ] || [ -z "$phase" ] && continue
+  check_drift pr "$num" "$phase"
+done
 
-print_visible_loop_log_summaries() {
-  if [[ ! -d "$log_dir" ]]; then
-    echo "visible_loop_log_summaries_last_60m:"
-    echo "  unavailable: logs directory missing"
-    return
+# 7. Stale worktree(branch 已 merged 但 worktree 还在)
+echo ""
+echo "▍Stale worktree(branch 已 merged 应清理):"
+git worktree list --porcelain | grep "^worktree " | sed 's/^worktree //' | while read wt; do
+  base=$(basename "$wt")
+  # skip main + dev-sync
+  case "$base" in
+    aevatar | aevatar-wt-dev-sync) continue ;;
+  esac
+  # If worktree branch is in remote merged-to-master list, mark stale
+  branch=$(git -C "$wt" branch --show-current 2>/dev/null)
+  if [ -n "$branch" ]; then
+    # branch exists on remote? if not, stale
+    if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+      echo "  ⚠️ $wt  branch=$branch(remote 已不存在 — git worktree remove $wt --force && git branch -D $branch)"
+    fi
   fi
+done
 
-  if [[ ! -x "$log_summary_script" ]]; then
-    echo "visible_loop_log_summaries_last_60m:"
-    echo "  unavailable: log summary helper missing path=$log_summary_script"
-    return
-  fi
+# 8. Stuck-too-long(issue/PR 有 stuck label 且 last non-AI comment > 6h)
+echo ""
+echo "▍Stuck too long(>6h 无 maintainer 回复;考虑 4h reflector 重判):"
+gh issue list --label "auto-loop-stuck" --state open --json number,title 2>/dev/null | python3 -c "
+import json, sys, subprocess
+from datetime import datetime, timezone
+data = json.load(sys.stdin)
+for it in data:
+    num = it['number']
+    r = subprocess.run(['gh', 'issue', 'view', str(num), '--json', 'comments'], capture_output=True, text=True)
+    if r.returncode != 0: continue
+    try:
+        comments = json.loads(r.stdout).get('comments', [])
+    except:
+        continue
+    # filter non-AI(no ⟦AI:AUTO-LOOP⟧ sentinel)
+    non_ai = [c for c in comments if '⟦AI:AUTO-LOOP⟧' not in (c.get('body','') or '')]
+    if not non_ai: continue
+    last = max(non_ai, key=lambda c: c.get('createdAt',''))
+    ts_str = last.get('createdAt','').rstrip('Z')
+    try:
+        ts = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+    except:
+        continue
+    delta_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+    if delta_h > 6:
+        print(f'  ⚠️ #{num} last maintainer comment {delta_h:.1f}h ago — {it[\"title\"][:50]}')
+" 2>/dev/null
 
-  local files=()
-  local file
-  while IFS= read -r file; do
-    files+=("$file")
-  done < <(find "$log_dir" -name "visible-*.log" -type f -mmin -60 2>/dev/null | sort || true)
+# 9. Open auto-loop issues + label state
+echo ""
+echo "▍Open auto-loop issues:"
+gh issue list --label "auto-loop" --state open --json number,title,labels --jq '.[] | "  • #\(.number) labels=[\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("⚙") or startswith("⏸") or startswith("🆘") or startswith("👤") or startswith("🤖"))) | join(", "))] — \(.title | .[0:55])"' 2>/dev/null
 
-  echo "visible_loop_log_summaries_last_60m:"
-  if [[ "${#files[@]}" -eq 0 ]]; then
-    echo "  none"
-    return
-  fi
-
-  "$log_summary_script" "${files[@]}" | sed 's/^/  /'
-}
-
-print_monitor_snapshot() {
-  local monitor_log="$log_dir/concurrency-monitor.log"
-  echo "monitor:"
-  echo "  alert_log=$(file_status "$refactor_dir/.concurrency-alert.log")"
-  echo "  pending_events=$(file_status "$refactor_dir/.controller-pending-events.log")"
-  echo "  monitor_state=$(file_status "$refactor_dir/.concurrency-monitor-state.json")"
-  if [[ -f "$monitor_log" ]]; then
-    local max_zero
-    local current_zero
-    max_zero="$(tail -10 "$monitor_log" 2>/dev/null | grep -oE "zero_streak=[0-9]+" | sort -t= -k2 -rn | head -1 || true)"
-    current_zero="$(tail -1 "$monitor_log" 2>/dev/null | grep -oE "zero_streak=[0-9]+" | head -1 || true)"
-    echo "  zero_streak_max_10_ticks=${max_zero:-none}"
-    echo "  zero_streak_current=${current_zero:-none}"
-  else
-    echo "  zero_streak_max_10_ticks=unavailable"
-    echo "  zero_streak_current=unavailable"
-  fi
-}
-
-degraded_reasons=()
-[[ "$host_env_status" == "loaded" ]] || degraded_reasons+=("host_env_$host_env_status")
-[[ -d "$log_dir" ]] || degraded_reasons+=("logs_missing")
-[[ -d "$prompt_dir" ]] || degraded_reasons+=("prompts_missing")
-
-echo "codex_refactor_loop_peek"
-echo "timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "repo_root=$repo_root"
-echo "branch=$(git -C "$repo_root" branch --show-current 2>/dev/null || echo unknown)"
-echo "host_env=$host_env_status path=$repo_root/.refactor-loop/host.env"
-echo "refactor_loop_dir=$(path_status "$refactor_dir")"
-echo "logs_dir=$(path_status "$log_dir") file_count=$(count_files "$log_dir")"
-echo "prompts_dir=$(path_status "$prompt_dir") file_count=$(count_files "$prompt_dir")"
-echo "runs_dir=$(path_status "$run_dir") file_count=$(count_files "$run_dir")"
-echo "github_state=skipped local_read_only_peek"
-
-print_process_snapshot
-print_active_logs
-print_recent_markers
-print_visible_loop_log_summaries
-print_monitor_snapshot
-
-if [[ "${#degraded_reasons[@]}" -gt 0 ]]; then
-  echo "degraded=true"
-  printf 'degraded_reasons=%s\n' "$(IFS=,; echo "${degraded_reasons[*]}")"
-  if [[ -x "$helper_script" ]]; then
-    echo "delegated_helper=$helper_script"
-    bash "$helper_script" || true
-  else
-    echo "delegated_helper=missing path=$helper_script"
-  fi
-else
-  echo "degraded=false"
-fi
+echo ""
+echo "═══════════════════════════════════════════════════"
