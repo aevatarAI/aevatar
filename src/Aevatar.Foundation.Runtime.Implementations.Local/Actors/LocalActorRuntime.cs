@@ -297,6 +297,10 @@ public sealed class LocalActorRuntime : IActorRuntime
         await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
+        // Refactor (issue1271/first-slice): Old pattern: parent-side observation had to infer child
+        // completion through local runtime knowledge. New principle: committed facts are relayed by
+        // the shared stream-forwarding surface, so local and distributed runtimes expose the same
+        // observer-visible committed-facts path.
         await _streams.GetStream(childId).UpsertRelayAsync(
             StreamForwardingRules.CreateCommittedFactsObserverBinding(childId, parentId),
             ct);

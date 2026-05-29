@@ -31,6 +31,10 @@ public static class StreamForwardingRules
         string targetStreamId,
         StreamForwardingMode forwardingMode = StreamForwardingMode.HandleThenForward)
     {
+        // Refactor (issue1271/first-slice): Old pattern: committed facts could stop at the child stream.
+        // New principle: committed observer publications must follow the same runtime forwarding contract.
+        // This binding lets parent observers receive child committed facts without introducing a second
+        // projection path or a process-local actor/session registry.
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
 
