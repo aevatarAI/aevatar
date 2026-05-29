@@ -2673,9 +2673,107 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 continue;
             field.Add(entry.Clone());
         }
-        while (field.Count > cap)
-            field.RemoveAt(0);
+
+        NormalizeHistoryWindow(field, cap);
     }
+
+    private static void NormalizeHistoryWindow(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        int cap)
+    {
+        while (field.Count > cap)
+            RemoveOldestHistoryUnit(field);
+
+        DropOrphanToolResults(field);
+    }
+
+    private static void RemoveOldestHistoryUnit(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field)
+    {
+        if (field.Count == 0)
+            return;
+
+        var first = field[0];
+        if (IsAssistantToolCallMessage(first))
+        {
+            var callIds = first.ToolCalls.Select(static call => call.Id).ToHashSet(StringComparer.Ordinal);
+            field.RemoveAt(0);
+            RemoveToolResults(field, callIds);
+            return;
+        }
+
+        if (IsToolResultMessage(first))
+        {
+            var callId = first.ToolCallId;
+            field.RemoveAt(0);
+            if (!string.IsNullOrWhiteSpace(callId))
+                RemoveAssistantToolCall(field, callId);
+            return;
+        }
+
+        field.RemoveAt(0);
+    }
+
+    private static void RemoveToolResults(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        HashSet<string> callIds)
+    {
+        if (callIds.Count == 0)
+            return;
+
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (IsToolResultMessage(field[i]) && callIds.Contains(field[i].ToolCallId))
+                field.RemoveAt(i);
+        }
+    }
+
+    private static void RemoveAssistantToolCall(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        string callId)
+    {
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (IsAssistantToolCallMessage(field[i]) &&
+                field[i].ToolCalls.Any(call => string.Equals(call.Id, callId, StringComparison.Ordinal)))
+            {
+                field.RemoveAt(i);
+            }
+        }
+    }
+
+    private static void DropOrphanToolResults(Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field)
+    {
+        var openCallIds = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < field.Count; i++)
+        {
+            var entry = field[i];
+            if (IsAssistantToolCallMessage(entry))
+            {
+                foreach (var call in entry.ToolCalls)
+                {
+                    if (!string.IsNullOrWhiteSpace(call.Id))
+                        openCallIds.Add(call.Id);
+                }
+                continue;
+            }
+
+            if (!IsToolResultMessage(entry))
+                continue;
+
+            if (string.IsNullOrWhiteSpace(entry.ToolCallId) || !openCallIds.Remove(entry.ToolCallId))
+            {
+                field.RemoveAt(i);
+                i--;
+            }
+        }
+    }
+
+    private static bool IsAssistantToolCallMessage(ConversationHistoryEntry entry) =>
+        string.Equals(entry.Role, "assistant", StringComparison.Ordinal) && entry.ToolCalls.Count > 0;
+
+    private static bool IsToolResultMessage(ConversationHistoryEntry entry) =>
+        string.Equals(entry.Role, "tool", StringComparison.Ordinal);
 
     private static string? NormalizeOptional(string? value)
     {

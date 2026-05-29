@@ -789,6 +789,143 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundAndReadyAsync_WhenRetainedHistoryExceedsCap_DoesNotKeepOrphanToolResult()
+    {
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-lark-history-cap", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-cap-1", "lark:scope-a:chat-cap"));
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-history-cap-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "run-cap-1",
+            Activity = CreateActivity("act-history-cap-1", "lark:scope-a:chat-cap"),
+            Outbound = new MessageContent { Text = "latest assistant" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+
+        ready.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "assistant",
+            Content = "old assistant tool call",
+            ToolCalls =
+            {
+                new ConversationToolCallEntry
+                {
+                    Id = "old-call",
+                    Name = "search",
+                    ArgumentsJson = "{}",
+                },
+            },
+        });
+        ready.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "tool",
+            ToolCallId = "old-call",
+            Content = "old result",
+        });
+        for (var i = 0; i < 100; i++)
+        {
+            ready.AppendedHistory.Add(new ConversationHistoryEntry
+            {
+                Role = i % 2 == 0 ? "user" : "assistant",
+                Content = $"recent {i}",
+            });
+        }
+
+        await agent.HandleLlmReplyReadyAsync(ready);
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-cap-2", "lark:scope-a:chat-cap"));
+
+        agent.State.RetainedHistory.Count.ShouldBeLessThanOrEqualTo(100);
+        agent.State.RetainedHistory.ShouldNotContain(entry => entry.Role == "tool" && entry.ToolCallId == "old-call");
+        dispatcher.Dispatched.Count.ShouldBe(2);
+        dispatcher.Dispatched[1].PriorHistory.Count.ShouldBeLessThanOrEqualTo(100);
+        dispatcher.Dispatched[1].PriorHistory.ShouldNotContain(entry => entry.Role == "tool" && entry.ToolCallId == "old-call");
+    }
+
+    [Fact]
+    public async Task HandleInboundAndReadyAsync_WhenRetainedHistoryExceedsCap_PreservesCompleteToolPair()
+    {
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-lark-history-tool-pair", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-tool-pair-1", "lark:scope-a:chat-tool-pair"));
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-history-tool-pair-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "run-tool-pair-1",
+            Activity = CreateActivity("act-history-tool-pair-1", "lark:scope-a:chat-tool-pair"),
+            Outbound = new MessageContent { Text = "latest assistant" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+
+        for (var i = 0; i < 98; i++)
+        {
+            ready.AppendedHistory.Add(new ConversationHistoryEntry
+            {
+                Role = i % 2 == 0 ? "user" : "assistant",
+                Content = $"older {i}",
+            });
+        }
+        ready.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "assistant",
+            Content = "kept assistant tool call",
+            ToolCalls =
+            {
+                new ConversationToolCallEntry
+                {
+                    Id = "kept-call",
+                    Name = "search",
+                    ArgumentsJson = "{}",
+                },
+            },
+        });
+        ready.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "tool",
+            ToolCallId = "kept-call",
+            Content = "kept result",
+        });
+        ready.AppendedHistory.Add(new ConversationHistoryEntry { Role = "user", Content = "latest user" });
+
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        agent.State.RetainedHistory.Count.ShouldBeLessThanOrEqualTo(100);
+        agent.State.RetainedHistory.ShouldContain(entry =>
+            entry.Role == "assistant" && entry.ToolCalls.Any(call => call.Id == "kept-call"));
+        agent.State.RetainedHistory.ShouldContain(entry => entry.Role == "tool" && entry.ToolCallId == "kept-call");
+    }
+
+    [Fact]
     public async Task HandleInboundActivityAsync_WhenDifferentConversationActorRuns_DoesNotInjectOtherConversationHistory()
     {
         var firstDispatcher = new RecordingRunDispatcher();
