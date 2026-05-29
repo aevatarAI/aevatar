@@ -255,8 +255,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
             .Should()
             .NotBeNull();
-        builder.Services.Should().NotContain(service =>
-            ServiceTypeContains(service.ServiceType, nameof(WorkflowCapabilitiesStartupArtifact)));
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(builder.Services);
     }
 
     [Fact]
@@ -328,8 +327,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
-        services.Should().NotContain(service =>
-            ServiceTypeContains(service.ServiceType, nameof(WorkflowCapabilitiesStartupArtifact)));
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
         services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
     }
 
@@ -382,8 +380,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
-        services.Should().NotContain(service =>
-            ServiceTypeContains(service.ServiceType, nameof(WorkflowCapabilitiesStartupArtifact)));
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
     }
 
     [Fact]
@@ -520,5 +517,14 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         return serviceType.IsGenericType &&
                serviceType.GenericTypeArguments.Any(argument =>
                    argument.Name.Contains(typeName, StringComparison.Ordinal));
+    }
+
+    private static void AssertNoWorkflowCapabilitiesStartupArtifactServices(IServiceCollection services)
+    {
+        // Refactor (iter161-cluster-001 #1257-first):
+        //   Old pattern: DI tests referenced the obsolete WorkflowCapabilitiesStartupArtifact type through nameof.
+        //   New principle: tests protect against service registration by symbol name without keeping the deleted type alive.
+        services.Should().NotContain(service =>
+            ServiceTypeContains(service.ServiceType, "WorkflowCapabilitiesStartupArtifact"));
     }
 }
