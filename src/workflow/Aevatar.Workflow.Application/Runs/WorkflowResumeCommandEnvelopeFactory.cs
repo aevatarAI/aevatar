@@ -27,7 +27,11 @@ internal sealed class WorkflowResumeCommandEnvelopeFactory : ICommandEnvelopeFac
 
         return new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
+            // Refactor (issue1277/first-slice):
+            // Old pattern: resume envelopes could use a factory-local random id.
+            // New principle: the accepted command id is the envelope identity.
+            // Correlation remains propagation context, not the target envelope id.
+            Id = context.CommandId,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(resumed),
             Route = EnvelopeRouteSemantics.CreateDirect("api.workflow.resume", context.TargetId),

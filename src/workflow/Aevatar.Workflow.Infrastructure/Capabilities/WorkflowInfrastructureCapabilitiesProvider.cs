@@ -1,18 +1,16 @@
 using Aevatar.Configuration;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.Workflow.Projection.Workflows;
 
-namespace Aevatar.Workflow.Infrastructure.Workflows;
+namespace Aevatar.Workflow.Infrastructure.Capabilities;
 
 // Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
 //   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
 //   New principle: Removed dead capability flag; output describes available primitives only
-internal sealed class WorkflowCapabilitiesStartupMaterializer
+internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapabilitiesPort
 {
-    public const string ArtifactId = "workflow-capabilities";
-
     private static readonly IReadOnlyDictionary<string, PrimitiveMetadataDescriptor> PrimitiveDescriptors =
         new Dictionary<string, PrimitiveMetadataDescriptor>(StringComparer.OrdinalIgnoreCase)
         {
@@ -57,40 +55,47 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
                 ]),
         };
 
-    private readonly IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact> _writeDispatcher;
     private readonly IEnumerable<IWorkflowModulePack> _modulePacks;
+    private readonly WorkflowCatalogReadModelQueryPort _catalogQueryPort;
+    private readonly WorkflowCatalogReadModelMapper _mapper;
 
-    public WorkflowCapabilitiesStartupMaterializer(
-        IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact> writeDispatcher,
-        IEnumerable<IWorkflowModulePack> modulePacks)
+    public WorkflowInfrastructureCapabilitiesProvider(
+        IEnumerable<IWorkflowModulePack> modulePacks,
+        WorkflowCatalogReadModelQueryPort catalogQueryPort,
+        WorkflowCatalogReadModelMapper mapper)
     {
-        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _modulePacks = modulePacks ?? throw new ArgumentNullException(nameof(modulePacks));
+        _catalogQueryPort = catalogQueryPort ?? throw new ArgumentNullException(nameof(catalogQueryPort));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
     }
 
-    // Refactor (iter46/issue-871-workflow-file-catalog-query-port):
-    //   Old pattern: Workflow catalog/capabilities query port discovered files, parsed YAML, loaded connector config, and cached results in singleton process memory during query execution.
-    //   New principle: WorkflowGAgent per-definition authority; query ports only read freshness-bearing readmodels; file discovery/parsing happens at startup/import time, not in query path.
-    // Refactor (iter94/cluster-094b):
-    //   Old: workflow capabilities was a current-state document with fake StateVersion = 1 and LastEventId = startup-materialization.
-    //   New: workflow capabilities is a startup artifact with honest GeneratedAtUtc and SchemaVersion watermarks, without fake authoritative version fields.
-    public async Task MaterializeAsync(CancellationToken ct = default)
+    // Refactor (iter161-cluster-001 #1257-first):
+    //   Old pattern: workflow capabilities were modeled as a startup artifact proto/partial surface after readmodel framing was removed.
+    //   New principle: capabilities DTOs come from the narrow provider path and do not create a persisted artifact surface.
+    public async Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var now = DateTimeOffset.UtcNow;
-        var artifact = new WorkflowCapabilitiesStartupArtifact
+        var generatedAt = DateTimeOffset.UtcNow;
+        var workflows = await _catalogQueryPort.QueryCatalogDocumentsAsync(ct);
+        var workflowWatermark = workflows.Count == 0
+            ? default
+            : workflows.Max(workflow => workflow.UpdatedAt);
+
+        return new WorkflowCapabilitiesDocument
         {
-            Id = ArtifactId,
-            GeneratedAtUtc = now,
             SchemaVersion = "capabilities.v1",
+            GeneratedAtUtc = generatedAt,
+            ProjectionWatermark = generatedAt >= workflowWatermark ? generatedAt : workflowWatermark,
             Primitives = BuildPrimitiveCapabilities(),
             Connectors = BuildConnectorCapabilities(AevatarConnectorConfig.LoadConnectors()),
+            Workflows = workflows
+                .OrderBy(workflow => workflow.WorkflowName, StringComparer.OrdinalIgnoreCase)
+                .Select(_mapper.ToCapabilityWorkflow)
+                .ToList(),
         };
-
-        await _writeDispatcher.UpsertAsync(artifact, ct);
     }
 
-    private List<WorkflowPrimitiveCapabilityReadModel> BuildPrimitiveCapabilities()
+    private List<WorkflowPrimitiveCapability> BuildPrimitiveCapabilities()
     {
         var aliasByCanonical = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var runtimeModuleByCanonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -132,7 +137,7 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
                 var descriptor = PrimitiveDescriptors.TryGetValue(canonical, out var knownDescriptor)
                     ? knownDescriptor
                     : new PrimitiveMetadataDescriptor($"Core workflow primitive `{canonical}`.", []);
-                return new WorkflowPrimitiveCapabilityReadModel
+                return new WorkflowPrimitiveCapability
                 {
                     Name = canonical,
                     Aliases = aliases,
@@ -140,13 +145,13 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
                     Description = descriptor.Description,
                     RuntimeModule = runtimeModuleByCanonical.GetValueOrDefault(canonical, string.Empty),
                     Parameters = descriptor.Parameters
-                        .Select(parameter => new WorkflowPrimitiveParameterCapabilityReadModel
+                        .Select(parameter => new WorkflowPrimitiveParameterCapability
                         {
                             Name = parameter.Name,
                             Type = parameter.Type,
                             Required = parameter.Required,
                             Description = parameter.Description,
-                            DefaultValue = parameter.DefaultValue,
+                            Default = parameter.DefaultValue,
                             Enum = parameter.EnumValues.ToList(),
                         })
                         .ToList(),
@@ -155,7 +160,7 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
             .ToList();
     }
 
-    private static List<WorkflowConnectorCapabilityReadModel> BuildConnectorCapabilities(
+    private static List<WorkflowConnectorCapability> BuildConnectorCapabilities(
         IReadOnlyList<ConnectorConfigEntry> connectorEntries)
     {
         return connectorEntries
@@ -164,7 +169,7 @@ internal sealed class WorkflowCapabilitiesStartupMaterializer
             {
                 var normalizedType = (entry.Type ?? string.Empty).Trim();
                 var typeKey = normalizedType.ToLowerInvariant();
-                return new WorkflowConnectorCapabilityReadModel
+                return new WorkflowConnectorCapability
                 {
                     Name = entry.Name,
                     Type = normalizedType,

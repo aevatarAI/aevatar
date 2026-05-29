@@ -1700,7 +1700,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const accepted = await saveCurrentDraftToScope();
       setNotice({
         type: 'info',
-        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the workspace catalog to catch up.`,
+        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Refresh the workspace catalog if the read model is still pending.`,
       });
       const observation = await observeAcceptedSave(accepted);
       const operationState = normalizeScriptSaveOperationState(
@@ -1752,7 +1752,14 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     } finally {
       setSavePending(false);
     }
-  }, [observeAcceptedSave, openWorkspaceSection, refreshScopeScripts, resolvedScopeId, saveCurrentDraftToScope, updateSelectedDraft]);
+  }, [
+    observeAcceptedSave,
+    openWorkspaceSection,
+    refreshScopeScripts,
+    resolvedScopeId,
+    saveCurrentDraftToScope,
+    updateSelectedDraft,
+  ]);
 
   const handleOpenBindScope = React.useCallback(() => {
     const scopeScript = selectedDraft?.scopeDetail?.script;
@@ -2006,7 +2013,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         message: response.accepted
           ? observedCatalog
             ? `Promoted ${response.scriptId} to ${response.candidateRevision}.`
-            : `Promotion accepted for ${response.scriptId} ${response.candidateRevision}. Waiting for the catalog read model to catch up.`
+            : `Promotion accepted for ${response.scriptId} ${response.candidateRevision}. Refresh the workspace catalog if the read model is still pending.`
           : response.failureReason || 'Promotion proposal was rejected.',
       });
     } catch (error) {

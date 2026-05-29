@@ -148,7 +148,7 @@ public static class WorkflowCapabilityEndpoints
             }
 
             return Results.Accepted(
-                $"/api/actors/{dispatchResult.Receipt.ActorId}",
+                BuildWorkflowRunStatusUrl(dispatchResult.Receipt.ActorId),
                 CapabilityTraceContext.CreateAcceptedPayload(dispatchResult.Receipt));
         }
         catch (OperationCanceledException)
@@ -207,7 +207,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Resume dispatch only proves inbox admission for the workflow actor, not applied continuation state.
-            //   The actor read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -271,7 +271,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Signal dispatch only proves inbox admission for the workflow actor, not applied signal handling.
-            //   The actor read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -332,7 +332,7 @@ public static class WorkflowCapabilityEndpoints
 
             // Refactor (iter56/cluster-891-endpoint-ack-honesty): old=200-shaped accepted, new=202 + Location
             //   Stop dispatch only proves inbox admission for the workflow actor, not terminal run state.
-            //   The actor read model remains the status resource for observing the run after acceptance.
+            //   The workflow actor current-state read model remains the status resource for observing the run after acceptance.
             var statusUrl = BuildWorkflowRunStatusUrl(dispatch.Receipt);
             return Results.Accepted(statusUrl, new
             {
@@ -357,7 +357,13 @@ public static class WorkflowCapabilityEndpoints
     }
 
     private static string BuildWorkflowRunStatusUrl(WorkflowRunControlAcceptedReceipt receipt) =>
-        $"/api/actors/{Uri.EscapeDataString(receipt.ActorId)}";
+        BuildWorkflowRunStatusUrl(receipt.ActorId);
+
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: accepted status links pointed at /api/actors/{actorId}.
+    //   New principle: accepted status links point at the workflow actor current-state readmodel resource.
+    private static string BuildWorkflowRunStatusUrl(string actorId) =>
+        $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state";
 
     private static WorkflowRunEventEnvelope BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
         new()
