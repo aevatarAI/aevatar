@@ -192,7 +192,7 @@ public static class DeviceEventEndpoints
                      : string.Empty;
         }
 
-        // Refactor (issue1281/first-slice): Old pattern: pass content.text through as DeviceInbound.PayloadJson.
+        // Refactor (iter1281/cluster-001-device-inbound-typed-payload): Old pattern: pass content.text through as DeviceInbound.PayloadJson.
         // New principle: terminate NyxID callback JSON at the Host/Adapter boundary.
         // Known device events are allowlisted and mapped to typed Protobuf payload cases.
         // Unknown or malformed content is rejected before any EventEnvelope dispatch can happen.
