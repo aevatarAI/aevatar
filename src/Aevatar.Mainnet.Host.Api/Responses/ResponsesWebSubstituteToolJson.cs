@@ -33,12 +33,12 @@ internal static class ResponsesWebSubstituteToolJson
     public static string ToBoundaryJson(ResponsesWebSubstituteToolExecutionResult result) =>
         result.ResultCase switch
         {
-            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedCached => ResponsesWebResultJson.ToBoundaryJson(result.TypedCached),
-            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedError => ResponsesWebResultJson.ToBoundaryJson(result.TypedError),
-            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedSearch => ResponsesWebResultJson.ToBoundaryJson(result.TypedSearch),
+            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedCached => ResponsesWebResultBoundaryJson.ToBoundaryJson(result.TypedCached),
+            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedError => ResponsesWebResultBoundaryJson.ToBoundaryJson(result.TypedError),
+            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.TypedSearch => ResponsesWebResultBoundaryJson.ToBoundaryJson(result.TypedSearch),
             ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Cached => ToBoundaryJson(result.Cached),
             ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Error => ToBoundaryJson(result.Error),
-            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Fetch => ResponsesWebResultJson.ToBoundaryJson(result.Fetch),
+            ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Fetch => ResponsesWebResultBoundaryJson.ToBoundaryJson(result.Fetch),
             ResponsesWebSubstituteToolExecutionResult.ResultOneofCase.Search => ToBoundaryJson(result.Search),
             _ => "{}",
         };

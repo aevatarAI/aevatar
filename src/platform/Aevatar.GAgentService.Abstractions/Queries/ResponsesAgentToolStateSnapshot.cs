@@ -40,7 +40,6 @@ public sealed record ResponsesWebTraceSnapshot(
     string Query,
     bool CacheHit,
     ResponsesWebToolResult Result,
-    string ResultJson,
     DateTimeOffset ObservedAt);
 
 public sealed record ResponsesWebCacheEntrySnapshot(

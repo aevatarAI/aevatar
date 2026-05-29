@@ -79,7 +79,6 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 trace.Query,
                 trace.CacheHit,
                 ResolveWebResult(trace.TypedResult, trace.Result),
-                ResponsesWebResultJson.ToBoundaryJson(ResolveWebResult(trace.TypedResult, trace.Result)),
                 trace.ObservedAt)).ToArray(),
             document.WebCacheEntries.Select(static entry => new ResponsesWebCacheEntrySnapshot(
                 entry.CacheKey,

@@ -51,12 +51,11 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         snapshot.Tasks[0].ArgumentsJson.Should().Be("{}");
         snapshot.Tasks[0].ResultJson.Should().Be("""{"status":"accepted"}""");
         snapshot.WebTraces.Should().ContainSingle(x => x.TraceId == "trace-1");
-        snapshot.WebTraces[0].ResultJson.Should().Be("""{"url":"https://example.com","status_code":200,"content_type":"","content":"fresh"}""");
         snapshot.WebTraces[0].Result.Fetch.Content.Should().Be("fresh");
 
         var cache = await reader.GetWebCacheEntryAsync(ScopeId, OwnerSubject, "WebFetch", "cache-1");
         cache.Should().NotBeNull();
-        ResponsesWebResultJson.ToBoundaryJson(cache!.Result).Should().Be("""{"url":"https://example.com","status_code":200,"content_type":"","content":"fresh"}""");
+        cache!.Result.Fetch.Content.Should().Be("fresh");
     }
 
     [Fact]
@@ -155,7 +154,6 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         snapshot!.WebTraces.Should().ContainSingle();
         snapshot.WebTraces[0].Result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Fetch);
         snapshot.WebTraces[0].Result.Fetch.Content.Should().Be("legacy");
-        snapshot.WebTraces[0].ResultJson.Should().Be("""{"url":"https://legacy.example.com","status_code":202,"content_type":"","content":"legacy"}""");
         cache.Should().NotBeNull();
         cache!.Result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Fetch);
         cache.Result.Fetch.StatusCode.Should().Be(202);

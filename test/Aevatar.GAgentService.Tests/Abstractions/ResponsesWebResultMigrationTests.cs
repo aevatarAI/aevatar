@@ -6,7 +6,7 @@ using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.GAgentService.Tests.Abstractions;
 
-public sealed class ResponsesWebResultJsonTests
+public sealed class ResponsesWebResultMigrationTests
 {
     [Fact]
     public void FromLegacyValue_ShouldMapFetchStruct_ToTypedFetchResult()
@@ -73,7 +73,7 @@ public sealed class ResponsesWebResultJsonTests
 
         result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Error);
         result.Error.Code.Should().Be("legacy_value_result");
-        result.Error.Message.Should().Be("""{"custom":"kept"}""");
+        result.Error.Message.Should().Be("unsupported legacy result value");
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public sealed class ResponsesWebResultJsonTests
 
         result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Error);
         result.Error.Code.Should().Be("legacy_value_result");
-        result.Error.Message.Should().Be("\"plain\"");
+        result.Error.Message.Should().Be("plain");
     }
 
     [Fact]
