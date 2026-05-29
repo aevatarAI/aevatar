@@ -1957,7 +1957,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             <Typography.Text strong>Workflow draft run</Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-            seeded fixture
+            Draft input
           </span>
         </div>
         <div style={{ display: 'grid', gap: 8 }}>
@@ -2022,7 +2022,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               )
             }
           >
-            Load fixture
+            Load sample input
           </Button>
         </Space>
         {workflowRunError ? (
@@ -3246,7 +3246,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             <Typography.Text strong>Script draft run</Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#fffbe6', color: '#ad6800' }}>
-            seeded fixture
+            Draft input
           </span>
         </div>
         <div style={sectionDescriptionStyle}>
@@ -3286,7 +3286,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               )
             }
           >
-            Load fixture
+            Load sample input
           </Button>
         </Space>
         <div>
@@ -3687,7 +3687,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             <Typography.Text strong>GAgent draft run</Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-            seeded fixture
+            Draft input
           </span>
         </div>
         <div style={sectionDescriptionStyle}>
@@ -3715,7 +3715,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
               setRunPrompt('Classify this support ticket, keep the member state, and decide whether to escalate.')
             }
           >
-            Load fixture
+            Load sample input
           </Button>
         </Space>
         <div>
