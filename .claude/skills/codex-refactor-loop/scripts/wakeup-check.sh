@@ -228,25 +228,48 @@ fi
 
 # ============================================================================
 echo ""
-echo "=== RECOMMENDATION ==="
-NEEDED=$(( 5 - ACTIVE ))
+echo "==================================================================="
+echo "=== HARD GATE — AI MUST DISPATCH BEFORE END-TURN ================="
+echo "==================================================================="
+FLOOR_REQUIRED=5
+NEEDED=$(( FLOOR_REQUIRED - ACTIVE ))
 if [ -f .refactor-loop/.auto-stopped ]; then
-    echo "STOP active — no dispatch"
+    echo "STOP_ACTIVE=1 — dispatch FORBIDDEN (auto-stopped marker exists)"
+    echo "AI may end-turn without dispatch."
 elif [ "$NEEDED" -le 0 ]; then
-    echo "floor=$ACTIVE >= 5 — no fill needed"
+    echo "floor_actual=$ACTIVE floor_required=$FLOOR_REQUIRED gap=0"
+    echo "FLOOR_OK=1 — AI may end-turn (or ScheduleWakeup) without dispatching new codex."
 else
-    echo "floor=$ACTIVE < 5, need $NEEDED more codex"
-    echo "Order of dispatch:"
-    [ "$M_FOUND" = "1" ] && echo "  P0: dispatch milestone-related codex first"
-    [ "$A_COUNT" -gt 0 ] && echo "  P1: open PR for $A_COUNT stale implementing issue(s)"
-    [ "$B_COUNT" -gt 0 ] && echo "  P2: process $B_COUNT stale reviewing PR(s)"
-    [ "$C_COUNT" -gt 0 ] && echo "  P3: fix $C_COUNT CI-red PR(s)"
-    [ "$D_COUNT" -gt 0 ] && echo "  P4: spawn reflector for $D_COUNT stuck issue(s)"
-    [ "$E_COUNT" -gt 0 ] && echo "  P5: label-triage $E_COUNT untouched issue(s)"
-    [ "$F_COUNT" -gt 0 ] && echo "  P6: spawn judge for $F_COUNT Phase 9 issue(s)"
-    if [ "$G_BUSY" -eq 0 ]; then
-        echo "  P9 (BACKFILL): audit-iter-${NEXT_ITER}"
+    echo "floor_actual=$ACTIVE floor_required=$FLOOR_REQUIRED gap=$NEEDED"
+    echo "MUST_DISPATCH=$NEEDED — AI MUST spawn $NEEDED codex BEFORE ScheduleWakeup / end-turn."
+    echo ""
+    echo "ACTIONABLE WORK QUEUE (pick top $NEEDED by priority):"
+    QUEUE_REMAINING=$NEEDED
+    take() {
+        # $1 = how many to take from this priority, $2 = label
+        local n="$1"; local lbl="$2"
+        [ "$QUEUE_REMAINING" -le 0 ] && return
+        [ "$n" -le 0 ] && return
+        local take_n="$n"
+        [ "$take_n" -gt "$QUEUE_REMAINING" ] && take_n="$QUEUE_REMAINING"
+        echo "  TAKE $take_n × $lbl"
+        QUEUE_REMAINING=$(( QUEUE_REMAINING - take_n ))
+    }
+    [ "$M_FOUND" = "1" ] && take 1 "P0 milestone-related codex"
+    take "$A_COUNT" "P1 controller-action: open PR + 3 reviewer for stale implementing issue"
+    take "$B_COUNT" "P2 controller-action: fix/merge for stale reviewing PR"
+    take "$C_COUNT" "P3 spawn fix codex for CI-red PR"
+    take "$D_COUNT" "P4 spawn reflector for stuck 3h+ issue"
+    take "$E_COUNT" "P5 controller-action: gh issue edit --add-label auto-loop-triage (daemon spawns triage codex)"
+    take "$F_COUNT" "P6 spawn judge for Phase 9 issue"
+    if [ "$G_BUSY" -eq 0 ] && [ "$QUEUE_REMAINING" -gt 0 ]; then
+        take "$QUEUE_REMAINING" "P9 spawn audit-iter-${NEXT_ITER} (BACKFILL — only because Step A-F empty)"
     fi
+    if [ "$QUEUE_REMAINING" -gt 0 ]; then
+        echo "  UNFILLED=$QUEUE_REMAINING — no actionable work; spawn audit-iter-${NEXT_ITER} or Phase 10/11 backfill"
+    fi
+    echo ""
+    echo "VIOLATION RULE: ending the turn with floor_actual < $FLOOR_REQUIRED AND .auto-stopped absent = P0 BUG."
 fi
 
 echo ""
