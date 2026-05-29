@@ -16,7 +16,8 @@ internal sealed class WorkflowSignalCommandEnvelopeFactory : ICommandEnvelopeFac
         var signalName = NormalizeRequired(command.SignalName, nameof(command.SignalName));
         return new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
+            // Refactor (issue1249-first): Old: signal used a factory-local random envelope id. New: envelope id carries the accepted command identity.
+            Id = context.CommandId,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new SignalReceivedEvent
             {

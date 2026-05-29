@@ -240,6 +240,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             context);
 
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
+        envelope.Id.Should().Be("cmd-1");
         resumed.UserInput.Should().BeEmpty();
         resumed.EditedContent.Should().BeEmpty();
         resumed.Feedback.Should().BeEmpty();
@@ -267,6 +268,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new WorkflowSignalCommand("actor-1", "run-1", "approve", "cmd-1", null),
             context);
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Payload.Unpack<SignalReceivedEvent>().Payload.Should().BeEmpty();
 
         var actOnCommand = () => factory.CreateEnvelope(null!, context);
@@ -292,6 +294,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new WorkflowStopCommand("actor-1", "run-1", "cmd-1", null),
             context);
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Payload.Unpack<WorkflowStoppedEvent>().Reason.Should().BeEmpty();
 
         var actOnCommand = () => factory.CreateEnvelope(null!, context);

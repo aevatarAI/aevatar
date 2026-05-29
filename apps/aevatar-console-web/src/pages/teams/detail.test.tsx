@@ -1152,6 +1152,33 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
   });
 
+  it("marks the route-selected member in the members tab", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(screen.getByText("当前选中")).toBeTruthy();
+  });
+
+  it("shows the route-selected member in the overview status cards", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-team-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("当前成员")).toBeTruthy();
+    expect(screen.getAllByText("member-team-alpha").length).toBeGreaterThan(0);
+    expect(screen.getByText("memberId · member-team-alpha")).toBeTruthy();
+  });
+
   it("shows the configured Team entry member without treating it as the service target", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -1261,6 +1288,24 @@ describe("TeamDetailPage", () => {
     });
     expect(await screen.findByText("Team response")).toBeTruthy();
     expect(await screen.findByText(/上次测试/)).toBeTruthy();
+  });
+
+  it("explains when Team Test uses the entry member instead of the selected member", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-support&testTeam=1",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await screen.findByTestId("team-test-modal-body");
+
+    expect(
+      within(dialog).getByText(
+        "当前页面选中的是 member-support，Team 测试仍通过入口成员发起。",
+      ),
+    ).toBeTruthy();
   });
 
   it("auto-opens Team Test from the Team Detail route intent", async () => {
