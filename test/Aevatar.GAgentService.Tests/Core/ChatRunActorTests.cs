@@ -118,6 +118,120 @@ public sealed class ChatRunActorTests
     }
 
     [Fact]
+    public async Task SubmitWaitCompleteThenTerminal_WhenObservedResultIsBlank_ShouldBuildDefaultInternalResultJson()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actor = await StartedActorAsync("resp_default_result", eventStore);
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_default",
+            runId: "run_default",
+            waitMode: ChatRunSubRunWaitMode.Complete,
+            actorId: "actor-default"));
+
+        await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
+        {
+            RunId = "run_default",
+            Status = "RunFinished",
+            InternalResultJson = " ",
+        });
+
+        var history = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
+        history.InternalResultJson.Should().Contain("\"run_id\":\"run_default\"");
+        history.InternalResultJson.Should().Contain("\"actor_id\":\"actor-default\"");
+        actor.State.Messages.Should().ContainSingle(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "call_default" &&
+            message.Content == history.InternalResultJson);
+
+        var foldedEvent = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(ChatRunSubRunTerminalFoldedEvent.Descriptor))
+            .Select(static payload => payload.Unpack<ChatRunSubRunTerminalFoldedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        foldedEvent.InternalResultJson.Should().Be(history.InternalResultJson);
+    }
+
+    [Fact]
+    public async Task SubmitWaitComplete_WhenHistoryAlreadyHasInternalResultJson_ShouldNotReopenSubscription()
+    {
+        var actor = await StartedActorAsync("resp_folded_resubmit");
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_folded",
+            runId: "run_folded",
+            waitMode: ChatRunSubRunWaitMode.Complete));
+        await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
+        {
+            RunId = "run_folded",
+            Status = "RunFinished",
+            InternalResultJson = """{"content":"folded"}""",
+        });
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_folded",
+            runId: "run_folded",
+            waitMode: ChatRunSubRunWaitMode.Complete,
+            resultJson: """{"content":"resubmitted"}"""));
+
+        actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
+        actor.State.ToolCallHistory.Should().ContainSingle()
+            .Which.InternalResultJson.Should().Contain("folded");
+    }
+
+    [Fact]
+    public async Task PrepareObservation_WhenHistoryAlreadyHasInternalResultJson_ShouldKeepFoldedResult()
+    {
+        var actor = await StartedActorAsync("resp_folded_prepare");
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_folded_prepare",
+            runId: "run_folded_prepare",
+            waitMode: ChatRunSubRunWaitMode.Stream,
+            resultJson: """{"content":"already-folded"}"""));
+
+        await actor.HandlePrepareSubRunObservationAsync(BuildPrepareObservation(
+            toolCallId: "call_folded_prepare",
+            runId: "run_folded_prepare",
+            actorId: "actor-1"));
+
+        actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
+        actor.State.ToolCallHistory.Should().ContainSingle()
+            .Which.InternalResultJson.Should().Contain("already-folded");
+    }
+
+    [Fact]
+    public void ChatRunResultJsonFields_ShouldRoundTripAsInternalResultJsonOnExistingWireNumbers()
+    {
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunToolCallRecord { ToolCallId = "call-1", InternalResultJson = """{"value":"record"}""" },
+            static message => ChatRunToolCallRecord.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"record"}""");
+        AssertInternalResultJsonRoundTrips(
+            new SubmitChatRunToolCallRequested { ToolCallId = "call-1", InternalResultJson = """{"value":"submit"}""" },
+            static message => SubmitChatRunToolCallRequested.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"submit"}""");
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunToolCallSubmittedEvent { ToolCallId = "call-1", InternalResultJson = """{"value":"submitted"}""" },
+            static message => ChatRunToolCallSubmittedEvent.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"submitted"}""");
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunSubRunTerminalObserved { RunId = "run-1", InternalResultJson = """{"value":"observed"}""" },
+            static message => ChatRunSubRunTerminalObserved.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"observed"}""");
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunSubRunTerminalFoldedEvent { RunId = "run-1", InternalResultJson = """{"value":"folded"}""" },
+            static message => ChatRunSubRunTerminalFoldedEvent.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"folded"}""");
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunToolResultReady { ResponseId = "resp-1", InternalResultJson = """{"value":"ready"}""" },
+            static message => ChatRunToolResultReady.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"ready"}""");
+    }
+
+    [Fact]
     public async Task State_ShouldExposeTypedSubRunSubscriptionShape()
     {
         var actor = await StartedActorAsync("resp_typed");
@@ -517,6 +631,15 @@ public sealed class ChatRunActorTests
             ChatRunSubRunWaitMode.Complete => "complete",
             _ => "stream",
         };
+
+    private static void AssertInternalResultJsonRoundTrips<TMessage>(
+        TMessage message,
+        Func<TMessage, string> parse,
+        string expected)
+        where TMessage : IMessage<TMessage>
+    {
+        parse(message).Should().Be(expected);
+    }
 
     private static EventEnvelope BuildForwardedCommittedCompletionEnvelope(
         string sourceActorId,
