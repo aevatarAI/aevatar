@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
+import "llm_sessions.proto";
 import "service_revision.proto";
 
 // --- ServiceCatalogReadModel ---
@@ -323,8 +324,12 @@ message ResponsesWebTraceReadModel {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
+  // Refactor (iter161-cluster-001 #1251-first):
+  //   Old pattern: projected Web result readmodel carried only Value.
+  //   New principle: typed_result mirrors actor-owned typed result; result is legacy fallback only.
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at_utc_value = 9;
+  aevatar.gagentservice.ResponsesWebToolResult typed_result = 10;
 }
 
 message ResponsesWebCacheEntryReadModel {
@@ -332,8 +337,12 @@ message ResponsesWebCacheEntryReadModel {
   string tool_name = 2;
   string url = 3;
   string query = 4;
+  // Refactor (iter161-cluster-001 #1251-first):
+  //   Old pattern: projected cache result carried only Value.
+  //   New principle: typed_result is the normal query path; result is legacy fallback only.
   google.protobuf.Value result = 5;
   google.protobuf.Timestamp cached_at_utc_value = 6;
   google.protobuf.Timestamp last_hit_at_utc_value = 7;
   int64 hit_count = 8;
+  aevatar.gagentservice.ResponsesWebToolResult typed_result = 9;
 }

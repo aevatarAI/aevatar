@@ -1,4 +1,5 @@
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
@@ -44,7 +45,12 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
     {
         var webClient = new RecordingWebApiClient
         {
-            SearchResult = StructValue(("results", ListValue(StructValue(("title", ProtoValue.ForString("fresh")))))),
+            SearchResult = StructValue((
+                "results",
+                ListValue(StructValue(
+                    ("title", ProtoValue.ForString("fresh")),
+                    ("url", ProtoValue.ForString("https://example.com/fresh")),
+                    ("snippet", ProtoValue.ForString("fresh snippet")))))),
         };
         var adapter = new ResponsesWebSubstituteBackendAdapter(
             webClient,
@@ -54,9 +60,34 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
             new ResponsesWebSearchBoundaryInput("aevatar docs", 5, "secret-token"),
             CancellationToken.None);
 
-        result.Value.StructValue.Fields["results"].ListValue.Values[0].StructValue.Fields["title"].StringValue
-            .Should()
-            .Be("fresh");
+        result.Output.Results.Should().ContainSingle();
+        result.Output.Results[0].Title.Should().Be("fresh");
+        result.Output.Results[0].Url.Should().Be("https://example.com/fresh");
+        result.Output.Results[0].Snippet.Should().Be("fresh snippet");
+        webClient.SearchCalls.Should().ContainSingle();
+        webClient.SearchCalls[0].Token.Should().Be("secret-token");
+        webClient.SearchCalls[0].Query.Should().Be("aevatar docs");
+        webClient.SearchCalls[0].MaxResults.Should().Be(5);
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedSearchResults))]
+    public async Task ExecuteWebSearchAsync_WhenProviderValueHasNoResultsList_ShouldReturnEmptyTypedResults(
+        ProtoValue providerValue)
+    {
+        var webClient = new RecordingWebApiClient
+        {
+            SearchResult = providerValue,
+        };
+        var adapter = new ResponsesWebSubstituteBackendAdapter(
+            webClient,
+            new WebToolOptions { MaxSearchResults = 7 });
+
+        var result = await adapter.ExecuteWebSearchAsync(
+            new ResponsesWebSearchBoundaryInput("aevatar docs", 5, "secret-token"),
+            CancellationToken.None);
+
+        result.Output.Results.Should().BeEmpty();
         webClient.SearchCalls.Should().ContainSingle();
         webClient.SearchCalls[0].Token.Should().Be("secret-token");
         webClient.SearchCalls[0].Query.Should().Be("aevatar docs");
@@ -105,6 +136,14 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
             return Task.FromResult(FetchResult);
         }
     }
+
+    public static TheoryData<ProtoValue> MalformedSearchResults() =>
+        new()
+        {
+            ProtoValue.ForString("bad"),
+            StructValue(("items", ListValue(StructValue(("title", ProtoValue.ForString("fresh")))))),
+            StructValue(("results", ProtoValue.ForString("bad"))),
+        };
 
     private static ProtoValue StructValue(params (string Key, ProtoValue FieldValue)[] fields)
     {
