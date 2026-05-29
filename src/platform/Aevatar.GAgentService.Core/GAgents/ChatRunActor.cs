@@ -17,7 +17,9 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
 {
     private static readonly Duration DefaultIdleTtl = Duration.FromTimeSpan(TimeSpan.FromMinutes(30));
 
-    // Refactor (issue1334): Old pattern: ChatRun persisted folded tool results used generic ResultJson naming. New principle: ChatRun actor state and events quarantine that JSON as internal_result_json while boundary payload names remain explicit.
+    // Refactor (iter1334/cluster-1334-chatrun-result-json-boundary-quarantine):
+    // Old pattern: ChatRun persisted folded tool results used generic ResultJson naming.
+    // New principle: ChatRun actor state and events quarantine that JSON as internal_result_json while boundary payload names remain explicit.
     public ChatRunActor()
     {
         InitializeId();
@@ -129,7 +131,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             return;
 
         var internalResultJson = string.IsNullOrWhiteSpace(observed.InternalResultJson)
-            ? BuildDefaultResultJson(pending, observed)
+            ? BuildDefaultInternalResultJson(pending, observed)
             : observed.InternalResultJson;
         await PersistDomainEventAsync(new ChatRunSubRunTerminalFoldedEvent
         {
@@ -196,7 +198,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         {
             RunId = pending.RunId,
             Status = ResolveGAgentTerminalStatus(completed),
-            InternalResultJson = BuildGAgentTerminalResultJson(pending, completed),
+            InternalResultJson = BuildGAgentTerminalInternalResultJson(pending, completed),
             ActorId = pending.ActorId,
             ServiceId = pending.ServiceId,
             EndpointId = pending.EndpointId,
@@ -495,7 +497,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             state.ActiveSubRunSubscriptions.Add(subscription);
     }
 
-    private static string BuildDefaultResultJson(
+    private static string BuildDefaultInternalResultJson(
         ChatRunSubRunSubscription pending,
         ChatRunSubRunTerminalObserved observed)
     {
@@ -517,7 +519,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         });
     }
 
-    private static string BuildGAgentTerminalResultJson(
+    private static string BuildGAgentTerminalInternalResultJson(
         ChatRunSubRunSubscription pending,
         RoleChatSessionCompletedEvent completed)
     {

@@ -232,6 +232,30 @@ public sealed class ChatRunActorTests
     }
 
     [Fact]
+    public void ChatRunInternalMessages_ShouldExposeInternalResultJsonFieldNameOnly()
+    {
+        var messageDescriptors = new[]
+        {
+            ChatRunToolCallRecord.Descriptor,
+            SubmitChatRunToolCallRequested.Descriptor,
+            ChatRunToolCallSubmittedEvent.Descriptor,
+            ChatRunSubRunTerminalObserved.Descriptor,
+            ChatRunSubRunTerminalFoldedEvent.Descriptor,
+            ChatRunToolResultReady.Descriptor,
+        };
+
+        foreach (var descriptor in messageDescriptors)
+        {
+            descriptor.Fields.InFieldNumberOrder()
+                .Should()
+                .ContainSingle(field => field.Name == "internal_result_json");
+            descriptor.Fields.InFieldNumberOrder()
+                .Should()
+                .NotContain(field => field.Name == "result_json");
+        }
+    }
+
+    [Fact]
     public async Task State_ShouldExposeTypedSubRunSubscriptionShape()
     {
         var actor = await StartedActorAsync("resp_typed");
