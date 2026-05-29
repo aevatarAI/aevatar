@@ -60,6 +60,19 @@ public sealed class WebSearchToolExecutionTests
         request.Headers.Authorization!.Parameter.Should().Be("token-2");
     }
 
+    [Theory]
+    [InlineData("\"plain json string\"", "plain json string")]
+    [InlineData("[1,2,3]", "[1,2,3]")]
+    public void ParseSearchPayload_WhenJsonRootIsNotObject_ShouldReturnUnstructuredSearchResult(
+        string payload,
+        string expectedMessage)
+    {
+        var result = WebToolResultBoundaryJson.ParseSearchPayload(payload);
+
+        result.Results.Should().BeEmpty();
+        result.Error.Should().Be(new WebToolError("unstructured_search_result", expectedMessage));
+    }
+
     [Fact]
     public async Task SearchAsync_ShouldRoundTripProviderPayloadThroughTypedDtoAndBoundaryJson()
     {

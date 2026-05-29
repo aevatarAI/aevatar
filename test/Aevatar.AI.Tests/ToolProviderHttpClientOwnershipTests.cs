@@ -124,6 +124,28 @@ public sealed class ToolProviderHttpClientOwnershipTests
     }
 
     [Fact]
+    public async Task WebApiClient_SearchAsync_ShouldMapHttpHandlerExceptionToTypedError()
+    {
+        var handler = new RecordingHttpMessageHandler(_ =>
+            throw new HttpRequestException("network unavailable"));
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                SearchApiBaseUrl = "https://search.test",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
+
+        result.Results.Should().BeEmpty();
+        result.Error.Should().Be(new WebToolError("request_failed", "network unavailable"));
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
+        request.Headers.Authorization!.Parameter.Should().Be("token-1");
+    }
+
+    [Fact]
     public async Task ChronoStorageApiClient_Dispose_ShouldNotDisposeInjectedHttpClient()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
