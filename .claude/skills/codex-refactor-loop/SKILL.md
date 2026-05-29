@@ -294,12 +294,12 @@ Bash(
      --prompt <prompt-file> --log <log-file> --timeout 5400
    ```
 
-**反模式(❌ 已废)`spawn_with_banner.py + Popen 自 detach`**:
+**反模式(❌ 已废,已删除见 #1242)`spawn_with_banner.py + Popen 自 detach`**:
 - 用 `Popen + start_new_session` 把 codex 脱离 python parent → harness 看不见 codex
 - 结果:codex done 1-13 分钟后 controller 才在下次 ScheduleWakeup 时才发现(0 codex 期间监控告警但 controller 在睡)
-- Auric 2026-05-21 "你连这种傻逼问题都处理不好么":zero_streak=13 = 13 分钟 0 codex,monitor 一直 alert,我没醒。原因正是 detached spawn 让 harness 失去追踪
+- maintainer 2026-05-21 事故复盘:zero_streak=13 = 13 分钟 0 codex,monitor 一直 alert,controller 未被唤醒。原因正是 detached spawn 让 harness 失去追踪
 
-**正确语义**:codex = harness-tracked Bash task = automatic task-notification on exit。spawn_with_banner.py 旧 detached 模式仅在 audit / bootstrap 等无 banner 场景可用(且仍要 Bash `run_in_background: true` 包裹)。
+**正确语义**:codex = harness-tracked Bash task = automatic task-notification on exit。`spawn_with_banner.py` 已删除(见 #1242),不得作为 audit / bootstrap 等场景的备用入口。
 
 **禁止**:
 - ❌ 用 `nohup ... &` 或 `Popen + start_new_session` detach codex
