@@ -174,7 +174,9 @@ public static class AgentBuilderCardFlow
         if (!IsKnownTextCommand(command))
             return false;
 
-        // Refactor (issue1305): Old pattern: agent-builder routing split across NyxRelayAgentBuilderFlow + AgentBuilderCardFlow. New principle: single AgentBuilderCardFlow routes all agent-builder slash commands via TryResolveSimpleAgentAction.
+        // Refactor (iter9/cluster-1305-hybrid-minimal-delete):
+        // Old pattern: agent-builder routing split across NyxRelayAgentBuilderFlow + AgentBuilderCardFlow.
+        // New principle: single AgentBuilderCardFlow routes all agent-builder slash commands via TryResolveSimpleAgentAction.
         if (!IsPrivateChat(evt.ChatType))
         {
             decision = AgentBuilderFlowDecision.DirectReply(BuildPrivateChatRestrictionReply(command));
