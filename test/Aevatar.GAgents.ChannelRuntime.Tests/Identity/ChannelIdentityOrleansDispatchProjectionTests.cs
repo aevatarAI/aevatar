@@ -17,6 +17,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
 public sealed class ChannelIdentityOrleansDispatchProjectionTests
 {
+    // Refactor (iter290/cluster517-first):
+    //   Old pattern: channel identity tests covered handler bodies and a commit-only Orleans projection path.
+    //   New principle: Orleans dispatch/projection tests cover commit, revoke delete, and duplicate commit without projection-only no-op events.
     [Fact]
     public async Task CommitBindingDispatch_ShouldReplayCommittedEventToChannelIdentityReadModel()
     {
