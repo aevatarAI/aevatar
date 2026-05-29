@@ -132,6 +132,7 @@ public sealed class WorkflowRunControlCommandTests
 
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route!.PublisherActorId.Should().Be("api.workflow.resume");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
@@ -166,6 +167,7 @@ public sealed class WorkflowRunControlCommandTests
 
         var signal = envelope.Payload.Unpack<SignalReceivedEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route!.PublisherActorId.Should().Be("api.workflow.signal");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
@@ -196,6 +198,7 @@ public sealed class WorkflowRunControlCommandTests
 
         var stopped = envelope.Payload.Unpack<WorkflowStoppedEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route!.PublisherActorId.Should().Be("api.workflow.stop");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
