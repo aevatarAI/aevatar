@@ -7,8 +7,7 @@ namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Production implementation of <see cref="IUserAgentCatalogCommandPort"/>.
-/// Routes catalog upsert / tombstone through <see cref="IActorDispatchPort"/>
-/// (no direct <c>HandleEventAsync</c> on the actor instance).
+/// Routes catalog upsert / tombstone through <see cref="IActorDispatchPort"/>.
 ///
 /// Issue #466: this is an internal infrastructure port (not user-facing). It
 /// dispatches by id; ownership semantics live on the public
@@ -26,6 +25,8 @@ namespace Aevatar.GAgents.Scheduled;
 /// Refactor (iter23/cluster-002):
 ///   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
 ///   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
+///
+/// Refactor (iter149/issue1132): Old pattern: catalog mutations used handled-dispatch as a stronger synchronous ACK.  New principle: catalog command port uses accepted-only dispatch; catalog read model observes committed state later.
 /// </summary>
 internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
 {

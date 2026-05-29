@@ -17,6 +17,9 @@ namespace Aevatar.GAgents.Household;
 /// HouseholdEntity — autonomous home AI agent.
 /// Implements Perceive-Reason-Act loop driven by stream events.
 /// </summary>
+// Refactor (iter108/cluster-108-003-household-tool-direct-runtime-command-path):
+//   Old pattern: orphan HouseholdEntityTool derived actor id, created actor through IActorRuntime, built EventEnvelope, and dispatched directly.
+//   New principle: HouseholdEntity is reached through the device callback CQRS command facade; the orphan LLM tool adapter was deleted.
 public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 {
     public HouseholdEntity(

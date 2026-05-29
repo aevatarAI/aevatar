@@ -25,8 +25,7 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
         if (string.IsNullOrWhiteSpace(scopeId) || string.IsNullOrWhiteSpace(ownerSubject))
             return null;
 
-        var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject);
-        var document = await _reader.GetAsync(actorId, ct);
+        var document = await GetDocumentAsync(scopeId, ownerSubject, ct);
         return document == null ? null : Map(document);
     }
 
@@ -91,4 +90,19 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 entry.LastHitAt,
                 entry.HitCount)).ToArray());
 
+    private async Task<ResponsesAgentToolStateCurrentStateReadModel?> GetDocumentAsync(
+        string scopeId,
+        string ownerSubject,
+        CancellationToken ct)
+    {
+        var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject);
+        var document = await _reader.GetAsync(actorId, ct);
+        if (document != null)
+            return document;
+
+        var legacyActorId = ResponseAgentToolStateIds.BuildLegacyActorId(scopeId, ownerSubject);
+        return string.Equals(actorId, legacyActorId, StringComparison.Ordinal)
+            ? null
+            : await _reader.GetAsync(legacyActorId, ct);
+    }
 }

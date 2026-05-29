@@ -29,7 +29,31 @@ message WorkflowRunExecutionStartedEvent
   string input = 3;
   string definition_actor_id = 4;
   string scope_id = 5;
+  WorkflowRunExecutionContextDelta execution_context_delta = 6;
 }
+message WorkflowRunExecutionContextDelta
+{
+  WorkflowRunLlmExecutionContextDelta llm = 1;
+  WorkflowRunConnectorExecutionContextDelta connector = 2;
+  bool clear_llm = 3;
+  bool clear_connector = 4;
+}
+message WorkflowRunLlmExecutionContextDelta
+{
+  string nyxid_access_token = 1;
+  string model_override = 2;
+  string nyxid_route_preference = 3;
+}
+message WorkflowRunConnectorExecutionContextDelta
+{
+  string http_authorization = 1;
+}
+message WorkflowRunExecutionContextUpdatedEvent
+{
+  string run_id = 1;
+  WorkflowRunExecutionContextDelta execution_context_delta = 2;
+}
+message WorkflowRunExecutionContextClearedEvent { string run_id = 1; }
 message WorkflowCommandObservedEvent { string command_id = 1; }
 message WorkflowExecutionStateUpsertedEvent
 {

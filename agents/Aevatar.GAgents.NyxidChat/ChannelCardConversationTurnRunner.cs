@@ -159,7 +159,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 token,
                 new LarkCardKitSettingsRequest(
                     CardId: cardId,
-                    SettingsJson: """{"streaming_mode": false}""",
+                    SettingsJson: LarkStreamingCardShell.BuildCloseStreamingSettingsJson(),
                     Sequence: sequence,
                     IdempotencyKey: $"orphan-close-{cardId}"),
                 ct);
@@ -265,7 +265,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                 token,
                 new LarkCardKitSettingsRequest(
                     CardId: cardId,
-                    SettingsJson: """{"streaming_mode": false}""",
+                    SettingsJson: LarkStreamingCardShell.BuildCloseStreamingSettingsJson(),
                     Sequence: workingSequence,
                     IdempotencyKey: $"close-{cardId}-{workingSequence}"),
                 ct);

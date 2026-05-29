@@ -34,6 +34,9 @@ if [ -d "src/Aevatar.Host.Api" ] || [ -d "src/Aevatar.Host.Gateway" ]; then
   exit 1
 fi
 
+bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
+bash tools/ci/static_service_activation_guard.sh || exit $?
+
 if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
   echo "Solution must not include legacy host projects."
   exit 1
@@ -394,6 +397,26 @@ fi
 if [ -n "${dispatch_projection_boundary_report}" ]; then
   echo "${dispatch_projection_boundary_report}"
   echo "Direct actor HandleEventAsync dispatch and raw SubscribeAsync<EventEnvelope> subscriptions are forbidden outside runtime transport internals."
+  exit 1
+fi
+
+# Refactor (phase9/issue-1132):
+#   Old: a handled-dispatch side contract could make accepted-only dispatch
+#   receipts look stronger than the runtime-neutral command admission contract.
+#   New: production code uses IActorDispatchPort only; handled-dispatch shims and
+#   typed dispatchers are retired.
+handled_dispatch_pattern="IActor""HandledDispatchPort|DispatchAndWait""HandledAsync|HandledActor""CommandTargetDispatcher|LocalActor""HandledDispatchPort|OrleansActor""HandledDispatchPort"
+if rg -n "${handled_dispatch_pattern}" \
+  src agents tools \
+  -g '*.cs' \
+  -g '*.sh' \
+  -g '!**/bin/**' \
+  -g '!**/obj/**' \
+  -g '!**/wwwroot/**' \
+  -g '!*.g.cs' \
+  -g '!*.Designer.cs'
+then
+  echo "Handled actor dispatch side contracts are forbidden in production paths; use IActorDispatchPort accepted-only dispatch."
   exit 1
 fi
 

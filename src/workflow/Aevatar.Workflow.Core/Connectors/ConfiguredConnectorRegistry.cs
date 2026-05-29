@@ -18,7 +18,7 @@ namespace Aevatar.Workflow.Core.Connectors;
 /// it relies on consistent configuration across all nodes.
 /// </para>
 /// </summary>
-public sealed class ConfiguredConnectorRegistry : IConnectorRegistry
+public sealed class ConfiguredConnectorRegistry : IConnectorRegistry, IDisposable
 {
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private ImmutableDictionary<string, ConnectorSlot> _connectors =
@@ -107,6 +107,40 @@ public sealed class ConfiguredConnectorRegistry : IConnectorRegistry
         _mutationGate.Dispose();
     }
 
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
+            return;
+
+        ImmutableDictionary<string, ConnectorSlot> snapshot;
+
+        _mutationGate.Wait();
+        try
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            snapshot = _connectors;
+            _connectors = ImmutableDictionary.Create<string, ConnectorSlot>(StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+
+        var disposedConnectors = new HashSet<IConnector>(ReferenceEqualityComparer.Instance);
+        foreach (var slot in snapshot.Values)
+        {
+            if (!disposedConnectors.Add(slot.Connector))
+                continue;
+
+            DisposeSlot(slot);
+        }
+
+        _mutationGate.Dispose();
+    }
+
     private static async ValueTask DisposeSlotAsync(ConnectorSlot slot)
     {
         if (slot.Ownership != ConnectorOwnership.RegistryOwned)
@@ -121,6 +155,15 @@ public sealed class ConfiguredConnectorRegistry : IConnectorRegistry
                 disposable.Dispose();
                 break;
         }
+    }
+
+    private static void DisposeSlot(ConnectorSlot slot)
+    {
+        if (slot.Ownership != ConnectorOwnership.RegistryOwned)
+            return;
+
+        if (slot.Connector is IDisposable disposable)
+            disposable.Dispose();
     }
 
     private sealed record ConnectorSlot(IConnector Connector, ConnectorOwnership Ownership);

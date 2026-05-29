@@ -13,4 +13,10 @@ public interface IVoicePresenceSessionLeasePort
         VoicePresenceSessionLeaseHandle handle,
         string reason,
         CancellationToken ct = default);
+
+    Task CompleteTransportLifetimeAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        string transportLeaseId,
+        string reason,
+        CancellationToken ct = default);
 }

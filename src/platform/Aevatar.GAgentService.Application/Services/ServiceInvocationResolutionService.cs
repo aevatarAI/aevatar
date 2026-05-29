@@ -10,13 +10,13 @@ public sealed class ServiceInvocationResolutionService
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
     private readonly IServiceTrafficViewQueryReader _trafficViewQueryReader;
     private readonly IServiceServingSetQueryReader? _servingSetQueryReader;
-    private readonly IServiceRevisionArtifactStore _artifactStore;
+    private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
 
     public ServiceInvocationResolutionService(
         IServiceCatalogQueryReader catalogQueryReader,
         IServiceTrafficViewQueryReader trafficViewQueryReader,
-        IServiceRevisionArtifactStore artifactStore)
-        : this(catalogQueryReader, trafficViewQueryReader, null, artifactStore)
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader)
+        : this(catalogQueryReader, trafficViewQueryReader, null, revisionCatalogQueryReader)
     {
     }
 
@@ -24,12 +24,12 @@ public sealed class ServiceInvocationResolutionService
         IServiceCatalogQueryReader catalogQueryReader,
         IServiceTrafficViewQueryReader trafficViewQueryReader,
         IServiceServingSetQueryReader? servingSetQueryReader,
-        IServiceRevisionArtifactStore artifactStore)
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader)
     {
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
         _trafficViewQueryReader = trafficViewQueryReader ?? throw new ArgumentNullException(nameof(trafficViewQueryReader));
         _servingSetQueryReader = servingSetQueryReader;
-        _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
+        _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
     }
 
     public async Task<bool> HasServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
@@ -63,9 +63,9 @@ public sealed class ServiceInvocationResolutionService
             throw new InvalidOperationException($"Endpoint '{request.EndpointId}' has no serving target on service '{serviceKey}'.");
 
         var selectedTarget = SelectTarget(endpointView.Targets, request, serviceKey);
-        var artifact = await _artifactStore.GetAsync(serviceKey, selectedTarget.RevisionId, ct)
-            ?? throw new InvalidOperationException(
-                $"Prepared artifact for '{serviceKey}' revision '{selectedTarget.RevisionId}' was not found.");
+        var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(request.Identity, ct);
+        // Refactor (iter100/cluster-100): Old invocation resolved artifacts from a process-local store. / New invocation resolves prepared artifacts from the revision readmodel catalog.
+        var artifact = revisionCatalog.GetRequiredPreparedArtifact(request.Identity, selectedTarget.RevisionId);
         var endpoint = artifact.Endpoints.FirstOrDefault(x =>
             string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal));
         if (endpoint == null)

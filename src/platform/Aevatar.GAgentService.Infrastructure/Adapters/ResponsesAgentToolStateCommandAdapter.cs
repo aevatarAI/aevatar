@@ -158,7 +158,7 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
         if (string.IsNullOrWhiteSpace(ownerSubject))
             throw new ArgumentException("ownerSubject is required.", nameof(ownerSubject));
 
-        var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject);
+        var actorId = await ResolveActorIdAsync(scopeId, ownerSubject);
         var actor = await _runtime.CreateAsync<ResponsesAgentToolStateGAgent>(actorId, ct: ct);
         // The register dispatch is idempotent at the actor (HandleRegisterAsync
         // returns early when scope/owner already match). We do not cache a
@@ -187,6 +187,16 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                 $"{actor.Id}:registered"),
             ct);
         return actor;
+    }
+
+    private async Task<string> ResolveActorIdAsync(string scopeId, string ownerSubject)
+    {
+        var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject);
+        var legacyActorId = ResponseAgentToolStateIds.BuildLegacyActorId(scopeId, ownerSubject);
+        return !string.Equals(actorId, legacyActorId, StringComparison.Ordinal)
+               && await _runtime.ExistsAsync(legacyActorId)
+            ? legacyActorId
+            : actorId;
     }
 
     private static EventEnvelope CreateEnvelope(

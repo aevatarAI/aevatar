@@ -6,12 +6,14 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-// Refactor (iter16/cluster-031):
-//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-//                bag for request metadata, LLM overrides, authorization, secure values
-//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
-internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor
+// Refactor (iter115/cluster-3):
+//   Old pattern: module contexts could only access process-local runtime context facts.
+//   New principle: module contexts expose the actor state host so facades can resolve
+//                  typed execution context state without query/replay side reads.
+internal sealed class WorkflowExecutionContextAdapter :
+    IWorkflowExecutionContext,
+    IWorkflowExecutionRuntimeContextAccessor,
+    IWorkflowExecutionStateHostAccessor
 {
     private readonly IEventHandlerContext _inner;
     private readonly IWorkflowExecutionStateHost _stateHost;
@@ -31,6 +33,8 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
     public string RunId => _stateHost.RunId;
 
     public WorkflowExecutionRuntimeContext RuntimeContext => _stateHost.RuntimeContext;
+
+    public IWorkflowExecutionStateHost StateHost => _stateHost;
 
     public IServiceProvider Services => _inner.Services;
 

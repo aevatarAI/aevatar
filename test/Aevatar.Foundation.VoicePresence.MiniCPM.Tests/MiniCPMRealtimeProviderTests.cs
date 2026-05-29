@@ -1,9 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
-using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.MiniCPM.Internal;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -34,8 +32,8 @@ public class MiniCPMRealtimeProviderTests
         });
 
         await using var provider = CreateProvider(handler);
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
-        await provider.SendAudioAsync(new byte[] { 1, 2, 3, 4 }, CancellationToken.None);
+        var providerSession = await ConnectAsync(provider);
+        await providerSession.SendAudioAsync(new byte[] { 1, 2, 3, 4 }, CancellationToken.None);
 
         uidHeader.ShouldNotBeNullOrWhiteSpace();
         requestBody.ShouldNotBeNullOrWhiteSpace();
@@ -73,9 +71,8 @@ public class MiniCPMRealtimeProviderTests
         });
 
         await using var provider = CreateProvider(handler);
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
-
-        await provider.SendAudioAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None);
+        var providerSession = await ConnectAsync(provider);
+        await providerSession.SendAudioAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None);
 
         streamCalls.ShouldBe(0);
     }
@@ -111,16 +108,11 @@ public class MiniCPMRealtimeProviderTests
         await using var provider = CreateProvider(handler);
         var events = new List<VoiceProviderEvent>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        provider.OnEvent = (evt, ct) =>
+        await ConnectAsync(provider, events, evt =>
         {
-            _ = ct;
-            events.Add(evt);
             if (evt.EventCase == VoiceProviderEvent.EventOneofCase.ResponseDone)
                 done.TrySetResult();
-            return Task.CompletedTask;
-        };
-
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        });
         await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         events.Select(x => x.EventCase).ShouldBe(
@@ -141,30 +133,38 @@ public class MiniCPMRealtimeProviderTests
     [Fact]
     public async Task Receive_loop_should_use_stable_provider_local_id_when_response_id_is_zero()
     {
+        var chunkAudio = Convert.ToBase64String(MiniCPMWaveCodec.EncodePcm16Mono([12, 34, 56, 78], 24000));
         await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
         {
-            _ = request;
             _ = ct;
+            if (request.RequestUri!.AbsolutePath.EndsWith("/api/v1/completions", StringComparison.Ordinal))
+            {
+                return Task.FromResult(CreateSseResponse(
+                    $$"""
+                    data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":"{{chunkAudio}}","text":"hello","finish_reason":"processing"}]}
+
+                    data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":null,"text":"\n<end>","finish_reason":"done"}]}
+
+                    """));
+            }
+
             return Task.FromResult(CreateJsonResponse("{}"));
         }));
-        var chunkAudio = Convert.ToBase64String(MiniCPMWaveCodec.EncodePcm16Mono([12, 34, 56, 78], 24000));
-        var channel = Channel.CreateUnbounded<VoiceProviderEvent>();
-        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(
-            $$"""
-            data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":"{{chunkAudio}}","text":"hello","finish_reason":"processing"}]}
-
-            data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":null,"text":"\n<end>","finish_reason":"done"}]}
-
-            """));
-
-        var readCompletionStreamAsync = typeof(MiniCPMRealtimeProvider)
-            .GetMethod("ReadCompletionStreamAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        await ((Task)readCompletionStreamAsync.Invoke(provider, [stream, channel.Writer, CancellationToken.None])!);
-        channel.Writer.TryComplete();
-
         var events = new List<VoiceProviderEvent>();
-        await foreach (var evt in channel.Reader.ReadAllAsync())
-            events.Add(evt);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = await provider.ConnectAsync(new VoiceProviderSessionKey("lease-1", "host-1", "transport-1", 1), CreateConfig(),
+            (key, evt, ct) =>
+            {
+                _ = key;
+                _ = ct;
+                events.Add(evt);
+                if (evt.EventCase == VoiceProviderEvent.EventOneofCase.ResponseDone)
+                    done.TrySetResult();
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await session.DisposeAsync();
 
         events.Select(static x => x.EventCase).ShouldBe(
         [
@@ -207,16 +207,9 @@ public class MiniCPMRealtimeProviderTests
 
         await using var provider = CreateProvider(handler);
         var events = new List<VoiceProviderEvent>();
-        provider.OnEvent = (evt, ct) =>
-        {
-            _ = ct;
-            events.Add(evt);
-            return Task.CompletedTask;
-        };
+        var providerSession = await ConnectAsync(provider, events);
 
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
-
-        await provider.CancelResponseAsync(CancellationToken.None);
+        await providerSession.CancelResponseAsync(CancellationToken.None);
 
         await stopRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
         events.ShouldNotContain(static evt => evt.EventCase == VoiceProviderEvent.EventOneofCase.ResponseCancelled);
@@ -241,8 +234,8 @@ public class MiniCPMRealtimeProviderTests
         });
 
         await using var provider = CreateProvider(handler);
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
-        await provider.UpdateSessionAsync(new VoiceSessionConfig
+        var providerSession = await ConnectAsync(provider);
+        await providerSession.UpdateSessionAsync(new VoiceSessionConfig
         {
             SampleRateHz = 16000,
             Voice = "friendly",
@@ -258,7 +251,7 @@ public class MiniCPMRealtimeProviderTests
             },
         }, CancellationToken.None);
 
-        await provider.SendAudioAsync(new byte[] { 5, 6, 7, 8 }, CancellationToken.None);
+        await providerSession.SendAudioAsync(new byte[] { 5, 6, 7, 8 }, CancellationToken.None);
 
         requestBody.ShouldNotBeNullOrWhiteSpace();
         using var document = JsonDocument.Parse(requestBody);
@@ -288,16 +281,11 @@ public class MiniCPMRealtimeProviderTests
         });
 
         await using var provider = CreateProvider(handler);
-        provider.OnEvent = (evt, ct) =>
+        await ConnectAsync(provider, events, evt =>
         {
-            _ = ct;
-            events.Add(evt);
             if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
                 disconnected.TrySetResult();
-            return Task.CompletedTask;
-        };
-
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        });
         await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         events.Select(x => x.EventCase).ShouldBe(
@@ -314,33 +302,41 @@ public class MiniCPMRealtimeProviderTests
     {
         await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
         {
-            _ = request;
             _ = ct;
+            if (request.RequestUri!.AbsolutePath.EndsWith("/api/v1/completions", StringComparison.Ordinal))
+            {
+                return Task.FromResult(CreateSseResponse(
+                    """
+                    data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":null,"text":"\n<end>","finish_reason":"processing"}]}
+
+                    data: not-json
+
+                    data: {"id":"u1","error":"provider boom"}
+
+                    data: {"id":"u1","choices":[]}
+
+                    data: {"id":"u1","response_id":3,"choices":[{"role":"assistant","audio":"%%%","text":"speak","finish_reason":"processing"}]}
+
+                    """));
+            }
+
             return Task.FromResult(CreateJsonResponse("{}"));
         }));
-        var channel = Channel.CreateUnbounded<VoiceProviderEvent>();
-        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(
-            """
-            data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":null,"text":"\n<end>","finish_reason":"processing"}]}
-
-            data: not-json
-
-            data: {"id":"u1","error":"provider boom"}
-
-            data: {"id":"u1","choices":[]}
-
-            data: {"id":"u1","response_id":3,"choices":[{"role":"assistant","audio":"%%%","text":"speak","finish_reason":"processing"}]}
-
-            """));
-
-        var readCompletionStreamAsync = typeof(MiniCPMRealtimeProvider)
-            .GetMethod("ReadCompletionStreamAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        await ((Task)readCompletionStreamAsync.Invoke(provider, [stream, channel.Writer, CancellationToken.None])!);
-        channel.Writer.TryComplete();
-
         var events = new List<VoiceProviderEvent>();
-        await foreach (var evt in channel.Reader.ReadAllAsync())
-            events.Add(evt);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = await provider.ConnectAsync(new VoiceProviderSessionKey("lease-1", "host-1", "transport-1", 1), CreateConfig(),
+            (key, evt, ct) =>
+            {
+                _ = key;
+                _ = ct;
+                events.Add(evt);
+                if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
+                    disconnected.TrySetResult();
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await session.DisposeAsync();
 
         events.Select(static x => x.EventCase).ShouldBe(
         [
@@ -367,13 +363,13 @@ public class MiniCPMRealtimeProviderTests
             _ = ct;
             return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
         }));
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        await ConnectAsync(provider);
 
         await provider.DisposeAsync();
         await provider.DisposeAsync();
 
         await Should.ThrowAsync<ObjectDisposedException>(() =>
-            provider.ConnectAsync(CreateConfig(), CancellationToken.None));
+            ConnectAsync(provider));
     }
 
     [Fact]
@@ -385,9 +381,9 @@ public class MiniCPMRealtimeProviderTests
             _ = ct;
             return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
         }));
-        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        var providerSession = await ConnectAsync(provider);
 
-        await Should.ThrowAsync<InvalidOperationException>(() => provider.UpdateSessionAsync(new VoiceSessionConfig
+        await Should.ThrowAsync<InvalidOperationException>(() => providerSession.UpdateSessionAsync(new VoiceSessionConfig
         {
             SampleRateHz = 24000,
         }, CancellationToken.None));
@@ -403,8 +399,10 @@ public class MiniCPMRealtimeProviderTests
             return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
         }));
 
+        var providerSession = await ConnectAsync(provider);
+
         await Should.ThrowAsync<NotSupportedException>(() =>
-            provider.SendToolResultAsync("call-1", "{}", CancellationToken.None));
+            providerSession.SendToolResultAsync("call-1", "{}", CancellationToken.None));
     }
 
     [Fact]
@@ -417,8 +415,10 @@ public class MiniCPMRealtimeProviderTests
             return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
         }));
 
+        var providerSession = await ConnectAsync(provider);
+
         await Should.ThrowAsync<NotSupportedException>(() =>
-            provider.InjectEventAsync(new VoiceConversationEventInjection(), CancellationToken.None));
+            providerSession.InjectEventAsync(new VoiceConversationEventInjection(), CancellationToken.None));
     }
 
     [Fact]
@@ -431,7 +431,7 @@ public class MiniCPMRealtimeProviderTests
             return Task.FromResult(CreateSseResponse(blockAfterPayload: true));
         }));
 
-        await Should.ThrowAsync<InvalidOperationException>(() => provider.ConnectAsync(new VoiceProviderConfig
+        await Should.ThrowAsync<InvalidOperationException>(() => ConnectAsync(provider, config: new VoiceProviderConfig
         {
             ProviderName = "openai",
             Endpoint = "http://127.0.0.1:32550",
@@ -453,6 +453,31 @@ public class MiniCPMRealtimeProviderTests
         ProviderName = "minicpm",
         Endpoint = "http://127.0.0.1:32550",
     };
+
+    private static Task<RealtimeVoiceProviderSession> ConnectAsync(
+        MiniCPMRealtimeProvider provider,
+        VoiceProviderConfig? config = null,
+        CancellationToken ct = default) =>
+        ConnectAsync(provider, [], onEvent: null, config, ct);
+
+    private static Task<RealtimeVoiceProviderSession> ConnectAsync(
+        MiniCPMRealtimeProvider provider,
+        List<VoiceProviderEvent> events,
+        Action<VoiceProviderEvent>? onEvent = null,
+        VoiceProviderConfig? config = null,
+        CancellationToken ct = default) =>
+        provider.ConnectAsync(
+            new VoiceProviderSessionKey("lease-1", "host-1", "transport-1", 1),
+            config ?? CreateConfig(),
+            (key, evt, token) =>
+            {
+                _ = key;
+                _ = token;
+                events.Add(evt);
+                onEvent?.Invoke(evt);
+                return Task.CompletedTask;
+            },
+            ct);
 
     private static HttpResponseMessage CreateJsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK) =>
         new(statusCode)

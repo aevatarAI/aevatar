@@ -39,6 +39,10 @@ message RunFinishedEvent {
   google.protobuf.Any result = 3;
 }
 
+message GAgentDraftRunResultPayload {
+  string output = 1;
+}
+
 message RunErrorEvent {
   string message = 1;
   google.protobuf.StringValue run_id = 2;

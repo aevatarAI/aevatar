@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 
 namespace Aevatar.GAgentService.Application.Responses;
 

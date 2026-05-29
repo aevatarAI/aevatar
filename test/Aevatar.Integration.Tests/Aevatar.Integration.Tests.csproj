@@ -47,7 +47,7 @@
               AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
     <Protobuf Include="Protos/script_evolution_protocol.proto"
               GrpcServices="None"
-              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions;..\..\src\Aevatar.Scripting.Abstractions\Protos" />
     <Protobuf Include="Protos/hybrid_service_upgrade_protocol.proto"
               GrpcServices="None"
               AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />

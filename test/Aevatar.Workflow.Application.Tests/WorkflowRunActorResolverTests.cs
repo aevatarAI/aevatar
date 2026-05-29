@@ -18,7 +18,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", " direct ", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow(" direct ")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -41,8 +41,7 @@ public sealed class WorkflowRunActorResolverTests
         var result = await resolver.ResolveOrCreateAsync(
             new WorkflowChatRunRequest(
                 "hello",
-                "direct",
-                null,
+                WorkflowChatSource.CatalogWorkflow("direct"),
                 ScopeId: "scope-user-1"),
             CancellationToken.None);
 
@@ -64,7 +63,7 @@ public sealed class WorkflowRunActorResolverTests
             });
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct()),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -85,7 +84,7 @@ public sealed class WorkflowRunActorResolverTests
             });
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct()),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -100,7 +99,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "missing", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
@@ -141,7 +140,9 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1", WorkflowYamls: [entryWorkflowYaml, helperWorkflowYaml]),
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml, helperWorkflowYaml], actorId: "agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -188,8 +189,6 @@ public sealed class WorkflowRunActorResolverTests
         var result = await resolver.ResolveOrCreateAsync(
             new WorkflowChatRunRequest(
                 "hello",
-                null,
-                null,
                 ScopeId: "request-scope-1",
                 Source: WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml], actorId: sourceActorId)),
             CancellationToken.None);
@@ -232,10 +231,9 @@ public sealed class WorkflowRunActorResolverTests
         var result = await resolver.ResolveOrCreateAsync(
             new WorkflowChatRunRequest(
                 "hello",
-                "direct",
-                sourceActorId,
+                WorkflowChatSource.DefinitionActor(sourceActorId, "direct"),
                 ScopeId: "request-scope-1",
-                Source: WorkflowChatSource.DefinitionActor(sourceActorId, "direct")),
+                LlmControl: null),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -271,7 +269,9 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1", WorkflowYamls: [entryWorkflowYaml]),
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml], actorId: "agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);
@@ -300,7 +300,9 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "auto", null, WorkflowYamls: [entryWorkflowYaml, helperWorkflowYaml]),
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml, helperWorkflowYaml], "auto")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNameMismatch);
@@ -317,7 +319,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null, WorkflowYamls: ["bad"]),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle(["bad"])),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
@@ -345,7 +347,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null, WorkflowYamls: [firstYaml, secondYaml]),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle([firstYaml, secondYaml])),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
@@ -358,7 +360,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-404"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-404")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.AgentNotFound);
@@ -371,7 +373,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(WorkflowActorBinding.Unsupported("agent-1")), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.AgentTypeNotSupported);
@@ -396,7 +398,7 @@ public sealed class WorkflowRunActorResolverTests
             new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.AgentWorkflowNotConfigured);
@@ -420,7 +422,7 @@ public sealed class WorkflowRunActorResolverTests
             new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "requested", "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1", "requested")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);
@@ -448,7 +450,7 @@ public sealed class WorkflowRunActorResolverTests
             registry);
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -478,7 +480,7 @@ public sealed class WorkflowRunActorResolverTests
             registry);
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -522,7 +524,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
 
         var boundResult = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, opaqueActorId),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor(opaqueActorId)),
             CancellationToken.None);
 
         boundResult.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -535,7 +537,7 @@ public sealed class WorkflowRunActorResolverTests
         actorPort.CreateRunBindings.Clear();
 
         var freshResult = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             CancellationToken.None);
 
         freshResult.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -564,7 +566,7 @@ public sealed class WorkflowRunActorResolverTests
             new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("agent-1")),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.AgentWorkflowNotConfigured);
@@ -583,7 +585,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, registry);
 
         var act = async () => await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             CancellationToken.None);
 
         var ex = await act.Should().ThrowAsync<WorkflowDirectFallbackTriggerException>();
@@ -607,7 +609,7 @@ public sealed class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var act = async () => await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null, WorkflowYamls: [entryWorkflowYaml]),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.InlineYamlBundle([entryWorkflowYaml])),
             CancellationToken.None);
 
         var ex = await act.Should().ThrowAsync<InvalidOperationException>();

@@ -67,6 +67,9 @@ public sealed class ConnectorAuthConfig
 }
 
 /// <summary>Telegram user-account connector settings (MTProto client).</summary>
+// Refactor (iter113/cluster-113-telegram-connector-inmemory-updates):
+//   Old pattern: Telegram connector keeps inbound updates as in-memory state (process-local queue/dictionary).
+//   New principle: Delete telegram_user /getUpdates in-memory queue and route inbound Telegram through existing NyxID relay/proxy; no new actor type; no in-memory state on connector side.
 public sealed class TelegramUserConnectorConfig
 {
     public string ApiId { get; init; } = "";
@@ -80,7 +83,7 @@ public sealed class TelegramUserConnectorConfig
     public string AppVersion { get; init; } = "";
     public string SystemLangCode { get; init; } = "";
     public string LangCode { get; init; } = "";
-    public string[] AllowedOperations { get; init; } = ["/sendMessage", "/getUpdates"];
+    public string[] AllowedOperations { get; init; } = ["/sendMessage"];
 }
 
 /// <summary>
@@ -267,8 +270,11 @@ public static partial class AevatarConnectorConfig
             return new TelegramUserConnectorConfig();
 
         var allowedOperations = ReadStringArray(obj, "allowedOperations");
+        allowedOperations = allowedOperations
+            .Where(operation => !string.Equals(operation?.Trim(), "/getUpdates", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         if (allowedOperations.Length == 0)
-            allowedOperations = ["/sendMessage", "/getUpdates"];
+            allowedOperations = ["/sendMessage"];
 
         return new TelegramUserConnectorConfig
         {

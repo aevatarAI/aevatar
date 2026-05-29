@@ -32,6 +32,66 @@ public sealed class WorkflowExecutionRuntimeContextSourceRegressionTests
         source.Should().NotContain("_executionItems");
     }
 
+    [Fact]
+    public void WorkflowExecutionRuntimeContext_ShouldNotReintroduceDurableControlOrSecurityAuthority()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var path = Path.Combine(
+            repositoryRoot,
+            "src",
+            "workflow",
+            "Aevatar.Workflow.Core",
+            "Execution",
+            "WorkflowExecutionRuntimeContext.cs");
+
+        var source = StripComments(File.ReadAllText(path));
+
+        source.Should().NotContain("CapturedSecureInputs");
+        source.Should().NotContain("Dictionary<CapturedSecureInputKey, string>");
+        source.Should().NotContain("LlmOverrides");
+        source.Should().NotContain("WorkflowLlmRuntimeOverrides");
+        source.Should().NotContain("WorkflowConnectorRuntimeContext");
+        source.Should().NotContain("public string? Authorization");
+    }
+
+    [Fact]
+    public void SecureInputStateAccess_ShouldNotClearCapturedUnconditionally()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var path = Path.Combine(
+            repositoryRoot,
+            "src",
+            "workflow",
+            "Aevatar.Workflow.Core",
+            "Modules",
+            "SecureInputStateAccess.cs");
+
+        var source = StripComments(File.ReadAllText(path));
+
+        source.Should().NotContain("state.Captured.Clear()");
+    }
+
+    [Fact]
+    public void WorkflowCoreSources_ShouldNotPreserveOldRuntimeOnlyNoMigrationComment()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var files = Directory
+            .EnumerateFiles(
+                Path.Combine(repositoryRoot, "src", "workflow", "Aevatar.Workflow.Core"),
+                "*.cs",
+                SearchOption.AllDirectories)
+            .Where(path => !IsGeneratedFile(path))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var source = string.Join(
+            Environment.NewLine,
+            files.Select(path => File.ReadAllText(path)));
+
+        source.Should().NotContain("runtime-only values stay non-durable");
+        source.Should().NotContain("no proto/state migration");
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

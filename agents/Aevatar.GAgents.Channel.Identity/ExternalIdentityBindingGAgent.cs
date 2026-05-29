@@ -86,7 +86,6 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
                 cmd.ExternalSubject.ExternalUserId,
                 State.BindingId,
                 cmd.BindingId);
-            await EnsureCommittedStateActivatedAsync().ConfigureAwait(false);
             return;
         }
 
@@ -144,7 +143,6 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId,
                 reason);
-            await EnsureCommittedStateActivatedAsync().ConfigureAwait(false);
             return;
         }
 
@@ -189,25 +187,12 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
         return false;
     }
 
-    private Task EnsureCommittedStateActivatedAsync()
-    {
-        var activation = Services.GetService(typeof(IChannelIdentityCommittedStateActivationService))
-            as IChannelIdentityCommittedStateActivationService;
-        if (activation == null)
-            return Task.CompletedTask;
-
-        var actorId = !string.IsNullOrWhiteSpace(Id)
-            ? Id
-            : State.ExternalSubject?.ToActorId() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(actorId) || EventSourcing == null)
-            return Task.CompletedTask;
-
-        return activation.EnsureExternalIdentityCommittedStateActivatedAsync(
-            actorId,
-            State.Clone(),
-            EventSourcing.CurrentVersion,
-            CancellationToken.None);
-    }
+    // Refactor (iter97/cluster-097): Old pattern: no-op identity commands
+    // activated committed-state projection by side-reading the latest event
+    // and manually dispatching a projection envelope. New principle: identity
+    // commands only commit real facts; committed-state hook + activation plan
+    // provider own projection materialization, and drift repair must be an
+    // explicit maintenance/admin path.
 
     // ─── State transitions ───
 

@@ -48,14 +48,22 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             var captured = envelope.Payload.Unpack<SecureValueCapturedEvent>();
             if (!string.IsNullOrWhiteSpace(captured.Variable) && !string.IsNullOrEmpty(captured.Value))
             {
-                SecureInputRuntimeContextAccess.SetCapturedValue(ctx, captured.RunId, captured.Variable, captured.Value);
+                await SecureInputRuntimeContextAccess.SetCapturedValueAsync(
+                    ctx,
+                    captured.RunId,
+                    captured.Variable,
+                    captured.Value,
+                    ct);
             }
             return;
         }
 
         if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
         {
-            SecureInputRuntimeContextAccess.RemoveRun(ctx, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
+            await SecureInputRuntimeContextAccess.RemoveRunAsync(
+                ctx,
+                envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId,
+                ct);
             return;
         }
 

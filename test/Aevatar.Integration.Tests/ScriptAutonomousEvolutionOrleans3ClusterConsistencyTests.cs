@@ -126,7 +126,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 "orleans_generated",
                 "1");
 
-            await definitionPortNode1.UpsertDefinitionAsync(
+            var workerADefinition = await definitionPortNode1.UpsertDefinitionWithSnapshotAsync(
                 workerAScriptId,
                 "rev-a-1",
                 ScriptPackageSpecExtensions.CreateSingleSource(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
@@ -136,7 +136,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     "1")),
                 workerADefinitionActorId,
                 CancellationToken.None);
-            await definitionPortNode1.UpsertDefinitionAsync(
+            var workerBDefinition = await definitionPortNode1.UpsertDefinitionWithSnapshotAsync(
                 workerBScriptId,
                 "rev-b-1",
                 ScriptPackageSpecExtensions.CreateSingleSource(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
@@ -201,6 +201,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                                 TempBRuntimeId = tempBRuntimeId,
                                 GeneratedRuntimeId = generatedRuntimeId,
                                 GeneratedDefinitionActorId = generatedDefinitionActorId,
+                                WorkerADefinitionSnapshot = workerADefinition.Snapshot.ToBindingSpec(),
+                                WorkerBDefinitionSnapshot = workerBDefinition.Snapshot.ToBindingSpec(),
                             }),
                             ScriptRevision = "rev-orchestrator-1",
                             DefinitionActorId = orchestratorDefinitionActorId,

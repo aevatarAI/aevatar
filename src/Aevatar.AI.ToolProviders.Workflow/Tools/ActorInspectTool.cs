@@ -23,10 +23,13 @@ public sealed class ActorInspectTool : IAgentTool
 
     public string Name => "actor_inspect";
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string Description =>
         "Inspect actor state via the projection readmodel. " +
         "Shows actor snapshots (status, output, step counts), " +
-        "graph relationships, and registered agents. " +
+        "and registered agents. " +
         "All data is from committed projections, not live actor internals.";
 
     public string ParametersSchema => """
@@ -35,16 +38,12 @@ public sealed class ActorInspectTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["snapshot", "list", "graph", "agents"],
-              "description": "Action: 'snapshot' (default) actor state, 'list' all actors, 'graph' relationships, 'agents' registered agents"
+              "enum": ["snapshot", "list", "agents"],
+              "description": "Action: 'snapshot' (default) actor state, 'list' all actors, 'agents' registered agents"
             },
             "actor_id": {
               "type": "string",
-              "description": "Actor ID (required for 'snapshot' and 'graph')"
-            },
-            "graph_depth": {
-              "type": "integer",
-              "description": "Graph traversal depth (default: 2, max: 5)"
+              "description": "Actor ID (required for 'snapshot')"
             },
             "take": {
               "type": "integer",
@@ -75,8 +74,8 @@ public sealed class ActorInspectTool : IAgentTool
             return action switch
             {
                 "list" or "agents" => await ListAgentsAsync(ct),
-                "graph" => await GetGraphAsync(args, ct),
-                _ => await GetSnapshotAsync(args, ct),
+                "snapshot" => await GetSnapshotAsync(args, ct),
+                _ => JsonSerializer.Serialize(new { error = $"Unsupported actor_inspect action '{action}'" }),
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -109,37 +108,6 @@ public sealed class ActorInspectTool : IAgentTool
                 total = snapshot.TotalSteps, requested = snapshot.RequestedSteps,
                 completed = snapshot.CompletedSteps, role_replies = snapshot.RoleReplyCount,
             },
-        }, s_json);
-    }
-
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: the graph action exposed workflow run graph data as an actor current-state graph query.
-    //   New principle: workflow history/report/graph are workflow-run artifacts or exports, not current-state readmodels.
-    private async Task<string> GetGraphAsync(ToolArgs args, CancellationToken ct)
-    {
-        var actorId = args.Str("actor_id");
-        if (string.IsNullOrWhiteSpace(actorId))
-            return """{"error":"'actor_id' is required for 'graph' action"}""";
-
-        var depth = Math.Clamp(args.Int("graph_depth") ?? _options.MaxGraphDepth, 1, 5);
-        var take = Math.Clamp(args.Int("take") ?? 200, 1, 500);
-
-        var subgraph = await _queryService.GetWorkflowRunGraphExportSubgraphAsync(actorId, depth, take, ct: ct);
-
-        return JsonSerializer.Serialize(new
-        {
-            root = subgraph.RootNodeId,
-            nodes = subgraph.Nodes.Select(n => new
-            {
-                id = n.NodeId, type = n.NodeType, updated_at = n.UpdatedAt,
-                properties = n.Properties.Count > 0 ? n.Properties : null,
-            }).ToArray(),
-            edges = subgraph.Edges.Select(e => new
-            {
-                from = e.FromNodeId, to = e.ToNodeId, type = e.EdgeType,
-                properties = e.Properties.Count > 0 ? e.Properties : null,
-            }).ToArray(),
-            node_count = subgraph.Nodes.Count, edge_count = subgraph.Edges.Count,
         }, s_json);
     }
 

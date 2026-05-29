@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "chat_activity.proto";
 import "conversation_events.proto";
+import "ai_messages.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -64,6 +65,87 @@ message AgentRunGAgentState {
   // completion/timeout continuations.
   int64 generation_requested_at_unix_ms = 14;
   int32 generation_attempt = 15;
+  // Drop notification outbox facts. AgentRunDroppedEvent is persisted before
+  // notifying the target actor; retry callbacks carry only stable IDs and the
+  // actor replays the DeferredLlmReplyDroppedEvent from these state fields.
+  string pending_drop_notification_run_id = 16;
+  string pending_drop_notification_correlation_id = 17;
+  string pending_drop_notification_target_actor_id = 18;
+  string pending_drop_notification_reason = 19;
+  int64 pending_drop_notification_dropped_at_unix_ms = 20;
+  int64 drop_notification_dispatched_at_unix_ms = 21;
+  AgentRunReplyStepState generation_step = 22;
+}
+
+enum AgentRunReplyStepKind {
+  AGENT_RUN_REPLY_STEP_KIND_UNSPECIFIED = 0;
+  AGENT_RUN_REPLY_STEP_KIND_LLM = 1;
+  AGENT_RUN_REPLY_STEP_KIND_TOOL = 2;
+}
+
+message AgentRunReplyTokenUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message AgentRunToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments_json = 3;
+}
+
+message AgentRunChatMessage {
+  string role = 1;
+  string content = 2;
+  string reasoning_content = 3;
+  repeated aevatar.ai.ChatContentPart content_parts = 4;
+  string tool_call_id = 5;
+  repeated AgentRunToolCall tool_calls = 6;
+}
+
+message AgentRunReplyStepState {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 next_step_index = 5;
+  int32 round = 6;
+  int32 max_tool_rounds = 7;
+  int32 length_recovery_count = 8;
+  bool has_streamed_text_content = 9;
+  string accumulated_text = 10;
+  AgentRunReplyTokenUsage aggregated_usage = 11;
+  string last_finish_reason = 12;
+  repeated AgentRunChatMessage messages = 13;
+  repeated AgentRunChatMessage pending_history_messages = 14;
+  repeated AgentRunToolCall pending_tool_calls = 15;
+  bool final_no_tools_step = 16;
+  aevatar.ai.LLMControlContextPayload llm_control = 17;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 18;
+  map<string, string> external_metadata = 19;
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
+}
+
+// Typed LLM IO facts returned by the executor. The run actor reconciles these
+// facts with its current AgentRunReplyStepState before persisting the next
+// waterline.
+message AgentRunLlmStepResult {
+  string accumulated_text = 1;
+  string content = 2;
+  string reasoning_content = 3;
+  repeated AgentRunToolCall tool_calls = 4;
+  AgentRunReplyTokenUsage usage = 5;
+  string finish_reason = 6;
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
+  bool has_streamed_text_content = 8;
+}
+
+// Typed tool IO facts returned by the executor. The run actor owns round
+// advancement and message/state persistence.
+message AgentRunToolStepResult {
+  repeated AgentRunChatMessage result_messages = 1;
+  bool advance_round = 2;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -72,6 +154,10 @@ message AgentRunGAgentState {
 // scheduler callback payloads.
 message AgentRunStartRequested {
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 1;
+  // Refactor (iter101/cluster-105):
+  //   Old pattern: derive run_id by parsing AgentRun actor id prefix.
+  //   New principle: start command carries run_id as typed data; actor id remains opaque.
+  string run_id = 2;
 }
 
 // Durable output-dispatch retry signal emitted by the callback scheduler.
@@ -86,6 +172,18 @@ message AgentRunOutputDispatchRetryRequested {
   int64 generation = 5;
   int64 requested_at_unix_ms = 6;
   bool requires_runtime_reply_token = 7;
+}
+
+// Durable drop-notification retry signal emitted by the callback scheduler.
+// Refactor (iter99/cluster-605-drop-outbox):
+//   Old pattern: drop notification failure reused the ready-output retry command, which had different state and credential semantics.
+//   New principle: callback payload carries only stable drop IDs; AgentRunGAgent replays the drop notification from actor-owned state.
+message AgentRunDropNotificationRetryRequested {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int64 requested_at_unix_ms = 5;
 }
 
 message AgentRunCleanupRequested {
@@ -127,23 +225,42 @@ message AgentRunReplyGenerationRequestedEvent {
   int32 attempt = 5;
 }
 
-// Transient command sent back by the stateless generation executor after it
-// has produced an immutable reply payload. The nested request may still carry
-// command-only credentials such as reply_token; AgentRunGAgent must use them
-// only for the accepted-only LlmReplyReadyEvent handoff and must never persist
-// them into AgentRunGAgentState or AgentRun*Event facts.
-message AgentRunReplyGenerationCompleted {
+// Persisted per-step waterline owned by AgentRunGAgent. Runtime-only
+// credentials remain only on the transient self-message request.
+message AgentRunReplyStepStateUpdatedEvent {
   string run_id = 1;
   string correlation_id = 2;
   string target_actor_id = 3;
-  string reply_text = 4;
-  aevatar.gagents.channel.abstractions.MessageContent outbound = 5;
-  aevatar.gagents.channel.runtime.LlmReplyTerminalState terminal_state = 6;
-  string error_code = 7;
-  string error_summary = 8;
-  int64 completed_at_unix_ms = 9;
-  int32 attempt = 10;
-  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 11;
+  int32 attempt = 4;
+  AgentRunReplyStepState step_state = 5;
+}
+
+// Typed self-message: request the next single LLM IO step. The nested request
+// may carry command-only relay credentials and must not be persisted.
+message AgentRunNextLlmStepRequestedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 step_index = 5;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 6;
+  reserved 7;
+  reserved "step_state";
+  AgentRunLlmStepResult llm_step_result = 8;
+}
+
+// Typed self-message: request the next single tool IO step. The nested request
+// may carry command-only relay credentials and must not be persisted.
+message AgentRunNextToolStepRequestedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 step_index = 5;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 6;
+  reserved 7;
+  reserved "step_state";
+  AgentRunToolStepResult tool_step_result = 8;
 }
 
 // Transient command for executor failures that did not produce a normal reply
@@ -188,6 +305,13 @@ message AgentRunDroppedEvent {
   string target_actor_id = 3;
   string reason = 4;
   int64 dropped_at_unix_ms = 5;
+}
+
+message AgentRunDropNotificationDispatchedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 dispatched_at_unix_ms = 4;
 }
 
 message AgentRunFailedEvent {

@@ -35,11 +35,9 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
     private ExternalIdentityBindingGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
-    private RecordingCommittedStateActivationService _activation = null!;
 
     public async Task InitializeAsync()
     {
-        _activation = new RecordingCommittedStateActivationService();
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore, InMemoryEventStore>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
@@ -50,7 +48,6 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         // continuation timers; tests register a no-op so the dispatch path
         // is exercised without bringing up a real Orleans cluster.
         services.AddSingleton<Aevatar.Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler, NoopCallbackScheduler>();
-        services.AddSingleton<IChannelIdentityCommittedStateActivationService>(_activation);
 
         _serviceProvider = services.BuildServiceProvider();
 
@@ -121,10 +118,6 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         _agent.EventSourcing!.CurrentVersion.Should().Be(
             afterFirstVersion,
             "the discard branch must not append a projection-only no-op event");
-        _activation.ExternalIdentityRequests.Should().ContainSingle(request =>
-            request.ActorId == subject.ToActorId() &&
-            request.State.BindingId == "bnd_first" &&
-            request.StateVersion == afterFirstVersion);
     }
 
     [Fact]
@@ -208,8 +201,6 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         _agent.EventSourcing!.CurrentVersion.Should().Be(
             initialVersion,
             "empty revoke must not append a projection-only no-op event");
-        _activation.ExternalIdentityRequests.Should().BeEmpty(
-            "there is no committed state root to activate before the actor has any committed version");
     }
 
     [Fact]
@@ -367,30 +358,9 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         }
     }
 
-    private sealed class RecordingCommittedStateActivationService : IChannelIdentityCommittedStateActivationService
-    {
-        public List<ExternalIdentityActivationRequest> ExternalIdentityRequests { get; } = [];
-
-        public Task EnsureExternalIdentityCommittedStateActivatedAsync(
-            string actorId,
-            ExternalIdentityBindingState state,
-            long stateVersion,
-            CancellationToken ct = default)
-        {
-            ExternalIdentityRequests.Add(new ExternalIdentityActivationRequest(actorId, state.Clone(), stateVersion));
-            return Task.CompletedTask;
-        }
-
-        public Task EnsureAevatarOAuthClientCommittedStateActivatedAsync(
-            string actorId,
-            AevatarOAuthClientState state,
-            long stateVersion,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
-
-    private sealed record ExternalIdentityActivationRequest(
-        string ActorId,
-        ExternalIdentityBindingState State,
-        long StateVersion);
+    // Refactor (iter97/cluster-097): Old pattern: tests injected a hidden
+    // committed-state activation service and expected identity no-op commands
+    // to side-dispatch projection envelopes. New principle: no-op commands
+    // only preserve actor facts; committed-state hook/plan provider own
+    // materialization, and repair belongs to explicit maintenance/admin.
 }
