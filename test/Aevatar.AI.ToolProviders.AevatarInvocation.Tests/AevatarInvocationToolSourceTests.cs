@@ -708,7 +708,7 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static void ShouldNotCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)
     {
-        // Refactor (issue1300-first): Old: stamp trusted caller/control to Headers/Metadata. New: typed ScopeId/ToolContext/LlmControl as authority.
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
         metadata.Should().NotBeNull();
         var values = metadata!.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal);
         values.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);

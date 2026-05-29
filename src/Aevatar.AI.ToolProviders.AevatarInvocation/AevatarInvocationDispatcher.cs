@@ -751,7 +751,7 @@ public sealed class AevatarInvocationDispatcher
         string commandId,
         InvocationCallerScope scope)
     {
-        // Refactor (issue1300-first): Old: stamp trusted caller/control to Headers/Metadata. New: typed ScopeId/ToolContext/LlmControl as authority.
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
         var headers = BuildPayloadHeaders(payload.Headers);
         var request = new ChatRequestEvent
         {
@@ -770,7 +770,7 @@ public sealed class AevatarInvocationDispatcher
     private static Dictionary<string, string> BuildPayloadHeaders(
         Google.Protobuf.Collections.MapField<string, string>? headers)
     {
-        // Refactor (issue1300-first): Old: stamp trusted caller/control to Headers/Metadata. New: typed ScopeId/ToolContext/LlmControl as authority.
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
         if (headers == null)
             return metadata;
@@ -859,7 +859,7 @@ public sealed class AevatarInvocationDispatcher
 
     private static AgentToolExecutionContextPayload ToPayload(AgentToolExecutionContext? context)
     {
-        // Refactor (issue1300-first): Old: stamp trusted caller/control to Headers/Metadata. New: typed ScopeId/ToolContext/LlmControl as authority.
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         var payload = new AgentToolExecutionContextPayload
         {
@@ -912,7 +912,7 @@ public sealed class AevatarInvocationDispatcher
 
     private static LLMControlContextPayload ToLlmControlPayload(AgentToolExecutionContext? context)
     {
-        // Refactor (issue1300-first): Old: stamp trusted caller/control to Headers/Metadata. New: typed ScopeId/ToolContext/LlmControl as authority.
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         return new LLMControlContext(
             context.Credentials.NyxIdAccessToken,
