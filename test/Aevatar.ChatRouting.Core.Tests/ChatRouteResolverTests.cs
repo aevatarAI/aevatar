@@ -216,7 +216,7 @@ public sealed class ChatRouteResolverTests
                 ["actor_id"] = "agent-voice",
                 ["voice_module_name"] = "voice_presence_openai",
             },
-            toolSetName: "voice.realtime");
+            toolSetName: "workspace.default");
         var snapshot = new ChatRoutePolicySnapshot(
             ForwardToModelAction("default-model"),
             [
@@ -246,7 +246,7 @@ public sealed class ChatRouteResolverTests
                 ["actor_id"] = "agent-voice",
                 ["voice_module_name"] = "voice_presence_openai",
             },
-            expectedToolSetName: "voice.realtime");
+            expectedToolSetName: "workspace.default");
     }
 
     [Fact]

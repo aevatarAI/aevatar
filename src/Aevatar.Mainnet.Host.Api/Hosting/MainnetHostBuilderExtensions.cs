@@ -255,11 +255,6 @@ public static class MainnetHostBuilderExtensions
                 [ToolSetNames.WorkspaceDefault],
                 [],
                 "Lark route tool composition with the default workspace tools.");
-            options.AddToolSet(
-                ToolSetNames.VoiceRealtime,
-                [ToolSetNames.WorkspaceDefault],
-                [],
-                "Placeholder realtime voice composition.");
         });
 
         return builder;

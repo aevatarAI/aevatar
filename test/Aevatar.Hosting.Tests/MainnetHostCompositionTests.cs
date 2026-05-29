@@ -157,7 +157,6 @@ public sealed class MainnetHostCompositionTests
 
         registry.GetRegisteredNames().Should().Equal(
             ToolSetNames.LarkSelfNotify,
-            ToolSetNames.VoiceRealtime,
             ToolSetNames.WorkspaceDefault);
 
         var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
@@ -187,10 +186,9 @@ public sealed class MainnetHostCompositionTests
         larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is QueryReadModelToolSource);
 
-        var voice = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime });
-        voice.IsSuccess.Should().BeTrue(voice.Error?.Message);
-        voice.Sources.Select(static source => source.GetType()).Should()
-            .Equal(workspace.Sources.Select(static source => source.GetType()));
+        var voice = registry.Resolve(new ChatRouteToolSetRef { Name = "voice.realtime" });
+        voice.IsSuccess.Should().BeFalse();
+        voice.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
 
         var unknown = registry.Resolve(new ChatRouteToolSetRef { Name = "missing.set" });
         unknown.IsSuccess.Should().BeFalse();

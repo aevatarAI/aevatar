@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -62,7 +61,6 @@ internal static class VoiceDemoBootstrapEndpoints
 
         var routePolicyReceipt = await EnsureVoiceRoutePolicyAsync(
             scopeId,
-            actorId,
             ownerScope,
             routePolicyCommandPort,
             routePolicyQueryPort,
@@ -72,27 +70,37 @@ internal static class VoiceDemoBootstrapEndpoints
         {
             status = "accepted",
             actor_id = actorId,
-            route_policy_actor_id = routePolicyReceipt.ActorId,
+            route_policy_actor_id = routePolicyReceipt?.ActorId,
             voice_module_name = VoiceModuleName,
             policy_rule_id = RouteRuleId,
             agent_command_id = voiceDemoReceipt.CommandId,
             agent_correlation_id = voiceDemoReceipt.CorrelationId,
-            route_policy_command_id = routePolicyReceipt.CommandId,
-            route_policy_correlation_id = routePolicyReceipt.CorrelationId,
+            route_policy_command_id = routePolicyReceipt?.CommandId,
+            route_policy_correlation_id = routePolicyReceipt?.CorrelationId,
             nyxid_proxy = "https://nyx.chrono-ai.fun/api/v1/proxy/s/llm-openai",
             readiness = "query readmodels or subscribe to events; this POST only confirms dispatch acceptance",
         });
     }
 
-    private static async Task<ChatRoutePolicyCommandAcceptedReceipt> EnsureVoiceRoutePolicyAsync(
+    private static async Task<ChatRoutePolicyCommandAcceptedReceipt?> EnsureVoiceRoutePolicyAsync(
         string scopeId,
-        string actorId,
         OwnerScope ownerScope,
         IChatRoutePolicyCommandPort routePolicyCommandPort,
         IChatRoutePolicyQueryPort routePolicyQueryPort,
         CancellationToken ct)
     {
         var existing = await routePolicyQueryPort.LookupForCallerAsync(ownerScope, ct);
+        if (existing is null)
+            return null;
+
+        var keptRules = existing.Rules
+            .Where(static rule => !string.Equals(rule.RuleId, RouteRuleId, StringComparison.Ordinal))
+            .Select(static rule => rule.Clone())
+            .ToArray();
+
+        if (keptRules.Length == existing.Rules.Count)
+            return null;
+
         var command = new UpsertChatRoutePolicyRequested
         {
             OwnerScope = new OwnerScope
@@ -100,23 +108,12 @@ internal static class VoiceDemoBootstrapEndpoints
                 NyxUserId = scopeId,
                 Platform = OwnerScope.NyxIdPlatform,
             },
-            DefaultTarget = existing?.DefaultTarget.Clone() ?? new ChatRouteAction
-            {
-                ForwardToModel = new ForwardToModel
-                {
-                    ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime },
-                },
-            },
+            DefaultTarget = existing.DefaultTarget.Clone(),
         };
 
-        if (existing is not null)
-        {
-            // Refactor (issue1321-first): remove the stale voice-demo rule that used
-            // tool_choice_hint as actor addressing; policy-aware /ws/voice now fails closed.
-            command.Rules.AddRange(existing.Rules
-                .Where(static rule => !string.Equals(rule.RuleId, RouteRuleId, StringComparison.Ordinal))
-                .Select(static rule => rule.Clone()));
-        }
+        // Refactor (issue1365-first): only remove the stale voice-demo route.
+        // Bootstrap no longer creates a voice.realtime default target placeholder.
+        command.Rules.AddRange(keptRules);
 
         return await routePolicyCommandPort.UpsertAsync(scopeId, command, ct);
     }
