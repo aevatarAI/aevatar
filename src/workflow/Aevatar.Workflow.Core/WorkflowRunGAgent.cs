@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.AI.Abstractions;
@@ -13,6 +14,7 @@ using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
 
@@ -44,6 +46,7 @@ public sealed class WorkflowRunGAgent
     private readonly WorkflowExecutionRuntimeContext _runtimeContext = new();
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IStreamForwardingRegistry? _streamForwardingRegistry;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IEventModuleFactory<IWorkflowExecutionContext> _stepExecutorFactory;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
@@ -57,10 +60,12 @@ public sealed class WorkflowRunGAgent
         IRoleAgentTypeResolver roleAgentTypeResolver,
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
-        IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
+        IWorkflowDefinitionResolver? workflowDefinitionResolver = null,
+        IStreamForwardingRegistry? streamForwardingRegistry = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _streamForwardingRegistry = streamForwardingRegistry;
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _stepExecutorFactory = stepExecutorFactory ?? throw new ArgumentNullException(nameof(stepExecutorFactory));
         _ = workflowDefinitionResolver;
@@ -533,20 +538,33 @@ public sealed class WorkflowRunGAgent
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
-        {
-            await PersistDomainEventAsync(artifactFact, CancellationToken.None);
-            if (artifactFact is WorkflowRoleReplyRecordedEvent roleReply)
-                await DispatchCommittedRoleReplyArtifactAsync(roleReply);
-        }
+        if (!WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
+            return;
+
+        await PersistDomainEventAsync(artifactFact, CancellationToken.None);
+
+        if (artifactFact is not WorkflowRoleReplyRecordedEvent roleReply)
+            return;
+
+        await DispatchCommittedRoleReplyArtifactAsync(roleReply, envelope);
     }
 
     // Refactor (issue1271/first-slice):
     //   Old pattern: LLM-like modules completed steps from live TextMessageEndEvent / ChatResponseEvent frames.
     //   New principle: child role committed facts are first persisted as WorkflowRoleReplyRecordedEvent.
     //   The same fact is then fed through the existing workflow module bridge for SessionId reconciliation.
-    private Task DispatchCommittedRoleReplyArtifactAsync(WorkflowRoleReplyRecordedEvent roleReply) =>
-        PublishAsync(roleReply, TopologyAudience.Self);
+    // Refactor (iter170/cluster-1247-first):
+    //   Old pattern: the actor re-entered itself with inline handling/publish fallback.
+    //   New principle: committed role reply facts are admitted through the runtime-neutral dispatch port before the module pipeline consumes them.
+    private Task DispatchCommittedRoleReplyArtifactAsync(WorkflowRoleReplyRecordedEvent roleReply, EventEnvelope sourceEnvelope) =>
+        _dispatchPort.DispatchAsync(Id, new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(roleReply),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
+            Propagation = sourceEnvelope.Propagation?.Clone(),
+        }, CancellationToken.None);
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
     {
@@ -559,6 +577,7 @@ public sealed class WorkflowRunGAgent
         {
             try
             {
+                await UnlinkRoleCommittedFactsFromWorkflowAsync(childActorId, ct);
                 await _runtime.UnlinkAsync(childActorId, ct);
                 await _runtime.DestroyAsync(childActorId, ct);
             }
@@ -603,6 +622,7 @@ public sealed class WorkflowRunGAgent
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await CreateRoleActorAsync(role, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
+            await LinkRoleCommittedFactsToWorkflowAsync(actor.Id, CancellationToken.None);
 
             await DispatchRoleInitializationAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id));
             _childAgentIds.Add(actor.Id);
@@ -621,6 +641,47 @@ public sealed class WorkflowRunGAgent
 
     private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope) =>
         _dispatchPort.DispatchAsync(actorId, envelope);
+
+    private async Task LinkRoleCommittedFactsToWorkflowAsync(string roleActorId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(Id))
+            return;
+
+        var forwardingRegistry = ResolveStreamForwardingRegistry();
+        if (forwardingRegistry == null)
+            return;
+
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: workflow modules used live role frames as completion fallback and the run actor manipulated stream transport directly.
+        //   New principle: role committed facts are registered through the stream forwarding topology abstraction and re-enter via actor dispatch.
+        var binding = new StreamForwardingBinding
+        {
+            SourceStreamId = roleActorId,
+            TargetStreamId = Id,
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = [],
+            EventTypeFilter =
+            {
+                $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}",
+            },
+        };
+
+        await forwardingRegistry.UpsertAsync(binding, ct);
+    }
+
+    private Task UnlinkRoleCommittedFactsFromWorkflowAsync(string roleActorId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(Id))
+            return Task.CompletedTask;
+
+        var forwardingRegistry = ResolveStreamForwardingRegistry();
+        return forwardingRegistry == null
+            ? Task.CompletedTask
+            : forwardingRegistry.RemoveAsync(roleActorId, Id, ct);
+    }
+
+    private IStreamForwardingRegistry? ResolveStreamForwardingRegistry() =>
+        _streamForwardingRegistry ?? Services.GetService<IStreamForwardingRegistry>();
 
     // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
     //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle

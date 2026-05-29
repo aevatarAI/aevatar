@@ -45,6 +45,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames completed workflow steps.
+        //   New principle: only committed WorkflowRoleReplyRecordedEvent can complete pending LLM steps.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
                 payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor) ||
@@ -65,7 +68,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
         if (payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
         {
-            await HandleRoleReplyRecordedAsync(payload.Unpack<WorkflowRoleReplyRecordedEvent>(), ctx, ct);
+            await HandleRoleReplyRecordedAsync(payload.Unpack<WorkflowRoleReplyRecordedEvent>(), envelope, ctx, ct);
             return;
         }
 
@@ -161,6 +164,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
     private async Task HandleRoleReplyRecordedAsync(
         WorkflowRoleReplyRecordedEvent evt,
+        EventEnvelope envelope,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
@@ -173,7 +177,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
-        var publisherActorId = string.IsNullOrWhiteSpace(evt.RoleActorId) ? ctx.AgentId : evt.RoleActorId;
+        var publisherActorId = !string.IsNullOrWhiteSpace(evt.RoleActorId)
+            ? evt.RoleActorId
+            : envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (TryExtractLlmFailure(evt.Content, out var error))
         {
             await PublishFailedCompletionAsync(pending, error, publisherActorId, ctx, ct);

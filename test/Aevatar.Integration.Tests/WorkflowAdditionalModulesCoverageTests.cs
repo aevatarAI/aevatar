@@ -1010,7 +1010,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
         var llmSessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
         await llmCall.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = llmSessionId,
                 Content = sensitiveLlmOutput,
@@ -1085,7 +1085,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldRedactNonStreamingChatResponseInInformationLogs()
+    public async Task LlmCallModule_ShouldRedactCommittedRoleReplyInInformationLogs()
     {
         const string sensitiveLlmPrompt = "customer secret llm non streaming prompt";
         const string sensitiveLlmOutput = "customer secret llm non streaming output";
@@ -1107,7 +1107,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var sessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = sessionId,
                 Content = sensitiveLlmOutput,
@@ -2311,7 +2311,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new ChatResponseEvent
             {
                 SessionId = improveSession,
                 Content = "draft-2-better",
