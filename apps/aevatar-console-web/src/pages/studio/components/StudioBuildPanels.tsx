@@ -589,9 +589,71 @@ function normalizePrimitiveParameterDescriptor(
   return {
     ...parameter,
     name: resolvedName,
-    description:
-      'Prompt prefix prepended before the workflow run prompt reaches the LLM.',
   };
+}
+
+function isLLMPromptInstructionParameter(
+  stepType: string,
+  parameterName: string,
+): boolean {
+  return (
+    stepType.trim().toLowerCase() === 'llm_call' &&
+    resolveStepParameterName(stepType, parameterName) === 'prompt_prefix'
+  );
+}
+
+function getParameterDisplayLabel(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  return isLLMPromptInstructionParameter(stepType, parameter.name)
+    ? 'Prompt instruction'
+    : parameter.name;
+}
+
+function getParameterDisplayDescription(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
+    return 'Instruction added before each workflow run input reaches the LLM.';
+  }
+
+  return parameter.description || `Type: ${parameter.type}`;
+}
+
+function getParameterPlaceholder(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
+    return 'e.g. Translate the user input to Japanese';
+  }
+
+  return parameter.default || parameter.type || 'Value';
+}
+
+function shouldUseParameterDefault(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): boolean {
+  return !isLLMPromptInstructionParameter(stepType, parameter.name);
+}
+
+function normalizeParameterEditorSourceValue(
+  stepType: string,
+  parameterName: string,
+  value: unknown,
+): unknown {
+  if (
+    isLLMPromptInstructionParameter(stepType, parameterName) &&
+    value !== null &&
+    typeof value === 'object'
+  ) {
+    return '';
+  }
+
+  return value;
 }
 
 function normalizePrimitiveParameterDescriptors(
@@ -1689,13 +1751,33 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   {selectedPrimitiveParameters.length ? (
                     <div style={{ display: 'grid', gap: 10 }}>
                       {selectedPrimitiveParameters.map((parameter) => {
-                        const currentValue = formatParameterEditorValue(
+                        const parameterDisplayLabel = getParameterDisplayLabel(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterAriaLabel = `Parameter ${parameterDisplayLabel}`;
+                        const parameterPlaceholder = getParameterPlaceholder(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterDescription = getParameterDisplayDescription(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterValue = normalizeParameterEditorSourceValue(
+                          stepDraft.type,
+                          parameter.name,
                           readStepParameterValue(
                             parsedStepParameters,
                             stepDraft.type,
                             parameter.name,
-                          ) ??
-                            parameter.default,
+                          ),
+                        );
+                        const currentValue = formatParameterEditorValue(
+                          parameterValue ??
+                            (shouldUseParameterDefault(stepDraft.type, parameter)
+                              ? parameter.default
+                              : ''),
                         );
 
                         return (
@@ -1707,19 +1789,19 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               htmlFor={`workflow-step-parameter-${parameter.name}`}
                               style={workflowFieldLabelStyle}
                             >
-                              {parameter.name}
+                              {parameterDisplayLabel}
                               {parameter.required ? ' *' : ''}
                             </label>
                             {parameter.enumValues.length > 0 ? (
                               <Select
                                 allowClear={!parameter.required}
-                                aria-label={`Parameter ${parameter.name}`}
+                                aria-label={parameterAriaLabel}
                                 id={`workflow-step-parameter-${parameter.name}`}
                                 options={parameter.enumValues.map((value) => ({
                                   label: value,
                                   value,
                                 }))}
-                                placeholder={parameter.default || 'Select value'}
+                                placeholder={parameterPlaceholder}
                                 value={currentValue || undefined}
                                 onChange={(value) =>
                                   updateStepDraft((current) =>
@@ -1736,9 +1818,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             ) : (
                               <Input
-                                aria-label={`Parameter ${parameter.name}`}
+                                aria-label={parameterAriaLabel}
                                 id={`workflow-step-parameter-${parameter.name}`}
-                                placeholder={parameter.default || parameter.type || 'Value'}
+                                placeholder={parameterPlaceholder}
                                 value={currentValue}
                                 onChange={(event) =>
                                   updateStepDraft((current) =>
@@ -1755,7 +1837,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             )}
                             <div style={workflowInlineMetaStyle}>
-                              {parameter.description || `Type: ${parameter.type}`}
+                              {parameterDescription}
                             </div>
                           </div>
                         );

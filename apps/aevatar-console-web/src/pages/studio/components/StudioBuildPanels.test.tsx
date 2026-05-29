@@ -1241,12 +1241,14 @@ describe('StudioWorkflowBuildPanel', () => {
     );
 
     const promptPrefixInput = await screen.findByLabelText(
-      'Parameter prompt_prefix',
+      'Parameter Prompt instruction',
     );
     expect(promptPrefixInput).toHaveValue('Legacy prompt field');
+    expect(screen.getByText('Prompt instruction')).toBeInTheDocument();
     expect(screen.queryByLabelText('Parameter prompt')).not.toBeInTheDocument();
+    expect(screen.queryByText('prompt_prefix')).not.toBeInTheDocument();
     expect(
-      screen.getByText(/Prompt prefix prepended before the workflow run prompt reaches the LLM/i),
+      screen.getByText(/Instruction added before each workflow run input reaches the LLM/i),
     ).toBeInTheDocument();
 
     fireEvent.change(promptPrefixInput, {
@@ -1279,7 +1281,7 @@ describe('StudioWorkflowBuildPanel', () => {
     );
 
     const promptPrefixInput = await screen.findByLabelText(
-      'Parameter prompt_prefix',
+      'Parameter Prompt instruction',
     );
     fireEvent.change(promptPrefixInput, {
       target: {
@@ -1299,6 +1301,53 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(JSON.parse(pendingDraft.draft.parametersText)).toEqual({
       prompt_prefix: 'Classify the refund request before answering.',
     });
+  });
+
+  it('does not show object defaults as llm prompt instructions', async () => {
+    render(
+      <WorkflowBuildHarness
+        initialDocumentOverride={{
+          ...initialDocument,
+          steps: [
+            {
+              ...initialDocument.steps[0],
+              parameters: {},
+            },
+            initialDocument.steps[1],
+          ],
+        }}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+        runtimePrimitivesOverride={[
+          {
+            name: 'llm_call',
+            aliases: [],
+            description: 'Call the LLM.',
+            category: 'ai',
+            parameters: [
+              {
+                name: 'prompt',
+                type: 'string',
+                required: false,
+                description: 'Prompt template or prompt override.',
+                default: '{}',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+        ]}
+      />,
+    );
+
+    const promptPrefixInput = await screen.findByLabelText(
+      'Parameter Prompt instruction',
+    );
+    expect(promptPrefixInput).toHaveValue('');
+    expect(promptPrefixInput).toHaveAttribute(
+      'placeholder',
+      'e.g. Translate the user input to Japanese',
+    );
   });
 
   it('keeps human prompt edits on the prompt parameter', async () => {
