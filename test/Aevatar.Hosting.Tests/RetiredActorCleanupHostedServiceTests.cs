@@ -40,7 +40,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         streamProvider.SeedRelay("channel-bot-registration-store", "stale-child-stream");
         var service = CreateService(typeProbe, runtime, streamProvider, eventStore, CreateChannelRuntimeSpec());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain("channel-bot-registration-store");
         runtime.DestroyedActorIds.Should().Contain(
@@ -68,7 +68,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         var service = CreateService(
             typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateChannelRuntimeSpec());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().BeEmpty();
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(1);
@@ -88,7 +88,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         var service = CreateService(
             typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateChannelRuntimeSpec());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().BeEmpty();
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(1);
@@ -104,7 +104,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         var service = CreateService(
             typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateChannelRuntimeSpec());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain("channel-bot-registration-store");
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
@@ -160,7 +160,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             CreateScheduledSpec(),
             serviceCollection.BuildServiceProvider());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain("skill-runner-old");
         runtime.DestroyedActorIds.Should().Contain("workflow-agent-old");
@@ -195,7 +195,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         var service = CreateService(
             typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateScheduledSpec());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().BeEmpty();
         probedActorIds.Should().NotContain("skill-runner-already-migrated");
@@ -251,7 +251,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             CreateScheduledSpec(),
             serviceCollection.BuildServiceProvider());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain("skill-runner-snapshotted");
         runtime.DestroyedActorIds.Should().Contain("workflow-agent-snapshotted");
@@ -280,7 +280,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         var service = CreateService(
             typeProbe, runtime, streamProvider, eventStore, CreateChannelRuntimeSpec());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain(projectionScopeActorId);
         (await eventStore.GetVersionAsync(projectionScopeActorId)).Should().Be(0);
@@ -325,7 +325,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             CreateScheduledSpec(),
             serviceCollection.BuildServiceProvider());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().NotContain("skill-runner-recent");
         runtime.DestroyedActorIds.Should().Contain("agent-registry-store");
@@ -386,7 +386,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             CreateScheduledSpec(),
             serviceCollection.BuildServiceProvider());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         documents.DeletedIds.Should().Equal("agent-doc-delete");
         documents.RemainingIds.Should().Equal("agent-doc-keep");
@@ -418,7 +418,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             CreateChannelRuntimeSpec(),
             serviceCollection.BuildServiceProvider());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain("channel-bot-registration-store");
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
@@ -445,7 +445,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         var service = CreateService(
             typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateScheduledSpec());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain(newScopeKeyActorId);
         (await eventStore.GetVersionAsync(newScopeKeyActorId)).Should().Be(0);
@@ -486,7 +486,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             CreateChannelRuntimeSpec(),
             serviceCollection.BuildServiceProvider());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         pubSub.ResetActorIds.Should().Contain("channel-bot-registration-store");
         pubSub.ResetActorIds.Should().Contain(
@@ -516,7 +516,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             CreateChannelRuntimeSpec(),
             serviceCollection.BuildServiceProvider());
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain("channel-bot-registration-store");
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
@@ -543,12 +543,34 @@ public sealed class RetiredActorCleanupHostedServiceTests
             eventStore,
             specs: [CreateDeviceSpec(), CreateChannelRuntimeSpec()]);
 
-        await service.StartAsync(CancellationToken.None);
+        await RunStartupCleanupAsync(service);
 
         runtime.DestroyedActorIds.Should().Contain("device-registration-store");
         runtime.DestroyedActorIds.Should().Contain("channel-bot-registration-store");
         (await eventStore.GetVersionAsync("device-registration-store")).Should().Be(0);
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Cleanup_ShouldSkipDestructiveWork_WhenPerTargetRevalidationSeesCurrentRuntimeType()
+    {
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
+        var typeProbe = new SequencedTypeProbe(new Dictionary<string, Queue<string?>>
+        {
+            ["channel-bot-registration-store"] = new Queue<string?>([
+                "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent, Aevatar.GAgents.ChannelRuntime",
+                "Aevatar.GAgents.Channel.Runtime.ChannelBotRegistrationGAgent, Aevatar.GAgents.Channel.Runtime",
+            ]),
+        });
+        var runtime = new RecordingActorRuntime();
+        var service = CreateService(
+            typeProbe, runtime, new RecordingStreamProvider(), eventStore, CreateChannelRuntimeSpec());
+
+        await RunStartupCleanupAsync(service);
+
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(1);
     }
 
     private static IRetiredActorSpec CreateChannelRuntimeSpec() => new ChannelRuntimeRetiredActorSpec();
@@ -575,11 +597,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
         IServiceProvider? services = null)
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Aevatar:RetiredActorCleanup:WaitPollMilliseconds"] = "1",
-                ["Aevatar:RetiredActorCleanup:InProgressTimeoutSeconds"] = "1",
-            })
+            .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
 
         var resolvedServices = services ?? BuildSpecServices(eventStore, typeProbe);
@@ -603,6 +621,12 @@ public sealed class RetiredActorCleanupHostedServiceTests
         services.AddSingleton<Aevatar.Foundation.Abstractions.Persistence.IEventStore>(eventStore);
         services.AddSingleton(typeProbe);
         return services.BuildServiceProvider();
+    }
+
+    private static async Task RunStartupCleanupAsync(RetiredActorCleanupHostedService service)
+    {
+        await service.StartAsync(CancellationToken.None);
+        await service.Completion;
     }
 
     private static Task AppendSingleEventAsync(InMemoryEventStore eventStore, string actorId) =>
@@ -700,6 +724,18 @@ public sealed class RetiredActorCleanupHostedServiceTests
             ct.ThrowIfCancellationRequested();
             probedActorIds.Add(actorId);
             return Task.FromResult(typeNames.TryGetValue(actorId, out var typeName) ? typeName : null);
+        }
+    }
+
+    private sealed class SequencedTypeProbe(IReadOnlyDictionary<string, Queue<string?>> typeNames) : IActorTypeProbe
+    {
+        public Task<string?> GetRuntimeAgentTypeNameAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                typeNames.TryGetValue(actorId, out var queue) && queue.Count > 0
+                    ? queue.Dequeue()
+                    : null);
         }
     }
 

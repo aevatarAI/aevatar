@@ -54,21 +54,21 @@ A spec declares:
 
 For each spec the service:
 
-1. Acquires a per-spec lease at `__maintenance:retired-actor-cleanup:{specId}`
-   (waits if another pod holds an in-progress lease, takes over after
-   `InProgressTimeoutSeconds`).
+1. Starts a background cleanup pass during host startup; module startup is not
+   blocked on completion.
 2. Streams targets from `DiscoverDynamicTargetsAsync` first, then iterates
    `Targets`.
-3. For each target: probes the runtime type via `IActorTypeProbe`. When it
-   matches a retired token, removes upstream relays from `SourceStreamId`,
-   removes outgoing relays best-effort, deletes module-owned read models
-   best-effort, destroys the actor, and resets the event stream.
-4. Releases the lease.
+3. For each target: probes the runtime type via `IActorTypeProbe`, then
+   revalidates the same target immediately before destructive work. When the
+   final check still matches a retired token, it removes upstream relays from
+   `SourceStreamId`, removes outgoing relays best-effort, deletes module-owned
+   read models best-effort, destroys the actor, and resets the event stream.
 
 There is no "completed forever" marker. The cleanup runs every startup; targets
 already cleaned by a previous pod are detected as either "no runtime type and no
 event stream" (skip) or "no runtime type but stream still present" (continue
-reset path).
+reset path). Targets recreated with a current runtime type between discovery and
+cleanup are skipped by the per-target revalidation fence.
 
 ## Active Specs
 
@@ -92,8 +92,6 @@ Options:
 - `Enabled`: default `true`
 - `ResetEventStreams`: default `true`
 - `CleanupReadModels`: default `true`
-- `InProgressTimeoutSeconds`: default `300`
-- `WaitPollMilliseconds`: default `1000`
 
 Use `Enabled=false` only for emergency rollback while manually clearing the
 retired actors. Leaving it disabled means the old activation failure can return
@@ -117,10 +115,9 @@ the targets are fully cleaned (and remains a no-op afterwards). No changes to
 
 ## Expected Upgrade Behavior
 
-- First pod to start in a deployment wave acquires each spec's lease.
-- Other pods wait while a spec's marker is in progress.
-- If the owning pod dies before completion, another pod takes over after
-  `InProgressTimeoutSeconds`.
+- Every pod may trigger the startup cleanup pass.
+- Duplicate cleanup passes converge through per-target revalidation and
+  idempotent actor / stream / read-model cleanup.
 - New projection startup recreates the needed actors using the current runtime
   types and rebuild paths.
 
@@ -128,15 +125,15 @@ the targets are fully cleaned (and remains a no-op afterwards). No changes to
 
 Healthy startup logs should include one entry per spec:
 
-- `Retired actor cleanup completed for spec channel-runtime.`
-- `Retired actor cleanup completed for spec device.`
-- `Retired actor cleanup completed for spec scheduled.`
+- `Retired actor cleanup pass finished for spec channel-runtime.`
+- `Retired actor cleanup pass finished for spec device.`
+- `Retired actor cleanup pass finished for spec scheduled.`
 
 During the first cleanup of a newly-retired type, `IActorTypeProbe` may activate
 the retired actor long enough to read its persisted type name. Orleans can emit
 transient error logs like `Unable to resolve agent type …` for those actors
 before the cleanup removes them. Treat those as expected only when they are
-followed by `Retired actor cleanup completed for spec …`.
+followed by `Retired actor cleanup pass finished for spec …`.
 
 The failure signatures below should disappear after the cleanup has completed:
 

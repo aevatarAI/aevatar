@@ -218,7 +218,7 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldRunRetiredActorCleanup_BeforeProjectionStartupServices()
+    public void AddAevatarMainnetHost_ShouldRegisterRetiredActorCleanup()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
@@ -229,11 +229,7 @@ public sealed class MainnetHostCompositionTests
             options.EnableCors = false;
         });
 
-        var cleanupIndex = HostedServiceIndex<RetiredActorCleanupHostedService>(builder.Services);
-
-        HostedServiceIndex(builder.Services, "ChannelBotRegistrationStartupService").Should().BeGreaterThan(cleanupIndex);
-        HostedServiceIndex(builder.Services, "DeviceRegistrationStartupService").Should().BeGreaterThan(cleanupIndex);
-        HostedServiceIndex(builder.Services, "UserAgentCatalogStartupService").Should().BeGreaterThan(cleanupIndex);
+        HostedServiceIndex<RetiredActorCleanupHostedService>(builder.Services).Should().BeGreaterThanOrEqualTo(0);
     }
 
     private static WebApplicationBuilder CreateBuilder()
