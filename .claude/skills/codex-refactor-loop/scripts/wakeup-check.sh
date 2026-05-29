@@ -192,13 +192,21 @@ done < <(gh issue list --state open --limit 50 --json number,author,updatedAt,la
 
 # ============================================================================
 echo ""
-echo "=== STEP F: PHASE 9 PENDING JUDGE / NEXT ROUND ==="
+echo "=== STEP F: PHASE 9 — pending judge / pending r1 solver ==="
 F_COUNT=0
+F2_COUNT=0
 while IFS= read -r n; do
     [ -z "$n" ] && continue
     # 最新 round 的 solver logs
     latest_round=$(ls "$LOGDIR"/phase9-issue${n}-r*-*.log 2>/dev/null | grep -oE 'r[0-9]+' | sort -Vu | tail -1)
-    [ -z "$latest_round" ] && continue
+    if [ -z "$latest_round" ]; then
+        # NO solver log AT ALL → r1 not dispatched yet
+        # per Auric 2026-05-29 "一堆issues没完成, 为什么发新审计?" — design-solving
+        # issue without r1 solver = unprocessed backlog, MUST take priority over audit
+        echo "#${n}: NO solver yet — ACTION: spawn r1 minimal/structural/delete solvers"
+        F2_COUNT=$((F2_COUNT+1))
+        continue
+    fi
     solver_done=$(grep -lE "EXIT=0" "$LOGDIR"/phase9-issue${n}-${latest_round}-{minimal,structural,delete}.log 2>/dev/null | wc -l | tr -d ' ')
     judge_log="$LOGDIR/phase9-issue${n}-${latest_round}-judge.log"
     if [ "$solver_done" -eq 3 ] && [ ! -f "$judge_log" ]; then
@@ -206,24 +214,34 @@ while IFS= read -r n; do
         F_COUNT=$((F_COUNT+1))
     fi
 done < <(gh issue list --state open --label "🔍 phase:design-solving" --json number --jq '.[].number' 2>/dev/null)
-[ "$F_COUNT" -eq 0 ] && echo "(none — no Phase 9 issue waiting for judge or next-round dispatch)"
+if [ "$F_COUNT" -eq 0 ] && [ "$F2_COUNT" -eq 0 ]; then
+    echo "(none — no Phase 9 issue waiting for judge or r1 solver dispatch)"
+fi
+# F2 issues each consume 3 codex slots (minimal/structural/delete)
+F_COUNT=$(( F_COUNT + F2_COUNT * 3 ))
 
 # ============================================================================
 echo ""
-echo "=== STEP G: AUDIT BACKFILL (always available to fill floor — no exemption) ==="
+echo "=== STEP G: AUDIT BACKFILL (only when A-F all empty — per Auric 2026-05-29) ==="
 G_BUSY=$(( A_COUNT + B_COUNT + C_COUNT + D_COUNT + E_COUNT + F_COUNT ))
 LAST_ITER=$(ls .refactor-loop/runs/audit-iter-*.md 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
 LAST_LOG_ITER=$(ls "$LOGDIR"/audit-iter-*.log 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
 NEXT_ITER=$((${LAST_LOG_ITER:-${LAST_ITER:-0}} + 1))
 echo "last audit run: iter-${LAST_ITER:-?} (log iter-${LAST_LOG_ITER:-?})"
-# Per Auric 2026-05-29 "并发数不足无豁免, 直接改skills" — audit backfill is ALWAYS
-# available to fill floor when codex shortfall exists. Previous "DO NOT dispatch until
-# A-F cleared" gate was wrong: P5 label-edit work doesn't fill codex slots, so floor
-# falls below threshold while gate blocks audit. Remove the gate entirely.
-if [ ! -f "$LOGDIR/audit-iter-${NEXT_ITER}.log" ]; then
-    echo "ACTION: spawn audit-iter-${NEXT_ITER} (backfill — no exemption)"
+# Per Auric 2026-05-29 "一堆issues没完成, 为什么发新审计?" — REVERTING the prior
+# "always available" decision. Audit IS backfill, not floor-filler. When design-solving
+# issues sit without solvers (Step F2) or any actionable A-F work exists, audit is
+# WRONG because: (a) new audit produces more design issues that won't be solved
+# without floor for solvers; (b) backlog grows without bound. Audit only when truly
+# nothing else to do.
+if [ "$G_BUSY" -gt 0 ]; then
+    echo "Step A-F has $G_BUSY actionable items — DO NOT dispatch audit until cleared"
 else
-    echo "audit-iter-${NEXT_ITER} log already exists — try audit-iter-$((NEXT_ITER+1))"
+    if [ ! -f "$LOGDIR/audit-iter-${NEXT_ITER}.log" ]; then
+        echo "ACTION: spawn audit-iter-${NEXT_ITER} (backfill — A-F all empty)"
+    else
+        echo "audit-iter-${NEXT_ITER} log already exists — skip"
+    fi
 fi
 
 # ============================================================================
@@ -261,15 +279,18 @@ else
     take "$C_COUNT" "P3 spawn fix codex for CI-red PR"
     take "$D_COUNT" "P4 spawn reflector for stuck 3h+ issue"
     take "$E_COUNT" "P5 controller-action: gh issue edit --add-label auto-loop-triage (daemon spawns triage codex)"
-    take "$F_COUNT" "P6 spawn judge for Phase 9 issue"
-    # Per Auric 2026-05-29 "并发数不足无豁免" — audit backfill MUST be available to
-    # absorb remaining gap. Removed the prior gate that blocked audit while A-F had
-    # non-codex work (label edits) queued.
+    take "$F_COUNT" "P6 spawn judge OR r1 solvers for Phase 9 design-solving issue (each F2 = 3 slots)"
+    # Per Auric 2026-05-29 "一堆issues没完成, 为什么发新审计?" — audit is backfill,
+    # not floor-filler. Only spawn audit when A-F all empty. If gap remains after
+    # P0-P6 are exhausted, that means the actionable backlog truly is processed.
+    if [ "$G_BUSY" -eq 0 ] && [ "$QUEUE_REMAINING" -gt 0 ]; then
+        take "$QUEUE_REMAINING" "P9 spawn audit-iter-${NEXT_ITER}+ (BACKFILL — A-F empty only)"
+    fi
     if [ "$QUEUE_REMAINING" -gt 0 ]; then
-        take "$QUEUE_REMAINING" "P9 spawn audit-iter-${NEXT_ITER}+ (BACKFILL — no exemption when floor < $FLOOR_REQUIRED)"
+        echo "  UNFILLED=$QUEUE_REMAINING — A-F has codex-slot work but already in flight; OK to end-turn"
     fi
     echo ""
-    echo "VIOLATION RULE (per Auric 2026-05-29 '并发数不足无豁免'): floor_actual < $FLOOR_REQUIRED AND .auto-stopped absent = P0 BUG. NO exemption — controller MUST spawn audit backfill to fill the gap even when actionable queue is non-codex (label triage / etc)."
+    echo "PRIORITY RULE (per Auric 2026-05-29 '一堆issues没完成, 为什么发新审计?'): processing existing design-solving / implementing / reviewing / fix backlog ALWAYS comes before new audit. Audit creates more design issues, growing the backlog if solvers are not running."
 fi
 
 echo ""
