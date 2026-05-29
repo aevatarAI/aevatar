@@ -131,7 +131,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             // AgentToolRequestContext accessors without durable request bearer.
             try
             {
-                // Refactor (issue1253-first): Old: approval resume rebuilt control context from pending.Metadata. New: use typed pending.ToolContext first, with metadata only for old persisted state fallback.
+                // Refactor (issue1253-first):
+                //   Old pattern: Approval resume rebuilt control context from pending.Metadata.
+                //   New principle: Use typed pending.ToolContext first, with metadata only for old persisted state fallback.
                 var pendingToolContext = ResolvePendingApprovalToolContext(pending);
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
@@ -238,7 +240,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.ArgumentsJson,
                     ToolApprovalMode.Auto,
                     pending.IsDestructive,
-                    // Refactor (issue1253-first): Old: remote approval received scrubbed durable metadata that could include legacy control keys. New: remote approval only receives open annotations.
+                    // Refactor (issue1253-first):
+                    //   Old pattern: Remote approval received scrubbed durable metadata that could include legacy control keys.
+                    //   New principle: Remote approval only receives open annotations.
                     new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
                 CancellationToken.None);
 
@@ -302,7 +306,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 new RemoteToolApprovalStatusQuery(
                     pending.RequestId,
                     pending.RemoteApprovalId,
-                    // Refactor (issue1253-first): Old: status checks forwarded pending.Metadata as a control surface. New: status checks forward annotations only.
+                    // Refactor (issue1253-first):
+                    //   Old pattern: Status checks forwarded pending.Metadata as a control surface.
+                    //   New principle: Status checks forward annotations only.
                     new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
                 CancellationToken.None);
         }
@@ -426,7 +432,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     ArgumentsJson = args,
                     IsDestructive = true,
                 };
-                // Refactor (issue1253-first): Old: pending approval persisted stable context in metadata. New: persist typed durable-safe context and keep metadata as open annotations only.
+                // Refactor (issue1253-first):
+                //   Old pattern: Pending approval persisted stable context in metadata.
+                //   New principle: Persist typed durable-safe context and keep metadata as open annotations only.
                 pending.ToolContext = CreateDurablePendingApprovalToolContext(request);
                 foreach (var kv in ScrubPendingApprovalMetadata(request.Metadata))
                     pending.Metadata[kv.Key] = kv.Value;

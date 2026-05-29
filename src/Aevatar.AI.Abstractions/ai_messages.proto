@@ -258,9 +258,13 @@ message PendingToolApprovalState {
   bool is_destructive = 6;
   string timeout_callback_id = 7;
   // field 8 reserved (was timeout_lease bytes, removed — lease kept in-memory only)
-  // Refactor (issue1253-first): Old: durable approval continuation restored typed context from metadata. New: typed pending approval context is the durable control surface.
+  // Refactor (issue1253-first):
+  //   Old pattern: Durable approval continuation restored typed context from metadata.
+  //   New principle: Typed pending approval context is the durable control surface.
   AgentToolExecutionContextPayload tool_context = 14;
-  // Refactor (issue1253-first): Old: metadata carried approval control keys. New: metadata is open annotations plus old-state legacy fallback only.
+  // Refactor (issue1253-first):
+  //   Old pattern: Metadata carried approval control keys.
+  //   New principle: Metadata is open annotations plus old-state legacy fallback only.
   map<string, string> metadata = 9;
   string remote_approval_id = 10;
   reserved 11;
