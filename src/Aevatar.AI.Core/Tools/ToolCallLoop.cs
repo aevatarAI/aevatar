@@ -57,7 +57,7 @@ public sealed class ToolCallLoop
         // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
         //   Old pattern: ToolCallLoop pushed raw request Metadata into AsyncLocal.
         //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
-        var toolContext = baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest);
+        var toolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
         using var _ = AgentToolContextScope.Push(toolContext);
         return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
     }

@@ -44,7 +44,10 @@ public static class AgentToolExecutionContextMapper
         ArgumentNullException.ThrowIfNull(request);
 
         if (request.ToolContext is { } typedContext)
-            return request.LlmControl?.ToToolContext(typedContext) ?? typedContext;
+        {
+            var mergedContext = MergeExternalMetadata(typedContext, request.Metadata);
+            return request.LlmControl?.ToToolContext(mergedContext) ?? mergedContext;
+        }
 
         var mapped = FromMetadata(request.Metadata);
         mapped = request.LlmControl?.ToToolContext(mapped) ?? mapped;
@@ -77,6 +80,23 @@ public static class AgentToolExecutionContextMapper
         ArgumentNullException.ThrowIfNull(request);
 
         return FromRequest(request).WithCallId(callId);
+    }
+
+    public static AgentToolExecutionContext MergeExternalMetadata(
+        AgentToolExecutionContext context,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var incoming = StripOwnedControlKeys(metadata);
+        if (incoming.Count == 0)
+            return context;
+
+        var merged = new Dictionary<string, string>(incoming, StringComparer.Ordinal);
+        foreach (var pair in context.ExternalMetadata)
+            merged[pair.Key] = pair.Value;
+
+        return context with { ExternalMetadata = merged };
     }
 
     public static AgentToolExecutionContext FromPayload(AgentToolExecutionContextPayload? payload)

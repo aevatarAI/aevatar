@@ -61,6 +61,41 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void FromRequest_WhenTypedContextExists_ShouldMergeExternalMetadataWithoutClobberingExplicitContextMetadata()
+    {
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "request-1",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.lark.operator_user_id"] = "lark-user-from-receive-flow",
+                ["channel.lark.operator_open_id"] = "ou_operator_1",
+                ["explicit"] = "from-request",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            },
+            ToolContext = AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials("typed-token", null, null),
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["explicit"] = "from-tool-context",
+                    ["tool-only"] = "kept",
+                },
+            },
+        };
+
+        var context = AgentToolExecutionContextMapper.FromRequest(request);
+
+        context.Credentials.NyxIdAccessToken.Should().Be("typed-token");
+        context.ExternalMetadata["channel.lark.operator_user_id"].Should().Be("lark-user-from-receive-flow");
+        context.ExternalMetadata["channel.lark.operator_open_id"].Should().Be("ou_operator_1");
+        context.ExternalMetadata["explicit"].Should().Be("from-tool-context");
+        context.ExternalMetadata["tool-only"].Should().Be("kept");
+        context.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+    }
+
+    [Fact]
     public void FromMetadata_WhenChannelCanonicalKeysAreAbsent_ShouldMapLegacyAliases()
     {
         var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)

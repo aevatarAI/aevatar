@@ -98,7 +98,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldIncludeLarkOperatorIdsInLlmMetadata_WhenAvailable()
+    public async Task RunInboundAsync_ShouldUseLarkApprovalOperatorUserIdInLlmMetadata_WhenAvailable()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -111,7 +111,8 @@ public sealed class ChannelConversationTurnRunnerTests
                 transportExtras: new TransportExtras
                 {
                     NyxPlatform = "lark",
-                    NyxLarkOperatorUserId = "ou_operator_1",
+                    NyxSenderUserId = "nyx-user-1",
+                    NyxLarkOperatorUserId = "lark-user-1",
                     NyxLarkOperatorOpenId = "ou_open_operator_1",
                     NyxLarkOperatorUnionId = "on_operator_1",
                 }),
@@ -119,7 +120,8 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().Be("ou_operator_1");
+        result.LlmReplyRequest!.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().Be("lark-user-1");
+        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().NotBe("nyx-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorOpenId].Should().Be("ou_open_operator_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUnionId].Should().Be("on_operator_1");
     }

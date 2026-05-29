@@ -306,7 +306,7 @@ public sealed class ChatRuntime
         if (skillRecovery.RequiresInitialSearch)
         {
             await skillRecovery.ApplyInitialDirectivesAsync(
-                baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest),
+                AgentToolExecutionContextMapper.FromRequest(baseRequest),
                 messages,
                 pendingHistoryMessages,
                 ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, 0),
@@ -324,7 +324,7 @@ public sealed class ChatRuntime
             var streamingExecutor = new StreamingToolExecutor(
                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
                 requestMetadata: baseRequest.Metadata,
-                toolContext: baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest));
+                toolContext: AgentToolExecutionContextMapper.FromRequest(baseRequest));
             using var streamingToolState = streamingExecutor.CreateExecutionState();
 
             List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
@@ -677,7 +677,7 @@ public sealed class ChatRuntime
                 _hooks,
                 _toolLoop.ToolMiddlewares,
                 requestMetadata: baseRequest.Metadata,
-                toolContext: toolContext ?? baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest)));
+                toolContext: toolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest)));
 
     private async Task RunStopHookAsync(
         string? finalContent,
@@ -884,7 +884,11 @@ public sealed class ChatRuntime
         LLMControlContext? llmControl)
     {
         var effectiveLlmControl = llmControl ?? baseRequest.LlmControl;
-        var effectiveToolContext = toolContext ?? baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest);
+        var effectiveToolContext = toolContext is null
+            ? AgentToolExecutionContextMapper.FromRequest(baseRequest)
+            : AgentToolExecutionContextMapper.MergeExternalMetadata(
+                toolContext,
+                MergeMetadata(baseRequest.Metadata, metadata));
         effectiveToolContext = effectiveLlmControl?.ToToolContext(effectiveToolContext) ?? effectiveToolContext;
         if (!string.IsNullOrWhiteSpace(requestId))
         {
