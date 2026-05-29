@@ -7,6 +7,11 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
+// Refactor (iter1357/cluster-explicit-scope-draft-member-repair):
+//   Old pattern: there was no explicit scoped HTTP entry point for repairing
+//   historical workflow-draft member authority gaps.
+//   New principle: Host only guards scope access and composes the one-shot
+//   repair service; repair orchestration stays in the projection service.
 internal static class StudioWorkflowDraftMemberRepairEndpoints
 {
     public static void Map(IEndpointRouteBuilder app)

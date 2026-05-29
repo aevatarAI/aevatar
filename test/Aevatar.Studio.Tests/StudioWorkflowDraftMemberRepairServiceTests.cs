@@ -94,6 +94,22 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
     }
 
     [Fact]
+    public async Task RepairScopeAsync_ShouldRethrowCancellation_WithoutFailedItem()
+    {
+        var workspace = new StubWorkspaceQueryPort([
+            NewDraft("workflow-1", "Workflow One"),
+        ]);
+        var service = NewService(
+            workspace,
+            new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap(),
+            new CancelingDispatchPort());
+
+        var act = () => service.RepairScopeAsync("scope-1");
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public void EnsureCommandFactory_ShouldShareStableIdentity_ForLiveProjectionAndRepair()
     {
         var factory = new StudioWorkflowDraftMemberEnsureCommandFactory();
@@ -162,6 +178,15 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
                 Drafts: drafts,
                 StateVersion: 11,
                 UpdatedAtUtc: DateTimeOffset.Parse("2026-05-25T00:00:00Z")));
+    }
+
+    private sealed class CancelingDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default) =>
+            throw new OperationCanceledException();
     }
 
 }

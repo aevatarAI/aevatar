@@ -9,8 +9,10 @@ using Aevatar.Studio.Projection.CommandServices;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.Repair;
 using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -67,6 +69,30 @@ public sealed class StudioWorkflowDraftMemberRepairEndpointsTests
         AssertBadRequestResult(
             result,
             "INVALID_STUDIO_WORKFLOW_DRAFT_MEMBER_REPAIR_REQUEST");
+    }
+
+    [Fact]
+    public async Task Map_ShouldRegisterPostRoute_WithServiceBinding()
+    {
+        var service = NewRepairService([]);
+        var app = BuildMappedApp(service);
+        var endpoint = GetRepairEndpoint(app);
+        var methodMetadata = endpoint.Metadata.GetMetadata<HttpMethodMetadata>();
+        var context = CreateAuthenticatedContext("scope-1");
+        context.RequestServices = app.Services;
+        context.Request.RouteValues["scopeId"] = "scope-1";
+        await using var body = new MemoryStream();
+        context.Response.Body = body;
+
+        await endpoint.RequestDelegate!(context);
+
+        endpoint.RoutePattern.RawText.Should().Be(
+            "/api/scopes/{scopeId}/workflow-drafts:repair-members");
+        methodMetadata.Should().NotBeNull();
+        methodMetadata!.HttpMethods.Should().Equal(HttpMethods.Post);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        context.Response.Headers.Location.ToString().Should().Be(
+            "/api/scopes/scope-1/workflow-drafts:repair-members");
     }
 
     private static StudioWorkflowDraftMemberRepairService NewRepairService(
@@ -132,6 +158,34 @@ public sealed class StudioWorkflowDraftMemberRepairEndpointsTests
             RequestServices = services,
         };
     }
+
+    private static WebApplication BuildMappedApp(StudioWorkflowDraftMemberRepairService repairService)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:Authentication:Enabled"] = "true",
+            })
+            .Build());
+        builder.Services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        builder.Services.AddSingleton(repairService);
+        builder.Services.AddRouting();
+        var app = builder.Build();
+
+        StudioWorkflowDraftMemberRepairEndpoints.Map(app);
+
+        return app;
+    }
+
+    private static RouteEndpoint GetRepairEndpoint(WebApplication app) =>
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(endpoint => string.Equals(
+                endpoint.RoutePattern.RawText,
+                "/api/scopes/{scopeId}/workflow-drafts:repair-members",
+                StringComparison.Ordinal));
 
     private static async Task<TResult> InvokeHandle<TResult>(string methodName, params object?[] args)
     {
