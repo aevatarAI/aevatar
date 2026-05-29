@@ -865,6 +865,33 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_WhenCommittedStateIsRelayedFromChild_ShouldSkipWrite()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 3, 18, 7, 45, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent
+                {
+                    Success = true,
+                    Output = "z\ny",
+                },
+                new WorkflowRunState
+                {
+                    WorkflowName = "child-level2",
+                    Status = "completed",
+                    FinalOutput = "z\ny",
+                },
+                publisherActorId: "child-run-actor"));
+
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
     public void WorkflowRunGraphArtifactMaterializer_ShouldDeriveFromReportAndDeduplicateNodesAndEdges()
     {
         var readModel = new WorkflowRunInsightReportDocument
@@ -1111,6 +1138,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         WorkflowRunState state,
         long version = 1,
         string eventId = "evt-1",
+        string publisherActorId = "root-actor",
         bool includeEnvelopeTimestamp = true)
     {
         return new EventEnvelope
@@ -1119,7 +1147,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             Timestamp = includeEnvelopeTimestamp
                 ? Timestamp.FromDateTime(DateTime.UtcNow)
                 : null,
-            Route = EnvelopeRouteSemantics.CreateObserverPublication("root-actor"),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(publisherActorId),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
                 StateEvent = new StateEvent
