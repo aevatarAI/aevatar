@@ -40,6 +40,15 @@ owner: eanzhao
 | Service（如 `WriteService`、`QueryService`） | Module（无脑套用） | aevatar 的应用层契约必须承载业务语义、不是纯转发空壳；一个 "Service" 是不是 Module 取决于它的 Interface 是不是足够 deep。多数情况下，正确的形态是更窄的 `IXxxQueryPort` / `IActorDispatchPort`，而不是泛 `Service`。 |
 | Router | 新的转发 Actor / hot-path 调度中心 | 在 ingress 语境里，router = **config actor + boundary resolver**：`ChatRoutePolicyGAgent` 只作为 per-scope 配置权威持有策略，`ChatRouteResolver` 只在入口边界做无状态、瞬时决策；它不是新增 actor hop，也不持久化决策。见 [ADR-0024: Chat Route Policy — Config Actor + Boundary Resolver](../adr/0024-chat-route-policy.md)。 |
 
+### 1.2 Actor evolution 词汇
+
+| 术语 | 含义与口径 |
+|---|---|
+| Lazy state migration | 同一 actor、同一 identity、同一事实拥有者内的 state schema 懒迁移。只消费历史 state 与 runtime envelope 上的 schema version；不得做 I/O、跨 actor 调用、projection 写入或 readmodel 读取。 |
+| Projection-driven bootstrap | split / merge / re-key 时，从旧 actor 已提交事实或 committed state publication 物化新 actor bootstrap 输入的流程。bootstrap 输入不是新事实；新 actor 提交自己的 domain event 后才成为权威事实。 |
+| Retire cleanup | actor 演进完成后，对旧 actor、旧 readmodel、旧索引或旧路由的显式退役清理。它是演进协议的一部分，不是 query path 的临时兼容判断。 |
+| Re-key redirect | actor identity/key 改写时，旧 key 到新 key 的显式重定向事实。它用于目标解析与清理窗口，不允许调用方解析 actorId 字符串，也不允许用 commandId/correlationId 代替 actorId。 |
+
 ## 2. 关键原则（与 CLAUDE.md 已有规则的映射）
 
 ### 2.1 Deletion test（删除测试）
