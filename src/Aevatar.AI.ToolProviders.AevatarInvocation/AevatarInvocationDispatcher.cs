@@ -751,19 +751,38 @@ public sealed class AevatarInvocationDispatcher
         string commandId,
         InvocationCallerScope scope)
     {
-        var metadata = BuildLegacyMetadata(scope, payload.Headers);
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        var headers = BuildPayloadHeaders(payload.Headers);
         var request = new ChatRequestEvent
         {
             Prompt = payload.Prompt,
             SessionId = commandId,
             ScopeId = scope.ScopeId,
             ToolContext = ToPayload(AgentToolRequestContext.Current),
+            LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
         };
-        request.Headers[LLMRequestMetadataKeys.RequestId] = commandId;
-        AppendMetadata(request.Headers, metadata);
-        AppendMetadata(request.Metadata, metadata);
+        AppendMetadata(request.Headers, headers);
+        AppendMetadata(request.Metadata, headers);
         request.InputParts.Add(ToChatInputParts(payload));
         return request;
+    }
+
+    private static Dictionary<string, string> BuildPayloadHeaders(
+        Google.Protobuf.Collections.MapField<string, string>? headers)
+    {
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        var filteredHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (headers == null)
+            return filteredHeaders;
+
+        foreach (var (key, value) in headers)
+        {
+            var normalizedKey = Normalize(key);
+            if (normalizedKey != null && !IsProtectedCallerMetadataKey(normalizedKey))
+                filteredHeaders[normalizedKey] = value ?? string.Empty;
+        }
+
+        return filteredHeaders;
     }
 
     private static Dictionary<string, string> BuildLegacyMetadata(
@@ -840,6 +859,7 @@ public sealed class AevatarInvocationDispatcher
 
     private static AgentToolExecutionContextPayload ToPayload(AgentToolExecutionContext? context)
     {
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         var payload = new AgentToolExecutionContextPayload
         {
@@ -888,6 +908,20 @@ public sealed class AevatarInvocationDispatcher
         foreach (var (key, value) in context.ExternalMetadata)
             payload.ExternalMetadata[key] = value;
         return payload;
+    }
+
+    private static LLMControlContextPayload ToLlmControlPayload(AgentToolExecutionContext? context)
+    {
+        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        context ??= AgentToolExecutionContext.Empty;
+        return new LLMControlContext(
+            context.Credentials.NyxIdAccessToken,
+            context.Credentials.NyxIdOrgToken,
+            context.Credentials.SenderNyxIdAccessToken,
+            context.Routing.ModelOverride,
+            context.Routing.NyxIdRoutePreference,
+            context.Routing.MaxToolRoundsOverride,
+            context.Routing.UserMemoryPrompt).ToPayload();
     }
 
     private CallerScopeResolution ResolveCallerScope(bool requireOwner = true)
