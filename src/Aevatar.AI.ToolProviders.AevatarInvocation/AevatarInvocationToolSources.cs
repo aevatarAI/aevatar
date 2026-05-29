@@ -119,7 +119,8 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
     public string Name => "aevatar_start_workflow";
 
     public string Description =>
-        "Start an Aevatar workflow by workflow_id with typed inputs.";
+        "Start an Aevatar workflow by workflow_id with typed inputs. " +
+        "When use_skill returns inline workflow_yamls, pass that bundle in workflow_yamls instead of treating the YAMLs as ordinary text.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.StartWorkflow;
 
