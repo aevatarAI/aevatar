@@ -2938,19 +2938,7 @@ public sealed class MainnetResponsesEndpointsTests
             ResponsesWebSearchBoundaryInput input,
             CancellationToken ct) =>
             Task.FromResult(new ResponsesWebSearchBoundaryResult(
-                new Google.Protobuf.WellKnownTypes.Value
-                {
-                    StructValue = new Struct
-                    {
-                        Fields =
-                        {
-                            ["results"] = new Google.Protobuf.WellKnownTypes.Value
-                            {
-                                ListValue = new ListValue(),
-                            },
-                        },
-                    },
-                }));
+                new ResponsesWebSearchToolOutput()));
     }
 
     private sealed class StubAgentTool : IAgentTool
@@ -2990,7 +2978,7 @@ public sealed class MainnetResponsesEndpointsTests
                 toolName,
                 value,
                 string.Empty,
-                ResponsesJsonValues.ParseBoundaryPayload(resultJson),
+                ResponsesWebResultMigration.FromLegacyValue(ResponsesJsonValues.ParseBoundaryPayload(resultJson)),
                 DateTimeOffset.UtcNow,
                 null,
                 0);

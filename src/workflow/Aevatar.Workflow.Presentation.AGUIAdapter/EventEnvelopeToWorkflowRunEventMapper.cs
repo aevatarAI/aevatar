@@ -610,13 +610,13 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
-        // Refactor (iter79/cluster-079-secure-input-suspension-metadata-bag):
-        //   Old pattern: WorkflowSuspendedEvent.Metadata string bag for secure/input_mode/redacted_output/variable
-        //   New principle (delete framing): typed bool secure + string redacted_output + reuse variable_name; Metadata open extension only; reserved keys read-only fallback
+        // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
+        //   New principle: typed suspension fields are the single source; Metadata is open extension data only.
         var metadata = WorkflowSuspendedSecureInputMetadata.FilterOpenExtensionMetadata(evt.Metadata);
-        var variableName = WorkflowSuspendedSecureInputMetadata.ResolveVariableName(evt.VariableName, evt.Metadata);
-        var secure = WorkflowSuspendedSecureInputMetadata.ResolveSecure(evt.Secure, evt.Metadata);
-        var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveRedactedOutput(evt.RedactedOutput, evt.Metadata);
+        var variableName = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.VariableName);
+        var secure = evt.Secure;
+        var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.RedactedOutput);
 
         events =
         [
@@ -670,21 +670,10 @@ internal static class WorkflowSuspendedSecureInputMetadata
         return filtered;
     }
 
-    public static string ResolveVariableName(string? typedValue, IDictionary<string, string> metadata) =>
+    public static string ResolveTypedString(string? typedValue) =>
         !string.IsNullOrWhiteSpace(typedValue)
             ? typedValue
-            : metadata.TryGetValue("variable", out var legacy) ? legacy : string.Empty;
-
-    public static bool ResolveSecure(bool typedValue, IDictionary<string, string> metadata) =>
-        typedValue ||
-        (metadata.TryGetValue("secure", out var legacy) &&
-         bool.TryParse(legacy, out var parsed) &&
-         parsed);
-
-    public static string ResolveRedactedOutput(string? typedValue, IDictionary<string, string> metadata) =>
-        !string.IsNullOrWhiteSpace(typedValue)
-            ? typedValue
-            : metadata.TryGetValue("redacted_output", out var legacy) ? legacy : string.Empty;
+            : string.Empty;
 }
 
 public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler

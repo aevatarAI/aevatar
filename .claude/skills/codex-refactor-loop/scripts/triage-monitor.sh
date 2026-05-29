@@ -53,7 +53,14 @@ while true; do
       # Per Auric 2026-05-29 "daemon 是在运行么? daemon没问题么?": bug discovered when
       # 22 issues sat labeled but no TRIAGE_DONE markers appeared.
       prompt_file="$REPO_ROOT/.refactor-loop/prompts/triage-issue-${issue}.md"
-      ISSUE_NUMBER="$issue" AUTHOR="$author" envsubst < "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" > "$prompt_file" 2>/dev/null
+      # Refactor (#1172): envsubst first so ${ISSUE_NUMBER}/${AUTHOR} placeholders don't fail spawn-codex placeholder guard.
+      # Keep legacy literal replacements for older template text while validating the final prompt.
+      if ! ISSUE_NUMBER="$issue" AUTHOR="$author" envsubst < "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" \
+          | sed "s/#560/#${issue}/g; s/issue 560/issue ${issue}/g; s/Author: loning/Author: ${author}/g" \
+          > "$prompt_file" 2>/dev/null; then
+        log "FATAL: failed to materialize prompt for issue #$issue — skipping spawn"
+        continue
+      fi
       if grep -qE '\$\{ISSUE_NUMBER\}|\$\{AUTHOR\}' "$prompt_file"; then
         log "FATAL: prompt for issue #$issue still has unresolved placeholders — skipping spawn"
         continue

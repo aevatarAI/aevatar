@@ -1,7 +1,5 @@
 namespace Aevatar.AI.ToolProviders.Web;
 
-using Google.Protobuf.WellKnownTypes;
-
 /// <summary>
 /// Abstraction over <see cref="WebApiClient"/> so consumers depend on the
 /// contract instead of the concrete HTTP client. Lets host code follow the
@@ -11,7 +9,7 @@ using Google.Protobuf.WellKnownTypes;
 public interface IWebApiClient
 {
     /// <summary>Perform a web search via NyxID proxy or a direct API.</summary>
-    Task<Value> SearchAsync(string token, string query, int maxResults, CancellationToken ct);
+    Task<WebSearchResult> SearchAsync(string token, string query, int maxResults, CancellationToken ct);
 
     /// <summary>Fetch a URL and return the response body as text.</summary>
     /// <param name="token">
@@ -19,5 +17,5 @@ public interface IWebApiClient
     /// LLM-controlled URLs MUST pass empty so the token is never forwarded to
     /// attacker-controlled hosts.
     /// </param>
-    Task<FetchResult> FetchUrlAsync(string token, string url, CancellationToken ct);
+    Task<WebFetchResult> FetchUrlAsync(string token, string url, CancellationToken ct);
 }

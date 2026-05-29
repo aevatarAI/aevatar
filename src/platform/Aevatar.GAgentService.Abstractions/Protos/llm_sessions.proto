@@ -465,12 +465,6 @@ message ChatRunTerminatedEvent {
   google.protobuf.Timestamp observed_at = 2;
 }
 
-enum ResponsesAgentToolTaskStatus {
-  RESPONSES_AGENT_TOOL_TASK_STATUS_UNSPECIFIED = 0;
-  RESPONSES_AGENT_TOOL_TASK_STATUS_ACCEPTED = 1;
-  RESPONSES_AGENT_TOOL_TASK_STATUS_REJECTED = 2;
-}
-
 message ResponsesAgentToolStateRecord {
   string scope_id = 1;
   string owner_subject = 2;
@@ -487,18 +481,6 @@ message ResponsesTodoItem {
   google.protobuf.Timestamp updated_at = 6;
 }
 
-message ResponsesTaskTrace {
-  string task_id = 1;
-  string source_response_id = 2;
-  string child_actor_id = 3;
-  string description = 4;
-  ResponsesAgentToolTaskStatus status = 5;
-  google.protobuf.Value arguments = 6;
-  google.protobuf.Value result = 7;
-  google.protobuf.Timestamp created_at = 8;
-  google.protobuf.Timestamp updated_at = 9;
-}
-
 message ResponsesWebTrace {
   string trace_id = 1;
   string source_response_id = 2;
@@ -507,8 +489,12 @@ message ResponsesWebTrace {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
+  // Refactor (iter161-cluster-001 #1251-first):
+  //   Old pattern: normal writes stored stable Web results in google.protobuf.Value.
+  //   New principle: normal writes use typed ResponsesWebToolResult; result remains legacy read fallback only.
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
+  ResponsesWebToolResult typed_result = 10;
 }
 
 message ResponsesWebCacheEntry {
@@ -516,10 +502,14 @@ message ResponsesWebCacheEntry {
   string tool_name = 2;
   string url = 3;
   string query = 4;
+  // Refactor (iter161-cluster-001 #1251-first):
+  //   Old pattern: cache result facts were written as google.protobuf.Value.
+  //   New principle: typed_result is the write path; result is legacy read fallback only.
   google.protobuf.Value result = 5;
   google.protobuf.Timestamp cached_at = 6;
   google.protobuf.Timestamp last_hit_at = 7;
   int64 hit_count = 8;
+  ResponsesWebToolResult typed_result = 9;
 }
 
 message ResponsesWebFetchToolInput {
@@ -552,21 +542,56 @@ message ResponsesWebFetchToolOutput {
   string redirect_url = 5;
 }
 
+message ResponsesWebSearchResultItem {
+  string title = 1;
+  string url = 2;
+  string snippet = 3;
+}
+
+message ResponsesWebSearchToolOutput {
+  repeated ResponsesWebSearchResultItem results = 1;
+}
+
+message ResponsesWebToolError {
+  string code = 1;
+  string message = 2;
+}
+
+message ResponsesWebToolResult {
+  oneof result {
+    ResponsesWebFetchToolOutput fetch = 1;
+    ResponsesWebSearchToolOutput search = 2;
+    ResponsesWebToolError error = 3;
+  }
+}
+
 message ResponsesWebSubstituteToolExecutionResult {
   oneof result {
+    // Refactor (iter161-cluster-001 #1251-first):
+    //   Old pattern: cached/error/search used Value in the normal path.
+    //   New principle: typed fields carry stable Responses Web result semantics; Value arms are legacy fallback only.
     google.protobuf.Value cached = 1;
     google.protobuf.Value error = 2;
     ResponsesWebFetchToolOutput fetch = 3;
     google.protobuf.Value search = 4;
+    ResponsesWebToolResult typed_cached = 5;
+    ResponsesWebToolError typed_error = 6;
+    ResponsesWebSearchToolOutput typed_search = 7;
   }
 }
 
 message ResponsesAgentToolState {
+  // Refactor (issue1183/first-slice):
+  //   Old pattern: ResponsesTaskTrace dead trace surface — task_substitute / task_trace
+  //                readmodel surface 无 consumer,占用 proto field number。
+  //   New principle: deleted / reserved per Phase 9 r1 consensus (hybrid minimal/
+  //                  structural/delete), proto field number reserved 防重新占用。
+  reserved 5;
+  reserved "task_traces";
   ResponsesAgentToolStateRecord record = 1;
   int64 last_applied_event_version = 2;
   string last_event_id = 3;
   repeated ResponsesTodoItem todo_items = 4;
-  repeated ResponsesTaskTrace task_traces = 5;
   repeated ResponsesWebTrace web_traces = 6;
   repeated ResponsesWebCacheEntry web_cache_entries = 7;
 }
@@ -598,21 +623,6 @@ message ResponsesTodoWriteAppliedEvent {
   google.protobuf.Timestamp observed_at = 4;
 }
 
-message RecordResponsesTaskRequested {
-  string source_response_id = 1;
-  string task_id = 2;
-  string child_actor_id = 3;
-  string description = 4;
-  google.protobuf.Value arguments = 5;
-  google.protobuf.Value result = 6;
-  ResponsesAgentToolTaskStatus status = 7;
-  google.protobuf.Timestamp observed_at = 8;
-}
-
-message ResponsesTaskRecordedEvent {
-  ResponsesTaskTrace task = 1;
-}
-
 message RecordResponsesWebTraceRequested {
   string source_response_id = 1;
   string trace_id = 2;
@@ -621,8 +631,12 @@ message RecordResponsesWebTraceRequested {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
+  // Refactor (iter161-cluster-001 #1251-first):
+  //   Old pattern: command carried normal Web result as Value.
+  //   New principle: typed_result is the write path; result is legacy fallback only.
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
+  ResponsesWebToolResult typed_result = 10;
 }
 
 message ResponsesWebTraceRecordedEvent {

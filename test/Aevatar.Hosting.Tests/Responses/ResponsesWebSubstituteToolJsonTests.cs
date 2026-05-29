@@ -2,7 +2,6 @@ using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Hosting.Tests.Responses;
@@ -52,10 +51,15 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     {
         var result = new ResponsesWebSubstituteToolExecutionResult
         {
-            Cached = StructValue(
-                ("url", ProtoValue.ForString("https://example.com/docs")),
-                ("content", ProtoValue.ForString("cached body")),
-                ("status_code", ProtoValue.ForNumber(200))),
+            TypedCached = new ResponsesWebToolResult
+            {
+                Fetch = new ResponsesWebFetchToolOutput
+                {
+                    Url = "https://example.com/docs",
+                    Content = "cached body",
+                    StatusCode = 200,
+                },
+            },
         };
 
         using var document = ParseBoundaryJson(result);
@@ -96,7 +100,10 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     {
         var result = new ResponsesWebSubstituteToolExecutionResult
         {
-            Error = StructValue(("error", ProtoValue.ForString("blocked_private_address"))),
+            TypedError = new ResponsesWebToolError
+            {
+                Code = "blocked_private_address",
+            },
         };
 
         using var document = ParseBoundaryJson(result);
@@ -110,7 +117,7 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     {
         var result = new ResponsesWebSubstituteToolExecutionResult
         {
-            Search = StructValue(("results", ListValue())),
+            TypedSearch = new ResponsesWebSearchToolOutput(),
         };
 
         using var document = ParseBoundaryJson(result);
@@ -119,6 +126,37 @@ public sealed class ResponsesWebSubstituteToolJsonTests
         root.TryGetProperty("results", out var results).Should().BeTrue();
         results.ValueKind.Should().Be(JsonValueKind.Array);
         results.GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public void ToBoundaryJson_FreshWebSearchResult_EmitsResultFieldsJson()
+    {
+        var result = new ResponsesWebSubstituteToolExecutionResult
+        {
+            TypedSearch = new ResponsesWebSearchToolOutput
+            {
+                Results =
+                {
+                    new ResponsesWebSearchResultItem
+                    {
+                        Title = "fresh",
+                        Url = "https://example.com/fresh",
+                        Snippet = "fresh snippet",
+                    },
+                },
+            },
+        };
+
+        using var document = ParseBoundaryJson(result);
+        var root = document.RootElement;
+
+        root.TryGetProperty("results", out var results).Should().BeTrue();
+        results.ValueKind.Should().Be(JsonValueKind.Array);
+        results.GetArrayLength().Should().Be(1);
+        var item = results[0];
+        item.GetProperty("title").GetString().Should().Be("fresh");
+        item.GetProperty("url").GetString().Should().Be("https://example.com/fresh");
+        item.GetProperty("snippet").GetString().Should().Be("fresh snippet");
     }
 
     [Fact]
@@ -131,7 +169,7 @@ public sealed class ResponsesWebSubstituteToolJsonTests
         var emptyFetch = ResponsesWebSubstituteToolJson.ToBoundaryJson(
             new ResponsesWebSubstituteToolExecutionResult { Fetch = new ResponsesWebFetchToolOutput() });
         var emptySearch = ResponsesWebSubstituteToolJson.ToBoundaryJson(
-            new ResponsesWebSubstituteToolExecutionResult { Search = StructValue(("results", ListValue())) });
+            new ResponsesWebSubstituteToolExecutionResult { TypedSearch = new ResponsesWebSearchToolOutput() });
 
         JsonDocument.Parse(emptyOneof).RootElement.ValueKind.Should().Be(JsonValueKind.Object);
         JsonDocument.Parse(emptyValue).RootElement.ValueKind.Should().Be(JsonValueKind.Object);
@@ -150,18 +188,4 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     private static JsonDocument ParseBoundaryJson(ResponsesWebSubstituteToolExecutionResult result) =>
         JsonDocument.Parse(ResponsesWebSubstituteToolJson.ToBoundaryJson(result));
 
-    private static ProtoValue StructValue(params (string Key, ProtoValue FieldValue)[] fields)
-    {
-        var value = new ProtoValue { StructValue = new Struct() };
-        foreach (var (key, fieldValue) in fields)
-            value.StructValue.Fields[key] = fieldValue;
-        return value;
-    }
-
-    private static ProtoValue ListValue(params ProtoValue[] values)
-    {
-        var value = new ProtoValue { ListValue = new ListValue() };
-        value.ListValue.Values.AddRange(values);
-        return value;
-    }
 }

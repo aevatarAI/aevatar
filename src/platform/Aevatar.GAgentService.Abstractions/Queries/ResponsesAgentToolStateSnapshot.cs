@@ -1,5 +1,3 @@
-using Google.Protobuf.WellKnownTypes;
-
 namespace Aevatar.GAgentService.Abstractions.Queries;
 
 public sealed record ResponsesAgentToolStateSnapshot(
@@ -10,7 +8,6 @@ public sealed record ResponsesAgentToolStateSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     IReadOnlyList<ResponsesTodoItemSnapshot> Todos,
-    IReadOnlyList<ResponsesTaskTraceSnapshot> Tasks,
     IReadOnlyList<ResponsesWebTraceSnapshot> WebTraces,
     IReadOnlyList<ResponsesWebCacheEntrySnapshot> WebCacheEntries);
 
@@ -22,17 +19,6 @@ public sealed record ResponsesTodoItemSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
-public sealed record ResponsesTaskTraceSnapshot(
-    string TaskId,
-    string SourceResponseId,
-    string ChildActorId,
-    string Description,
-    string Status,
-    string ArgumentsJson,
-    string ResultJson,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
-
 public sealed record ResponsesWebTraceSnapshot(
     string TraceId,
     string SourceResponseId,
@@ -41,7 +27,7 @@ public sealed record ResponsesWebTraceSnapshot(
     string Url,
     string Query,
     bool CacheHit,
-    string ResultJson,
+    ResponsesWebToolResult Result,
     DateTimeOffset ObservedAt);
 
 public sealed record ResponsesWebCacheEntrySnapshot(
@@ -49,7 +35,7 @@ public sealed record ResponsesWebCacheEntrySnapshot(
     string ToolName,
     string Url,
     string Query,
-    Value Result,
+    ResponsesWebToolResult Result,
     DateTimeOffset CachedAt,
     DateTimeOffset? LastHitAt,
     long HitCount);
