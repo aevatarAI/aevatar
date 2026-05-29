@@ -55,38 +55,22 @@ internal sealed class ResponsesWebSubstituteBackendAdapter : IResponsesWebSubsti
             input.Query,
             input.MaxResults,
             ct).ConfigureAwait(false);
-        // Refactor (iter161-cluster-001 #1251-first):
-        //   Old pattern: Host adapter passed provider Value into Application.
-        //   New principle: Host maps provider JSON-like Value into Responses-owned typed search output.
+        // Refactor (issue1273/first-slice): Old pattern: Host adapter re-parsed loose
+        // provider Value/JSON into Responses output. New principle: provider returns a
+        // local typed DTO and Host only maps between boundary-owned typed contracts.
         return new ResponsesWebSearchBoundaryResult(ToSearchOutput(result));
     }
 
-    private static ResponsesWebSearchToolOutput ToSearchOutput(Google.Protobuf.WellKnownTypes.Value value)
+    private static ResponsesWebSearchToolOutput ToSearchOutput(WebSearchResult result)
     {
         var output = new ResponsesWebSearchToolOutput();
-        if (value.KindCase != Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StructValue ||
-            !value.StructValue.Fields.TryGetValue("results", out var results) ||
-            results.KindCase != Google.Protobuf.WellKnownTypes.Value.KindOneofCase.ListValue)
-        {
-            return output;
-        }
-
-        output.Results.AddRange(results.ListValue.Values
-            .Where(static item => item.KindCase == Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StructValue)
+        output.Results.AddRange(result.Results
             .Select(static item => new ResponsesWebSearchResultItem
             {
-                Title = ReadString(item, "title"),
-                Url = ReadString(item, "url"),
-                Snippet = ReadString(item, "snippet"),
+                Title = item.Title,
+                Url = item.Url,
+                Snippet = item.Snippet,
             }));
         return output;
-    }
-
-    private static string ReadString(Google.Protobuf.WellKnownTypes.Value item, string key)
-    {
-        return item.StructValue.Fields.TryGetValue(key, out var value) &&
-               value.KindCase == Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StringValue
-            ? value.StringValue
-            : string.Empty;
     }
 }
