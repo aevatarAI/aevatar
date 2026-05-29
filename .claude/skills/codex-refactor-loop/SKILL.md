@@ -913,16 +913,19 @@ nohup python3 .claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py \
 disown
 ```
 
-Daemon 工作流:
-1. cd `$REPO_ROOT`,确认 HEAD = `auto-refact-dev`(不是则 skip)
-2. Working tree dirty → skip(controller 在工作)
-3. 但若 `.git/MERGE_HEAD` 存在 + 无 in-flight codex → **dispatch codex resolve**(防止上次 codex 死)
-4. `git fetch origin` + `git rev-list --count HEAD..origin/dev`
-5. behind=0 → idle skip
-6. behind>0 → 尝试 `git merge --ff-only`,成功则 push;失败则 `git merge --no-ff`(merge commit)
-7. **冲突** → 写 `prompts/dev-sync-conflict-<ts>.md` + spawn-codex resolve(timeout 5400s)
-8. codex 在同一 worktree resolve 文件 + `git add` + `git merge --continue`(不 push,daemon 后续 push)
-9. codex 完成 marker:`DEV_SYNC_RESOLVED:<files>` 或 `DEV_SYNC_BLOCKED:<reason>`
+Daemon 工作流(2026-05-30 重写 — PR-based 双向 sync):
+1. 双向 tick:**forward**(dev → auto-refact-dev)+ **reverse**(auto-refact-dev → dev rollup)
+2. 每方向:计算 source ahead of target = N;N==0 → skip
+3. 没 open sync PR → 创 sync branch + open PR(forward 立即 enable auto-merge;reverse 等 maintainer review)
+4. 有 open sync PR + `mergeStateStatus`:
+   - **DIRTY** → spawn codex resolve in REVERSE_WT/FORWARD_WT
+   - **BEHIND** → `gh api .../update-branch`(GitHub merge base into PR head)
+   - **CI fail** → spawn codex fix-ci
+   - **CLEAN + sync_branch behind source by N > 0**(stale)→ 自动 `git reset --hard origin/<source>` + `git push --force-with-lease`(2026-05-30 修复:之前会卡在 CLEAN 状态等 maintainer 看陈旧 PR)
+   - **CLEAN + sync 同步** → 等 GitHub auto-merge(forward)/ maintainer review(reverse)
+5. Reverse gate:trunk 落后 dev > 0 → reverse 暂停(先完 forward 让 trunk superset of dev)
+
+事故记录(2026-05-30):PR #1167(reverse rollup auto-refact-dev → dev)2 天没动。期间 cluster PR 持续合到 auto-refact-dev → sync_branch 落后 source(auto-refact-dev)56 commits,但 daemon 只看 `mss=CLEAN` 未检 sync_branch vs source 落后,死循环 log "等 maintainer review + merge"。修法:CLEAN 后追加 `src_ahead_of_sync` 检测 + force-reset 到 source tip + force-push。
 
 ### Daemon vs controller 分工
 
