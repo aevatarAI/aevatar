@@ -2139,6 +2139,51 @@ Per Auric (2026-05-19): "及时与远程同步."
 
 If a push fails (network, conflict, branch protection): controller MUST surface the failure inline and either fix-and-retry or escalate within the same turn — never silently leave local changes uncommitted/unpushed.
 
+### Skill 自身 bug 修复 — 走当前 skill PR branch 不走 Phase 8(per Auric 2026-05-29 "skills自身的bug直接在重构分支上修即可")
+
+**铁律**:`.claude/skills/codex-refactor-loop/**`(SKILL.md / scripts/ / prompts/)的 bug 修复**不走** Phase 8 multi-reviewer 共识、**不开**新 cluster PR、**不走** audit cluster lifecycle。直接 commit + push 到**当前活跃 skill PR branch**(目前 `skill/2026-05-29_priority-reversal-issue-pr-first` → PR #1239)。
+
+理由:
+- skill 文件不是 production code,不需要 reviewer-architect 验 CLAUDE 合规
+- skill bug 直接影响 controller 当前正在跑的行为 — 等 Phase 8 几小时收敛 = controller 继续 stuck
+- skill PR 已包含全部 daemon/script 修;新 bug 只是 cherry-pick 到同一 PR 的 commit
+
+操作 pattern:
+```bash
+# 1. checkout 到当前活跃 skill branch
+git checkout skill/2026-05-29_priority-reversal-issue-pr-first
+git pull --ff-only
+
+# 2. 改 + 烟测(直接跑 wakeup-check.sh / smoke test)
+vim .claude/skills/codex-refactor-loop/scripts/<file>
+bash .claude/skills/codex-refactor-loop/scripts/<file> # smoke
+
+# 3. commit + push(中文 commit msg 含 sentinel + 引用 Auric 当日决策)
+git commit -m "skill: <fix summary>
+
+per Auric YYYY-MM-DD '<原话>'.
+
+<根因 + 修法>
+
+⟦AI:AUTO-LOOP⟧"
+git push
+
+# 4. 立即 restart 相关 daemon(让新代码生效)
+pkill -f <daemon.sh|.py>
+nohup ... >> log 2>&1 & disown
+
+# 5. 切回 trunk
+git checkout auto-refact-dev
+```
+
+**反面禁止**:
+- ❌ skill bug 开新 cluster PR / 走 audit cluster lifecycle(浪费 Phase 8 几小时)
+- ❌ skill bug 走 Phase 9 multi-solver consensus(skill 不是 design issue)
+- ❌ skill 改了不 restart daemon — daemon 进程仍跑旧代码(state.json 已更新但行为没变)
+- ❌ skill commit 不带 `per Auric YYYY-MM-DD` 引用 — 历史 trace 丢失
+
+**例外**:涉及 CLAUDE.md / docs/canon / docs/adr 的改动**仍走** Phase 9 maintainer + 多 solver 共识(那不是 skill bug,是 architecture decision)。
+
 ### Stop conditions / stop action
 
 - **Stop conditions**: audit returns 0 candidates twice in a row OR every cluster in current batch failed verify twice OR operator says stop.
