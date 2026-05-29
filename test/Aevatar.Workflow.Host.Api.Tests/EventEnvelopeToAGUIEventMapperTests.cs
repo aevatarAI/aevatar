@@ -360,7 +360,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void WorkflowSuspended_ShouldFallbackLegacySecureInputMetadataToTypedPayload()
+    public void WorkflowSuspended_ShouldIgnoreLegacySecureInputMetadataReservedKeys()
     {
         var suspended = CreateMapper().Map(WrapCommitted(new WorkflowSuspendedEvent
         {
@@ -380,9 +380,9 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
 
         suspended.Should().ContainSingle();
         var request = suspended[0].Custom.Payload.Unpack<WorkflowHumanInputRequestCustomPayload>();
-        request.VariableName.Should().Be("api_key");
-        request.Secure.Should().BeTrue();
-        request.RedactedOutput.Should().Be("[legacy captured]");
+        request.VariableName.Should().BeEmpty();
+        request.Secure.Should().BeFalse();
+        request.RedactedOutput.Should().BeEmpty();
         request.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
         request.Metadata.Should().NotContainKey("variable");
         request.Metadata.Should().NotContainKey("secure");

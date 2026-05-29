@@ -8,6 +8,29 @@ namespace Aevatar.ChatRouting.Core.Tests;
 public sealed class ChatRoutePolicyProtoTests
 {
     [Fact]
+    public void ChatRouteActionDescriptor_ShouldExposeOnlyCurrentActionFields()
+    {
+        var actionOneof = ChatRouteAction.Descriptor.Oneofs
+            .Single(oneof => oneof.Name == "action");
+
+        var actionFieldNames = actionOneof.Fields
+            .Select(field => field.Name)
+            .ToArray();
+
+        actionFieldNames.Should().BeEquivalentTo("forward_to_model", "reject");
+        ChatRouteAction.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => field.Name)
+            .Should()
+            .NotContain(new[]
+            {
+                "forward_to_gagent",
+                "forward_to_team",
+                "forward_to_workflow",
+                "bypass",
+            });
+    }
+
+    [Fact]
     public void ForwardToModel_ShouldRoundTripToolSetRefAndToolChoiceHint()
     {
         var action = new ChatRouteAction

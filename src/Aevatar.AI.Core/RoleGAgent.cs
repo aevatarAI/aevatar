@@ -812,23 +812,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             await ScheduleApprovalTimeoutAsync(pendingApproval);
         }
 
+        // Refactor (iter164/cluster-001-role-completion):
+        //   Old pattern: terminal presentation frames were published before
+        //                RoleChatSessionCompletedEvent was committed; commit failure was downgraded to replay-only loss.
+        //   New principle: commit RoleChatSessionCompletedEvent first; publish terminal frames only from that committed fact.
+        await PersistSessionCompletionAsync(request, replayRecord);
         replayRecord = await PublishMissingDisplayContentAsync(request.SessionId, replayRecord);
-
-        // Publish first so consumers (relay, SSE) get the response immediately.
-        // Persist is best-effort: concurrency conflicts must not block the reply.
         await PublishCompletionAsync(request.SessionId, replayRecord.Content);
-
-        try
-        {
-            await PersistSessionCompletionAsync(request, replayRecord);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            Logger.LogWarning(ex,
-                "[{Role}] Failed to persist session completion. session={SessionId}. " +
-                "Response was already published — session replay may be unavailable.",
-                RoleName, request.SessionId);
-        }
     }
 
     private static int ResolveLlmTimeoutMs(ChatRequestEvent request)

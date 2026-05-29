@@ -562,7 +562,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
-    public void ApplyObservedPayloadToReport_ShouldFallbackLegacyOnlySecureInputMetadata()
+    public void ApplyObservedPayloadToReport_ShouldIgnoreLegacyOnlySecureInputMetadataReservedKeys()
     {
         var report = new WorkflowRunInsightReportDocument
         {
@@ -597,9 +597,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             x.Stage == "workflow.suspended" &&
             x.StepId == "secure-input");
         suspendedTimeline.Data.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
-        suspendedTimeline.Data.Should().ContainKey("variable").WhoseValue.Should().Be("api_key");
-        suspendedTimeline.Data.Should().ContainKey("secure").WhoseValue.Should().Be("true");
-        suspendedTimeline.Data.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[legacy captured]");
+        suspendedTimeline.Data.Should().NotContainKey("variable");
+        suspendedTimeline.Data.Should().NotContainKey("secure");
+        suspendedTimeline.Data.Should().NotContainKey("redacted_output");
         suspendedTimeline.Data.Should().NotContainKey("input_mode");
     }
 
