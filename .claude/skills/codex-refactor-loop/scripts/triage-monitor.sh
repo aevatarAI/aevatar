@@ -6,10 +6,10 @@
 # 设计:
 # - 60s 周期 gh issue list --label "auto-loop-triage" --state open
 # - 对每个未处理的 issue:
-#   - 写 event 到 .refactor-loop/.controller-pending-events.log:
-#     `<ISO8601> new-triage-issue <issue> <author>`
+#   - 物化 triage prompt/log 路径,再写 event 到 .refactor-loop/.controller-pending-events.log:
+#     `<ISO8601> new-triage-issue <issue> <author> prompt=<path> log=<path> timeout=5400`
 #   - state 存 .refactor-loop/triage-monitor-state.json(seen issue id)
-# - 不自己派 codex(controller 责任)
+# - 不自己派 codex(controller 责任,controller 再用 spawn-codex.sh 生成标准 markers)
 # - 启动: nohup bash .claude/skills/codex-refactor-loop/scripts/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown
 #
 # ⟦AI:AUTO-LOOP⟧
@@ -21,7 +21,7 @@ INTERVAL="${INTERVAL:-60}"
 STATE_FILE="$REPO_ROOT/.refactor-loop/triage-monitor-state.json"
 PENDING_LOG="$REPO_ROOT/.refactor-loop/.controller-pending-events.log"
 
-mkdir -p "$REPO_ROOT/.refactor-loop"
+mkdir -p "$REPO_ROOT/.refactor-loop" "$REPO_ROOT/.refactor-loop/prompts" "$REPO_ROOT/.refactor-loop/logs"
 [ -f "$STATE_FILE" ] || echo "{}" > "$STATE_FILE"
 
 log() {
@@ -34,6 +34,9 @@ while true; do
   # Query open issues with auto-loop-triage label
   issues=$(gh issue list --label "auto-loop-triage" --state open --json number,author --jq '.[] | "\(.number) \(.author.login)"' 2>/dev/null)
   if [ -z "$issues" ]; then
+    if [ "${TRIAGE_MONITOR_RUN_ONCE:-0}" = "1" ]; then
+      break
+    fi
     sleep "$INTERVAL"
     continue
   fi
@@ -65,17 +68,16 @@ while true; do
         log "FATAL: prompt for issue #$issue still has unresolved placeholders — skipping spawn"
         continue
       fi
-      # Spawn triage codex(nohup disown — daemon 自己派,不需 harness 跟踪;codex 自己 update GitHub)
       log_file="$REPO_ROOT/.refactor-loop/logs/triage-issue-${issue}.log"
-      ISSUE_NUMBER="$issue" nohup bash "$REPO_ROOT/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh" \
-        --cd "$REPO_ROOT" \
-        --prompt "$prompt_file" \
-        --log "$log_file" \
-        --timeout 5400 >> "$REPO_ROOT/.refactor-loop/logs/triage-monitor.log" 2>&1 &
-      disown
-      log "spawned: triage codex for issue #$issue (author=$author)"
+      # // Refactor (issue1337): Old: daemon detached spawn-codex.sh with nohup + disown. New: daemon only records the controller spawn request; controller invokes spawn-codex.sh so its standard marker files remain authoritative.
+      printf '%s new-triage-issue %s %s prompt=%s log=%s timeout=5400\n' \
+        "$ts" "$issue" "$author" "$prompt_file" "$log_file" >> "$PENDING_LOG"
+      log "queued: triage codex for issue #$issue (author=$author prompt=$prompt_file log=$log_file)"
     fi
   done <<< "$issues"
 
+  if [ "${TRIAGE_MONITOR_RUN_ONCE:-0}" = "1" ]; then
+    break
+  fi
   sleep "$INTERVAL"
 done
