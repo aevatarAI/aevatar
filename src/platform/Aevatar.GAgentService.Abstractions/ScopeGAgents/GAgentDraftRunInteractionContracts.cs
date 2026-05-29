@@ -5,6 +5,8 @@ using Aevatar.Presentation.AGUI;
 
 namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
 
+// Refactor (iter1353/cluster-001): Old pattern: draft-run requests used scalar legacy control fields and payload headers for trusted facts.
+// New principle: requests preserve typed ToolContext and LlmControl through the application hop.
 public sealed record GAgentDraftRunInteractionRequest(
     string ScopeId,
     string ActorTypeName,

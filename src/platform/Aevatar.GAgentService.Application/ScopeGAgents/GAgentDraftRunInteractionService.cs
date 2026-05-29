@@ -50,6 +50,8 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         var actor = preparedActor.Actor!;
         try
         {
+            // Refactor (iter1353/cluster-001): Old pattern: the port forwarded only legacy scalar control fields.
+            // New principle: the port preserves typed ToolContext and LlmControl into the command boundary.
             var command = new GAgentDraftRunCommand(
                 ScopeId: request.ScopeId.Trim(),
                 ActorTypeName: actor.ActorTypeName,

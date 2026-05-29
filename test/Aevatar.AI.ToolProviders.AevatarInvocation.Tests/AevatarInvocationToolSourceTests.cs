@@ -308,13 +308,9 @@ public sealed class AevatarInvocationToolSourceTests
         harness.TeamInvocation.Request.Input.Prompt.Should().Be("go");
         harness.TeamInvocation.Request.Input.Headers.Should().Contain("h", "v");
         ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request.Input.Headers);
-        harness.TeamInvocation.Request.Input.ToolContext.Should().NotBeNull();
-        harness.TeamInvocation.Request.Input.ToolContext!.Caller.ScopeId.Should().Be("scope-1");
-        harness.TeamInvocation.Request.Input.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        harness.TeamInvocation.Request.Input.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        harness.TeamInvocation.Request.Input.LlmControl.Should().NotBeNull();
-        harness.TeamInvocation.Request.Input.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
-        harness.TeamInvocation.Request.Input.LlmControl.ModelOverride.Should().Be("model-1");
+        ShouldCarryTypedToolControlValues(
+            harness.TeamInvocation.Request.Input.ToolContext,
+            harness.TeamInvocation.Request.Input.LlmControl);
         harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("scope-1");
 
         var result = Read(output);
@@ -433,10 +429,9 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request!.Input.Headers);
-        harness.TeamInvocation.Request.Input.ToolContext!.Caller.OwnerSubject.Should().Be("owner-1");
-        harness.TeamInvocation.Request.Input.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        harness.TeamInvocation.Request.Input.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
-        harness.TeamInvocation.Request.Input.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
+        ShouldCarryTypedToolControlValues(
+            harness.TeamInvocation.Request.Input.ToolContext,
+            harness.TeamInvocation.Request.Input.LlmControl);
     }
 
     [Fact]
@@ -514,13 +509,9 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
-        harness.WorkflowDispatch.Command.ToolContext.Should().NotBeNull();
-        harness.WorkflowDispatch.Command.ToolContext!.Caller.ScopeId.Should().Be("scope-1");
-        harness.WorkflowDispatch.Command.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        harness.WorkflowDispatch.Command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        harness.WorkflowDispatch.Command.LlmControl.Should().NotBeNull();
-        harness.WorkflowDispatch.Command.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
-        harness.WorkflowDispatch.Command.LlmControl.ModelOverride.Should().Be("model-1");
+        ShouldCarryTypedToolControlValues(
+            harness.WorkflowDispatch.Command.ToolContext,
+            harness.WorkflowDispatch.Command.LlmControl);
 
         var result = Read(output);
         result.GetProperty("run_id").GetString().Should().Be("wf-command");
@@ -714,10 +705,9 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
-        harness.WorkflowDispatch.Command.ToolContext!.Caller.OwnerSubject.Should().Be("owner-1");
-        harness.WorkflowDispatch.Command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        harness.WorkflowDispatch.Command.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
-        harness.WorkflowDispatch.Command.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
+        ShouldCarryTypedToolControlValues(
+            harness.WorkflowDispatch.Command.ToolContext,
+            harness.WorkflowDispatch.Command.LlmControl);
     }
 
     [Fact]
@@ -892,7 +882,8 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static void ShouldNotCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         metadata.Should().NotBeNull();
         var values = metadata!.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal);
         values.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
@@ -910,6 +901,25 @@ public sealed class AevatarInvocationToolSourceTests
         values.Should().NotContainKey(LLMRequestMetadataKeys.ConnectedServicesContext);
         values.Should().NotContainKey("scope_id");
         values.Should().NotContainKey("external");
+    }
+
+    private static void ShouldCarryTypedToolControlValues(
+        AgentToolExecutionContext? toolContext,
+        LLMControlContext? llmControl)
+    {
+        toolContext.Should().NotBeNull();
+        toolContext!.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        toolContext.Routing.ModelOverride.Should().Be("model-1");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-1");
+
+        llmControl.Should().NotBeNull();
+        llmControl!.NyxIdAccessToken.Should().Be("access-token");
+        llmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
+        llmControl.ModelOverride.Should().Be("model-1");
+        llmControl.NyxIdRoutePreference.Should().Be("route-1");
     }
 
     private static AgentToolContextScope PushContext(string callId, string? scopeId = "scope-1") =>

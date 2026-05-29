@@ -441,6 +441,8 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
         };
 
         AppendMetadata(chatRequest.Metadata, context.Headers);
+        // Refactor (iter1353/cluster-001): Old pattern: ChatRequestEvent control was rebuilt from Metadata or legacy command scalars.
+        // New principle: command-level ToolContext and LlmControl are serialized directly into the event payload.
         chatRequest.ToolContext = (command.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload();
         chatRequest.LlmControl = (command.LlmControl ?? new LLMControlContext(
             NyxIdAccessToken: Normalize(command.NyxIdAccessToken),

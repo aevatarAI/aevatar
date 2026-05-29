@@ -80,6 +80,8 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(input.Timeout ?? DefaultInteractionTimeout);
 
+        // Refactor (iter1353/cluster-001): Old pattern: static invocation lowered trusted facts into headers before draft-run dispatch.
+        // New principle: headers stay payload-only; typed ToolContext and LlmControl cross the command boundary unchanged.
         var interaction = await _interactionService.ExecuteAsync(
             new GAgentDraftRunCommand(
                 ScopeId: identity.TenantId,

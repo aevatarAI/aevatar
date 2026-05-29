@@ -224,6 +224,8 @@ public sealed class AevatarInvocationDispatcher
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
+        // Refactor (iter1353/cluster-001): Old pattern: workflow dispatch stamped trusted caller/control facts into Metadata.
+        // New principle: Metadata carries only filtered payload headers; ScopeId, ToolContext, and LlmControl carry trusted facts.
         var metadata = BuildPayloadHeaders(request.Inputs.Headers);
         var workflowYamls = request.WorkflowYamls.Count == 0
             ? null
@@ -573,6 +575,8 @@ public sealed class AevatarInvocationDispatcher
         InvokeTeamToolRequest request,
         InvocationCallerScope scope)
     {
+        // Refactor (iter1353/cluster-001): Old pattern: team dispatch stamped trusted caller/control facts into Headers.
+        // New principle: Headers carries only filtered payload headers; typed ToolContext and LlmControl carry trusted facts.
         var headers = BuildPayloadHeaders(request.Payload.Headers);
         var identity = new ServiceIdentity
         {
@@ -857,7 +861,8 @@ public sealed class AevatarInvocationDispatcher
         string commandId,
         InvocationCallerScope scope)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         var headers = BuildPayloadHeaders(payload.Headers);
         var request = new ChatRequestEvent
         {
@@ -876,7 +881,8 @@ public sealed class AevatarInvocationDispatcher
     private static Dictionary<string, string> BuildPayloadHeaders(
         Google.Protobuf.Collections.MapField<string, string>? headers)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         var filteredHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
         if (headers == null)
             return filteredHeaders;
@@ -908,7 +914,8 @@ public sealed class AevatarInvocationDispatcher
 
     private static AgentToolExecutionContextPayload ToPayload(AgentToolExecutionContext? context)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         var payload = new AgentToolExecutionContextPayload
         {
@@ -961,7 +968,8 @@ public sealed class AevatarInvocationDispatcher
 
     private static LLMControlContextPayload ToLlmControlPayload(AgentToolExecutionContext? context)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         return ToLlmControlContext(context).ToPayload();
     }
 

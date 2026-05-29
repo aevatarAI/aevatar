@@ -18,6 +18,8 @@ public sealed record StaticGAgentStreamInvocationRequest(
     string EndpointId,
     StaticGAgentStreamInvocationInput Input);
 
+// Refactor (iter1353/cluster-001): Old pattern: static service invocation trusted caller/control facts rode through Headers.
+// New principle: Headers remains payload transport; ToolContext and LlmControl carry trusted typed facts.
 public sealed record StaticGAgentStreamInvocationInput(
     string Prompt,
     string? PreferredActorId = null,
