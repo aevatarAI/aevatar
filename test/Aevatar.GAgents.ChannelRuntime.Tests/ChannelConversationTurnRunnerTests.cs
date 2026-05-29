@@ -1004,6 +1004,46 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldNotRouteNonSlashAgentBuilderIntentToToolExecution()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-unexpected"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "list agents",
+                "msg-normal-agent-builder-intent-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-normal-agent-builder-intent-1",
+                    CorrelationId = "corr-normal-agent-builder-intent-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            RelayRuntimeContext(
+                "corr-normal-agent-builder-intent-1",
+                "relay-token-normal-agent-builder-intent-1",
+                "relay-msg-normal-agent-builder-intent-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-normal-agent-builder-intent-1");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Be("list agents");
+        adapter.Replies.Should().BeEmpty();
+        relayHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldUseRuntimeNyxToken_ForSanitizedRelayAgentBuilderTurn()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

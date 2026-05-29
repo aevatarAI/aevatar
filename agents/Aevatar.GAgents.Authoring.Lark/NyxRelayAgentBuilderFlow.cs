@@ -20,31 +20,39 @@ public static class NyxRelayAgentBuilderFlow
         ChannelInboundEvent evt,
         out AgentBuilderFlowDecision? decision)
     {
+        var resolution = Resolve(evt);
+        decision = resolution.Decision;
+        return resolution.IsMatchedKnownAgentBuilderCommand;
+    }
+
+    public static NyxRelayAgentBuilderFlowResolution Resolve(ChannelInboundEvent evt)
+    {
         ArgumentNullException.ThrowIfNull(evt);
-        decision = null;
 
         if (string.IsNullOrWhiteSpace(evt.Text))
-            return false;
+            return NyxRelayAgentBuilderFlowResolution.NonSlashText();
 
         var trimmedText = evt.Text.TrimStart();
         if (!trimmedText.StartsWith('/'))
-            return false;
+            return NyxRelayAgentBuilderFlowResolution.NonSlashText();
 
         var tokens = ChannelTextCommandParser.Tokenize(trimmedText);
         if (tokens.Count == 0)
-            return false;
+            return NyxRelayAgentBuilderFlowResolution.NonSlashText();
 
         var command = tokens[0];
         if (!IsKnownCommand(command))
-            return false;
+            return NyxRelayAgentBuilderFlowResolution.UnknownSlashCommand();
 
         if (!IsPrivateChat(evt.ChatType))
         {
-            decision = AgentBuilderFlowDecision.DirectReply(BuildPrivateChatRestrictionReply(command));
-            return true;
+            return NyxRelayAgentBuilderFlowResolution.PrivateChatRejected(
+                AgentBuilderFlowDecision.DirectReply(BuildPrivateChatRestrictionReply(command)));
         }
 
-        return TryResolveKnownCommand(command, tokens, out decision);
+        return TryResolveKnownCommand(command, tokens, out var decision)
+            ? NyxRelayAgentBuilderFlowResolution.KnownAgentBuilderCommand(decision!)
+            : NyxRelayAgentBuilderFlowResolution.UnknownSlashCommand();
     }
 
     public static MessageContent FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
@@ -325,4 +333,39 @@ public static class NyxRelayAgentBuilderFlow
         var normalized = (value ?? string.Empty).Trim();
         return normalized.Length == 0 ? null : normalized;
     }
+}
+
+public enum NyxRelayAgentBuilderFlowOutcome
+{
+    KnownAgentBuilderCommand,
+    NonSlashText,
+    UnknownSlashCommandPassToLlm,
+    PrivateChatRejected,
+}
+
+public sealed record NyxRelayAgentBuilderFlowResolution(
+    NyxRelayAgentBuilderFlowOutcome Outcome,
+    AgentBuilderFlowDecision? Decision)
+{
+    public bool IsMatchedKnownAgentBuilderCommand =>
+        Outcome is NyxRelayAgentBuilderFlowOutcome.KnownAgentBuilderCommand
+            or NyxRelayAgentBuilderFlowOutcome.PrivateChatRejected;
+
+    public bool ShouldPassToLlm =>
+        Outcome is NyxRelayAgentBuilderFlowOutcome.NonSlashText
+            or NyxRelayAgentBuilderFlowOutcome.UnknownSlashCommandPassToLlm;
+
+    public static NyxRelayAgentBuilderFlowResolution KnownAgentBuilderCommand(
+        AgentBuilderFlowDecision decision) =>
+        new(NyxRelayAgentBuilderFlowOutcome.KnownAgentBuilderCommand, decision);
+
+    public static NyxRelayAgentBuilderFlowResolution NonSlashText() =>
+        new(NyxRelayAgentBuilderFlowOutcome.NonSlashText, null);
+
+    public static NyxRelayAgentBuilderFlowResolution UnknownSlashCommand() =>
+        new(NyxRelayAgentBuilderFlowOutcome.UnknownSlashCommandPassToLlm, null);
+
+    public static NyxRelayAgentBuilderFlowResolution PrivateChatRejected(
+        AgentBuilderFlowDecision decision) =>
+        new(NyxRelayAgentBuilderFlowOutcome.PrivateChatRejected, decision);
 }

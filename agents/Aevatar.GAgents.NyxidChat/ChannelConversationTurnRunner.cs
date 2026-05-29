@@ -975,11 +975,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         Task typingReactionTask,
         CancellationToken ct)
     {
-        AgentBuilderFlowDecision? decision = null;
-        var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(
-            inboundEvent,
-            out decision);
-        if (!relayDecisionMatched &&
+        // Refactor (issue1304-first): Old: implicit fall-through. New: explicit predicate-based dispatch.
+        var relayResolution = NyxRelayAgentBuilderFlow.Resolve(inboundEvent);
+        var relayDecisionMatched = relayResolution.IsMatchedKnownAgentBuilderCommand;
+        var decision = relayResolution.Decision;
+        if (activity.Type == ActivityType.CardAction &&
             ((decision = await AgentBuilderCardFlow.TryResolveAsync(
                     inboundEvent,
                     _userConfigQueryPort,

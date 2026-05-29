@@ -139,6 +139,76 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.ReplyPayload.Should().Contain("/delete-agent agent-1 confirm");
     }
 
+    [Fact]
+    public void Resolve_ShouldReturnKnownAgentBuilderCommand_ForKnownPrivateCommand()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/agents",
+        };
+
+        var resolution = NyxRelayAgentBuilderFlow.Resolve(inbound);
+
+        resolution.Outcome.Should().Be(NyxRelayAgentBuilderFlowOutcome.KnownAgentBuilderCommand);
+        resolution.IsMatchedKnownAgentBuilderCommand.Should().BeTrue();
+        resolution.ShouldPassToLlm.Should().BeFalse();
+        resolution.Decision.Should().NotBeNull();
+        resolution.Decision!.RequiresToolExecution.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Resolve_ShouldReturnUnknownSlashPassToLlm_ForUnknownSlash()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/daily alice",
+        };
+
+        var resolution = NyxRelayAgentBuilderFlow.Resolve(inbound);
+
+        resolution.Outcome.Should().Be(NyxRelayAgentBuilderFlowOutcome.UnknownSlashCommandPassToLlm);
+        resolution.IsMatchedKnownAgentBuilderCommand.Should().BeFalse();
+        resolution.ShouldPassToLlm.Should().BeTrue();
+        resolution.Decision.Should().BeNull();
+    }
+
+    [Fact]
+    public void Resolve_ShouldReturnNonSlashText_ForOrdinaryText()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "list agents",
+        };
+
+        var resolution = NyxRelayAgentBuilderFlow.Resolve(inbound);
+
+        resolution.Outcome.Should().Be(NyxRelayAgentBuilderFlowOutcome.NonSlashText);
+        resolution.IsMatchedKnownAgentBuilderCommand.Should().BeFalse();
+        resolution.ShouldPassToLlm.Should().BeTrue();
+        resolution.Decision.Should().BeNull();
+    }
+
+    [Fact]
+    public void Resolve_ShouldReturnPrivateChatRejection_ForKnownCommandInGroup()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "group",
+            Text = "/agents",
+        };
+
+        var resolution = NyxRelayAgentBuilderFlow.Resolve(inbound);
+
+        resolution.Outcome.Should().Be(NyxRelayAgentBuilderFlowOutcome.PrivateChatRejected);
+        resolution.IsMatchedKnownAgentBuilderCommand.Should().BeTrue();
+        resolution.ShouldPassToLlm.Should().BeFalse();
+        resolution.Decision.Should().NotBeNull();
+        resolution.Decision!.RequiresToolExecution.Should().BeFalse();
+    }
+
     [Theory]
     [InlineData("/foobar")]
     [InlineData("/goal draft Q2 launch")]
