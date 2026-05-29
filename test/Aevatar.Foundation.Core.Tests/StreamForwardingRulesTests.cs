@@ -42,12 +42,17 @@ public class StreamForwardingRulesTests
         {
             Route = EnvelopeRouteSemantics.CreateObserverPublication("child", ObserverAudience.CommittedFacts),
         };
+        var unspecifiedObserver = new EventEnvelope
+        {
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("child", ObserverAudience.Unspecified),
+        };
         var topology = new EventEnvelope
         {
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("child", TopologyAudience.Children),
         };
 
         StreamForwardingRules.Matches(binding, committed).Should().BeTrue();
+        StreamForwardingRules.Matches(binding, unspecifiedObserver).Should().BeFalse();
         StreamForwardingRules.Matches(binding, topology).Should().BeFalse();
     }
 
