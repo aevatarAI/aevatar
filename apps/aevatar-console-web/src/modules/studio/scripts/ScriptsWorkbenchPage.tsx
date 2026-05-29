@@ -1625,6 +1625,9 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     }
   }, [resolvedScopeId]);
 
+  // Refactor (iter160-cluster-001 #1261-first):
+  //   Old pattern: fixed-time polling with retry sleep.
+  //   New principle: one-shot stale read; return a pending notice when the read model is pending.
   const readPromotionCatalogOnce = React.useCallback(async (
     decision: ScriptPromotionDecision,
   ): Promise<ScriptCatalogSnapshot | null> => {
