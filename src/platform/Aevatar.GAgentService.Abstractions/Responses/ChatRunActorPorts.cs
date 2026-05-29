@@ -38,13 +38,7 @@ public interface IChatRunToolCompletionControlExecutor
         CancellationToken ct = default);
 }
 
-public sealed record ChatRunToolCompletionResult(
-    string ActorId,
-    string RunId,
-    string ToolCallId,
-    string ToolName,
-    string ResultJson);
-
+// Refactor (issue1363): Removed unused symbols. Original cluster #1335 split into first-slice delete + later-slice design-pending.
 public interface IChatRunActorPort
 {
     Task<string> StartAsync(ChatRunStartRequest request, CancellationToken ct = default);
@@ -67,12 +61,5 @@ public interface IChatRunActorPort
     Task TerminateAsync(
         string chatRunActorId,
         string reason,
-        CancellationToken ct = default);
-}
-
-public interface IChatRunToolCompletionSink
-{
-    ValueTask OnToolResultReadyAsync(
-        ChatRunToolResultReady ready,
         CancellationToken ct = default);
 }
