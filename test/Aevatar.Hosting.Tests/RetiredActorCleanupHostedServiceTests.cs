@@ -573,6 +573,34 @@ public sealed class RetiredActorCleanupHostedServiceTests
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(1);
     }
 
+    [Fact]
+    public async Task StartAsync_ShouldReturnBeforeCleanupDiscoveryCompletes()
+    {
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "blocked-retired-actor");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["blocked-retired-actor"] =
+                "Aevatar.Tests.Legacy.BlockedRetiredActor, Aevatar.Tests",
+        });
+        var runtime = new RecordingActorRuntime();
+        var spec = new BlockingDiscoveryRetiredActorSpec("blocked-retired-actor");
+        var service = CreateService(
+            typeProbe, runtime, new RecordingStreamProvider(), eventStore, spec);
+
+        await service.StartAsync(CancellationToken.None);
+
+        await spec.DiscoveryEntered.Task;
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        service.Completion.IsCompleted.Should().BeFalse();
+
+        spec.ReleaseDiscovery();
+        await service.Completion;
+
+        runtime.DestroyedActorIds.Should().Contain("blocked-retired-actor");
+        (await eventStore.GetVersionAsync("blocked-retired-actor")).Should().Be(0);
+    }
+
     private static IRetiredActorSpec CreateChannelRuntimeSpec() => new ChannelRuntimeRetiredActorSpec();
 
     private static IRetiredActorSpec CreateDeviceSpec() => new DeviceRetiredActorSpec();
@@ -736,6 +764,33 @@ public sealed class RetiredActorCleanupHostedServiceTests
                 typeNames.TryGetValue(actorId, out var queue) && queue.Count > 0
                     ? queue.Dequeue()
                     : null);
+        }
+    }
+
+    private sealed class BlockingDiscoveryRetiredActorSpec(string actorId) : RetiredActorSpec
+    {
+        private readonly TaskCompletionSource _discoveryEntered = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseDiscovery = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource DiscoveryEntered => _discoveryEntered;
+
+        public override string SpecId => "blocking-discovery";
+
+        public override IReadOnlyList<RetiredActorTarget> Targets => [];
+
+        public void ReleaseDiscovery() => _releaseDiscovery.SetResult();
+
+        public override async IAsyncEnumerable<RetiredActorTarget> DiscoverDynamicTargetsAsync(
+            IServiceProvider services,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            _discoveryEntered.SetResult();
+            await _releaseDiscovery.Task.WaitAsync(ct);
+            yield return new RetiredActorTarget(
+                actorId,
+                ["Aevatar.Tests.Legacy.BlockedRetiredActor"]);
         }
     }
 

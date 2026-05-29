@@ -4,7 +4,9 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 
-// Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
+// Refactor (issue1287-first):
+//   Old pattern: DI registered startup cleanup that completed through EventStore marker coordination.
+//   New principle: DI registers one BackgroundService trigger; target safety is owned by revalidation.
 public static class RetiredActorCleanupServiceCollectionExtensions
 {
     /// <summary>
@@ -14,7 +16,6 @@ public static class RetiredActorCleanupServiceCollectionExtensions
     /// Startup only triggers cleanup; per-target revalidation makes duplicate
     /// runs converge without requiring startup ordering against module services.
     /// </summary>
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     public static IServiceCollection AddRetiredActorCleanup(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);

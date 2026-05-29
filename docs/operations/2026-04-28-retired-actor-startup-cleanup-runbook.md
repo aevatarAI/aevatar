@@ -37,7 +37,7 @@ Each retired module ships its own `IRetiredActorSpec` implementation alongside i
 DI extension (`AddChannelRuntime`, `AddDeviceRegistration`, `AddScheduledAgents`).
 A spec declares:
 
-- `SpecId` — stable identifier used as the marker stream namespace.
+- `SpecId` — stable identifier used for logs and operational diagnostics.
 - `Targets` — well-known retired actor ids and the CLR type name tokens that
   identify them as retired.
 - `DiscoverDynamicTargetsAsync` — optional. The Scheduled spec uses this to read
@@ -54,8 +54,8 @@ A spec declares:
 
 For each spec the service:
 
-1. Starts a background cleanup pass during host startup; module startup is not
-   blocked on completion.
+1. Triggers a background-service cleanup pass during host startup; module startup
+   is not blocked on completion.
 2. Streams targets from `DiscoverDynamicTargetsAsync` first, then iterates
    `Targets`.
 3. For each target: probes the runtime type via `IActorTypeProbe`, then

@@ -5,7 +5,6 @@ namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 /// <summary>
 /// Tunables for the spec-driven retired-actor cleanup hosted service.
 /// </summary>
-// Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
 public sealed class RetiredActorCleanupOptions
 {
     public const string SectionName = "Aevatar:RetiredActorCleanup";
@@ -16,7 +15,6 @@ public sealed class RetiredActorCleanupOptions
 
     public bool CleanupReadModels { get; init; } = true;
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     public static RetiredActorCleanupOptions FromConfiguration(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -30,7 +28,6 @@ public sealed class RetiredActorCleanupOptions
         };
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private static bool ResolveBool(IConfiguration section, string key, bool fallback)
     {
         var raw = section[key];

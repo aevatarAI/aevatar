@@ -21,12 +21,15 @@ namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 /// work. New retired types take effect on the next pod startup with zero per-spec
 /// completion gating — the spec list itself is the only source of truth.
 ///
-/// Startup only triggers the cleanup pass. Each target is revalidated immediately
-/// before destructive work, so duplicate startup waves converge through no-op
-/// checks instead of EventStore marker coordination.
+/// Startup only triggers the cleanup pass through the host's background-service
+/// lifecycle. Each target is revalidated immediately before destructive work, so
+/// duplicate startup waves converge through no-op checks instead of EventStore
+/// marker coordination.
 /// </summary>
-// Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
-public sealed class RetiredActorCleanupHostedService : IHostedService
+// Refactor (issue1287-first):
+//   Old pattern: EventStore marker lease recorded completed specs and startup owned cleanup completion.
+//   New principle: BackgroundService triggers cleanup once; per-target revalidation fences destructive work.
+public sealed class RetiredActorCleanupHostedService : BackgroundService
 {
     // Stable cleanupReason values for log/metric distinguishing of normal-match
     // vs orphaned-stream recovery paths. Ops dashboards group on these strings.
@@ -43,10 +46,9 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
     private readonly IServiceProvider _services;
     private readonly RetiredActorCleanupOptions _options;
     private readonly ILogger<RetiredActorCleanupHostedService> _logger;
-    private CancellationTokenSource? _cleanupCts;
+    private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? _cleanupTask;
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     public RetiredActorCleanupHostedService(
         IEnumerable<IRetiredActorSpec> specs,
         IActorTypeProbe typeProbe,
@@ -72,37 +74,51 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
-    public Task Completion => _cleanupTask ?? Task.CompletedTask;
+    public Task Completion => _completion.Task;
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
-    public Task StartAsync(CancellationToken cancellationToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!_options.Enabled)
         {
             _logger.LogInformation("Retired actor cleanup is disabled.");
+            _completion.TrySetResult();
             return Task.CompletedTask;
         }
 
-        if (cancellationToken.IsCancellationRequested)
+        if (stoppingToken.IsCancellationRequested)
         {
+            _completion.TrySetCanceled(stoppingToken);
             return Task.CompletedTask;
         }
 
-        _cleanupCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _cleanupTask = Task.Run(() => RunCleanupPassAsync(_cleanupCts.Token), CancellationToken.None);
-        return Task.CompletedTask;
+        _cleanupTask = RunCleanupPassAfterStartupAsync(stoppingToken);
+        return _cleanupTask;
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
-    public Task StopAsync(CancellationToken cancellationToken)
+    private static async Task YieldStartupAsync()
     {
-        _ = cancellationToken;
-        _cleanupCts?.Cancel();
-        return Task.CompletedTask;
+        await Task.Yield();
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
+    private async Task RunCleanupPassAfterStartupAsync(CancellationToken ct)
+    {
+        try
+        {
+            await YieldStartupAsync().ConfigureAwait(false);
+            await RunCleanupPassAsync(ct).ConfigureAwait(false);
+            _completion.TrySetResult();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _completion.TrySetCanceled(ct);
+        }
+        catch (Exception ex)
+        {
+            _completion.TrySetException(ex);
+            throw;
+        }
+    }
+
     private async Task RunCleanupPassAsync(CancellationToken ct)
     {
         try
@@ -121,7 +137,6 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         }
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private async Task RunSpecAsync(IRetiredActorSpec spec, CancellationToken ct)
     {
         try
@@ -143,7 +158,6 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         }
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private async Task CleanupTargetAsync(IRetiredActorSpec spec, RetiredActorTarget target, CancellationToken ct)
     {
         var candidate = await RevalidateTargetForCleanupAsync(target, ct).ConfigureAwait(false);
@@ -188,7 +202,6 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
             revalidation.CleanupReason);
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private async Task<CleanupTargetRevalidation> RevalidateTargetForCleanupAsync(
         RetiredActorTarget target,
         CancellationToken ct)
@@ -223,7 +236,6 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
             CleanupReason: shouldContinueReset ? CleanupReasonOrphanedEventStream : string.Empty);
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private async Task CleanupIncomingRelayBestEffortAsync(
         IRetiredActorSpec spec, RetiredActorTarget target, CancellationToken ct)
     {
@@ -249,7 +261,6 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         }
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private async Task CleanupOutgoingRelaysBestEffortAsync(IRetiredActorSpec spec, string actorId, CancellationToken ct)
     {
         try
@@ -276,7 +287,6 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         }
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private async Task CleanupReadModelsBestEffortAsync(IRetiredActorSpec spec, string actorId, CancellationToken ct)
     {
         try
@@ -297,7 +307,6 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         }
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private async Task CleanupStreamPubSubBestEffortAsync(IRetiredActorSpec spec, string actorId, CancellationToken ct)
     {
         if (_streamPubSubMaintenance == null)
@@ -321,11 +330,9 @@ public sealed class RetiredActorCleanupHostedService : IHostedService
         }
     }
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private async Task<bool> HasEventStreamAsync(string actorId, CancellationToken ct) =>
         await _eventStore.GetVersionAsync(actorId, ct).ConfigureAwait(false) > 0;
 
-    // Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
     private sealed record CleanupTargetRevalidation(
         bool ShouldClean,
         string? RuntimeTypeName,
