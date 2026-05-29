@@ -33,11 +33,14 @@ run_shell_timeout() {
   local command_pid=""
   local timer_pid=""
   local exit_code=0
+  local stdin_copy=""
   local timeout_marker
   timeout_marker="$(mktemp "${TMPDIR:-/tmp}/codex-loop-timeout.XXXXXXXX")"
   rm -f "$timeout_marker"
+  stdin_copy="$(mktemp "${TMPDIR:-/tmp}/codex-loop-stdin.XXXXXXXX")"
+  cat > "$stdin_copy"
 
-  "$@" &
+  "$@" < "$stdin_copy" &
   command_pid=$!
 
   (
@@ -57,12 +60,14 @@ run_shell_timeout() {
   if [[ -f "$timeout_marker" ]]; then
     wait "$timer_pid" 2>/dev/null || true
     rm -f "$timeout_marker"
+    rm -f "$stdin_copy"
     return 124
   fi
 
   kill "$timer_pid" 2>/dev/null || true
   wait "$timer_pid" 2>/dev/null || true
   rm -f "$timeout_marker"
+  rm -f "$stdin_copy"
   return "$exit_code"
 }
 
