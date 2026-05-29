@@ -305,6 +305,44 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_ShouldCommitCompletionBeforePublishingTerminalFrame()
+    {
+        var inner = new InMemoryEventStoreForTests();
+        var operationLog = new List<string>();
+        var store = new RecordingCompletionEventStore(inner, operationLog);
+        var provider = new CountingLlmProviderFactory("ordered answer");
+        var services = BuildServices(store);
+
+        var publisher = new RecordingEventPublisher(operationLog);
+        var agent = CreateAgent(services, "role-completion-order", provider);
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleId = "role-ordered",
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "session-completion-order",
+        });
+
+        operationLog.Should().ContainInOrder(
+            "commit:RoleChatSessionCompletedEvent:session-completion-order",
+            "publish:TextMessageEndEvent:session-completion-order");
+        publisher.Published
+            .OfType<TextMessageEndEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.SessionId == "session-completion-order" &&
+                x.Content == "ordered answer");
+    }
+
+    [Fact]
     public async Task RoleChatSessions_ShouldRetainOnlyRecentBoundedCache()
     {
         var store = new InMemoryEventStoreForTests();
@@ -545,11 +583,13 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_WhenPersistCompletionFails_ShouldStillPublishResponse()
+    public async Task HandleChatRequest_WhenPersistCompletionFails_ShouldNotPublishTerminalFrames()
     {
         var inner = new InMemoryEventStoreForTests();
         var store = new FailOnCompletionEventStore(inner);
-        var provider = new CountingLlmProviderFactory("persist-fail answer");
+        var provider = new ThrowingLlmProviderFactory(
+            "throwing-persist-fail",
+            new InvalidOperationException("provider failed before commit"));
         var services = BuildServices(store);
 
         var publisher = new RecordingEventPublisher();
@@ -563,21 +603,28 @@ public class RoleGAgentReplayContractTests
             SystemPrompt = "system",
         });
 
-        await agent.HandleChatRequest(new ChatRequestEvent
+        var act = () => agent.HandleChatRequest(new ChatRequestEvent
         {
             Prompt = "hello",
             SessionId = "session-persist-fail",
         });
 
-        // Response was published despite persistence failure.
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("Simulated persistence failure for session completion.");
+
+        // Refactor (iter164/cluster-001-role-completion):
+        //   Old pattern: RoleGAgent published the terminal TextMessageEndEvent before completion commit.
+        //   New principle: completion commit failure prevents terminal presentation frames from being published.
+        publisher.Published
+            .OfType<TextMessageContentEvent>()
+            .Should()
+            .BeEmpty();
         publisher.Published
             .OfType<TextMessageEndEvent>()
             .Should()
-            .ContainSingle(x =>
-                x.SessionId == "session-persist-fail" &&
-                x.Content == "persist-fail answer");
+            .BeEmpty();
 
-        // The completion event should NOT be in the store (persist failed).
         var persisted = await inner.GetEventsAsync("role-persist-fail");
         persisted.Should().NotContain(x =>
             x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal));
@@ -860,7 +907,7 @@ public class RoleGAgentReplayContractTests
         return (bool)property.GetValue(result)!;
     }
 
-    private sealed class RecordingEventPublisher : IEventPublisher
+    private sealed class RecordingEventPublisher(List<string>? operationLog = null) : IEventPublisher
     {
         public List<IMessage> Published { get; } = [];
 
@@ -877,6 +924,8 @@ public class RoleGAgentReplayContractTests
             _ = sourceEnvelope;
             _ = options;
             Published.Add(evt);
+            if (evt is TextMessageEndEvent textMessageEnd)
+                operationLog?.Add($"publish:TextMessageEndEvent:{textMessageEnd.SessionId}");
             return Task.CompletedTask;
         }
 
@@ -1059,6 +1108,42 @@ public class RoleGAgentReplayContractTests
                 throw new InvalidOperationException("Simulated persistence failure for session completion.");
 
             return inner.AppendAsync(agentId, list, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId, long? fromVersion = null, CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class RecordingCompletionEventStore(
+        InMemoryEventStoreForTests inner,
+        List<string> operationLog) : IEventStore
+    {
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var list = events.ToList();
+            var result = inner.AppendAsync(agentId, list, expectedVersion, ct);
+
+            foreach (var evt in list)
+            {
+                if (!evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                    continue;
+
+                var completed = evt.EventData.Unpack<RoleChatSessionCompletedEvent>();
+                operationLog.Add($"commit:RoleChatSessionCompletedEvent:{completed.SessionId}");
+            }
+
+            return result;
         }
 
         public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
