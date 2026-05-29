@@ -507,7 +507,9 @@ message ResponsesWebTrace {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  // Refactor (issue1251-first): Old: normal writes stored stable Web results in google.protobuf.Value. New: normal writes use typed ResponsesWebToolResult; result remains legacy read fallback only.
+  // Refactor (issue1251-first):
+  //   Old pattern: normal writes stored stable Web results in google.protobuf.Value.
+  //   New principle: normal writes use typed ResponsesWebToolResult; result remains legacy read fallback only.
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
   ResponsesWebToolResult typed_result = 10;
@@ -518,7 +520,9 @@ message ResponsesWebCacheEntry {
   string tool_name = 2;
   string url = 3;
   string query = 4;
-  // Refactor (issue1251-first): Old: cache result facts were written as google.protobuf.Value. New: typed_result is the write path; result is legacy read fallback only.
+  // Refactor (issue1251-first):
+  //   Old pattern: cache result facts were written as google.protobuf.Value.
+  //   New principle: typed_result is the write path; result is legacy read fallback only.
   google.protobuf.Value result = 5;
   google.protobuf.Timestamp cached_at = 6;
   google.protobuf.Timestamp last_hit_at = 7;
@@ -581,7 +585,9 @@ message ResponsesWebToolResult {
 
 message ResponsesWebSubstituteToolExecutionResult {
   oneof result {
-    // Refactor (issue1251-first): Old: cached/error/search used Value in the normal path. New: typed fields carry stable Responses Web result semantics; Value arms are legacy fallback only.
+    // Refactor (issue1251-first):
+    //   Old pattern: cached/error/search used Value in the normal path.
+    //   New principle: typed fields carry stable Responses Web result semantics; Value arms are legacy fallback only.
     google.protobuf.Value cached = 1;
     google.protobuf.Value error = 2;
     ResponsesWebFetchToolOutput fetch = 3;
@@ -652,7 +658,9 @@ message RecordResponsesWebTraceRequested {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  // Refactor (issue1251-first): Old: command carried normal Web result as Value. New: typed_result is the write path; result is legacy fallback only.
+  // Refactor (issue1251-first):
+  //   Old pattern: command carried normal Web result as Value.
+  //   New principle: typed_result is the write path; result is legacy fallback only.
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
   ResponsesWebToolResult typed_result = 10;
