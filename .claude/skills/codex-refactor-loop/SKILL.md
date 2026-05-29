@@ -2562,65 +2562,57 @@ Per Auric (2026-05-19) 二次确认 "github上的也都中文,除了注释英文
 
 ---
 
-## Auto-stop / Throttle 条件(强制,per Auric 2026-05-25 "设置一下停止条件或者降速条件吧")
+## 并发豁免删除(强制,per Auric 2026-05-30 "禁止任何并发豁免, 如果并发不足, 则处理已经存在的issues、pr或者提新的审计来产生issues")
 
-Controller 每 wakeup 在 sweep 之后、派 codex 之前,evaluate 下列条件。**stop** 优先于 throttle。
+**2026-05-30 重写**:之前 stop / throttle / "floor=3 throttle 底线" 是并发豁免,允许 controller 在某些条件下 floor < 5 甚至 = 0。Auric 明确**取消所有豁免**:
 
-### Stop(硬停 — controller 不再派任何 codex,仅 push notification + 写 `.refactor-loop/.auto-stopped` 标记)
+### 唯一停止信号
 
-任一命中即 stop:
+**只有** `.refactor-loop/.pause` 文件存在时 controller 才允许 0 codex(maintainer 手动 touch)。删除文件后立即恢复 floor=5。
 
-1. **Audit 干涸**:最近 2 次 audit 报告 `AUDIT_DONE:iter-N:0`(0 cluster)。
-2. **Intake 池空**:open `auto-loop` 标签 issue 中,非 `🎉 phase:merged` 且非 `🆘 human:卡死` 的 actionable 数 == 0,且 open `auto-loop` PR 数 == 0。
-3. **Reflector 连续 escalate**:最近 3 次 reflector 决议都是 `META_RESOLVED:escalate-human`(说明 CLAUDE.md 规则解释跨多 cluster 都需人决策)。
-4. **PR 吞吐崩**:最近 48h 0 PR merged 且最近 24h 0 fix 收敛(只在死循环 fix/reject)。
-5. **Loop 标记文件**:仓库根存在 `.refactor-loop/.auto-stopped` 或 `.refactor-loop/.pause`(maintainer 手动 touch)。
+`.refactor-loop/.auto-stopped` 已废弃 — controller **不允许**自己写 stop 标记。
 
-stop 触发动作:
-- post PushNotification 给 user(中文):"auto-loop 停止,原因 X,Y 个 in-flight codex 自然完成后不再续派"
-- 写 `.refactor-loop/.auto-stopped` 含 timestamp + reason
-- ScheduleWakeup **不调用**(loop 真停)
-- 不 kill 在跑 codex(让自然完成,各自的 fix/merge 流程走完)
+### 禁止任何 throttle/stop 自决
 
-### Throttle(降速 — 仍派 codex 但降并发或换角度)
+**全删除**:
+- ❌ Audit 干涸 → 继续派 audit(新 iter audit 总能产生 candidates,或证明 codebase 干净进入 retrospective 模式)
+- ❌ Intake 池空 → 派 audit-N+1 产生新 issues
+- ❌ Reflector 连续 escalate → 继续 reflector,不停 loop
+- ❌ PR 吞吐崩 → 继续派 codex 处理 in-flight + audit
+- ❌ Audit 候选少 → 仍派下一 audit
+- ❌ Reflector 频繁 → 仍派新 design issue
+- ❌ Reviewer reject 率高 → 仍派新 implement
+- ❌ Triage eligible 率低 → 仍主动 scan
+- ❌ concurrency floor 任何"降到 3"豁免
 
-任一命中即 throttle(可叠加):
+**铁律**:任何时刻 `ps -ef | grep "codex exec"` < 5 + 无 `.pause` 文件 → controller **必须**派满 floor=5,**优先处理已存在 issues/PRs**;**没有可派工作**时**派新 audit** 产生 issues。
 
-1. **Audit 候选少**:最近 audit `AUDIT_DONE:iter-N:1`(只 1 cluster)→ 不再 prefetch 下一 audit,等当前 cluster 进 Phase 8 才派 audit-N+1。
-2. **Reflector 频繁**:最近 5 PR 里 >= 2 PR 需要 reflector → 暂停新 design issue intake(只跑 in-flight fix/review),concurrency floor 5→3。
-3. **Reviewer reject 率高**:最近 3 PR 累计 reviewer reject 率 >= 60% → 暂停新 implement 派出,集中 fix loop。
-4. **Triage eligible 率低**:最近 5 个 triage `TRIAGE_DONE:N:not-eligible` 占 >= 60% → 不再主动 scan open issue,等 maintainer 显式 label。
-5. **0 codex 但有 actionable**:concurrency_monitor `zero_streak >= 5` → 强制 wakeup 立即派(已有规则,此为保留兼容)。
+### 派什么填底线(优先级,严格,无豁免)
 
-throttle 触发动作:
-- post 中文 status banner 到任一最近活跃 PR/issue(说明降速 + 原因)
-- concurrency floor 调整 5→3,wakeup heartbeat 1500s→2400s
-- 不写 `.auto-stopped`(loop 仍存活)
+1. **stale `🛠️ phase:implementing` issue**(implement log EXIT=0 但未开 PR)→ controller 接 IMPLEMENT_DONE marker
+2. **stale `👀 phase:reviewing` PR**(REVIEW_DONE × 3 但未推进)→ 按 verdict 派 fix r+1 / merge
+3. **CI 红 PR fix codex 未派** → 立刻派
+4. **triaged design issue 未派 r1 solver** → 派 3 solver
+5. **active Phase 9 issue 等 judge** → 派 judge
+6. **stuck label 3h+ issue** → 派 reflector
+7. **未处理 open issue >3h** → label `auto-loop-triage`,daemon 接
+8. **conflict PR** → 派 conflict-resolve codex
+9. **Phase 10 advisory review**(eligible 非 auto-loop PR)
+10. **Phase 11 triage**(eligible 非 auto-loop issue)
+11. **下一 iter audit** → 即使 1-10 有 in-flight,floor < 5 时仍派(audit 不阻塞 cluster work)
+12. **next-next iter audit**(N+2 speculative)— floor 仍不足继续派
+13. **历史 closed design issue retrospective**
 
-### Resume(从 stop 恢复)
-
-stop 后 loop 不会自动 resume。**只有以下信号**才重启:
-- maintainer 删 `.refactor-loop/.auto-stopped` 或 `.refactor-loop/.pause`
-- maintainer 显式 `/loop` 命令重启
-- maintainer 把 `phase9-auto-solve` 加到 fresh issue(monitor daemon 不主动接,等 manual resume)
-
-恢复后 controller wakeup 第一动作:删除 stop 标记文件 + post "resumed at <ts> by <signal>" banner。
-
-### 自检
-
-Controller 每 wakeup 第一动作:
-```bash
-[[ -f .refactor-loop/.auto-stopped || -f .refactor-loop/.pause ]] && { echo STOP_MARKER_FOUND; cat .refactor-loop/.auto-stopped 2>/dev/null; exit 0; }
-```
-
-无标记继续 sweep 流程;有标记直接 ScheduleWakeup omit + push notification 重申状态。
+**重点变化**:audit 从"backfill only"升级为 **floor < 5 即可派**(原先要求 1-11 全空)。理由:audit 是产生新工作的唯一入口,不应被"等其他在跑"借口阻塞。
 
 ### 反面(❌ 严禁)
 
-- ❌ stop 后仍派 codex(违反"controller 不再派任何 codex")
-- ❌ throttle 时把 concurrency floor 降到 0(应至少保 1 codex 处理 in-flight fix)
-- ❌ 自动 resume(无 maintainer 信号 = stay stopped)
-- ❌ 把 `🆘 human` issue 数算入 actionable 池(那是等人,不是 actionable)
+- ❌ 看到 floor < 5 但不补派 → 违规
+- ❌ 用"throttle 降到 3"借口不补 → 已删除豁免
+- ❌ 用"等 CI 跑完"借口不补 → CI 不算 codex
+- ❌ 用"Audit 干涸"借口停 loop → 应继续产新 audit
+- ❌ 自己写 `.auto-stopped` → 只 `.pause` 是 maintainer 信号
+- ❌ ScheduleWakeup 时 floor < 5 + 无 `.pause` → P0 bug
 
 ### Hard floor = 5 codex(强制,per Auric 2026-05-26 "把最小并发数改回5",此前 2026-05-25 一度降到 2 后已回滚)
 
@@ -2640,33 +2632,37 @@ throttle 状态可降到 3(per "Throttle 条件"节,2 个触发任一)。**正�
 9. **PR 刚 push 等 CI** → arm CI Monitor(Monitor 不算 codex)
 10. **Phase 10 advisory review** → 扫 eligible 非 auto-loop open PR 派 3 reviewer
 11. **Phase 11 issue intake** → label `auto-loop-triage` 给 eligible 非 auto-loop open issue
-12. **审计 backlog(backfill only)**:**1-11 全空**才允许派 `audit-iter-N+1`(若上一 audit 已完成 + N+1 log 不存在)
-13. **next-next iter audit(backfill only)**:同 12
+12. **下一 iter audit**:floor < 5 即可派(无需 1-11 全空,per Auric 2026-05-30 "禁止任何并发豁免, 如果并发不足, 则处理已经存在的issues、pr或者提新的审计来产生issues")。audit 与 cluster impl 独立,不阻塞 in-flight 工作。
+13. **next-next iter audit**:同 12,floor < 5 即派
 
-**铁律**:audit 是 **backfill**,不是默认。任何 wakeup 派 audit 之前 controller **必须** verify 1-11 全空(无 stale implementing/reviewing/CI-red/stuck-3h/untouched-3h)。violate = 2026-05-29 头号 bug(连续派 audit 200-257 共 50+ 次,期间 20+ implementing issue 漏处理 IMPLEMENT_DONE)。
+**关键变化(2026-05-30)**:audit 从"backfill only"(原 priority 12,要求 1-11 全空)升级为 **floor < 5 即可派**。理由:Auric 明确"禁止任何并发豁免",任何时刻 floor < 5 必须补,而 audit 是产生新工作的唯一稳定入口。
 
 **自检脚本**(每 wakeup 第一动作之后):
 ```bash
 ACTIVE=$(ps -ef | grep "codex exec" | grep -v grep | wc -l | tr -d ' ')
-if [ -f .refactor-loop/.auto-stopped ] || [ -f .refactor-loop/.pause ]; then
-  : # stop 状态允许 0
+if [ -f .refactor-loop/.pause ]; then
+  : # 唯一 stop 状态:maintainer 手动 touch .pause
 elif (( ACTIVE < 5 )); then
   echo "FLOOR_VIOLATION: active=$ACTIVE < 5 — must dispatch before end-turn"
-  # 按上面优先级派 (5 - ACTIVE) 个
+  # 按上面优先级派 (5 - ACTIVE) 个,priority 1-10 + audit(11-13)穷举
 fi
 ```
 
-注:per Auric 2026-05-26 "ps grep timeout" undercount(spawn-codex 启动 codex exec subprocess,wrapper 不同 timeout 包装层级)→ 改用 `grep "codex exec"` 直接抓 codex exec 进程,更准。
+`.refactor-loop/.auto-stopped` 已废弃 — controller **不允许**自己写 stop。
+
+注:per Auric 2026-05-26 "ps grep timeout" undercount,改用 `grep "codex exec"` 直接抓 codex exec 进程。
 
 **反面**:
-- ❌ wakeup 结束时 `ACTIVE < 5` 且无 stop / throttle 标记 + 无 ScheduleWakeup → 死循环不前进
-- ❌ "等 CI 跑完"作为 0 codex 理由 → CI 跑时 controller 应该派下一波 Phase 9 r1(triaged 池有);CI Monitor 是 wake 信号不是 codex
-- ❌ 跨 turn 累积"等 r4 完成"+"等 Monitor"双重等待 0 codex → 必须主动派
-- ❌ floor 2 借口"等其他在跑"→ 主动派出新 audit / Phase 10 / Phase 11 填到 5
+- ❌ wakeup 结束时 `ACTIVE < 5` 且无 `.pause` → P0 bug
+- ❌ "等 CI 跑完"作为 0 codex 理由 → 派下一波 audit/Phase 10/11
+- ❌ "Audit 干涸"借口停 loop → 仍派下一 audit
+- ❌ 自己写 `.refactor-loop/.auto-stopped` → 仅 maintainer `.pause` 是合法 stop 信号
+- ❌ floor < 5 派 audit 之前要求"1-11 全空"→ 已废止此 gate
 
 事故记录:
-- 2026-05-25 一度把 hard floor 从 5 降到 2(per "强制检测最少2个 codex"),实际跑下来 floor 频繁 hit 1-2 critical violation,响应慢
-- 2026-05-26 Auric 显式指令"把最小并发数改回5",回滚到 5。throttle 3 是降速档,不是日常 floor
+- 2026-05-25 floor 从 5 降到 2 → 响应慢,2026-05-26 回滚 5
+- 2026-05-29 audit 误用"backfill only"导致连续派 audit 50+ 次漏 IMPLEMENT_DONE → priority 列表 1-10 优先 issue/PR,audit 升级为 priority 11(floor < 5 即派,无 1-10 全空 gate)
+- 2026-05-30 Auric 删所有并发豁免(throttle / stop / `.auto-stopped`)→ floor 严格 = 5,只 `.pause` 允许 0
 
 ---
 
