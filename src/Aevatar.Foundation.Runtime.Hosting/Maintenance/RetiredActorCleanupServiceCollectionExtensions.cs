@@ -16,6 +16,9 @@ public static class RetiredActorCleanupServiceCollectionExtensions
     /// Startup only triggers cleanup; per-target revalidation makes duplicate
     /// runs converge without requiring startup ordering against module services.
     /// </summary>
+    // Refactor (issue1287-first):
+    //   Old pattern: registration implied a startup cleanup owner coordinated by marker state.
+    //   New principle: registration only wires the BackgroundService trigger; target safety is revalidated.
     public static IServiceCollection AddRetiredActorCleanup(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);

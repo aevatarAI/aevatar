@@ -96,6 +96,9 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
         return RunCleanupPassAfterStartupAsync(stoppingToken);
     }
 
+    // Refactor (issue1287-first):
+    //   Old pattern: cleanup startup waited on marker lease state to imply ordering.
+    //   New principle: yield one host turn without inventing cleanup ownership state.
     private static async Task YieldStartupAsync()
     {
         await Task.Yield();
@@ -123,6 +126,9 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
         }
     }
 
+    // Refactor (issue1287-first):
+    //   Old pattern: a completed spec marker skipped later startup cleanup passes.
+    //   New principle: each startup pass iterates specs and lets target revalidation converge no-ops.
     private async Task RunCleanupPassAsync(CancellationToken ct)
     {
         try

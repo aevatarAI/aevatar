@@ -5,6 +5,9 @@ namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 /// <summary>
 /// Tunables for the spec-driven retired-actor cleanup hosted service.
 /// </summary>
+// Refactor (issue1287-first):
+//   Old pattern: options exposed marker lease timeout and polling controls.
+//   New principle: options only gate idempotent cleanup actions; no lease timing remains.
 public sealed class RetiredActorCleanupOptions
 {
     public const string SectionName = "Aevatar:RetiredActorCleanup";
@@ -15,9 +18,6 @@ public sealed class RetiredActorCleanupOptions
 
     public bool CleanupReadModels { get; init; } = true;
 
-    // Refactor (issue1287-first):
-    //   Old pattern: options included marker lease timeouts and polling cadence.
-    //   New principle: options only gate idempotent cleanup actions; no lease timing remains.
     public static RetiredActorCleanupOptions FromConfiguration(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);

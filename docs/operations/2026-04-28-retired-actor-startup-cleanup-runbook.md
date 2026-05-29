@@ -120,8 +120,8 @@ the targets are fully cleaned (and remains a no-op afterwards). No changes to
 - Duplicate cleanup passes converge through per-target revalidation and
   idempotent actor / stream / read-model cleanup.
 - New projection startup recreates the needed actors using the current runtime
-  types and rebuild paths. The cleanup lease coordinates cleanup ownership only;
-  it is not a startup-wide readiness barrier.
+  types and rebuild paths. Startup cleanup is best-effort background work; it is
+  not a startup-wide readiness barrier.
 
 ## Validation
 
