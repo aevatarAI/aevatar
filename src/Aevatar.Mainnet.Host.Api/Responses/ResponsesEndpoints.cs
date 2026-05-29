@@ -23,14 +23,16 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 internal static partial class ResponsesApiEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    internal const string NyxIdIdentityTokenHeader = "X-NyxID-Identity-Token";
+    internal const string NyxIdDelegationTokenHeader = "X-NyxID-Delegation-Token";
 
     public static IEndpointRouteBuilder MapResponsesApiEndpoints(this IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
 
         var group = app.MapGroup("/v1").WithTags("Responses");
-        // Auth is endpoint-internal: each handler manually extracts the inbound
-        // bearer and resolves the caller via NyxID `/me`. Opt out of the host's
+        // Auth is endpoint-internal: each handler extracts inbound caller
+        // evidence for the shared caller-scope resolver. Opt out of the host's
         // FallbackPolicy.RequireAuthenticatedUser() so opaque NyxID API keys
         // (non-JWT) reach the handler instead of being 401'd by JwtBearer.
         group.MapPost("/responses", HandleCreateResponseAsync).AllowAnonymous();
@@ -68,7 +70,8 @@ internal static partial class ResponsesApiEndpoints
                 commandRequest.ErrorMessage ?? "Invalid request.");
         }
 
-        var result = await commandFacade.CreateAsync(commandRequest.Request!, bearerToken, ct);
+        var callerScopeContext = BuildCallerScopeResolutionContext(http, bearerToken);
+        var result = await commandFacade.CreateAsync(commandRequest.Request!, callerScopeContext, ct);
         if (result.Error is not null)
             return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 
@@ -132,7 +135,8 @@ internal static partial class ResponsesApiEndpoints
                 "authentication_required",
                 "Authorization bearer token is required.");
 
-        var result = await commandFacade.CancelAsync(responseId, bearerToken, ct);
+        var callerScopeContext = BuildCallerScopeResolutionContext(http, bearerToken);
+        var result = await commandFacade.CancelAsync(responseId, callerScopeContext, ct);
         if (result.Error is not null)
             return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 
@@ -704,6 +708,27 @@ internal static partial class ResponsesApiEndpoints
         return authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
             ? authHeader["Bearer ".Length..].Trim()
             : null;
+    }
+
+    internal static ResponsesCallerScopeResolutionContext BuildCallerScopeResolutionContext(
+        HttpContext http,
+        string bearerToken)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+
+        return new ResponsesCallerScopeResolutionContext(
+            bearerToken,
+            ExtractHeaderValue(http, NyxIdIdentityTokenHeader),
+            ExtractHeaderValue(http, NyxIdDelegationTokenHeader));
+    }
+
+    private static string? ExtractHeaderValue(HttpContext http, string headerName)
+    {
+        if (!http.Request.Headers.TryGetValue(headerName, out var values))
+            return null;
+
+        var value = values.FirstOrDefault();
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     /// <summary>OpenAI-spec `GET /v1/models`. Fans out across every NyxID-routed service the caller

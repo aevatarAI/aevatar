@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -294,6 +295,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("corr-1");
         envelope.Route.IsDirect().Should().BeTrue();
@@ -304,8 +306,44 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Headers.Should().NotContainKey("workflow.command_id");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldScrubBearerFromDurableLlmControl_AndKeepRouting()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            LlmControl: new LLMControlContext(
+                NyxIdAccessToken: " access-token ",
+                NyxIdOrgToken: " org-token ",
+                SenderNyxIdAccessToken: " sender-token ",
+                ModelOverride: " model-a ",
+                NyxIdRoutePreference: " route-a ",
+                MaxToolRoundsOverride: 3,
+                UserMemoryPrompt: " memory "));
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+
+        request.LlmControl.NyxIdAccessToken.Should().BeEmpty();
+        request.LlmControl.NyxIdOrgToken.Should().BeEmpty();
+        request.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        request.LlmControl.ModelOverride.Should().Be(" model-a ");
+        request.LlmControl.NyxIdRoutePreference.Should().Be(" route-a ");
+        request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
+        request.LlmControl.UserMemoryPrompt.Should().Be(" memory ");
     }
 
     [Fact]

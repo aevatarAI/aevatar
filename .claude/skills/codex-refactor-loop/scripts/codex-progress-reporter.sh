@@ -1,9 +1,9 @@
 #!/bin/bash
 # codex-progress-reporter.sh
 # Per Auric 2026-05-19 "每 10 分钟更新一次各 codex 进展到 issue/PR".
-# 每 600s 扫 .refactor-loop/logs/*.log; 对未结束 (无 EXIT=) 的 log 提取 tail; edit-in-place
+# 每 600s 扫 .refactor-loop/markers/*.json; 对 running marker 的 log 提取 tail; edit-in-place
 # 一条 progress comment 到关联 issue/PR. 首次创建, 后续 update 同一 comment id.
-# 不会膨胀评论数. 完成时(检测到 EXIT=) 自动 post 终结 banner 并停止追该 log.
+# 不会膨胀评论数. 完成时(state=done)自动删除 progress comment 并清理 marker.
 #
 # State: .refactor-loop/codex-progress-state.json
 #   { "<log-basename>": { "target": "<num>", "kind": "issue|pr", "comment_id": <id>, "last_md5": "<sha>", "finished": false } }
@@ -13,19 +13,49 @@
 
 set -u  # 不用 -e/pipefail — daemon 必须存活,subshell 偶发 non-zero 不应导致整个 daemon 死
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="${CODEX_PROGRESS_REPO_ROOT:-$(cd "$(dirname "$0")/../../../.." && pwd)}"
 cd "$REPO_ROOT"
 
 INTERVAL="${INTERVAL:-600}"
 STATE_DIR=".refactor-loop"
 STATE_FILE="$STATE_DIR/codex-progress-state.json"
-LOG_DIR="$STATE_DIR/logs"
+MARKER_DIR="$STATE_DIR/markers"
 PROMPTS_DIR="$STATE_DIR/prompts"
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$STATE_DIR" "$MARKER_DIR"
 [ -f "$STATE_FILE" ] || echo "{}" > "$STATE_FILE"
 
 log_msg() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >&2; }
+
+md5_cmd() {
+  if command -v md5sum >/dev/null 2>&1; then
+    md5sum | awk '{print $1}'
+  else
+    md5 -q
+  fi
+}
+
+file_mtime_epoch() {
+  local file=$1
+  if stat -c %Y "$file" >/dev/null 2>&1; then
+    stat -c %Y "$file"
+  else
+    stat -f %m "$file"
+  fi
+}
+
+file_btime_epoch() {
+  local file=$1 value
+  if value=$(stat -c %W "$file" 2>/dev/null); then
+    if [ "$value" -gt 0 ] 2>/dev/null; then
+      echo "$value"
+      return
+    fi
+    file_mtime_epoch "$file"
+  else
+    stat -f %B "$file"
+  fi
+}
 
 # parse log basename → target number (issue or PR)
 # 优先从对应 prompt 文件 grep "#NNN"; 次选从 log 文件名 pattern 提取
@@ -60,19 +90,23 @@ parse_kind() {
 }
 
 is_finished() {
-  # 只看末 5 行 — wrapper 在结束时 append "EXIT=<code>\nDONE_AT=..." 作为最后两行
-  # 不能 grep 全 log,因为 codex 中途可能 echo / cat 含 "EXIT=" 的内容造成误判
-  tail -5 "$1" | grep -q "^EXIT="
+  [ "$(jq -r '.state // empty' "$1" 2>/dev/null)" = "done" ]
 }
 
-# zombie: 30 min 未写,但无 EXIT marker → 进程很可能死了,不该再当 in-flight 持续 post
 is_zombie() {
-  local log=$1
-  if is_finished "$log"; then return 1; fi
-  local mtime now
-  mtime=$(stat -f %m "$log" 2>/dev/null || stat -c %Y "$log")
+  [ "$(jq -r '.state // empty' "$1" 2>/dev/null)" = "zombie" ]
+}
+
+has_exit_marker() {
+  tail -5 "$1" 2>/dev/null | grep -q '^EXIT='
+}
+
+is_stale_without_exit() {
+  local log=$1 mtime now age
+  mtime=$(file_mtime_epoch "$log")
   now=$(date +%s)
-  [ $(( now - mtime )) -gt 1800 ]
+  age=$(( now - mtime ))
+  [ "$age" -gt 1800 ] && ! has_exit_marker "$log"
 }
 
 extract_tail() {
@@ -82,7 +116,7 @@ extract_tail() {
 
 elapsed_sec() {
   local log=$1 mtime now
-  mtime=$(stat -f %B "$log" 2>/dev/null || stat -c %Y "$log")
+  mtime=$(file_btime_epoch "$log")
   now=$(date +%s)
   echo $(( now - mtime ))
 }
@@ -121,13 +155,18 @@ state_set() {
 }
 
 post_or_update() {
-  local base=$1 log=$2
+  local base=$1 marker=$2 log=$3
   local target kind cid prev_md5 finished
   target=$(state_get "$base" "target")
   if [ -z "$target" ]; then
     target=$(parse_target "$base")
     if [ -z "$target" ]; then
-      log_msg "skip $base: no target"
+      if is_finished "$marker"; then
+        rm -f "$marker"
+        log_msg "done processed for $base (marker removed, no target)"
+      else
+        log_msg "skip $base: no target"
+      fi
       return
     fi
     kind=$(parse_kind "$target")
@@ -140,10 +179,10 @@ post_or_update() {
   fi
   [ -z "$cid" ] && cid="null"
 
-  if is_finished "$log"; then
+  if is_finished "$marker"; then
     finished="true"
-  elif is_zombie "$log"; then
-    log_msg "skip zombie log $base (no EXIT, mtime > 30 min)"
+  elif is_zombie "$marker"; then
+    log_msg "skip zombie marker $base"
     return
   else
     finished="false"
@@ -153,6 +192,8 @@ post_or_update() {
   local prev_finished
   prev_finished=$(state_get "$base" "finished")
   if [ "$finished" = "true" ] && [ "$prev_finished" = "true" ]; then
+    rm -f "$marker"
+    log_msg "done processed for $base (marker removed, already finished)"
     return
   fi
 
@@ -165,12 +206,21 @@ post_or_update() {
     fi
     # mark finished in state so we don't re-create next tick
     state_set "$base" "$target" "$kind" "0" "deleted" "true"
+    rm -f "$marker"
+    log_msg "done processed for $base (marker removed)"
+    return
+  fi
+
+  if [ "$finished" = "true" ]; then
+    state_set "$base" "$target" "$kind" "0" "done-no-progress-comment" "true"
+    rm -f "$marker"
+    log_msg "done processed for $base (marker removed, no progress comment)"
     return
   fi
 
   local body cur_md5
   body=$(build_body "$base" "$log" "$finished")
-  cur_md5=$(echo "$body" | md5)
+  cur_md5=$(echo "$body" | md5_cmd)
 
   # 内容没变化且没 finish 切换 → skip
   if [ "$cur_md5" = "$prev_md5" ] && [ "$finished" = "$prev_finished" ]; then
@@ -223,18 +273,51 @@ post_or_update() {
   rm -f "$body_file"
 }
 
-# 主 loop
-while true; do
+run_tick() {
   log_msg "tick"
-  for log in "$LOG_DIR"/*.log; do
-    [ -f "$log" ] || continue
-    base=$(basename "$log" .log)
+  # Refactor (iter158/cluster-1172-markers-event-design):
+  # Old: for log in "$LOG_DIR"/*.log; tail -5 to detect EXIT。
+  # New: for marker in .refactor-loop/markers/*.json;读 marker.state 字段判定 finished;
+  #      不再 tail log content(spawn-codex 写 marker 是 source of truth)。
+  for marker in "$MARKER_DIR"/*.json; do
+    [ -f "$marker" ] || continue
+    base=$(jq -r '.base // empty' "$marker" 2>/dev/null)
+    state=$(jq -r '.state // empty' "$marker" 2>/dev/null)
+    log=$(jq -r '.log_path // empty' "$marker" 2>/dev/null)
+    if [ -z "$base" ] || [ -z "$state" ] || [ -z "$log" ]; then
+      log_msg "skip invalid marker $marker"
+      continue
+    fi
+    if [ ! -f "$log" ] && [ "$state" != "done" ]; then
+      log_msg "skip $base: log not found: $log"
+      continue
+    fi
+    if [ "$state" = "running" ] && is_stale_without_exit "$log"; then
+      log_msg "skip zombie marker $base: stale log without EXIT"
+      continue
+    fi
     # 跳过 audit log(audit 完成后才能进 phase 2,不挂 issue);可以选 post 到 dashboard
     case "$base" in
-      audit-iter-*) continue ;;
-      remote-ci-*) continue ;;
+      audit-iter-*|remote-ci-*)
+        if [ "$state" = "done" ]; then
+          rm -f "$marker"
+          log_msg "done processed for $base (marker removed, no progress target)"
+        fi
+        continue
+        ;;
     esac
-    post_or_update "$base" "$log"
+    case "$state" in
+      running|done|zombie) post_or_update "$base" "$marker" "$log" ;;
+      *) log_msg "skip $base: unknown marker state=$state" ;;
+    esac
   done
+}
+
+# 主 loop
+while true; do
+  run_tick
+  if [ "${CODEX_PROGRESS_REPORTER_RUN_ONCE:-0}" = "1" ]; then
+    break
+  fi
   sleep "$INTERVAL"
 done

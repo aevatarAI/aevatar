@@ -2031,7 +2031,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var chatRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
-        chatRequest.LlmControl.NyxIdAccessToken.Should().Be("token-123");
+        chatRequest.LlmControl.NyxIdAccessToken.Should().BeEmpty();
         chatRequest.LlmControl.ModelOverride.Should().Be("model-main");
         chatRequest.LlmControl.NyxIdRoutePreference.Should().Be("route-fast");
         chatRequest.Metadata["trace-id"].Should().Be("trace-abc");

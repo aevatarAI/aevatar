@@ -20,7 +20,7 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 | Reflector 决议 | META_RESOLVED:<kind> | `## 🤖 meta-reflector decision: <kind>` post + label 转 |
 | Escalate human | label 加 🆘 | banner 说"✅ 需要 maintainer 决策:具体什么决策" |
 | Phase transition | controller route | label sync(`🔍`→`✅`→`🛠️`→`🚀`→`👀`→`🔧`→`⚙️`→`🎉`) |
-| Stuck 4h timeout | controller sweep | banner 说"等了 4h 自动派 reflector 重新评估" |
+| Stuck 3h timeout | controller sweep | banner 说"等了 3h 自动派 reflector / triage 重新评估"(per Auric 2026-05-29 从 4h 收紧到 3h) |
 | iter 完成 | last cluster merged | rollup PR banner + 派 next iter audit |
 | Bug 修复 | skill commit | commit 内容 push 到 auto-refact-dev,maintainer 可看 commit diff |
 
@@ -94,6 +94,7 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 | SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
 | META_JUDGE_DONE:consensus | implement codex |
 | META_JUDGE_DONE:converge:r+1 | r+1 三 solver |
+| META_JUDGE_DONE:split | close current issue + open 2 sub-issues(first implement, later design-pending) |
 | META_JUDGE_DONE:escalate:stalled | reflector(per Phase 9 路由表) |
 | META_RESOLVED:re-design | fresh round 三 solver with new framing |
 | IMPLEMENT_DONE:ok | controller commit/push/open PR + Phase 8 reviewer × 3 |
@@ -457,7 +458,9 @@ EOF
    - `phase9-issueN-rK-{minimal,delete,structural}.log` 全有 `EXIT=0` 且 `phase9-issueN-rK-judge.log` 不存在 → **派 r-K meta-judge**
    - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:consensus:...` → 派 implement,加 `auto-loop-resume` label
    - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:converge:round-K+1:...` → 派 r-K+1 三 solver
-   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:escalate:...` → label `🆘 human:卡死` + PushNotification
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:split:...` → close 当前 issue + open 2 sub-issue(first implement, later design-pending)
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:escalate:stalled:...` → 派 reflector(per Phase 9 路由表)
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:escalate:<其他>:...` → 按 Phase 9 路由表处理
 
 5. **Per-PR Phase 8 进展判定**:从 log marker 推断:
    - 三 reviewer 全 `REVIEW_DONE:` + 全 approve → auto-merge
@@ -1449,7 +1452,7 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 
 ## Phase 9 — Multi-solver design consensus (alternative to manual maintainer decisions)
 
-Runs when a `state.design_pending[i]` cluster has been open for one full Phase 7 sweep with no maintainer answer, OR when the operator manually sets `design_pending[i].auto_solve = true`. Goal: 3 independent solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3 unanimous → auto-dispatch implement** (skip maintainer decision); split or philosophy-touching → escalate to maintainer.
+Runs when a `state.design_pending[i]` cluster has been open for one full Phase 7 sweep with no maintainer answer, OR when the operator manually sets `design_pending[i].auto_solve = true`. Goal: 3 independent solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3 unanimous → auto-dispatch implement** (skip maintainer decision); split → close current issue + open first-slice implement issue and later-slice design-pending issue; philosophy-touching → escalation routing table.
 
 Per Auric's policy (2026-05-19): **3/3 unanimous required** — "早暴露问题比晚暴露问题好" — anything less goes through convergence (max 2 rounds) or escalation.
 
@@ -1479,7 +1482,7 @@ for role in minimal structural delete; do
 done
 ```
 
-All 3 solvers in parallel; each emits `SOLVER_DONE:<role>:<verdict>:<summary>`. When all 3 done, dispatch meta-judge:
+All 3 solvers in parallel; each emits `SOLVER_DONE:<role>:<verdict>:<summary>[:first-slice=<narrow plan>]`. When all 3 done, dispatch meta-judge:
 
 ```bash
 envsubst < .claude/skills/codex-refactor-loop/prompts/meta-judge.md \
@@ -1497,6 +1500,7 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 |---|---|---|
 | `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action") |
 | `converge:round-N:<question>` | — | 派 r-N+1 三 solver(把 convergence question prepend prompt) |
+| `split:<first-slice>:<later-slice>` | no-new-core first slice + later design slice | close 当前 issue + open 2 sub-issue；first 进 implement，later 进 design-pending |
 | `escalate:philosophy:<...>` | architecture-philosophy hardcoded trigger | **直接** label `🆘 human:卡死` + `auto-loop-stuck` + PushNotification |
 | `escalate:stalled:<...>` | 3+ round 无 maintainer input 且 solver verdict 无变化 | **必须先派 reflector codex**(走 meta-layer reflect 节);**禁止**直接 label 人 |
 | `escalate:<其他 category>` | conflict / budget-exhausted 等 | 派 reflector + 同时 PushNotification |
@@ -1580,9 +1584,11 @@ ScheduleWakeup(delaySeconds=$NEXT_WAKEUP_SECONDS, ...)
 - ❌ controller 处理完 events 但不缩 wakeup → 下次再来评论 → 又 25 min gap
 - ❌ controller 不更新 LAST_PROCESSED offset → 每 wakeup 重复处理同 events
 
-### Stuck label 4h 超时自动新一轮 meta-reflect(强制,per Auric 2026-05-20 "如果人长期不介入,比如四小时以上,则尝试进入新一轮元解决轮次,这样就不会积攒了")
+### Stuck issue 3h 超时自动重新处理(强制,per Auric 2026-05-29 "超过3小时没处理的issues就要重新处理";原 4h per Auric 2026-05-20,2026-05-29 收紧到 3h)
 
-每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后),对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` OR `🆘 human:卡死` label 的 issue:
+每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后):
+
+**A. Escalated issue(stuck label 类)**对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` OR `🆘 human:卡死` label 的 issue:
 
 ```bash
 last_human_at=$(gh issue view <N> --json comments --jq '[.comments[] | select(.body | contains("⟦AI:AUTO-LOOP⟧") | not) | .createdAt][-1] // .createdAt' | tr -d '"')
@@ -1592,19 +1598,40 @@ last_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$last_human_at" +%s 2>/dev/null
 delta_h=$(( (now_epoch - last_epoch) / 3600 ))
 
 # 防重复:有 in-flight reflector(meta-reflect-issue<N>*.log mtime < 30min)→ 跳过
-if (( delta_h >= 4 )) && [ -z "$(find .refactor-loop/logs/meta-reflect-issue<N>*.log -mmin -30 2>/dev/null)" ]; then
+if (( delta_h >= 3 )) && [ -z "$(find .refactor-loop/logs/meta-reflect-issue<N>*.log -mmin -30 2>/dev/null)" ]; then
   # 派 fresh reflector,suffix -rN+1 防 overwrite 历史 reflector log
   spawn-reflector <N>
 fi
 ```
 
-意图:防 escalated issue 在"等 maintainer"无限堆积。4h 后**自动**派 fresh reflector,让 AI 反思能否重新框架到共识路径(narrow scope / drop / re-cluster),不积攒。
+**B. Any open issue(non-escalated)未处理 3h+ 触发 re-triage**(per Auric 2026-05-29 "优先处理已经存在的issues而不是skills"):
+
+```bash
+# 全 open issue sweep,non-bot author,未在任何 phase label,non-merged
+gh issue list --state open --json number,author,updatedAt,labels --jq '
+  .[] | select(
+    (.author.login | endswith("[bot]") | not)
+    and ([.labels[].name] | (contains(["🎉 phase:merged"]) or contains(["auto-loop-triage"]) or contains(["🔍 phase:design-solving"]) or contains(["🛠️ phase:implementing"]) or contains(["🚀 phase:pr-open"]) or contains(["phase11-not-eligible"])) | not)
+  ) | "\(.number) \(.updatedAt)"
+' | while read num updated; do
+  # 3h+ 未 update → 加 auto-loop-triage label,daemon 自动接 triage codex
+  age_h=$(( ($(date -u +%s) - $(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$updated" +%s 2>/dev/null || date -u -d "$updated" +%s)) / 3600 ))
+  if (( age_h >= 3 )); then
+    gh issue edit "$num" --add-label "auto-loop-triage"
+  fi
+done
+```
+
+意图:**任何** open issue(escalated 或 untouched)>3h 没动 → controller 必须主动 action,不积攒。
+- escalated → 派 reflector
+- untouched → triage daemon 接(标 `auto-loop-triage`)
 
 **反面禁止**:
 - ❌ 见 stuck label 就跳过,不计算 delta
 - ❌ 用 `author=loning` 判真人评论时间(deprecated,见 sentinel 节)
-- ❌ 4h 内重复派 reflector 浪费 codex
+- ❌ 3h 内重复派 reflector 浪费 codex(in-flight log mtime < 30min 即 skip)
 - ❌ reflector 完成但忘清 stuck label → 下次 sweep 仍误判为 stuck
+- ❌ 优先 skill self-improve > 处理 existing issue(per Auric 2026-05-29 "优先处理已经存在的issues而不是skills")— 即使 skill 看上去能改进,**先把 open issue 池清干净**才能花资源改 skill
 
 ### 任何 concrete-plan 都必须走 multi-solver consensus(per Auric 2026-05-19 "核心流程是都需要达成共识")
 
@@ -1707,9 +1734,10 @@ Every Phase 9 action posts a bilingual comment to the issue. **Humans must be ab
 | Round N solvers dispatched | Bilingual: "Phase 9 round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
 | Maintainer reply detected mid-Phase-9 | Bilingual: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
 | **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Phase 9 Solver — \`<role>\` (round N)`. Body = verbatim solver output (already bilingual). One comment per solver, three comments per round. |
-| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output (bilingual). |
+| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|split\|escalate>\``. Body = verbatim judge output (bilingual). |
 | Meta-judge → consensus | Same as above + then a follow-up controller comment: "auto-loop-resume label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
+| Meta-judge → split | Same as above + close current issue + open 2 sub-issues; first enters implement, later enters design-pending |
 | Meta-judge → escalate | Same as above + label `auto-loop-stuck` + `## 🤖 Controller next-step` comment laying out the exact human action needed + PushNotification |
 | Hardcoded escalation trigger fired | Post meta-judge output + summary "architecture-philosophy trigger — escalating to human" + label `auto-loop-stuck`. Trigger fires on architecture-philosophy categories ONLY (see below); convergence-only splits do NOT escalate, they keep iterating. |
 
@@ -1907,20 +1935,25 @@ Concretely, this means:
 | `>= 5` | 不抢资源,保持现状 |
 | `< 5` | 立即派 `5 - 当前数` 个新 codex 填满 floor;优先级如下 |
 
-**填 floor 优先级**(从高到低):
+**填 floor 优先级**(从高到低,per Auric 2026-05-29 "优先处理已经存在的issues而不是skills"):
 
-1. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)— 最有价值,产出新 cluster 链路
-2. **next-next iter audit**(N+2,speculative parallel)— 即使 iter N+1 audit 仍在跑也可派
-3. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue,是否有 follow-up cluster 被漏(典型:reflector r4 提到的 "cross-stream unification" 应该被独立 cluster 捕获)
-4. **.claude/skills/codex-refactor-loop/scripts self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
-5. **docs sync codex** — 用最近 merged PRs 自动更新 `docs/audit-scorecard/`(如缺)
-6. **CI guard completeness codex** — 检查 `tools/ci/*_guard.sh` 是否覆盖所有 CLAUDE 条款
+1. **未处理 / 长期未动 open issue**(>3h 未 update):batch `auto-loop-triage` label,daemon spawn triage codex — **最高优先级**
+2. **stuck label 3h+** issue:派 fresh reflector(per "## Stuck issue 3h 超时" 节)
+3. **现有 phase9 / phase8 in-flight**:派下一步 codex(solver / judge / reviewer / fix)
+4. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)
+5. **next-next iter audit**(N+2,speculative parallel)
+6. **Phase 10 advisory review**(eligible open PR 池)
+7. **Phase 11 triage**(eligible open issue 池,5-10 oldest 一批 label)
+8. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue 漏 follow-up
+9. **`.claude/skills/codex-refactor-loop/scripts` self-audit codex** — 仅当 open issue 池**已清** + open auto-loop PR **全 in-flight** 时才允许;否则跳过(per Auric 2026-05-29 "skill 不优先")
+10. **docs sync codex** / **CI guard completeness codex** — 同上,issue 池清后才允许
 
 **反面禁止**:
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 5 才允许 ScheduleWakeup
 - ❌ "iter N 还没完"作为不派 N+1 / N+2 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
 - ❌ 所有 5 slot 都派 audit → 单一职责堆积,应混合 audit + retrospective + 自审
+- ❌ **open issue 池有 untouched / stale issue 时派 skill self-audit**(per Auric 2026-05-29 "优先处理已经存在的issues而不是skills")→ issue 池清后才允许 skill 自审
 
 **判定脚本**(controller wakeup step 1.5):
 

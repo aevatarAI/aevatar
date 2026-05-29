@@ -1,3 +1,5 @@
+using Google.Protobuf.WellKnownTypes;
+
 namespace Aevatar.GAgentService.Abstractions.Queries;
 
 public sealed record ResponsesAgentToolStateSnapshot(
@@ -47,7 +49,7 @@ public sealed record ResponsesWebCacheEntrySnapshot(
     string ToolName,
     string Url,
     string Query,
-    string ResultJson,
+    Value Result,
     DateTimeOffset CachedAt,
     DateTimeOffset? LastHitAt,
     long HitCount);

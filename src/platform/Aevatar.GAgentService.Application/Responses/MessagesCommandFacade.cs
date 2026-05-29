@@ -31,10 +31,11 @@ public sealed class MessagesCommandFacade(
 
     public async Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(callerScopeContext);
 
         var normalizedResult = MessagesRequestNormalizer.Normalize(request);
         if (!normalizedResult.Succeeded)
@@ -46,7 +47,7 @@ public sealed class MessagesCommandFacade(
         }
 
         var normalized = normalizedResult.Request!;
-        var callerScopeResult = await ResolveCallerScopeAsync(bearerToken, ct);
+        var callerScopeResult = await ResolveCallerScopeAsync(callerScopeContext, ct);
         if (callerScopeResult.Error is not null)
             return MessagesCreateCommandResult.FromError(
                 callerScopeResult.Error.StatusCode,
@@ -72,7 +73,7 @@ public sealed class MessagesCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
-            bearerToken,
+            callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             ct);
 
@@ -123,11 +124,13 @@ public sealed class MessagesCommandFacade(
         }
     }
 
-    private async Task<CallerScopeResult> ResolveCallerScopeAsync(string bearerToken, CancellationToken ct)
+    private async Task<CallerScopeResult> ResolveCallerScopeAsync(
+        ResponsesCallerScopeResolutionContext callerScopeContext,
+        CancellationToken ct)
     {
         try
         {
-            var callerScope = await callerScopeResolver.ResolveAsync(bearerToken, ct);
+            var callerScope = await callerScopeResolver.ResolveAsync(callerScopeContext, ct);
             return new CallerScopeResult(callerScope, null);
         }
         catch (ResponsesCallerScopeUnavailableException ex)

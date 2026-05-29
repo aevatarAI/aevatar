@@ -33,7 +33,15 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddHttpContextAccessor();
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
-        services.TryAddSingleton<IUserLlmCatalogPort, NyxIdLlmCatalogHttpClient>();
+        services.Configure<NyxIdLlmCatalogCacheOptions>(
+            configuration.GetSection(NyxIdLlmCatalogCacheOptions.SectionName));
+        services.TryAddSingleton<NyxIdLlmCatalogHttpClient>();
+        services.TryAddSingleton<IUserLlmCatalogPort>(sp => new CachedNyxIdLlmCatalogPort(
+            sp.GetRequiredService<NyxIdLlmCatalogHttpClient>(),
+            configuration,
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<NyxIdLlmCatalogCacheOptions>>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CachedNyxIdLlmCatalogPort>>()));
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);

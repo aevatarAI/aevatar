@@ -35,7 +35,10 @@ public sealed class GAgentDraftRunSessionEventProjector
         if (committedEntries.Count > 0)
             return committedEntries;
 
-        var mapped = ScopeGAgentAguiEventMapper.TryMap(envelope);
+        // Refactor (iter164/cluster-003-draft-run):
+        //   Old pattern: raw TextMessage*/Tool* envelopes were projected as draft-run AGUI session events.
+        //   New principle: draft-run session observation only accepts committed completions above or explicit AGUI observation frames here.
+        var mapped = ScopeGAgentAguiEventMapper.TryMapExplicitSessionObservation(envelope);
         if (mapped == null)
             return EmptyEntries;
 

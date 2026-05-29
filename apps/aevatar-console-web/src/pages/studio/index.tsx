@@ -269,13 +269,17 @@ function resolveStudioMemberBindingRunOutcome(
   return { kind: 'pending', run };
 }
 
-function buildStudioMemberBindingPendingNotice(
+export function buildStudioMemberBindingPendingNotice(
   displayName: string,
   run: StudioMemberBindingRunStatusResponse | null,
 ): StudioNotice {
   const status = run?.status ? ` Current status: ${run.status}.` : '';
+  const freshness =
+    typeof run?.stateVersion === 'number'
+      ? ` Read model observed v${run.stateVersion}.`
+      : ' Read model has not materialized this run yet.';
   return {
-    message: `${displayName} binding request was accepted and is still running.${status} Studio will keep refreshing the status before treating it as bound.`,
+    message: `${displayName} binding request was accepted and is still running.${status}${freshness} Studio will keep refreshing the status before treating it as bound.`,
     type: 'info',
   };
 }

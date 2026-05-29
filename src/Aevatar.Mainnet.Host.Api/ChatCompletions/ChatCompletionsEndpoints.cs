@@ -70,6 +70,7 @@ internal static class ChatCompletionsApiEndpoints
         var bearerToken = ExtractBearerToken(http);
         if (string.IsNullOrWhiteSpace(bearerToken))
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_required", "Authorization bearer token is required.");
+        var callerScopeContext = ResponsesApiEndpoints.BuildCallerScopeResolutionContext(http, bearerToken);
 
         var normalizedResult = ChatCompletionsRequestNormalizer.Normalize(request);
         if (!normalizedResult.Succeeded)
@@ -84,7 +85,7 @@ internal static class ChatCompletionsApiEndpoints
         ResponsesCallerScope callerScope;
         try
         {
-            callerScope = await callerScopeResolver.ResolveAsync(bearerToken, ct);
+            callerScope = await callerScopeResolver.ResolveAsync(callerScopeContext, ct);
         }
         catch (ResponsesCallerScopeUnavailableException ex)
         {

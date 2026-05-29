@@ -63,6 +63,8 @@ public sealed class MainnetChatCompletionsEndpointsTests
             """),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "openai-bearer");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "chat-identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "chat-delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -94,6 +96,14 @@ public sealed class MainnetChatCompletionsEndpointsTests
         provider.LastRequest.MaxTokens.Should().Be(256);
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("openai-bearer");
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<ChatCompletionsStubCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "openai-bearer",
+            "chat-identity-token",
+            "chat-delegation-token"));
     }
 
     [Fact]
@@ -495,10 +505,15 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
     private sealed class ChatCompletionsStubCallerScopeResolver : IResponsesCallerScopeResolver
     {
+        public ResponsesCallerScopeResolutionContext? LastContext { get; private set; }
+
         public Task<ResponsesCallerScope> ResolveAsync(
-            string nyxIdAccessToken,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey));
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default)
+        {
+            LastContext = context;
+            return Task.FromResult(new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey));
+        }
     }
 
     private sealed class ChatCompletionsNoopRouteResolver : IResponsesRouteResolver

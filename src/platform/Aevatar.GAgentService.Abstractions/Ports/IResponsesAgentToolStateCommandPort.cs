@@ -1,17 +1,11 @@
 using Aevatar.GAgentService.Abstractions.Queries;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
 public interface IResponsesAgentToolStateCommandPort
 {
     Task<ResponsesTodoWriteResult> ApplyTodoWriteAsync(
-        string scopeId,
-        string ownerSubject,
-        string sourceResponseId,
-        string argumentsJson,
-        CancellationToken ct = default);
-
-    Task<ResponsesTaskDispatchResult> RecordTaskAsync(
         string scopeId,
         string ownerSubject,
         string sourceResponseId,
@@ -31,19 +25,12 @@ public sealed record ResponsesTodoWriteResult(
     string SourceResponseId,
     IReadOnlyList<ResponsesTodoItemSnapshot> Todos);
 
-public sealed record ResponsesTaskDispatchResult(
-    string ActorId,
-    string TaskId,
-    string ChildActorId,
-    string Status,
-    string ResultJson);
-
 public sealed record ResponsesWebTraceResult(
     string ActorId,
     string TraceId,
     string CacheKey,
     bool CacheHit,
-    string ResultJson);
+    Value Result);
 
 public sealed record ResponsesWebTraceInput(
     string TraceId,
@@ -52,4 +39,4 @@ public sealed record ResponsesWebTraceInput(
     string Url,
     string Query,
     bool CacheHit,
-    string ResultJson);
+    Value Result);

@@ -503,6 +503,7 @@ export interface StudioMemberBindingRunStatusResponse {
   readonly bindingRunId: string;
   readonly scopeId: string;
   readonly memberId: string;
+  readonly stateVersion?: number | null;
   readonly platformBindingCommandId?: string | null;
   readonly failure?: StudioMemberBindingFailure | null;
   readonly updatedAt?: string | null;
