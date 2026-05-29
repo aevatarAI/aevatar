@@ -15,7 +15,7 @@ namespace Aevatar.GAgents.Household.Tests;
 
 /// <summary>
 /// Tests for <see cref="HouseholdEntity.HandleDeviceInbound"/> — validates that
-/// inbound device events are correctly dispatched, parsed, and applied to state.
+/// typed inbound device events are correctly dispatched and applied to state.
 /// </summary>
 public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
 {
@@ -50,14 +50,19 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_TemperatureChange_UpdatesEnvironment()
+    public async Task HandleDeviceInbound_TypedTemperature_UpdatesEnvironment()
     {
         var evt = new DeviceInbound
         {
             EventId = "evt-1",
             Source = "temperature-sensor",
             EventType = "temperature_change",
-            PayloadJson = """{"temperature": 28.5, "humidity": 65.0, "light_level": 70.0}""",
+            Sensor = new SensorDeviceInboundPayload
+            {
+                Temperature = 28.5,
+                Humidity = 65.0,
+                LightLevel = 70.0,
+            },
         };
 
         await _entity.HandleDeviceInbound(evt);
@@ -69,14 +74,17 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_PersonDetected_UpdatesSceneDescription()
+    public async Task HandleDeviceInbound_TypedCamera_UpdatesSceneDescription()
     {
         var evt = new DeviceInbound
         {
             EventId = "evt-2",
             Source = "camera-analyzer",
             EventType = "person_detected",
-            PayloadJson = """{"description": "Two people sitting in the living room"}""",
+            Camera = new CameraDeviceInboundPayload
+            {
+                SceneDescription = "Two people sitting in the living room",
+            },
         };
 
         await _entity.HandleDeviceInbound(evt);
@@ -86,14 +94,14 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_MotionDetected_UpdatesMotionFlag()
+    public async Task HandleDeviceInbound_TypedMotion_UpdatesMotionFlag()
     {
         var evt = new DeviceInbound
         {
             EventId = "evt-3",
             Source = "motion-sensor",
             EventType = "motion_detected",
-            PayloadJson = "{}",
+            Motion = new MotionDeviceInboundPayload { Detected = true },
         };
 
         await _entity.HandleDeviceInbound(evt);
@@ -103,7 +111,7 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_UnknownEventType_NoStateChange()
+    public async Task HandleDeviceInbound_NoTypedPayload_NoStateChange()
     {
         // Capture baseline state after activation
         var prevTemp = _entity.State.Environment?.Temperature ?? 0;
@@ -115,7 +123,6 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
             EventId = "evt-4",
             Source = "unknown-device",
             EventType = "unknown_type",
-            PayloadJson = """{"foo": "bar"}""",
         };
 
         // Should not throw and should not change state
@@ -128,34 +135,14 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleDeviceInbound_MalformedPayloadJson_NoStateChange()
-    {
-        var prevTemp = _entity.State.Environment?.Temperature ?? 0;
-
-        var evt = new DeviceInbound
-        {
-            EventId = "evt-5",
-            Source = "temperature-sensor",
-            EventType = "temperature_change",
-            PayloadJson = "not valid json",
-        };
-
-        // Should not throw — the handler catches JsonException
-        var act = () => _entity.HandleDeviceInbound(evt);
-        await act.Should().NotThrowAsync();
-
-        _entity.State.Environment!.Temperature.Should().Be(prevTemp);
-    }
-
-    [Fact]
-    public async Task HandleDeviceInbound_SpeechDetected_DoesNotThrow()
+    public async Task HandleDeviceInbound_TypedSpeech_DoesNotThrow()
     {
         var evt = new DeviceInbound
         {
             EventId = "evt-6",
             Source = "microphone",
             EventType = "speech_detected",
-            PayloadJson = """{"text": "Turn on the lights"}""",
+            Speech = new SpeechDeviceInboundPayload { Text = "Turn on the lights" },
         };
 
         // speech_detected triggers HandleChat -> RunReasoningAsync -> ChatStreamAsync.
