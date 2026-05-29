@@ -323,6 +323,42 @@ public sealed class ChatRunActorTests
     }
 
     [Fact]
+    public async Task AdapterSubmitToolCall_ShouldMapBoundaryToolExecutionResultJsonToInternalResultJson()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var adapter = new ChatRunActorAdapter(new RecordingActorRuntime(), dispatchPort);
+        const string boundaryPayload = """{"opaque":"tool-output"}""";
+
+        await adapter.SubmitToolCallAsync(
+            "chat-run:resp_adapter",
+            new ChatRunToolCompletionRequest(
+                "resp_adapter",
+                "gpt-test",
+                [ChatMessage.User("hello")],
+                new ToolCall
+                {
+                    Id = "call_adapter",
+                    Name = "aevatar_invoke_gagent",
+                    ArgumentsJson = """{"actor_id":"actor-1","wait":"complete"}""",
+                },
+                """{"actor_id":"actor-1","wait":"complete"}""",
+                boundaryPayload,
+                1,
+                RunId: "run_adapter",
+                StreamTopic: "aevatar://actors/actor-1/runs/run_adapter",
+                ActorId: "actor-1",
+                WaitMode: ChatRunSubRunWaitMode.Complete));
+
+        var dispatched = dispatchPort.Calls.Should().ContainSingle().Subject;
+        dispatched.actorId.Should().Be("chat-run:resp_adapter");
+        var command = dispatched.envelope.Payload.Unpack<SubmitChatRunToolCallRequested>();
+
+        command.ToolCallId.Should().Be("call_adapter");
+        command.RunId.Should().Be("run_adapter");
+        command.InternalResultJson.Should().Be(boundaryPayload);
+    }
+
+    [Fact]
     public async Task ForwardedCommittedCompletion_ShouldPublishObservedToolResultReady()
     {
         var eventStore = new InMemoryEventStore();
@@ -593,6 +629,70 @@ public sealed class ChatRunActorTests
         {
             Entries.Add((logLevel, exception, formatter(state, exception)));
         }
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            Task.FromResult<IActor>(new RecordingActor(id ?? $"created:{typeof(TAgent).Name}"));
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            Task.FromResult<IActor>(new RecordingActor(id ?? $"created:{agentType.Name}"));
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(new RecordingActor(id));
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(true);
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingDispatchPort : IActorDispatchPort
+    {
+        public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Calls.Add((actorId, envelope.Clone()));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class RecordingActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+
+        public IAgent Agent { get; } = new RecordingAgent(id);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingAgent(string id) : IAgent
+    {
+        public string Id { get; } = id;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class NoopAsyncDisposable : IAsyncDisposable
