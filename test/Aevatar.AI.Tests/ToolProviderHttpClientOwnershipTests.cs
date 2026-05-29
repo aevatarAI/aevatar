@@ -57,7 +57,7 @@ public sealed class ToolProviderHttpClientOwnershipTests
     }
 
     [Fact]
-    public async Task WebApiClient_SearchAsync_ShouldReturnErrorValue_WhenNoBackendConfigured()
+    public async Task WebApiClient_SearchAsync_ShouldReturnTypedError_WhenNoBackendConfigured()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -76,7 +76,7 @@ public sealed class ToolProviderHttpClientOwnershipTests
     }
 
     [Fact]
-    public async Task WebApiClient_SearchAsync_ShouldMapEmptyBodyToEmptyStruct()
+    public async Task WebApiClient_SearchAsync_ShouldMapEmptyBodyToEmptyTypedResult()
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {

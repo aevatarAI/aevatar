@@ -124,6 +124,27 @@ public static class WebToolResultBoundaryJson
         return JsonSerializer.Serialize(fields);
     }
 
+    public static WebFetchResult ParseFetchPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return EmptyFetchResult();
+
+        using var document = TryParseDocument(payload);
+        if (document == null)
+            return EmptyFetchResult();
+
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            return EmptyFetchResult();
+
+        return new WebFetchResult(
+            ReadPropertyInt32(root, "status_code"),
+            ReadPropertyString(root, "content_type"),
+            ReadPropertyString(root, "content"),
+            ReadOptionalPropertyString(root, "redirect_url"),
+            ReadPropertyString(root, "url"));
+    }
+
     public static string ToBoundaryJson(WebFetchToolResult result) =>
         JsonSerializer.Serialize(new
         {
@@ -167,8 +188,27 @@ public static class WebToolResultBoundaryJson
             ? ReadString(value)
             : string.Empty;
 
+    private static string? ReadOptionalPropertyString(JsonElement item, string propertyName) =>
+        item.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
+            ? ReadString(value)
+            : null;
+
+    private static int ReadPropertyInt32(JsonElement item, string propertyName)
+    {
+        if (!item.TryGetProperty(propertyName, out var value))
+            return 0;
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var intValue))
+            return intValue;
+
+        return 0;
+    }
+
     private static string ReadString(JsonElement value) =>
         value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? string.Empty
             : value.ToString();
+
+    private static WebFetchResult EmptyFetchResult() =>
+        new(0, string.Empty, string.Empty, null, string.Empty);
 }
