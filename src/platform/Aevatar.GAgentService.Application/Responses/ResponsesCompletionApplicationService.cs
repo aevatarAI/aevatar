@@ -321,7 +321,7 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         }
     }
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    // Refactor (iter290/cluster001): Old pattern: completion orchestration treated every tool as ResultJson-only. New principle: chat-run-aware tools may return typed control fields alongside boundary JSON.
     private static async Task<ChatRunToolCompletionRequest> ExecuteChatRunToolAsync(
         IAgentTool tool,
         ChatRunToolCompletionRequest request,

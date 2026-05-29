@@ -121,7 +121,7 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
             ct);
     }
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    // Refactor (iter290/cluster001): Old pattern: actor observation target was inferred from ResultJson. New principle: actor observation uses typed run, target, and wait fields before dispatch.
     private static ChatRunToolCompletionRequest ResolveObservationTarget(ChatRunToolCompletionRequest request)
     {
         if (request.WaitMode == ChatRunSubRunWaitMode.Complete && !string.IsNullOrWhiteSpace(request.RunId))

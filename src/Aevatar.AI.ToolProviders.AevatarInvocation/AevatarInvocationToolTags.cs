@@ -13,5 +13,5 @@ public interface IAevatarInvocationTool : IAgentTool
     string ToolSetTag => AevatarInvocationToolTags.ToolSet;
 }
 
-// Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+// Refactor (iter290/cluster001): Old pattern: invocation tools exposed only boundary JSON to chat-run orchestration. New principle: chat-run invocation tools implement the typed completion-control contract.
 public interface IAevatarInvocationChatRunTool : IAevatarInvocationTool, IChatRunToolCompletionControlExecutor;

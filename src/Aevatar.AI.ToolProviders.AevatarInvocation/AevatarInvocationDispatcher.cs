@@ -86,7 +86,7 @@ public sealed class AevatarInvocationDispatcher
     public async Task<string> InvokeGAgentAsync(string argumentsJson, CancellationToken ct = default) =>
         (await InvokeGAgentForChatRunAsync(null, argumentsJson, ct)).ToolExecutionResultJson;
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    // Refactor (iter290/cluster001): Old pattern: GAgent dispatch control was encoded only in ResultJson. New principle: GAgent dispatch returns typed run, target, wait, and stream fields for chat-run observation.
     public async Task<ChatRunToolCompletionRequest> InvokeGAgentForChatRunAsync(
         ChatRunToolCompletionRequest? chatRunRequest,
         string argumentsJson,
@@ -153,7 +153,7 @@ public sealed class AevatarInvocationDispatcher
     public async Task<string> InvokeTeamAsync(string argumentsJson, CancellationToken ct = default) =>
         (await InvokeTeamForChatRunAsync(null, argumentsJson, ct)).ToolExecutionResultJson;
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    // Refactor (iter290/cluster001): Old pattern: team dispatch control was encoded only in ResultJson. New principle: team dispatch returns typed run, service, endpoint, wait, and completion fields for chat-run observation.
     public async Task<ChatRunToolCompletionRequest> InvokeTeamForChatRunAsync(
         ChatRunToolCompletionRequest? chatRunRequest,
         string argumentsJson,
@@ -203,7 +203,7 @@ public sealed class AevatarInvocationDispatcher
     public async Task<string> StartWorkflowAsync(string argumentsJson, CancellationToken ct = default) =>
         (await StartWorkflowForChatRunAsync(null, argumentsJson, ct)).ToolExecutionResultJson;
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    // Refactor (iter290/cluster001): Old pattern: workflow dispatch control was encoded only in ResultJson. New principle: workflow dispatch returns typed actor, run, wait, and completion fields for chat-run observation.
     public async Task<ChatRunToolCompletionRequest> StartWorkflowForChatRunAsync(
         ChatRunToolCompletionRequest? chatRunRequest,
         string argumentsJson,
@@ -478,7 +478,7 @@ public sealed class AevatarInvocationDispatcher
         };
     }
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    // Refactor (iter290/cluster001): Old pattern: dispatcher-to-chat-run conversion left control facts inside boundary JSON. New principle: conversion mirrors stable control facts into typed completion fields while preserving boundary JSON.
     private static ChatRunToolCompletionRequest ToChatRunRequest(
         ChatRunToolCompletionRequest? request,
         InvocationToolResult result,
@@ -505,7 +505,6 @@ public sealed class AevatarInvocationDispatcher
         };
     }
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
     private static ChatRunToolCompletionRequest ToChatRunRequest(
         ChatRunToolCompletionRequest? request,
         string boundaryJson,

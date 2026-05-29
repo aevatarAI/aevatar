@@ -87,7 +87,6 @@ internal sealed class InvokeGAgentTool : IAevatarInvocationChatRunTool
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeGAgentAsync(argumentsJson, ct);
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
     public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
         ChatRunToolCompletionRequest request,
         CancellationToken ct = default) =>
@@ -113,7 +112,6 @@ internal sealed class InvokeTeamTool : IAevatarInvocationChatRunTool
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeTeamAsync(argumentsJson, ct);
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
     public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
         ChatRunToolCompletionRequest request,
         CancellationToken ct = default) =>
@@ -140,7 +138,6 @@ internal sealed class StartWorkflowTool : IAevatarInvocationChatRunTool
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.StartWorkflowAsync(argumentsJson, ct);
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
     public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
         ChatRunToolCompletionRequest request,
         CancellationToken ct = default) =>

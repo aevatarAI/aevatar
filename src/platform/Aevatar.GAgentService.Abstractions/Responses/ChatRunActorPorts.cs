@@ -9,7 +9,7 @@ public sealed record ChatRunStartRequest(
     IReadOnlyList<ChatMessage> Messages,
     TimeSpan? IdleTtl = null);
 
-// Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+// Refactor (iter290/cluster001): Old pattern: chat-run completion control was parsed back out of ResultJson. New principle: completion control crosses the public contract as typed scalar fields.
 public sealed record ChatRunToolCompletionRequest(
     string ResponseId,
     string? ModelName,
@@ -30,7 +30,7 @@ public sealed record ChatRunToolCompletionRequest(
     bool CompletionObserved = false,
     string ErrorCode = "");
 
-// Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+// Refactor (iter290/cluster001): Old pattern: chat-run tools returned only boundary JSON to the coordinator. New principle: chat-run-aware tools return a typed completion request for command observation.
 public interface IChatRunToolCompletionControlExecutor
 {
     Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(

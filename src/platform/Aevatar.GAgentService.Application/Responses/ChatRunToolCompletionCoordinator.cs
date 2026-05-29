@@ -150,7 +150,7 @@ public sealed class ChatRunToolCompletionCoordinator
         return (await readySource.Task.WaitAsync(ct)).ResultJson;
     }
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    // Refactor (iter290/cluster001): Old pattern: observation targets were recovered from tool ResultJson after dispatch. New principle: observation target fields are normalized before entering actor observation.
     private static ChatRunToolCompletionRequest NormalizeDispatchResultForObservation(
         ToolCall toolCall,
         string argumentsJson,
@@ -249,7 +249,7 @@ public sealed class ChatRunToolCompletionCoordinator
         return BuildTerminal(dispatch, dispatch.Status, dispatch.CompletionResultJson, completionObserved: true);
     }
 
-    // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+    // Refactor (iter290/cluster001): Old pattern: terminal observation rebuilt control facts from ResultJson. New principle: terminal observation copies typed dispatch fields into the actor event.
     private static ChatRunSubRunTerminalObserved BuildTerminal(
         ChatRunToolCompletionRequest dispatch,
         string status,

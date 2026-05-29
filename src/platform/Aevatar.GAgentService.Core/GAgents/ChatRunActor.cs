@@ -145,7 +145,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             ObservedAt = observed.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
         });
 
-        // Refactor (issue1298-first): Old: ResultJson string control parsing. New: typed scalar dispatch fields.
+        // Refactor (iter290/cluster001): Old pattern: ready notifications required consumers to parse ResultJson for completion facts. New principle: ready notifications publish typed completion facts with the result payload.
         await PublishAsync(new ChatRunToolResultReady
         {
             ResponseId = State.ResponseId,
