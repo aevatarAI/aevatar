@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -127,7 +128,9 @@ public sealed record WorkflowChatRunRequest(
     //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
     //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null,
-    LLMControlContext? LlmControl = null);
+    LLMControlContext? LlmControl = null,
+    // Refactor (issue1332): Old pattern: workflow chat commands could only carry tool controls through metadata/LlmControl. New principle: reuse typed AgentToolExecutionContext as the workflow ToolContext control surface.
+    AgentToolExecutionContext? ToolContext = null);
 
 public enum WorkflowChatRunStartError
 {

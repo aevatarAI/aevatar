@@ -69,7 +69,8 @@ internal static class ChatRunRequestNormalizer
                 InputParts: normalizedInputParts,
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
-                LlmControl: NormalizeLlmControl(input.LlmControl)));
+                LlmControl: NormalizeLlmControl(input.LlmControl),
+                ToolContext: input.ToolContext));
     }
 
     private static LLMControlContext? NormalizeLlmControl(ChatLlmControlInput? source)

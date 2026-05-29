@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -137,6 +138,37 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             3,
             UserMemoryPrompt: null));
         result.Request.Metadata.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldPreserveTypedToolContext()
+    {
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(" req-1 ", " call-1 "),
+            Caller = new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
+            Routing = LLMRequestRoutingContext.Empty with
+            {
+                ModelOverride = " model-a ",
+                NyxIdRoutePreference = " route-a ",
+                MaxToolRoundsOverride = 2,
+            },
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["trace-id"] = "trace-1",
+            },
+        };
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            ToolContext = toolContext,
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ToolContext.Should().BeSameAs(toolContext);
+        result.Request.LlmControl.Should().BeNull();
     }
 
     [Fact]
