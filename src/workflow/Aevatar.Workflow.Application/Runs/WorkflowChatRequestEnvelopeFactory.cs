@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -27,6 +28,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         AppendMetadata(chatRequest.Metadata, command.Metadata);
+        if (command.ToolContext != null)
+            chatRequest.ToolContext = ToDurableToolContextPayload(command.ToolContext);
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToDurableLlmControlPayload(command.LlmControl);
 
@@ -107,4 +110,11 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             NyxIdRoutePreference: control.NyxIdRoutePreference,
             MaxToolRoundsOverride: control.MaxToolRoundsOverride,
             UserMemoryPrompt: control.UserMemoryPrompt).ToPayload();
+
+    // Refactor (issue1332): Old pattern: workflow chat command envelope dropped typed ToolContext and relied on metadata/LlmControl. New principle: reuse AgentToolExecutionContext payload and scrub bearer fields before durable workflow state.
+    private static AgentToolExecutionContextPayload ToDurableToolContextPayload(AgentToolExecutionContext context) =>
+        (context with
+        {
+            Credentials = AgentToolCredentials.Empty,
+        }).ToPayload();
 }
