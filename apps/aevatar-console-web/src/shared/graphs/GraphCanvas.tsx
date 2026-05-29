@@ -66,7 +66,10 @@ const selfManagedSelectionCss = `
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
-  outline: none !important;
+}
+.react-flow__node.${SELF_MANAGED_SELECTION_CLASS}:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8) !important;
+  outline-offset: 2px !important;
 }
 `;
 
