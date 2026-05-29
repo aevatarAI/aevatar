@@ -91,6 +91,36 @@ public sealed class WebSearchToolExecutionTests
         item.GetProperty("snippet").GetString().Should().Be("fresh snippet");
     }
 
+    [Fact]
+    public async Task SearchAsync_ShouldMapProviderErrorJsonThroughTypedDtoAndBoundaryJson()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"error":"request_failed","message":"boom"}"""),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                SearchApiBaseUrl = "https://search.test",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-4", "broken backend", 2, CancellationToken.None);
+
+        result.Results.Should().BeEmpty();
+        result.Error.Should().Be(new WebToolError("request_failed", "boom"));
+
+        using var document = JsonDocument.Parse(WebToolResultBoundaryJson.ToBoundaryJson(result));
+        var root = document.RootElement;
+        root.GetProperty("error").GetString().Should().Be("request_failed");
+        root.GetProperty("message").GetString().Should().Be("boom");
+
+        handler.Requests.Should().ContainSingle()
+            .Which.RequestUri!.AbsoluteUri.Should().Be(
+                "https://search.test/search?q=broken%20backend&limit=2");
+    }
+
     private static WebSearchTool CreateTool(HttpClient http)
     {
         var options = new WebToolOptions
