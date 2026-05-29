@@ -771,18 +771,18 @@ public sealed class AevatarInvocationDispatcher
         Google.Protobuf.Collections.MapField<string, string>? headers)
     {
         // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        var filteredHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
         if (headers == null)
-            return metadata;
+            return filteredHeaders;
 
         foreach (var (key, value) in headers)
         {
             var normalizedKey = Normalize(key);
             if (normalizedKey != null && !IsProtectedCallerMetadataKey(normalizedKey))
-                metadata[normalizedKey] = value ?? string.Empty;
+                filteredHeaders[normalizedKey] = value ?? string.Empty;
         }
 
-        return metadata;
+        return filteredHeaders;
     }
 
     private static Dictionary<string, string> BuildLegacyMetadata(
