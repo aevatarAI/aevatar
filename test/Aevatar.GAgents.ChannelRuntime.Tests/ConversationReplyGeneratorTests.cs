@@ -192,7 +192,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkOperatorUserIdInSystemPrompt()
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkApprovalOperatorUserIdInSystemPrompt()
     {
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
@@ -213,7 +213,8 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [ChannelMetadataKeys.LarkOperatorUserId] = "ou_operator_1",
+                [ChannelMetadataKeys.LarkOperatorUserId] = "lark-user-1",
+                [ChannelMetadataKeys.LarkOperatorOpenId] = "ou_operator_1",
             },
             streamingSink: null,
             CancellationToken.None);
@@ -221,7 +222,8 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().Be("ok");
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
-        systemPrompt.Should().Contain("operator_user_id: \"ou_operator_1\"");
+        systemPrompt.Should().Contain("operator_user_id: \"lark-user-1\"");
+        systemPrompt.Should().Contain("operator_open_id: \"ou_operator_1\"");
     }
 
     [Fact]
