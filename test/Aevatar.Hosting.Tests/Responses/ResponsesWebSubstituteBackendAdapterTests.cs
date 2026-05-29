@@ -1,0 +1,123 @@
+using Aevatar.AI.ToolProviders.Web;
+using Aevatar.GAgentService.Application.Responses;
+using Aevatar.Mainnet.Host.Api.Responses;
+using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
+using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
+
+namespace Aevatar.Hosting.Tests.Responses;
+
+public sealed class ResponsesWebSubstituteBackendAdapterTests
+{
+    [Fact]
+    public async Task ExecuteWebFetchAsync_ShouldNotForwardNyxIdTokenAndMapFetchResult()
+    {
+        var webClient = new RecordingWebApiClient
+        {
+            FetchResult = new FetchResult(
+                200,
+                "text/plain",
+                "fresh body",
+                "https://example.com/final",
+                "https://example.com/docs"),
+        };
+        var adapter = new ResponsesWebSubstituteBackendAdapter(
+            webClient,
+            new WebToolOptions { MaxSearchResults = 7 });
+
+        var result = await adapter.ExecuteWebFetchAsync(
+            new ResponsesWebFetchBoundaryInput("https://example.com/docs", string.Empty),
+            CancellationToken.None);
+
+        result.Url.Should().Be("https://example.com/docs");
+        result.StatusCode.Should().Be(200);
+        result.ContentType.Should().Be("text/plain");
+        result.Content.Should().Be("fresh body");
+        result.RedirectUrl.Should().Be("https://example.com/final");
+        webClient.FetchCalls.Should().ContainSingle();
+        webClient.FetchCalls[0].Token.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteWebSearchAsync_ShouldForwardTokenAndMapSearchResult()
+    {
+        var webClient = new RecordingWebApiClient
+        {
+            SearchResult = StructValue(("results", ListValue(StructValue(("title", ProtoValue.ForString("fresh")))))),
+        };
+        var adapter = new ResponsesWebSubstituteBackendAdapter(
+            webClient,
+            new WebToolOptions { MaxSearchResults = 7 });
+
+        var result = await adapter.ExecuteWebSearchAsync(
+            new ResponsesWebSearchBoundaryInput("aevatar docs", 5, "secret-token"),
+            CancellationToken.None);
+
+        result.Value.StructValue.Fields["results"].ListValue.Values[0].StructValue.Fields["title"].StringValue
+            .Should()
+            .Be("fresh");
+        webClient.SearchCalls.Should().ContainSingle();
+        webClient.SearchCalls[0].Token.Should().Be("secret-token");
+        webClient.SearchCalls[0].Query.Should().Be("aevatar docs");
+        webClient.SearchCalls[0].MaxResults.Should().Be(5);
+    }
+
+    [Fact]
+    public void HostComposition_ShouldBindResponsesWebBackendPortToAdapter()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IWebApiClient, RecordingWebApiClient>();
+        services.AddSingleton(new WebToolOptions { MaxSearchResults = 11 });
+        services.AddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IResponsesWebSubstituteBackend>()
+            .Should()
+            .BeOfType<ResponsesWebSubstituteBackendAdapter>();
+    }
+
+    private sealed class RecordingWebApiClient : IWebApiClient
+    {
+        public List<(string Token, string Query, int MaxResults)> SearchCalls { get; } = [];
+
+        public List<(string Token, string Url)> FetchCalls { get; } = [];
+
+        public ProtoValue SearchResult { get; init; } = StructValue(("results", ListValue()));
+
+        public FetchResult FetchResult { get; init; } = new(
+            200,
+            "text/plain",
+            "body",
+            null,
+            "https://example.com");
+
+        public Task<ProtoValue> SearchAsync(string token, string query, int maxResults, CancellationToken ct)
+        {
+            SearchCalls.Add((token, query, maxResults));
+            return Task.FromResult(SearchResult.Clone());
+        }
+
+        public Task<FetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)
+        {
+            FetchCalls.Add((token, url));
+            return Task.FromResult(FetchResult);
+        }
+    }
+
+    private static ProtoValue StructValue(params (string Key, ProtoValue FieldValue)[] fields)
+    {
+        var value = new ProtoValue { StructValue = new Struct() };
+        foreach (var (key, fieldValue) in fields)
+            value.StructValue.Fields[key] = fieldValue;
+        return value;
+    }
+
+    private static ProtoValue ListValue(params ProtoValue[] values)
+    {
+        var value = new ProtoValue { ListValue = new ListValue() };
+        value.ListValue.Values.AddRange(values);
+        return value;
+    }
+}

@@ -2593,7 +2593,7 @@ const response = await fetch("{{invokePath}}", {
         IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
         CancellationToken ct)
     {
-        var snapshot = await workflowExecutionQueryService.GetActorSnapshotAsync(binding.ActorId, ct);
+        var snapshot = await workflowExecutionQueryService.GetWorkflowActorCurrentStateAsync(binding.ActorId, ct);
         var deployment = ResolveRunDeployment(binding, service, deployments);
         return new ScopeServiceRunSummaryHttpResponse(
             scopeId,
@@ -2636,7 +2636,7 @@ const response = await fetch("{{invokePath}}", {
     {
         var workflowSnapshot = snapshot.ImplementationKind == ServiceImplementationKind.Workflow &&
                                !string.IsNullOrWhiteSpace(snapshot.TargetActorId)
-            ? await workflowExecutionQueryService.GetActorSnapshotAsync(snapshot.TargetActorId, ct)
+            ? await workflowExecutionQueryService.GetWorkflowActorCurrentStateAsync(snapshot.TargetActorId, ct)
             : null;
 
         return new ScopeServiceRunSummaryHttpResponse(

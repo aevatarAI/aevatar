@@ -85,7 +85,7 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 entry.ToolName,
                 entry.Url,
                 entry.Query,
-                ResponsesJsonValues.ToBoundaryJson(entry.Result),
+                entry.Result.Clone(),
                 entry.CachedAt,
                 entry.LastHitAt,
                 entry.HitCount)).ToArray());

@@ -101,13 +101,13 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                     Url = NormalizeOptional(trace.Url) ?? string.Empty,
                     Query = NormalizeOptional(trace.Query) ?? string.Empty,
                     CacheHit = trace.CacheHit,
-                    Result = ResponsesJsonValues.ParseBoundaryPayload(trace.ResultJson),
+                    Result = trace.Result.Clone(),
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),
                 $"{sourceResponseId}:web:{traceId}"),
             ct);
 
-        return new ResponsesWebTraceResult(actor.Id, traceId, trace.CacheKey, trace.CacheHit, trace.ResultJson);
+        return new ResponsesWebTraceResult(actor.Id, traceId, trace.CacheKey, trace.CacheHit, trace.Result.Clone());
     }
 
     private async Task<IActor> EnsureActorAsync(

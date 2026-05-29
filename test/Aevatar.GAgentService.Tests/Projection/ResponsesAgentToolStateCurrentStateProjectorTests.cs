@@ -54,7 +54,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
 
         var cache = await reader.GetWebCacheEntryAsync(ScopeId, OwnerSubject, "WebFetch", "cache-1");
         cache.Should().NotBeNull();
-        cache!.ResultJson.Should().Be("""{"content":"fresh"}""");
+        ResponsesJsonValues.ToBoundaryJson(cache!.Result).Should().Be("""{"content":"fresh"}""");
     }
 
     [Fact]
