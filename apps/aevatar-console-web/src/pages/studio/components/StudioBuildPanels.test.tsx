@@ -20,6 +20,55 @@ import {
   StudioWorkflowBuildPanel,
 } from './StudioBuildPanels';
 
+type WorkflowPrimitiveParameterTestDescriptor = {
+  readonly name: string;
+  readonly type: string;
+  readonly required: boolean;
+  readonly description: string;
+  readonly default: string;
+  readonly enumValues: string[];
+};
+
+type WorkflowPrimitiveTestDescriptor = {
+  readonly name: string;
+  readonly aliases: string[];
+  readonly category: string;
+  readonly description: string;
+  readonly parameters: WorkflowPrimitiveParameterTestDescriptor[];
+  readonly exampleWorkflows: string[];
+};
+
+type WorkflowBuildHarnessRoleDocument = {
+  readonly id?: string;
+  readonly name?: string;
+  readonly systemPrompt?: string;
+  readonly provider?: string | null;
+  readonly model?: string | null;
+  readonly connectors?: unknown[];
+};
+
+type WorkflowBuildHarnessStepDocument = {
+  readonly id?: string;
+  readonly type?: string;
+  readonly originalType?: string;
+  readonly targetRole?: string | null;
+  readonly target_role?: string | null;
+  readonly parameters?: Record<string, unknown> | null;
+  readonly next?: string | null;
+  readonly branches?: Record<string, string> | null;
+};
+
+type WorkflowBuildHarnessDocument = {
+  readonly name?: string;
+  readonly description?: string;
+  readonly roles: WorkflowBuildHarnessRoleDocument[];
+  readonly steps: WorkflowBuildHarnessStepDocument[];
+};
+
+type AppliedStepDraft = {
+  readonly parametersText: string;
+};
+
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
     streamDraftRun: jest.fn(),
@@ -130,7 +179,7 @@ const scriptDetail = {
   },
 };
 
-const initialDocument = {
+const initialDocument: WorkflowBuildHarnessDocument = {
   name: 'workflow-demo',
   description: 'Workflow demo',
   roles: [
@@ -171,7 +220,7 @@ function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function buildWorkflowYaml(document: typeof initialDocument): string {
+function buildWorkflowYaml(document: WorkflowBuildHarnessDocument): string {
   const roleLines = document.roles.flatMap((role) => {
     const lines = [`  - id: ${role.id}`];
     if (role.name) {
@@ -208,17 +257,22 @@ function buildWorkflowYaml(document: typeof initialDocument): string {
 }
 
 function WorkflowBuildHarness({
+  initialDocumentOverride,
   onApplyStepDraftOverride,
   onContinueToBind,
   onSaveDraft,
+  runtimePrimitivesOverride,
 }: {
+  readonly initialDocumentOverride?: WorkflowBuildHarnessDocument;
   readonly onApplyStepDraftOverride?: (draft: any) => Promise<void>;
   readonly onContinueToBind: jest.Mock;
   readonly onSaveDraft: jest.Mock;
+  readonly runtimePrimitivesOverride?: readonly WorkflowPrimitiveTestDescriptor[];
 }) {
-  const [document, setDocument] = React.useState(() => cloneValue(initialDocument));
+  const documentSeed = initialDocumentOverride ?? initialDocument;
+  const [document, setDocument] = React.useState(() => cloneValue(documentSeed));
   const [draftYaml, setDraftYaml] = React.useState(() =>
-    buildWorkflowYaml(initialDocument),
+    buildWorkflowYaml(documentSeed),
   );
   const [selectedGraphNodeId, setSelectedGraphNodeId] = React.useState(
     'step:draft_step',
@@ -232,7 +286,7 @@ function WorkflowBuildHarness({
 
   const commitDocument = React.useCallback(
     async (
-      nextDocument: typeof initialDocument,
+      nextDocument: WorkflowBuildHarnessDocument,
       options?: {
         readonly nextSelectedNodeId?: string;
       },
@@ -260,7 +314,7 @@ function WorkflowBuildHarness({
           : async (draft) => {
               const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
               const result = applyStepInspectorDraft(document, currentStepId, draft);
-              await commitDocument(result.document as typeof initialDocument, {
+              await commitDocument(result.document as WorkflowBuildHarnessDocument, {
                 nextSelectedNodeId: result.nodeId,
               });
             }
@@ -279,7 +333,7 @@ function WorkflowBuildHarness({
             sourceStep?.branches || {},
           ),
         );
-        void commitDocument(result.document as typeof initialDocument, {
+        void commitDocument(result.document as WorkflowBuildHarnessDocument, {
           nextSelectedNodeId: result.nodeId,
         });
       }}
@@ -289,7 +343,7 @@ function WorkflowBuildHarness({
           afterStepId: selectedGraphNodeId.replace(/^step:/, ''),
           targetRoleId: 'assistant',
         });
-        await commitDocument(result.document as typeof initialDocument, {
+        await commitDocument(result.document as WorkflowBuildHarnessDocument, {
           nextSelectedNodeId: result.nodeId,
         });
       }}
@@ -305,7 +359,7 @@ function WorkflowBuildHarness({
       onRemoveSelectedStep={async () => {
         const currentStepId = selectedGraphNodeId.replace(/^step:/, '');
         const result = removeStep(document, currentStepId);
-        await commitDocument(result.document as typeof initialDocument, {
+        await commitDocument(result.document as WorkflowBuildHarnessDocument, {
           nextSelectedNodeId: result.nodeId,
         });
       }}
@@ -316,7 +370,7 @@ function WorkflowBuildHarness({
         }
 
         const result = removeStep(document, selectedNodeId);
-        await commitDocument(result.document as typeof initialDocument, {
+        await commitDocument(result.document as WorkflowBuildHarnessDocument, {
           nextSelectedNodeId: result.nodeId,
         });
       }}
@@ -327,7 +381,7 @@ function WorkflowBuildHarness({
       onRunPromptChange={setRunPrompt}
       onSaveDraft={() => onSaveDraft(draftYaml)}
       onSetDraftYaml={setDraftYaml}
-      runtimePrimitives={[
+      runtimePrimitives={runtimePrimitivesOverride ?? [
         {
           name: 'llm_call',
           aliases: [],
@@ -1137,6 +1191,143 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(handleContinueToBind).toHaveBeenCalledWith(
       expect.stringContaining('review_step'),
     );
+  });
+
+  it('writes llm_call prompt edits to prompt_prefix when runtime exposes prompt', async () => {
+    const handleApplyStepDraft = jest.fn<Promise<void>, [AppliedStepDraft]>(
+      async () => undefined,
+    );
+
+    render(
+      <WorkflowBuildHarness
+        initialDocumentOverride={{
+          ...initialDocument,
+          steps: [
+            {
+              ...initialDocument.steps[0],
+              parameters: {
+                prompt: 'Legacy prompt field',
+              },
+            },
+            initialDocument.steps[1],
+          ],
+        }}
+        onApplyStepDraftOverride={handleApplyStepDraft}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+        runtimePrimitivesOverride={[
+          {
+            name: 'llm_call',
+            aliases: [],
+            description: 'Call the LLM.',
+            category: 'ai',
+            parameters: [
+              {
+                name: 'prompt',
+                type: 'string',
+                required: false,
+                description: 'Prompt template or prompt override.',
+                default: '',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+        ]}
+      />,
+    );
+
+    const promptPrefixInput = await screen.findByLabelText(
+      'Parameter prompt_prefix',
+    );
+    expect(promptPrefixInput).toHaveValue('Legacy prompt field');
+    expect(screen.queryByLabelText('Parameter prompt')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Prompt prefix prepended before the workflow run prompt reaches the LLM/i),
+    ).toBeInTheDocument();
+
+    fireEvent.change(promptPrefixInput, {
+      target: {
+        value: 'Translate the input to Japanese.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }));
+
+    await waitFor(() => {
+      expect(handleApplyStepDraft).toHaveBeenCalledTimes(1);
+    });
+    const appliedDraft = handleApplyStepDraft.mock.calls.at(0)?.[0];
+    if (!appliedDraft) {
+      throw new Error('Expected an applied step draft.');
+    }
+    expect(JSON.parse(appliedDraft.parametersText)).toEqual({
+      prompt_prefix: 'Translate the input to Japanese.',
+    });
+  });
+
+  it('keeps human prompt edits on the prompt parameter', async () => {
+    const handleApplyStepDraft = jest.fn<Promise<void>, [AppliedStepDraft]>(
+      async () => undefined,
+    );
+
+    render(
+      <WorkflowBuildHarness
+        initialDocumentOverride={{
+          ...initialDocument,
+          steps: [
+            initialDocument.steps[0],
+            {
+              ...initialDocument.steps[1],
+              parameters: {
+                prompt: 'Approve this step?',
+              },
+            },
+          ],
+        }}
+        onApplyStepDraftOverride={handleApplyStepDraft}
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+        runtimePrimitivesOverride={[
+          {
+            name: 'human_approval',
+            aliases: [],
+            description: 'Pause for approval.',
+            category: 'human',
+            parameters: [
+              {
+                name: 'prompt',
+                type: 'string',
+                required: false,
+                description: 'Prompt shown to the reviewer.',
+                default: '',
+                enumValues: [],
+              },
+            ],
+            exampleWorkflows: ['workflow-demo'],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'approve_step' }));
+    const promptInput = await screen.findByLabelText('Parameter prompt');
+    fireEvent.change(promptInput, {
+      target: {
+        value: 'Approve the generated response?',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply changes' }));
+
+    await waitFor(() => {
+      expect(handleApplyStepDraft).toHaveBeenCalledTimes(1);
+    });
+    const appliedDraft = handleApplyStepDraft.mock.calls.at(0)?.[0];
+    if (!appliedDraft) {
+      throw new Error('Expected an applied step draft.');
+    }
+    expect(JSON.parse(appliedDraft.parametersText)).toEqual({
+      prompt: 'Approve the generated response?',
+    });
   });
 
   it('keeps runtime metadata out of output and only exposes it in debug details', async () => {

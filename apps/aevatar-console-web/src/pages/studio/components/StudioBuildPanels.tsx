@@ -51,6 +51,9 @@ import {
 } from '@/shared/studio/scriptPackage';
 import {
   createStepInspectorDraft,
+  readStepParameterValue,
+  resolveStepParameterName,
+  normalizeStepParametersForType,
   parseInspectorParameters,
   type StudioStepInspectorDraft,
 } from '@/shared/studio/document';
@@ -552,6 +555,47 @@ function tryParseStepParameters(
   }
 }
 
+function normalizePrimitiveParameterDescriptor(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): WorkflowPrimitiveDescriptor['parameters'][number] {
+  const resolvedName = resolveStepParameterName(stepType, parameter.name);
+  if (resolvedName === parameter.name) {
+    return parameter;
+  }
+
+  return {
+    ...parameter,
+    name: resolvedName,
+    description:
+      'Prompt prefix prepended before the workflow run prompt reaches the LLM.',
+  };
+}
+
+function normalizePrimitiveParameterDescriptors(
+  stepType: string,
+  parameters: readonly WorkflowPrimitiveDescriptor['parameters'][number][],
+): WorkflowPrimitiveDescriptor['parameters'][number][] {
+  const nextParameters: WorkflowPrimitiveDescriptor['parameters'][number][] = [];
+  const seenParameterNames = new Set<string>();
+
+  for (const parameter of parameters) {
+    const normalizedParameter = normalizePrimitiveParameterDescriptor(
+      stepType,
+      parameter,
+    );
+    const normalizedName = normalizedParameter.name.trim().toLowerCase();
+    if (!normalizedName || seenParameterNames.has(normalizedName)) {
+      continue;
+    }
+
+    seenParameterNames.add(normalizedName);
+    nextParameters.push(normalizedParameter);
+  }
+
+  return nextParameters;
+}
+
 function formatParameterEditorValue(value: unknown): string {
   if (value === null || value === undefined) {
     return '';
@@ -625,13 +669,20 @@ function updateStepDraftParameterValue(
   parameterType: string,
   rawValue: string,
 ): StudioStepInspectorDraft {
-  const nextParameters = tryParseStepParameters(draft.parametersText) ?? {};
+  const resolvedParameterName = resolveStepParameterName(draft.type, parameterName);
+  const nextParameters = normalizeStepParametersForType(
+    draft.type,
+    tryParseStepParameters(draft.parametersText) ?? {},
+  );
   const trimmed = rawValue.trim();
 
   if (!trimmed) {
-    delete nextParameters[parameterName];
+    delete nextParameters[resolvedParameterName];
   } else {
-    nextParameters[parameterName] = coerceParameterEditorValue(rawValue, parameterType);
+    nextParameters[resolvedParameterName] = coerceParameterEditorValue(
+      rawValue,
+      parameterType,
+    );
   }
 
   return {
@@ -1026,6 +1077,14 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         );
       }) ?? null,
     [runtimePrimitives, selectedStep?.type, stepDraft?.type],
+  );
+  const selectedPrimitiveParameters = React.useMemo(
+    () =>
+      normalizePrimitiveParameterDescriptors(
+        stepDraft?.type || selectedStep?.type || '',
+        selectedPrimitiveDescriptor?.parameters ?? [],
+      ),
+    [selectedPrimitiveDescriptor, selectedStep?.type, stepDraft?.type],
   );
   const parsedStepParameters = React.useMemo(
     () =>
@@ -1562,11 +1621,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 </div>
                 <div style={{ ...workflowFieldStyle, gridColumn: '1 / -1' }}>
                   <div style={workflowSectionHeadingStyle}>Parameters</div>
-                  {selectedPrimitiveDescriptor?.parameters.length ? (
+                  {selectedPrimitiveParameters.length ? (
                     <div style={{ display: 'grid', gap: 10 }}>
-                      {selectedPrimitiveDescriptor.parameters.map((parameter) => {
+                      {selectedPrimitiveParameters.map((parameter) => {
                         const currentValue = formatParameterEditorValue(
-                          parsedStepParameters?.[parameter.name] ??
+                          readStepParameterValue(
+                            parsedStepParameters,
+                            stepDraft.type,
+                            parameter.name,
+                          ) ??
                             parameter.default,
                         );
 
