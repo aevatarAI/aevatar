@@ -104,7 +104,7 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                     // Refactor (iter161-cluster-001 #1251-first):
                     //   Old pattern: first slice stopped writing legacy Value.
                     //   New principle: keep typed result primary while writing Value as readmodel fallback.
-                    Result = ResponsesWebResultJson.ToLegacyValue(trace.Result),
+                    Result = ResponsesWebResultMigration.ToLegacyValue(trace.Result),
                     TypedResult = trace.Result.Clone(),
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),

@@ -2,7 +2,6 @@ using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Hosting.Tests.Responses;
@@ -189,18 +188,4 @@ public sealed class ResponsesWebSubstituteToolJsonTests
     private static JsonDocument ParseBoundaryJson(ResponsesWebSubstituteToolExecutionResult result) =>
         JsonDocument.Parse(ResponsesWebSubstituteToolJson.ToBoundaryJson(result));
 
-    private static ProtoValue StructValue(params (string Key, ProtoValue FieldValue)[] fields)
-    {
-        var value = new ProtoValue { StructValue = new Struct() };
-        foreach (var (key, fieldValue) in fields)
-            value.StructValue.Fields[key] = fieldValue;
-        return value;
-    }
-
-    private static ProtoValue ListValue(params ProtoValue[] values)
-    {
-        var value = new ProtoValue { ListValue = new ListValue() };
-        value.ListValue.Values.AddRange(values);
-        return value;
-    }
 }

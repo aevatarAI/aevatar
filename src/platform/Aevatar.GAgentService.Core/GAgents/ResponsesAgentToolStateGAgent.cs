@@ -108,7 +108,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             // Refactor (iter161-cluster-001 #1251-first):
             //   Old pattern: typed result writes left legacy Value empty.
             //   New principle: typed remains primary and Value is retained as readmodel fallback.
-            Result = command.Result?.Clone() ?? ResponsesWebResultJson.ToLegacyValue(command.TypedResult),
+            Result = command.Result?.Clone() ?? ResponsesWebResultMigration.ToLegacyValue(command.TypedResult),
             TypedResult = command.TypedResult?.Clone(),
             ObservedAt = observedAt,
         };

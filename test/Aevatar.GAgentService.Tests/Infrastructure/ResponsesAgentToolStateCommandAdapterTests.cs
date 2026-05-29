@@ -152,7 +152,7 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
             Url: "https://example.com",
             Query: string.Empty,
             CacheHit: false,
-            Result: ResponsesWebResultJson.FromFetch(new ResponsesWebFetchToolOutput
+            Result: ResponsesWebResultMigration.FromFetch(new ResponsesWebFetchToolOutput
             {
                 Url = "https://example.com",
                 Content = "x",

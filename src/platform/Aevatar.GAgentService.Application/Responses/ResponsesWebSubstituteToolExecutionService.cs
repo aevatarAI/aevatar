@@ -91,7 +91,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             Content = output.Content,
             RedirectUrl = output.RedirectUrl,
         };
-        var typedOutput = ResponsesWebResultJson.FromFetch(protoOutput);
+        var typedOutput = ResponsesWebResultMigration.FromFetch(protoOutput);
         await RecordTraceAsync(
             request,
             cacheKey,
@@ -143,7 +143,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 
         if (string.IsNullOrWhiteSpace(request.NyxIdAccessToken))
         {
-            var authError = ResponsesWebResultJson.FromError(
+            var authError = ResponsesWebResultMigration.FromError(
                 "auth_required",
                 "No NyxID access token available. User must be authenticated.");
             await RecordTraceAsync(
@@ -162,7 +162,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
                     maxResults,
                     request.NyxIdAccessToken),
                 ct).ConfigureAwait(false)).Output;
-        var typedSearchResult = ResponsesWebResultJson.FromSearch(searchResult);
+        var typedSearchResult = ResponsesWebResultMigration.FromSearch(searchResult);
         await RecordTraceAsync(
             request,
             cacheKey,
@@ -226,7 +226,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
     {
         return new ResponsesWebSubstituteToolExecutionResult
         {
-            TypedError = ResponsesWebResultJson.FromError(code).Error,
+            TypedError = ResponsesWebResultMigration.FromError(code).Error,
         };
     }
 

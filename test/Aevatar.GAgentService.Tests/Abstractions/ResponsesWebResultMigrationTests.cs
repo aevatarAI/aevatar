@@ -18,7 +18,7 @@ public sealed class ResponsesWebResultMigrationTests
         value.StructValue.Fields["content"] = ProtoValue.ForString("body");
         value.StructValue.Fields["redirect_url"] = ProtoValue.ForString("https://example.com/final");
 
-        var result = ResponsesWebResultJson.FromLegacyValue(value);
+        var result = ResponsesWebResultMigration.FromLegacyValue(value);
 
         result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Fetch);
         result.Fetch.Url.Should().Be("https://example.com/page");
@@ -41,7 +41,7 @@ public sealed class ResponsesWebResultMigrationTests
         results.Values.Add(ProtoValue.ForString("ignored"));
         value.StructValue.Fields["results"] = new ProtoValue { ListValue = results };
 
-        var result = ResponsesWebResultJson.FromLegacyValue(value);
+        var result = ResponsesWebResultMigration.FromLegacyValue(value);
 
         result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Search);
         result.Search.Results.Should().ContainSingle();
@@ -56,7 +56,7 @@ public sealed class ResponsesWebResultMigrationTests
         var value = new ProtoValue { StructValue = new Struct() };
         value.StructValue.Fields["error"] = ProtoValue.ForString("auth_failed");
 
-        var result = ResponsesWebResultJson.FromLegacyValue(value);
+        var result = ResponsesWebResultMigration.FromLegacyValue(value);
 
         result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Error);
         result.Error.Code.Should().Be("auth_failed");
@@ -69,7 +69,7 @@ public sealed class ResponsesWebResultMigrationTests
         var value = new ProtoValue { StructValue = new Struct() };
         value.StructValue.Fields["custom"] = ProtoValue.ForString("kept");
 
-        var result = ResponsesWebResultJson.FromLegacyValue(value);
+        var result = ResponsesWebResultMigration.FromLegacyValue(value);
 
         result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Error);
         result.Error.Code.Should().Be("legacy_value_result");
@@ -79,7 +79,7 @@ public sealed class ResponsesWebResultMigrationTests
     [Fact]
     public void FromLegacyValue_ShouldMapNonStructValue_ToLegacyValueError()
     {
-        var result = ResponsesWebResultJson.FromLegacyValue(ProtoValue.ForString("plain"));
+        var result = ResponsesWebResultMigration.FromLegacyValue(ProtoValue.ForString("plain"));
 
         result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Error);
         result.Error.Code.Should().Be("legacy_value_result");
@@ -89,16 +89,16 @@ public sealed class ResponsesWebResultMigrationTests
     [Fact]
     public void FromLegacyValue_ShouldReturnUnsetResult_ForEmptyValue()
     {
-        ResponsesWebResultJson.FromLegacyValue(null).ResultCase
+        ResponsesWebResultMigration.FromLegacyValue(null).ResultCase
             .Should().Be(ResponsesWebToolResult.ResultOneofCase.None);
-        ResponsesWebResultJson.FromLegacyValue(new ProtoValue()).ResultCase
+        ResponsesWebResultMigration.FromLegacyValue(new ProtoValue()).ResultCase
             .Should().Be(ResponsesWebToolResult.ResultOneofCase.None);
     }
 
     [Fact]
     public void ToLegacyValue_ShouldMapSearchResult_ToLegacySearchStruct()
     {
-        var result = ResponsesWebResultJson.FromSearch(new ResponsesWebSearchToolOutput
+        var result = ResponsesWebResultMigration.FromSearch(new ResponsesWebSearchToolOutput
         {
             Results =
             {
@@ -111,7 +111,7 @@ public sealed class ResponsesWebResultMigrationTests
             },
         });
 
-        var value = ResponsesWebResultJson.ToLegacyValue(result);
+        var value = ResponsesWebResultMigration.ToLegacyValue(result);
 
         value.KindCase.Should().Be(ProtoValue.KindOneofCase.StructValue);
         var results = value.StructValue.Fields["results"].ListValue.Values;
@@ -124,9 +124,9 @@ public sealed class ResponsesWebResultMigrationTests
     [Fact]
     public void ToLegacyValue_ShouldMapErrorResult_ToLegacyErrorStruct()
     {
-        var result = ResponsesWebResultJson.FromError("auth_failed", "Token missing");
+        var result = ResponsesWebResultMigration.FromError("auth_failed", "Token missing");
 
-        var value = ResponsesWebResultJson.ToLegacyValue(result);
+        var value = ResponsesWebResultMigration.ToLegacyValue(result);
 
         value.KindCase.Should().Be(ProtoValue.KindOneofCase.StructValue);
         value.StructValue.Fields["error"].StringValue.Should().Be("auth_failed");

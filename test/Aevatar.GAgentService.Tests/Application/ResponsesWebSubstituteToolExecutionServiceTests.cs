@@ -274,7 +274,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
                 toolName,
                 value,
                 string.Empty,
-                ResponsesWebResultJson.FromLegacyValue(JsonParser.Default.Parse<ProtoValue>(resultJson)),
+                ResponsesWebResultMigration.FromLegacyValue(JsonParser.Default.Parse<ProtoValue>(resultJson)),
                 DateTimeOffset.UtcNow,
                 null,
                 0);

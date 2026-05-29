@@ -8,7 +8,7 @@ namespace Aevatar.GAgentService.Abstractions.Responses;
 //   interpreted the same untyped payload shape.
 //   New principle: ResponsesWebToolResult is the typed internal contract; this migration
 //   utility only bridges legacy Value payloads to and from the typed contract.
-public static class ResponsesWebResultJson
+public static class ResponsesWebResultMigration
 {
     public static ResponsesWebToolResult FromFetch(ResponsesWebFetchToolOutput output) =>
         new()

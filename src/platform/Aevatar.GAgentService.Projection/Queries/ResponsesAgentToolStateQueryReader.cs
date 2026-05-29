@@ -100,7 +100,7 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
         // Refactor (iter161-cluster-001 #1251-first):
         //   Old pattern: query snapshots exposed legacy Value directly.
         //   New principle: typed result is primary; legacy Value is converted only for old readmodels.
-        return ResponsesWebResultJson.FromLegacyValue(legacyResult);
+        return ResponsesWebResultMigration.FromLegacyValue(legacyResult);
     }
 
     private async Task<ResponsesAgentToolStateCurrentStateReadModel?> GetDocumentAsync(

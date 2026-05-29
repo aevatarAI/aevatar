@@ -72,7 +72,7 @@ public sealed class ResponsesAgentToolStateGAgentTests
         var actor = CreateActor();
         await RegisterAsync(actor);
 
-        var resultPayload = ResponsesWebResultJson.FromFetch(new ResponsesWebFetchToolOutput
+        var resultPayload = ResponsesWebResultMigration.FromFetch(new ResponsesWebFetchToolOutput
         {
             Url = "https://example.com",
             StatusCode = 200,

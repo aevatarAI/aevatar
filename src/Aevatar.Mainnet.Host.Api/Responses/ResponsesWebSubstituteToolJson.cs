@@ -30,6 +30,9 @@ internal static class ResponsesWebSubstituteToolJson
         };
     }
 
+    // Refactor (iter161-cluster-001 #1251-first):
+    //   Old pattern: shared Abstractions rendered Web result JSON before Host boundary handling.
+    //   New principle: Host owns final external JSON rendering from typed Web result branches.
     public static string ToBoundaryJson(ResponsesWebSubstituteToolExecutionResult result) =>
         result.ResultCase switch
         {

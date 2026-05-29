@@ -2978,7 +2978,7 @@ public sealed class MainnetResponsesEndpointsTests
                 toolName,
                 value,
                 string.Empty,
-                ResponsesWebResultJson.FromLegacyValue(ResponsesJsonValues.ParseBoundaryPayload(resultJson)),
+                ResponsesWebResultMigration.FromLegacyValue(ResponsesJsonValues.ParseBoundaryPayload(resultJson)),
                 DateTimeOffset.UtcNow,
                 null,
                 0);

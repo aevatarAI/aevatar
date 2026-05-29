@@ -201,7 +201,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             ToolName = "WebFetch",
             CacheKey = "cache-1",
             Url = "https://example.com",
-            TypedResult = ResponsesWebResultJson.FromFetch(new ResponsesWebFetchToolOutput
+            TypedResult = ResponsesWebResultMigration.FromFetch(new ResponsesWebFetchToolOutput
             {
                 Url = "https://example.com",
                 StatusCode = 200,
@@ -214,7 +214,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             CacheKey = "cache-1",
             ToolName = "WebFetch",
             Url = "https://example.com",
-            TypedResult = ResponsesWebResultJson.FromFetch(new ResponsesWebFetchToolOutput
+            TypedResult = ResponsesWebResultMigration.FromFetch(new ResponsesWebFetchToolOutput
             {
                 Url = "https://example.com",
                 StatusCode = 200,

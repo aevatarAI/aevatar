@@ -70,6 +70,30 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
         webClient.SearchCalls[0].MaxResults.Should().Be(5);
     }
 
+    [Theory]
+    [MemberData(nameof(MalformedSearchResults))]
+    public async Task ExecuteWebSearchAsync_WhenProviderValueHasNoResultsList_ShouldReturnEmptyTypedResults(
+        ProtoValue providerValue)
+    {
+        var webClient = new RecordingWebApiClient
+        {
+            SearchResult = providerValue,
+        };
+        var adapter = new ResponsesWebSubstituteBackendAdapter(
+            webClient,
+            new WebToolOptions { MaxSearchResults = 7 });
+
+        var result = await adapter.ExecuteWebSearchAsync(
+            new ResponsesWebSearchBoundaryInput("aevatar docs", 5, "secret-token"),
+            CancellationToken.None);
+
+        result.Output.Results.Should().BeEmpty();
+        webClient.SearchCalls.Should().ContainSingle();
+        webClient.SearchCalls[0].Token.Should().Be("secret-token");
+        webClient.SearchCalls[0].Query.Should().Be("aevatar docs");
+        webClient.SearchCalls[0].MaxResults.Should().Be(5);
+    }
+
     [Fact]
     public void HostComposition_ShouldBindResponsesWebBackendPortToAdapter()
     {
@@ -112,6 +136,14 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
             return Task.FromResult(FetchResult);
         }
     }
+
+    public static TheoryData<ProtoValue> MalformedSearchResults() =>
+        new()
+        {
+            ProtoValue.ForString("bad"),
+            StructValue(("items", ListValue(StructValue(("title", ProtoValue.ForString("fresh")))))),
+            StructValue(("results", ProtoValue.ForString("bad"))),
+        };
 
     private static ProtoValue StructValue(params (string Key, ProtoValue FieldValue)[] fields)
     {
