@@ -233,7 +233,11 @@ jest.mock("./components/RunsLaunchRail", () => {
     return React.createElement(
       "section",
       null,
-      React.createElement("div", null, "Run setup"),
+      React.createElement(
+        "div",
+        null,
+        props.variant === "chat" ? "Run context" : "Run setup"
+      ),
       props.showPromptField !== false
         ? React.createElement("textarea", {
             "aria-label": "Prompt",
@@ -248,11 +252,13 @@ jest.mock("./components/RunsLaunchRail", () => {
         : null,
       React.createElement("input", {
         "aria-label": "Workspace ID",
-        onChange: (event: any) =>
+        onChange: (event: any) => {
+          props.onScopeIdChange?.(event.target.value);
           setValues((current: Record<string, unknown>) => ({
             ...current,
             scopeId: event.target.value,
-          })),
+          }));
+        },
         value: values.scopeId ?? "",
       }),
       props.showSubmitActions !== false
@@ -345,20 +351,67 @@ describe("RunsPage", () => {
       screen.queryByRole("button", { name: "返回团队高级编辑" })
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Actor explorer" })
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: "Actor explorer" })
+    ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Mission Control" })
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: "Mission Control" })
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Open observability hub" })
     ).toBeNull();
     expect(
       screen.getByPlaceholderText("Describe the task to run.")
     ).toBeTruthy();
-    expect(container.textContent).toContain("Run setup");
+    expect(container.textContent).toContain("Run context");
     expect(container.textContent).toContain("Conversation");
+    expect(container.textContent).toContain("Workspace: required");
+    expect(container.textContent).toContain("Route: direct");
+    expect(container.textContent).toContain("Endpoint: chat");
+    expect(container.textContent).toContain(
+      "Add a workspace ID in Run context before sending."
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("enables the conversation composer only after a workspace is set", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?prompt=Run%20it"
+    );
+
+    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+
+    await screen.findByDisplayValue("Run it");
+    expect(container.textContent).toContain("Workspace: required");
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    expect(sendButton).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Workspace ID"), {
+      target: { value: "scope-1" },
+    });
+
+    expect(container.textContent).toContain("Workspace: scope-1");
+    expect(container.textContent).not.toContain(
+      "Add a workspace ID in Run context before sending."
+    );
+    expect(sendButton).toBeEnabled();
+
+    fireEvent.click(sendButton);
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
+        "scope-1",
+        expect.objectContaining({
+          prompt: "Run it",
+        }),
+        expect.any(AbortSignal),
+        {
+          serviceId: "direct",
+        }
+      );
+    });
   });
 
   it("stacks the chat setup and conversation panes on compact screens", async () => {

@@ -483,7 +483,7 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
   });
 
-  it('offers Add script from the empty Script build state', () => {
+  it('keeps the empty Script build state focused on creating the first script', () => {
     const handleCreateScriptDraft = jest.fn();
 
     render(
@@ -501,6 +501,22 @@ describe('StudioWorkflowBuildPanel', () => {
         onSelectScriptId={jest.fn()}
       />,
     );
+
+    expect(
+      screen.getByText(
+        'Create or select a script first. Validation, save, bind, and dry-run unlock after there is a script to work on.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Create a script capability or select a saved workspace script. After that, this panel will show validation, save, bind, and dry-run controls.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Create a script before running it')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Validate' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save script' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load fixture' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add script' }));
     expect(handleCreateScriptDraft).toHaveBeenCalled();
