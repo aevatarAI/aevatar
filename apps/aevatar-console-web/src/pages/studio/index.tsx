@@ -62,6 +62,7 @@ import {
   cloneStudioWorkflowDocument,
   connectStepToTarget,
   insertStepByType,
+  normalizeStepParametersForType,
   removeStep,
   removeSteps,
   suggestBranchLabelForStep,
@@ -4190,6 +4191,73 @@ const StudioPage: React.FC = () => {
     [availableStepTypes, draftWorkflowName, workflowNames],
   );
 
+  const normalizeWorkflowYamlForRuntime = useCallback(
+    async (
+      yaml: string,
+      document: StudioWorkflowDocument | null | undefined,
+      availableWorkflowNames: string[],
+    ): Promise<{
+      readonly yaml: string;
+      readonly document: StudioWorkflowDocument | null;
+    }> => {
+      const sourceYaml = yaml.trim();
+      if (!sourceYaml) {
+        return {
+          yaml: sourceYaml,
+          document: document ?? null,
+        };
+      }
+
+      let sourceDocument = cloneStudioWorkflowDocument(document);
+      if (!sourceDocument) {
+        sourceDocument =
+          cloneStudioWorkflowDocument(
+            (
+              await studioApi.parseYaml({
+                yaml: sourceYaml,
+                availableWorkflowNames,
+                availableStepTypes,
+              })
+            ).document,
+          ) ?? null;
+      }
+
+      if (!sourceDocument?.steps?.length) {
+        return {
+          yaml: sourceYaml,
+          document: sourceDocument,
+        };
+      }
+
+      const normalizedDocument: StudioWorkflowDocument = {
+        ...sourceDocument,
+        steps: sourceDocument.steps.map((step) => ({
+          ...step,
+          parameters: normalizeStepParametersForType(
+            trimOptional(step.type ?? step.originalType),
+            step.parameters && typeof step.parameters === 'object'
+              ? step.parameters
+              : {},
+          ),
+        })),
+      };
+
+      const serialized = await studioApi.serializeYaml({
+        document: normalizedDocument,
+        availableWorkflowNames,
+        availableStepTypes,
+      });
+
+      return {
+        yaml: serialized.yaml.trim() || sourceYaml,
+        document:
+          cloneStudioWorkflowDocument(serialized.document) ??
+          normalizedDocument,
+      };
+    },
+    [availableStepTypes],
+  );
+
   const buildWorkflowYamlBundle = useCallback(async (): Promise<string[]> => {
     const rootYaml = draftYaml.trim();
     if (!rootYaml) {
@@ -4229,9 +4297,14 @@ const StudioPage: React.FC = () => {
       if (normalizedWorkflowName) {
         seen.add(normalizedWorkflowName);
       }
-      bundle.push(current.yaml);
+      const normalizedCurrent = await normalizeWorkflowYamlForRuntime(
+        current.yaml,
+        current.document,
+        availableWorkflowNames,
+      );
+      bundle.push(normalizedCurrent.yaml);
 
-      for (const targetWorkflow of readWorkflowCallTargets(current.document)) {
+      for (const targetWorkflow of readWorkflowCallTargets(normalizedCurrent.document)) {
         if (seen.has(targetWorkflow)) {
           continue;
         }
@@ -4273,6 +4346,7 @@ const StudioPage: React.FC = () => {
     availableStepTypes,
     draftWorkflowName,
     draftYaml,
+    normalizeWorkflowYamlForRuntime,
     resolvedStudioScopeId,
     visibleWorkflowSummaries,
   ]);

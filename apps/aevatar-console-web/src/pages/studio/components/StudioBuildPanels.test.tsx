@@ -1179,6 +1179,9 @@ describe('StudioWorkflowBuildPanel', () => {
             'nyxid.route_preference': '/api/v1/proxy/s/openai',
           },
           prompt: 'Please triage the refund request.',
+          workflowYamls: [
+            expect.stringContaining('name: workflow-demo'),
+          ],
         }),
         expect.any(AbortSignal),
       );

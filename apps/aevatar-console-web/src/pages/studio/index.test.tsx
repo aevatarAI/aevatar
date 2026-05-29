@@ -115,6 +115,13 @@ function mockBuildWorkflowYaml(document: typeof mockWorkflowDocument): string {
     if (step.targetRole) {
       lines.push(`    targetRole: ${step.targetRole}`);
     }
+    const parameterEntries = Object.entries(step.parameters ?? {});
+    if (parameterEntries.length > 0) {
+      lines.push("    parameters:");
+      for (const [key, value] of parameterEntries) {
+        lines.push(`      ${key}: ${String(value)}`);
+      }
+    }
     if (step.next) {
       lines.push(`    next: ${step.next}`);
     }
@@ -5060,6 +5067,24 @@ describe("StudioPage", () => {
   });
 
   it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
+    mockParsedDocument = {
+      ...mockParsedDocument,
+      steps: mockParsedDocument.steps.map((step) =>
+        step.type === "llm_call"
+          ? {
+              ...step,
+              parameters: {
+                prompt: "把用户输入的内容转成日语",
+              },
+            }
+          : step
+      ),
+    } as any;
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      document: mockParsedDocument,
+      yaml: mockBuildWorkflowYaml(mockParsedDocument),
+    };
     mockScopeRuntimeApi.listServices.mockReset();
     mockScopeRuntimeApi.listServices
       .mockResolvedValueOnce([])
@@ -5109,6 +5134,15 @@ describe("StudioPage", () => {
         }),
       );
     });
+    const workflowYamls =
+      (studioApi.bindMemberWorkflow as jest.Mock).mock.calls.at(-1)?.[0]
+        ?.workflowYamls ?? [];
+    expect(workflowYamls.join("\n")).toContain(
+      "prompt_prefix: 把用户输入的内容转成日语"
+    );
+    expect(workflowYamls.join("\n")).not.toContain(
+      "prompt: 把用户输入的内容转成日语"
+    );
     await waitFor(() => {
       expect(screen.getByText("service:default")).toBeTruthy();
       expect(screen.getByText("services:default")).toBeTruthy();
