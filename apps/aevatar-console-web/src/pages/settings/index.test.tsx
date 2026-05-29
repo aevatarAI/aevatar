@@ -153,18 +153,18 @@ describe("SettingsPage", () => {
   it("renders the full-body LLM tab by default", async () => {
     renderWithQueryClient(React.createElement(SettingsPage));
 
-    expect(await screen.findByText("设置")).toBeTruthy();
-    expect(await screen.findByText("编辑默认配置")).toBeTruthy();
-    expect(screen.getByText("默认配置如何生效")).toBeTruthy();
-    expect(screen.getByText("技术预览")).toBeTruthy();
-    expect(screen.getAllByText("当前生效路由").length).toBeGreaterThan(0);
-    expect(screen.getByText("已连接 Provider")).toBeTruthy();
+    expect(await screen.findByText("Settings")).toBeTruthy();
+    expect(await screen.findByText("Edit defaults")).toBeTruthy();
+    expect(screen.getByText("How defaults work")).toBeTruthy();
+    expect(screen.getByText("Technical preview")).toBeTruthy();
+    expect(screen.getAllByText("Effective route").length).toBeGreaterThan(0);
+    expect(screen.getByText("Connected providers")).toBeTruthy();
     expect(screen.getAllByText("OpenAI Team Service").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("默认模型").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: /高级运行时/i }));
+    expect(screen.getAllByText("Default model").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /Advanced runtime/i }));
     expect(screen.getByDisplayValue("http://127.0.0.1:5080")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "重置" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
   });
 
   it("switches to the account tab in-place", async () => {
@@ -192,7 +192,7 @@ describe("SettingsPage", () => {
     await waitFor(() => {
       expect(window.location.search).toBe("?section=account");
     });
-    expect(screen.queryByRole("button", { name: "保存配置" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save config" })).toBeNull();
     expect(await screen.findByText("Profile")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
     expect(screen.getByText("Authentication")).toBeTruthy();
@@ -201,7 +201,7 @@ describe("SettingsPage", () => {
   it("shows gateway models from backend model groups", async () => {
     renderWithQueryClient(React.createElement(SettingsPage));
 
-    expect(await screen.findByText("4 个可用")).toBeTruthy();
+    expect(await screen.findByText("4 live")).toBeTruthy();
   });
 
   it("uses backend route-scoped model choices when the saved route is a service", async () => {
@@ -217,7 +217,7 @@ describe("SettingsPage", () => {
     renderWithQueryClient(React.createElement(SettingsPage));
 
     await waitFor(() => {
-      expect(screen.getByText("1 个可用")).toBeTruthy();
+      expect(screen.getByText("1 live")).toBeTruthy();
     });
   });
 
@@ -242,10 +242,10 @@ describe("SettingsPage", () => {
     renderWithQueryClient(React.createElement(SettingsPage));
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText("输入 Anthropic Lab Service 的模型 ID")).toBeTruthy();
+      expect(screen.getByPlaceholderText("Type a model ID for Anthropic Lab Service")).toBeTruthy();
     });
 
-    expect(screen.queryByRole("combobox", { name: "默认模型" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Default model" })).toBeNull();
   });
 
   it("saves canonical LLM settings", async () => {
@@ -257,11 +257,11 @@ describe("SettingsPage", () => {
 
     renderWithQueryClient(React.createElement(SettingsPage));
 
-    fireEvent.change(await screen.findByLabelText("默认模型"), {
+    fireEvent.change(await screen.findByLabelText("Default model"), {
       target: { value: "gpt-4o" },
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "保存配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save config" }));
 
     await waitFor(() => {
       expect(mockStudioApi.saveUserLlmSettings).toHaveBeenCalledWith({

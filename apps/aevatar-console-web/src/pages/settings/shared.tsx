@@ -149,13 +149,13 @@ export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
   children,
   content,
   extra,
-  title = "账户设置",
+  title = "Account Settings",
 }) => {
   const { token } = theme.useToken();
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / 设置"
+      breadcrumb="Aevatar / Settings"
       description={content}
       extra={
         extra ? (
