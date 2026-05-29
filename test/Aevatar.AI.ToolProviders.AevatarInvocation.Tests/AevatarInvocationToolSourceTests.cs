@@ -306,8 +306,15 @@ public sealed class AevatarInvocationToolSourceTests
         harness.TeamInvocation.Request.Identity.ServiceId.Should().Be("service-1");
         harness.TeamInvocation.Request.EndpointId.Should().Be("entry");
         harness.TeamInvocation.Request.Input.Prompt.Should().Be("go");
-        harness.TeamInvocation.Request.Input.Headers.Should().Contain("scope_id", "scope-1");
         harness.TeamInvocation.Request.Input.Headers.Should().Contain("h", "v");
+        ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request.Input.Headers);
+        harness.TeamInvocation.Request.Input.ToolContext.Should().NotBeNull();
+        harness.TeamInvocation.Request.Input.ToolContext!.Caller.ScopeId.Should().Be("scope-1");
+        harness.TeamInvocation.Request.Input.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        harness.TeamInvocation.Request.Input.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        harness.TeamInvocation.Request.Input.LlmControl.Should().NotBeNull();
+        harness.TeamInvocation.Request.Input.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
+        harness.TeamInvocation.Request.Input.LlmControl.ModelOverride.Should().Be("model-1");
         harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("scope-1");
 
         var result = Read(output);
@@ -373,7 +380,8 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.TeamResolver.LastScopeId.Should().Be("scope-1");
         harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("scope-1");
-        harness.TeamInvocation.Request.Input.Headers.Should().Contain("scope_id", "scope-1");
+        ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request.Input.Headers);
+        harness.TeamInvocation.Request.Input.ToolContext!.Caller.ScopeId.Should().Be("scope-1");
     }
 
     [Fact]
@@ -424,7 +432,11 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        ShouldCarryTrustedCallerValues(harness.TeamInvocation.Request!.Input.Headers);
+        ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request!.Input.Headers);
+        harness.TeamInvocation.Request.Input.ToolContext!.Caller.OwnerSubject.Should().Be("owner-1");
+        harness.TeamInvocation.Request.Input.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        harness.TeamInvocation.Request.Input.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
+        harness.TeamInvocation.Request.Input.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
     }
 
     [Fact]
@@ -500,8 +512,15 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.Prompt.Should().Be("run workflow");
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
-        harness.WorkflowDispatch.Command.Metadata.Should().Contain("scope_id", "scope-1");
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
+        ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
+        harness.WorkflowDispatch.Command.ToolContext.Should().NotBeNull();
+        harness.WorkflowDispatch.Command.ToolContext!.Caller.ScopeId.Should().Be("scope-1");
+        harness.WorkflowDispatch.Command.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        harness.WorkflowDispatch.Command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        harness.WorkflowDispatch.Command.LlmControl.Should().NotBeNull();
+        harness.WorkflowDispatch.Command.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
+        harness.WorkflowDispatch.Command.LlmControl.ModelOverride.Should().Be("model-1");
 
         var result = Read(output);
         result.GetProperty("run_id").GetString().Should().Be("wf-command");
@@ -694,7 +713,11 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        ShouldCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
+        ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
+        harness.WorkflowDispatch.Command.ToolContext!.Caller.OwnerSubject.Should().Be("owner-1");
+        harness.WorkflowDispatch.Command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        harness.WorkflowDispatch.Command.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
+        harness.WorkflowDispatch.Command.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
     }
 
     [Fact]
@@ -865,17 +888,6 @@ public sealed class AevatarInvocationToolSourceTests
                error.TryGetProperty("code", out var code)
             ? code.GetString()
             : null;
-    }
-
-    private static void ShouldCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)
-    {
-        metadata.Should().NotBeNull();
-        var values = metadata!.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal);
-        values.Should().Contain(LLMRequestMetadataKeys.OwnerSubject, "owner-1");
-        values.Should().Contain(LLMRequestMetadataKeys.NyxIdAccessToken, "access-token");
-        values.Should().Contain(LLMRequestMetadataKeys.SenderNyxIdAccessToken, "sender-token");
-        values.Should().Contain(LLMRequestMetadataKeys.ScopeId, "scope-1");
-        values.Should().Contain("scope_id", "scope-1");
     }
 
     private static void ShouldNotCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)

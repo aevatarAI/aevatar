@@ -441,14 +441,15 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
         };
 
         AppendMetadata(chatRequest.Metadata, context.Headers);
-        chatRequest.LlmControl = new LLMControlContext(
+        chatRequest.ToolContext = (command.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload();
+        chatRequest.LlmControl = (command.LlmControl ?? new LLMControlContext(
             NyxIdAccessToken: Normalize(command.NyxIdAccessToken),
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: Normalize(command.ModelOverride),
             NyxIdRoutePreference: Normalize(command.PreferredLlmRoute),
             MaxToolRoundsOverride: null,
-            UserMemoryPrompt: null).ToPayload();
+            UserMemoryPrompt: null)).ToPayload();
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
 

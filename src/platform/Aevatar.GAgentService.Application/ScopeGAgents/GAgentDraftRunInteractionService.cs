@@ -59,7 +59,9 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
                 NyxIdAccessToken: NormalizeOptional(request.NyxIdAccessToken),
                 ModelOverride: NormalizeOptional(request.ModelOverride),
                 PreferredLlmRoute: NormalizeOptional(request.PreferredLlmRoute),
-                InputParts: request.InputParts);
+                InputParts: request.InputParts,
+                ToolContext: request.ToolContext,
+                LlmControl: request.LlmControl);
 
             var result = await _interactionService.ExecuteAsync(command, emitAsync, onAcceptedAsync, ct);
             if (!result.Succeeded)

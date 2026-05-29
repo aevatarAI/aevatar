@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 
 namespace Aevatar.GAgentService.Abstractions.Ports;
@@ -24,7 +26,9 @@ public sealed record StaticGAgentStreamInvocationInput(
     IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
     ServiceInvocationCaller? Caller = null,
-    TimeSpan? Timeout = null);
+    TimeSpan? Timeout = null,
+    AgentToolExecutionContext? ToolContext = null,
+    LLMControlContext? LlmControl = null);
 
 public sealed record StaticGAgentStreamAcceptedReceipt(
     ServiceInvocationAcceptedReceipt ServiceReceipt,

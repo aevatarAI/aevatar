@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 
 namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -33,7 +35,9 @@ public sealed record GAgentDraftRunCommand(
     IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
     bool UseCorrelationIdAsFallbackSessionId = true,
-    string? AgentKind = null) : ICommandContextSeed
+    string? AgentKind = null,
+    AgentToolExecutionContext? ToolContext = null,
+    LLMControlContext? LlmControl = null) : ICommandContextSeed
 {
     public string? CommandId => null;
 

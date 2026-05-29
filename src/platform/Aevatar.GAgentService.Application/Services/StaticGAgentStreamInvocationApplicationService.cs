@@ -90,7 +90,9 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
                 Headers: headers,
                 InputParts: input.InputParts,
                 UseCorrelationIdAsFallbackSessionId: false,
-                AgentKind: agentKind),
+                AgentKind: agentKind,
+                ToolContext: input.ToolContext,
+                LlmControl: input.LlmControl),
             emitAsync,
             OnAcceptedAsync,
             timeoutCts.Token);

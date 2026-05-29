@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Presentation.AGUI;
 
@@ -12,7 +14,9 @@ public sealed record GAgentDraftRunInteractionRequest(
     string? NyxIdAccessToken = null,
     string? ModelOverride = null,
     string? PreferredLlmRoute = null,
-    IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null);
+    IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
+    AgentToolExecutionContext? ToolContext = null,
+    LLMControlContext? LlmControl = null);
 
 public sealed record GAgentDraftRunPreparedActor(
     string ScopeId,
