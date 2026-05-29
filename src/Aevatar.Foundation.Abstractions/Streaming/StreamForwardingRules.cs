@@ -30,7 +30,13 @@ public static class StreamForwardingRules
 
     public static StreamForwardingBinding CreateCommittedObservationBinding(
         string sourceStreamId,
-        string targetStreamId)
+        string targetStreamId) =>
+        CreateCommittedFactsObserverBinding(sourceStreamId, targetStreamId);
+
+    public static StreamForwardingBinding CreateCommittedFactsObserverBinding(
+        string sourceStreamId,
+        string targetStreamId,
+        StreamForwardingMode forwardingMode = StreamForwardingMode.HandleThenForward)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
@@ -43,8 +49,11 @@ public static class StreamForwardingRules
         {
             SourceStreamId = sourceStreamId,
             TargetStreamId = targetStreamId,
-            ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [],
+            ForwardingMode = forwardingMode,
+            DirectionFilter =
+            [
+                TopologyAudience.Unspecified,
+            ],
             EventTypeFilter =
             [
                 $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}",
@@ -57,9 +66,18 @@ public static class StreamForwardingRules
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var direction = envelope.Route.GetTopologyAudience();
+        var isObserverPublication = envelope.Route.IsObserverPublication();
+        var direction = isObserverPublication
+            ? TopologyAudience.Unspecified
+            : envelope.Route.GetTopologyAudience();
         if (binding.DirectionFilter.Count > 0 && !binding.DirectionFilter.Contains(direction))
             return false;
+
+        if (isObserverPublication &&
+            envelope.Route.GetObserverAudience() != ObserverAudience.CommittedFacts)
+        {
+            return false;
+        }
 
         if (binding.EventTypeFilter.Count == 0)
             return true;

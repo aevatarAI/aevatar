@@ -1139,6 +1139,78 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithPreviousResponseAfterBearerScopeRotation_ShouldReResolveCurrentBearerAndRejectBeforeRegistrationOrProviderCall()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "old-scope",
+            "owner-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            2,
+            "resp_previous:tool:call_1:emitted",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Pending,
+                    DateTimeOffset.UtcNow.AddHours(1),
+                    null,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    null,
+                    null),
+            ]));
+        var callerScopeResolver = new TokenAwareResponsesCallerScopeResolver(
+            new ResponsesCallerScope("new-scope", "owner-1", LlmSessionOriginKind.ApiKey));
+        await using var app = await CreateAppAsync(provider, sessions, callerScopeResolver);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "rotated-secret");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        GetErrorCode(body).Should().Be("response_scope_mismatch");
+        callerScopeResolver.ResolvedTokens.Should().Equal("rotated-secret");
+        sessions.Registered.Should().BeEmpty();
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.ForwardedToolCalls.Should().BeEmpty();
+        sessions.RecordedCompletions.Should().BeEmpty();
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+        provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task PostResponses_WithPreviousResponseFromDifferentOrigin_ShouldReturnForbidden()
     {
         var provider = new RecordingLLMProvider();
@@ -2851,6 +2923,20 @@ public sealed class MainnetResponsesEndpointsTests
         }
     }
 
+    private sealed class TokenAwareResponsesCallerScopeResolver(ResponsesCallerScope scope)
+        : IResponsesCallerScopeResolver
+    {
+        public List<string> ResolvedTokens { get; } = [];
+
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default)
+        {
+            ResolvedTokens.Add(context.InboundBearerToken);
+            return Task.FromResult(scope);
+        }
+    }
+
     private sealed class RecordingResponsesToolProvider : IResponsesToolProvider
     {
         private readonly IReadOnlyList<IAgentTool> _substituteTools;
@@ -2938,19 +3024,7 @@ public sealed class MainnetResponsesEndpointsTests
             ResponsesWebSearchBoundaryInput input,
             CancellationToken ct) =>
             Task.FromResult(new ResponsesWebSearchBoundaryResult(
-                new Google.Protobuf.WellKnownTypes.Value
-                {
-                    StructValue = new Struct
-                    {
-                        Fields =
-                        {
-                            ["results"] = new Google.Protobuf.WellKnownTypes.Value
-                            {
-                                ListValue = new ListValue(),
-                            },
-                        },
-                    },
-                }));
+                new ResponsesWebSearchToolOutput()));
     }
 
     private sealed class StubAgentTool : IAgentTool
@@ -2990,7 +3064,7 @@ public sealed class MainnetResponsesEndpointsTests
                 toolName,
                 value,
                 string.Empty,
-                ResponsesJsonValues.ParseBoundaryPayload(resultJson),
+                ResponsesWebResultMigration.FromLegacyValue(ResponsesJsonValues.ParseBoundaryPayload(resultJson)),
                 DateTimeOffset.UtcNow,
                 null,
                 0);

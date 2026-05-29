@@ -153,6 +153,52 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithPreviousResponseAfterBearerScopeRotation_ShouldRejectBeforeRegistrationOrDispatch()
+    {
+        const string previousResponseId = "resp_previous";
+        var previousSnapshot = BuildSnapshot(previousResponseId, scopeId: "old-scope");
+        var queryPort = new RecordingSessionQueryPort { Snapshot = previousSnapshot };
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var callerScopeResolver = new StaticCallerScopeResolver("new-scope", "owner-1", LlmSessionOriginKind.ApiKey);
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            queryPort: queryPort,
+            callerScopeResolver: callerScopeResolver,
+            dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            null,
+            [
+                new ResponsesToolResultInput(
+                    "call_1",
+                    """{"ok":true}""",
+                    null),
+            ],
+            false,
+            previousResponseId,
+            null,
+            null,
+            []), CallerScopeContext("rotated-token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            403,
+            "response_scope_mismatch",
+            "response id is not visible to the current caller scope."));
+        result.Accepted.Should().BeNull();
+        result.Completed.Should().BeNull();
+        result.StreamPlan.Should().BeNull();
+        sessions.Registered.Should().BeEmpty();
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.RecordedToolCalls.Should().BeEmpty();
+        sessions.RecordedCompletions.Should().BeEmpty();
+        sessions.UpdatedStatuses.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CancelAsync_ShouldRejectInvisibleResponse_AndUpdateVisibleResponse()
     {
         var queryPort = new RecordingSessionQueryPort
@@ -309,9 +355,6 @@ public sealed class ResponsesCommandFacadeTests
             NullLogger<ResponsesCommandFacade>.Instance);
     }
 
-    private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
-        new(bearerToken, null, null);
-
     private static ResponsesCreateCommandPlan BuildStreamPlan() =>
         new(
             new NormalizedResponsesRequest(
@@ -361,6 +404,9 @@ public sealed class ResponsesCommandFacadeTests
         ForwardToModel = new ForwardToModel { ModelName = modelName },
     };
 
+    private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
+        new(bearerToken, null, null);
+
     private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
     {
         ForwardToModel = new ForwardToModel
@@ -380,12 +426,15 @@ public sealed class ResponsesCommandFacadeTests
         },
     };
 
-    private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
+    private sealed class StaticCallerScopeResolver(
+        string scopeId = "scope-1",
+        string ownerSubject = "owner-1",
+        LlmSessionOriginKind originKind = LlmSessionOriginKind.ApiKey) : IResponsesCallerScopeResolver
     {
         public Task<ResponsesCallerScope> ResolveAsync(
             ResponsesCallerScopeResolutionContext context,
             CancellationToken ct = default) =>
-            Task.FromResult(new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey));
+            Task.FromResult(new ResponsesCallerScope(scopeId, ownerSubject, originKind));
     }
 
     private sealed class ThrowingCallerScopeResolver : IResponsesCallerScopeResolver
@@ -555,6 +604,10 @@ public sealed class ResponsesCommandFacadeTests
 
         public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
 
+        public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
+
+        public List<(string ActorId, string ResponseId, string CallId)> ResolvedToolResults { get; } = [];
+
         public RecordingSessionQueryPort QueryPort { get; } = new();
 
         public Exception? UpdateStatusException { get; init; }
@@ -602,15 +655,21 @@ public sealed class ResponsesCommandFacadeTests
             string callId,
             string schemaHash,
             string resultJson,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ToolResults.Add((sessionActorId, responseId, callId, schemaHash, resultJson));
+            return Task.CompletedTask;
+        }
 
         public Task ResolveForwardedToolResultAsync(
             string sessionActorId,
             string responseId,
             string callId,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ResolvedToolResults.Add((sessionActorId, responseId, callId));
+            return Task.CompletedTask;
+        }
 
         private static LlmSessionCompletionSnapshot ToSnapshot(LlmSessionCompletion completion) =>
             new(

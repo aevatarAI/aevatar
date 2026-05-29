@@ -1069,7 +1069,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_RoleReplyRecorded_ShouldCompleteMatchingPendingStep()
+    public async Task LLMCallModule_LiveFramesShouldNotCompleteAndRoleReplyShouldCompleteMatchingPendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1088,7 +1088,23 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text", attempt: 1);
         await module.HandleAsync(
-            Envelope(RoleReply(textSessionId, "a1", roleActorId: "role-worker-1")),
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = textSessionId,
+                Content = "a1",
+            }, publisherId: "role-worker-1"),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowRoleReplyRecordedEvent
+            {
+                SessionId = textSessionId,
+                Content = "a1",
+                RoleActorId = "role-worker-1",
+            }),
             ctx,
             CancellationToken.None);
 
@@ -1113,13 +1129,28 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat", attempt: 1);
         await module.HandleAsync(
-            Envelope(RoleReply(chatSessionId, "a2", roleActorId: "role-worker-2")),
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = chatSessionId,
+                Content = "a2",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowRoleReplyRecordedEvent
+            {
+                SessionId = chatSessionId,
+                Content = "a2",
+            }),
             ctx,
             CancellationToken.None);
 
         var chatCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         chatCompleted.StepId.Should().Be("llm-chat");
-        chatCompleted.WorkerId.Should().Be("role-worker-2");
+        chatCompleted.WorkerId.Should().Be(ctx.AgentId);
         chatCompleted.Output.Should().Be("a2");
     }
 

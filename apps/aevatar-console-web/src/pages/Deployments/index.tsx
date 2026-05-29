@@ -547,12 +547,17 @@ const DeploymentsScopeCard: React.FC<{
     <div
       style={{
         alignItems: "center",
-        display: "grid",
+        display: "flex",
+        flexWrap: "wrap",
         gap: 12,
-        gridTemplateColumns: "minmax(0, 1fr) auto",
+        justifyContent: "space-between",
       }}
     >
-      <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+      <Space
+        orientation="vertical"
+        size={2}
+        style={{ flex: "1 1 160px", minWidth: 160 }}
+      >
         <span
           style={{
             color: "var(--ant-color-primary)",
@@ -584,12 +589,13 @@ const DeploymentsScopeCard: React.FC<{
             borderRadius: 999,
             color: "var(--ant-color-primary)",
             display: "inline-flex",
+            flex: "0 1 auto",
             fontSize: 12,
             fontWeight: 600,
-            minHeight: 30,
             maxWidth: "100%",
+            minHeight: 30,
+            overflowWrap: "anywhere",
             padding: "0 12px",
-            whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
@@ -716,7 +722,7 @@ const DeploymentsScopeCard: React.FC<{
       </div>
 
       <Space size={8}>
-        <Button size="small" onClick={onReset}>
+        <Button aria-label="重置" size="small" onClick={onReset}>
           重置
         </Button>
         <Button

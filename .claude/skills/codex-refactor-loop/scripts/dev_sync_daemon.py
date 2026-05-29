@@ -295,6 +295,28 @@ def sync_direction(source: str, target: str, wt: Path, branch_prefix: str, label
             log(f"{label}: PR #{pr_num} CI fail + codex in-flight,等")
         return
 
+    # Stale-sync-branch refresh: sync_branch should track source tip.
+    # mss only measures sync_branch vs base; doesn't detect when source advances past sync_branch.
+    # If sync_branch lags source by N commits, force-reset to source tip + force-push so PR
+    # covers all latest source commits. Bug fix for stuck reverse rollup (PR #1167) on 2026-05-30.
+    if sync_branch:
+        src_ahead_of_sync = count_ahead(f"origin/{sync_branch}", f"origin/{source}")
+        if src_ahead_of_sync > 0:
+            log(f"{label}: PR #{pr_num} clean but sync_branch behind {source} by {src_ahead_of_sync} commits — refreshing")
+            if not ensure_worktree(wt, sync_branch):
+                log(f"{label}: WARN cannot prepare worktree for refresh")
+                return
+            r = run(["git", "reset", "--hard", f"origin/{source}"], cwd=wt)
+            if r.returncode != 0:
+                log(f"{label}: WARN reset --hard fail: {r.stderr.strip()[:120]}")
+                return
+            r = run(["git", "push", "--force-with-lease", "origin", f"HEAD:{sync_branch}"], cwd=wt, timeout=120)
+            if r.returncode != 0:
+                log(f"{label}: WARN force-push fail: {r.stderr.strip()[:120]}")
+                return
+            log(f"{label}: PR #{pr_num} sync_branch force-refreshed to {source} tip(+{src_ahead_of_sync} commits)")
+            return
+
     wait_what = "GitHub auto-merge" if label == "forward" else "maintainer review + merge"
     log(f"{label}: PR #{pr_num} clean(mss={mss or 'UNKNOWN'}),等 {wait_what}")
 

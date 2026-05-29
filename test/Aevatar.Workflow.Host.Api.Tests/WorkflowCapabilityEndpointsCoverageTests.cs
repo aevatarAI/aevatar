@@ -140,6 +140,229 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldNormalizeTypedInlineBundleSubmessage()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                InlineBundle = new WorkflowChatInlineYamlBundleSourceInput
+                {
+                    EntryName = " auto ",
+                    ActorId = " source-actor-1 ",
+                    YamlDocuments =
+                    [
+                        new WorkflowChatInlineYamlDocumentInput
+                        {
+                            Name = "auto",
+                            Yaml = "name: auto",
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
+        result.Request.Source.InlineBundle.Should().NotBeNull();
+        result.Request.Source.InlineBundle!.EntryName.Should().Be("auto");
+        result.Request.Source.InlineBundle.ActorId.Should().Be("source-actor-1");
+        result.Request.Source.InlineBundle.YamlDocuments.Should().ContainSingle()
+            .Which.Should().Be(new WorkflowChatInlineYamlDocument("auto", "name: auto"));
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldPreferTypedInlineBundleSubmessageOverLegacyAliases()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                WorkflowName = "legacy",
+                ActorId = "legacy-actor",
+                WorkflowYamls = ["name: legacy"],
+                InlineBundle = new WorkflowChatInlineYamlBundleSourceInput
+                {
+                    EntryName = " typed ",
+                    ActorId = " typed-actor ",
+                    YamlDocuments =
+                    [
+                        new WorkflowChatInlineYamlDocumentInput
+                        {
+                            Name = "typed",
+                            Yaml = "name: typed",
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
+        result.Request.Source.InlineBundle.Should().BeEquivalentTo(new WorkflowChatInlineYamlBundleSource(
+            "typed",
+            [new WorkflowChatInlineYamlDocument("typed", "name: typed")],
+            "typed-actor"));
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectBlankTypedInlineBundleYamlDocument()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                InlineBundle = new WorkflowChatInlineYamlBundleSourceInput
+                {
+                    EntryName = "auto",
+                    YamlDocuments =
+                    [
+                        new WorkflowChatInlineYamlDocumentInput
+                        {
+                            Name = "auto",
+                            Yaml = "   ",
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldTrimTypedCatalogNameSubmessage()
+    {
+        var result = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "catalog",
+                CatalogName = new WorkflowChatCatalogNameSourceInput
+                {
+                    WorkflowName = " auto ",
+                },
+            },
+        });
+        var blankResult = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "catalog",
+                CatalogName = new WorkflowChatCatalogNameSourceInput
+                {
+                    WorkflowName = "   ",
+                },
+            },
+        });
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.CatalogWorkflow);
+        result.Request.Source.CatalogName.Should().Be(new WorkflowChatCatalogNameSource("auto"));
+        blankResult.Succeeded.Should().BeFalse();
+        blankResult.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldPreferTypedCatalogNameSubmessageOverLegacyAlias()
+    {
+        var result = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "catalog",
+                WorkflowName = "legacy",
+                CatalogName = new WorkflowChatCatalogNameSourceInput
+                {
+                    WorkflowName = " typed ",
+                },
+            },
+        });
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.CatalogWorkflow);
+        result.Request.Source.CatalogName.Should().Be(new WorkflowChatCatalogNameSource("typed"));
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldTrimTypedDefinitionActorSubmessage()
+    {
+        var result = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "actor",
+                DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                {
+                    ActorId = " actor-1 ",
+                    WorkflowName = " auto ",
+                },
+            },
+        });
+        var blankResult = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "actor",
+                DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                {
+                    ActorId = "   ",
+                    WorkflowName = " auto ",
+                },
+            },
+        });
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
+        result.Request.Source.DefinitionActorSource.Should().Be(new WorkflowChatDefinitionActorSource("actor-1", "auto"));
+        blankResult.Succeeded.Should().BeFalse();
+        blankResult.Error.Should().Be(WorkflowChatRunStartError.AgentNotFound);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldPreferTypedDefinitionActorSubmessageOverLegacyAliases()
+    {
+        var result = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "actor",
+                ActorId = "legacy-actor",
+                WorkflowName = "legacy-workflow",
+                DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                {
+                    ActorId = " typed-actor ",
+                    WorkflowName = " typed-workflow ",
+                },
+            },
+        });
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
+        result.Request.Source.DefinitionActorSource.Should()
+            .Be(new WorkflowChatDefinitionActorSource("typed-actor", "typed-workflow"));
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldNormalizeTypedAndLegacyInputsToEquivalentTypedSource()
     {
         var typed = ChatRunRequestNormalizer.Normalize(new ChatInput

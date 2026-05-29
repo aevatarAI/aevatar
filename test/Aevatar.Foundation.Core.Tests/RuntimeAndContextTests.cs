@@ -93,7 +93,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         var committedObservationBinding = childBindings.Should().ContainSingle(x =>
             x.TargetStreamId == parent.Id &&
             x.ForwardingMode == StreamForwardingMode.HandleThenForward).Subject;
-        committedObservationBinding.DirectionFilter.Should().BeEmpty();
+        committedObservationBinding.DirectionFilter.SetEquals([TopologyAudience.Unspecified]).Should().BeTrue();
         committedObservationBinding.EventTypeFilter.Should().ContainSingle()
             .Which.Should().Be($"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}");
 

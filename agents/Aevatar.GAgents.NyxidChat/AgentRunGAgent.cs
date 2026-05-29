@@ -48,7 +48,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     internal static readonly TimeSpan TerminalCleanupDelay = TimeSpan.FromMinutes(5);
     private const string TerminalCleanupCallbackPrefix = "agent-run-terminal-cleanup";
     private const string GenerationTimeoutCallbackPrefix = "agent-run-generation-timeout";
-    internal static readonly TimeSpan OutputDispatchTimeout = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
     internal static readonly TimeSpan DropNotificationRetryDelay = TimeSpan.FromSeconds(5);
@@ -1032,8 +1031,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         };
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(request.TargetActorId, ready, outputCts.Token);
+            await SendToAsync(request.TargetActorId, ready, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1082,8 +1080,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(targetActorId, dropped, outputCts.Token);
+            await SendToAsync(targetActorId, dropped, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1112,8 +1109,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(command.TargetActorId, dropped, outputCts.Token);
+            await SendToAsync(command.TargetActorId, dropped, CancellationToken.None);
         }
         catch (Exception ex)
         {

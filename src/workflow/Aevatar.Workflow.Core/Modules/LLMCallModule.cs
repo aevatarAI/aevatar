@@ -174,9 +174,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
+        var publisherActorId = string.IsNullOrWhiteSpace(evt.RoleActorId) ? ctx.AgentId : evt.RoleActorId;
         if (TryExtractLlmFailure(evt.Content, out var error))
         {
-            await PublishFailedCompletionAsync(pending, error, evt.RoleActorId, ctx, ct);
+            await PublishFailedCompletionAsync(pending, error, publisherActorId, ctx, ct);
             await RemovePendingAsync(sessionId, pending, ctx, ct);
             return;
         }
@@ -195,7 +196,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 RunId = pending.RunId,
                 Success = true,
                 Output = evt.Content ?? string.Empty,
-                WorkerId = evt.RoleActorId,
+                WorkerId = publisherActorId,
             },
             TopologyAudience.Self,
             ct);
