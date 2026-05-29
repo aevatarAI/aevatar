@@ -14,6 +14,12 @@ namespace Aevatar.Studio.Projection.Projectors;
 /// Ensures a workflow draft has a canonical StudioMember authority after the
 /// workspace actor commits <see cref="StudioWorkflowDraftSaved"/>.
 /// </summary>
+// Refactor (iter1345/cluster-519-draft-member-authority):
+//   Old pattern: draft save callers could stitch member creation together
+//   outside the committed-state projection chain.
+//   New principle: the committed StudioWorkflowDraftSaved fact is the single
+//   trigger; this materializer fans out one typed EnsureStudioMember command
+//   through the standard actor dispatch path.
 internal sealed class StudioWorkflowDraftMemberEnsureMaterializer
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {

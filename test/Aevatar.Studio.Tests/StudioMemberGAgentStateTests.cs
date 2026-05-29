@@ -18,6 +18,11 @@ public sealed class StudioMemberGAgentStateTests
 {
     private readonly StudioMemberStateApplier _agent = new();
 
+    // Refactor (iter1345/cluster-519-draft-member-authority):
+    //   Old pattern: tests covered only direct create semantics, leaving the
+    //   draft projection ensure command contract implicit.
+    //   New principle: behavior tests lock the actor-owned idempotency and
+    //   conflict rules for the typed ensure-member command path.
     [Fact]
     public async Task HandleEnsureStudioMember_ShouldPersistCreatedEvent_WhenMissing()
     {
@@ -69,6 +74,35 @@ public sealed class StudioMemberGAgentStateTests
             RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
         });
 
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleEnsureStudioMember_ShouldReject_WhenExistingAuthorityDoesNotMatchCommandTarget()
+    {
+        var existing = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "workflow-1",
+            ScopeId = "scope-1",
+            DisplayName = "Existing",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-workflow-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var eventSourcing = new RecordingEventSourcing(existing);
+        var agent = NewHandlerAgent(existing, eventSourcing, new RecordingEventPublisher());
+
+        Func<Task> act = () => agent.HandleEnsureStudioMember(new EnsureStudioMember
+        {
+            MemberId = "workflow-2",
+            ScopeId = "scope-2",
+            DisplayName = "Conflicting workflow",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*member already initialized as 'scope-1/workflow-1'*");
         eventSourcing.RaisedEvents.Should().BeEmpty();
         eventSourcing.ConfirmCallCount.Should().Be(0);
     }

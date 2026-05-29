@@ -21,6 +21,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 {
     public static string ProjectionKind => "studio-member";
 
+    // Refactor (iter1345/cluster-519-draft-member-authority):
+    //   Old pattern: workflow draft saves could leave member authority creation
+    //   to API-side orchestration or read-model freshness assumptions.
+    //   New principle: committed draft facts enter projection fanout, then the
+    //   standard actor command path asks this member actor to own creation
+    //   idempotently from its authoritative state.
     [EventHandler(EndpointName = "ensureMember")]
     public async Task HandleEnsureStudioMember(EnsureStudioMember command)
     {

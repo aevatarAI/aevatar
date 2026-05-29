@@ -214,9 +214,11 @@ message StudioMemberCreatedEvent {
   google.protobuf.Timestamp created_at_utc = 7;
 }
 
-// Idempotent command used by committed workflow draft projection fanout.
-// It creates the member authority if missing and otherwise leaves the
-// existing StudioMemberState untouched.
+// Refactor (iter1345/cluster-519-draft-member-authority):
+//   Old pattern: draft member authority could be implied by API/query-side
+//   orchestration instead of an explicit actor-owned command.
+//   New principle: projection fanout sends this typed command through the
+//   existing dispatch envelope so StudioMemberGAgent remains the authority.
 message EnsureStudioMember {
   string member_id = 1;
   string scope_id = 2;
