@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -63,7 +65,24 @@ public sealed record WorkflowChatRunRequest(
     //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null,
     WorkflowChatSource? Source = null,
-    LLMControlContext? LlmControl = null);
+    LLMControlContext? LlmControl = null,
+    IReadOnlyDictionary<string, string>? Headers = null,
+    string? CommandIdSeed = null,
+    string? CorrelationIdSeed = null,
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+{
+    string? ICommandContextSeed.CommandId => CommandIdSeed;
+
+    string? ICommandContextSeed.CorrelationId => CorrelationIdSeed;
+
+    IReadOnlyDictionary<string, string>? ICommandContextSeed.Headers => Headers;
+}
+
+public sealed record WorkflowRunTargetSeed(
+    string ActorId,
+    string WorkflowNameForRun,
+    IReadOnlyList<string>? CreatedActorIds = null,
+    WorkflowChatSource? Source = null);
 
 public enum WorkflowChatRunStartError
 {
@@ -77,6 +96,7 @@ public enum WorkflowChatRunStartError
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
     PromptRequired = 9,
+    ProjectionUnavailable = 10,
 }
 
 public enum WorkflowProjectionCompletionStatus

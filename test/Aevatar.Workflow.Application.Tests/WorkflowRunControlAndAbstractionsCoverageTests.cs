@@ -568,16 +568,13 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunObservationLifecycle_ShouldAggregateRollbackFailure_WhenBindingAndRollbackBothFail()
+    public async Task WorkflowRunObservationLifecycle_ShouldPropagateBindFailureWithoutRollingBackCreatedActors()
     {
         var projectionPort = new FakeProjectionPort
         {
             AttachException = new InvalidOperationException("attach failed"),
         };
-        var actorPort = new FakeWorkflowRunActorPort
-        {
-            DestroyException = new InvalidOperationException("destroy failed"),
-        };
+        var actorPort = new FakeWorkflowRunActorPort();
         var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
         var target = new WorkflowRunCommandTarget("actor-1",
             "workflow-1",
@@ -598,11 +595,11 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             },
             CancellationToken.None);
 
-        var ex = await act.Should().ThrowAsync<AggregateException>();
-        ex.Which.Message.Should().Contain("rollback also failed");
-        ex.Which.InnerExceptions.Should().HaveCount(2);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("attach failed");
         projectionPort.AttachExistingCalls.Should().ContainSingle()
             .Which.Should().Be(("actor-1", "cmd-1"));
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     private static WorkflowRunCommandTarget CreateBoundTarget(

@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Presentation.AGUI;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,7 +21,14 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddCqrsCore();
-        services.TryAddSingleton<IGAgentDraftRunInteractionPort, GAgentDraftRunInteractionService>();
+        services.TryAddSingleton<IGAgentDraftRunInteractionPort>(sp =>
+            new GAgentDraftRunInteractionService(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IGAgentActorRegistryCommandPort>(),
+                sp.GetRequiredService<IScopeResourceAdmissionPort>(),
+                sp.GetRequiredService<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>(),
+                sp.GetRequiredService<IGAgentDraftRunObservationScopeActivationPort>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<GAgentDraftRunInteractionService>>()));
         services.TryAddSingleton<ICommandTargetResolver<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>, GAgentDraftRunCommandTargetResolver>();
         services.TryAddSingleton<ICommandObservationLifecycle<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>, GAgentDraftRunObservationLifecycle>();
         services.TryAddSingleton<ICommandEnvelopeFactory<GAgentDraftRunCommand>, GAgentDraftRunCommandEnvelopeFactory>();
@@ -32,7 +40,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandDurableCompletionResolver<GAgentDraftRunAcceptedReceipt, GAgentDraftRunCompletionStatus>, GAgentDraftRunDurableCompletionResolver>();
         services.TryAddSingleton<IEventFrameMapper<AGUIEvent, AGUIEvent>, IdentityEventFrameMapper<AGUIEvent>>();
         services.TryAddSingleton<IEventOutputStream<AGUIEvent, AGUIEvent>, DefaultEventOutputStream<AGUIEvent, AGUIEvent>>();
-        services.TryAddSingleton<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>(sp =>
+        services.TryAddSingleton(sp =>
             new DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>(
                 sp.GetRequiredService<ICommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>>(),
                 sp.GetRequiredService<IEventOutputStream<AGUIEvent, AGUIEvent>>(),

@@ -53,6 +53,11 @@ public sealed record ChatInput
     /// </summary>
     public IDictionary<string, string>? Metadata { get; init; }
 
+    /// <summary>
+    /// Optional command transport headers for downstream runtime adapters.
+    /// </summary>
+    public IDictionary<string, string>? Headers { get; init; }
+
     public ChatLlmControlInput? LlmControl { get; init; }
 }
 

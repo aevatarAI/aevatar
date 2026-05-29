@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -69,7 +68,7 @@ public static class ScopeWorkflowEndpoints
         string workflowId,
         RunScopeWorkflowByIdStreamHttpRequest request,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
         => await HandleRunWorkflowByIdStreamAsyncCore(http, scopeId, workflowId, request, workflowQueryPort, chatRunService, ct);
 
@@ -78,7 +77,7 @@ public static class ScopeWorkflowEndpoints
         string scopeId,
         RunScopeWorkflowStreamHttpRequest request,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
         => await HandleRunWorkflowStreamAsyncCore(http, scopeId, request, workflowQueryPort, chatRunService, ct);
 
@@ -191,7 +190,7 @@ public static class ScopeWorkflowEndpoints
         string workflowId,
         RunScopeWorkflowByIdStreamHttpRequest request,
         IScopeWorkflowQueryPort workflowQueryPort,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         try
@@ -238,7 +237,7 @@ public static class ScopeWorkflowEndpoints
         string scopeId,
         RunScopeWorkflowStreamHttpRequest request,
         IScopeWorkflowQueryPort workflowQueryPort,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         try
@@ -288,7 +287,7 @@ public static class ScopeWorkflowEndpoints
         string? sessionId,
         Dictionary<string, string>? headers,
         string? eventFormat,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         if (!TryParseEventFormat(eventFormat, out var resolvedEventFormat))
@@ -313,7 +312,7 @@ public static class ScopeWorkflowEndpoints
                     AgentId = workflow.ActorId,
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
-                    Metadata = scopedHeaders,
+                    Headers = scopedHeaders,
                     LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                 },
                 chatRunService,
@@ -337,7 +336,7 @@ public static class ScopeWorkflowEndpoints
     internal static async Task HandleAguiStreamAsync(
         HttpContext http,
         WorkflowChatRunRequest request,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
@@ -417,7 +416,7 @@ public static class ScopeWorkflowEndpoints
         string? sessionId,
         IReadOnlyDictionary<string, string>? headers,
         LLMControlContext? llmControl,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
@@ -429,7 +428,7 @@ public static class ScopeWorkflowEndpoints
                 workflow.ActorId,
                 sessionId,
                 WorkflowYamls: null,
-                Metadata: headers,
+                Headers: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
                 LlmControl: llmControl),
             chatRunService,
@@ -625,6 +624,7 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.WorkflowNotFound => (StatusCodes.Status404NotFound, "WORKFLOW_NOT_FOUND", "Workflow not found."),
             WorkflowChatRunStartError.AgentTypeNotSupported => (StatusCodes.Status400BadRequest, "AGENT_TYPE_NOT_SUPPORTED", "Actor is not workflow-capable."),
             WorkflowChatRunStartError.ProjectionDisabled => (StatusCodes.Status503ServiceUnavailable, "PROJECTION_DISABLED", "Projection pipeline is disabled."),
+            WorkflowChatRunStartError.ProjectionUnavailable => (StatusCodes.Status503ServiceUnavailable, "WORKFLOW_PROJECTION_UNAVAILABLE", "Workflow projection is unavailable."),
             WorkflowChatRunStartError.WorkflowBindingMismatch => (StatusCodes.Status409Conflict, "WORKFLOW_BINDING_MISMATCH", "Actor is bound to a different workflow."),
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => (StatusCodes.Status409Conflict, "AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),

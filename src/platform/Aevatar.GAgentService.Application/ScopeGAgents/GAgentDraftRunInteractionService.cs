@@ -18,6 +18,7 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
     private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
     private readonly IScopeResourceAdmissionPort _admissionPort;
     private readonly ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> _interactionService;
+    private readonly IGAgentDraftRunObservationScopeActivationPort _observationScopeActivationPort;
     private readonly ILogger<GAgentDraftRunInteractionService>? _logger;
 
     public GAgentDraftRunInteractionService(
@@ -25,12 +26,15 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         IGAgentActorRegistryCommandPort registryCommandPort,
         IScopeResourceAdmissionPort admissionPort,
         ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        IGAgentDraftRunObservationScopeActivationPort observationScopeActivationPort,
         ILogger<GAgentDraftRunInteractionService>? logger = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
         _admissionPort = admissionPort ?? throw new ArgumentNullException(nameof(admissionPort));
         _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
+        _observationScopeActivationPort = observationScopeActivationPort
+            ?? throw new ArgumentNullException(nameof(observationScopeActivationPort));
         _logger = logger;
     }
 
@@ -48,6 +52,21 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
             return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(preparedActor.Error);
 
         var actor = preparedActor.Actor!;
+        var commandId = CreateInteractionId();
+        var correlationId = CreateInteractionId();
+        var activation = await _observationScopeActivationPort.ActivateAsync(
+            actor.ActorId,
+            commandId,
+            correlationId,
+            ct);
+        if (activation == null)
+        {
+            await RollbackAsync(actor, CancellationToken.None);
+            return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
+                GAgentDraftRunStartError.ProjectionUnavailable);
+        }
+
+        var accepted = false;
         try
         {
             var command = new GAgentDraftRunCommand(
@@ -59,17 +78,36 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
                 NyxIdAccessToken: NormalizeOptional(request.NyxIdAccessToken),
                 ModelOverride: NormalizeOptional(request.ModelOverride),
                 PreferredLlmRoute: NormalizeOptional(request.PreferredLlmRoute),
-                InputParts: request.InputParts);
+                Headers: request.Headers,
+                InputParts: request.InputParts,
+                UseCorrelationIdAsFallbackSessionId: request.UseCorrelationIdAsFallbackSessionId,
+                CommandIdSeed: commandId,
+                CorrelationIdSeed: correlationId);
 
-            var result = await _interactionService.ExecuteAsync(command, emitAsync, onAcceptedAsync, ct);
-            if (!result.Succeeded)
+            async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
+            {
+                accepted = true;
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, token);
+            }
+
+            var result = await _interactionService.ExecuteAsync(command, emitAsync, OnAcceptedAsync, ct);
+            if (!result.Succeeded && !accepted)
+            {
+                await _observationScopeActivationPort.ReleaseAsync(activation, CancellationToken.None);
                 await RollbackAsync(actor, CancellationToken.None);
+            }
 
             return result;
         }
         catch
         {
-            await RollbackAsync(actor, CancellationToken.None);
+            if (!accepted)
+            {
+                await _observationScopeActivationPort.ReleaseAsync(activation, CancellationToken.None);
+                await RollbackAsync(actor, CancellationToken.None);
+            }
+
             throw;
         }
     }
@@ -191,6 +229,8 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
+
+    private static string CreateInteractionId() => Guid.NewGuid().ToString("N");
 
     private sealed record PreparationResult(
         GAgentDraftRunPreparedActor? Actor,

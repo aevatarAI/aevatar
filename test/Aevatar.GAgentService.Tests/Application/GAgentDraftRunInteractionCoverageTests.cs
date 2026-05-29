@@ -337,7 +337,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldMapMetadataInputPartsAndSessionFallback()
+    public void EnvelopeFactory_ShouldMapHeadersInputPartsAndSessionFallback()
     {
         var factory = new GAgentDraftRunCommandEnvelopeFactory();
 
@@ -380,7 +380,9 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         payload.Prompt.Should().Be("hello");
         payload.ScopeId.Should().Be("scope-a");
         payload.SessionId.Should().Be("corr-1");
-        payload.Metadata["x-trace"].Should().Be("trace-1");
+        payload.Headers["x-trace"].Should().Be("trace-1");
+        payload.Headers.Should().NotContainKey("empty");
+        payload.Metadata.Should().NotContainKey("x-trace");
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);

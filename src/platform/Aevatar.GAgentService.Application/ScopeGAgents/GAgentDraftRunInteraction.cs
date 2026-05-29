@@ -1,7 +1,6 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -402,7 +401,7 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             ScopeId = command.ScopeId,
         };
 
-        AppendMetadata(chatRequest.Metadata, context.Headers);
+        CopyHeaders(chatRequest.Headers, context.Headers);
         chatRequest.LlmControl = new LLMControlContext(
             NyxIdAccessToken: Normalize(command.NyxIdAccessToken),
             NyxIdOrgToken: null,
@@ -452,7 +451,7 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
         };
     }
 
-    private static void AppendMetadata(
+    private static void CopyHeaders(
         Google.Protobuf.Collections.MapField<string, string> destination,
         IReadOnlyDictionary<string, string>? source)
     {
@@ -464,12 +463,6 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
             var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
             var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
             if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
-                continue;
-            if (AgentToolExecutionContextMapper.StripOwnedControlKeys(
-                    new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        [normalizedKey] = normalizedValue,
-                    }).Count == 0)
                 continue;
 
             destination[normalizedKey] = normalizedValue;

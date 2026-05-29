@@ -32,11 +32,13 @@ public sealed record GAgentDraftRunCommand(
     string? PreferredLlmRoute = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
-    bool UseCorrelationIdAsFallbackSessionId = true) : ICommandContextSeed
+    bool UseCorrelationIdAsFallbackSessionId = true,
+    string? CommandIdSeed = null,
+    string? CorrelationIdSeed = null) : ICommandContextSeed
 {
-    public string? CommandId => null;
+    public string? CommandId => CommandIdSeed;
 
-    public string? CorrelationId => null;
+    public string? CorrelationId => CorrelationIdSeed;
 }
 
 public enum GAgentDraftRunStartError

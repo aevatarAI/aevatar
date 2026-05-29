@@ -276,12 +276,88 @@ public sealed class GAgentDraftRunInteractionPortTests
         registry.UnregisteredActors.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotReleaseActivationOrRollback_WhenInnerAcceptsThenReturnsFailure()
+    {
+        var activation = new RecordingActivationPort();
+        var runtime = new RecordingActorRuntime(_ => null);
+        var registry = new RecordingRegistryCommandPort();
+        var interaction = new RecordingInteractionService
+        {
+            ResultFactory = async (command, _, onAcceptedAsync, ct) =>
+            {
+                onAcceptedAsync.Should().NotBeNull();
+                await onAcceptedAsync!(
+                    new GAgentDraftRunAcceptedReceipt(
+                        command.PreferredActorId ?? "actor-1",
+                        command.ActorTypeName,
+                        command.CommandIdSeed ?? "cmd-1",
+                        command.CorrelationIdSeed ?? "corr-1",
+                        command.SessionId ?? string.Empty),
+                    ct);
+
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
+                    .Failure(GAgentDraftRunStartError.ProjectionUnavailable);
+            },
+        };
+        var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction, activation);
+
+        var result = await port.ExecuteAsync(
+            Request(preferredActorId: "draft-actor"),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(GAgentDraftRunStartError.ProjectionUnavailable);
+        activation.Released.Should().BeEmpty();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        registry.UnregisteredActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotReleaseActivationOrRollback_WhenInnerAcceptsThenThrows()
+    {
+        var activation = new RecordingActivationPort();
+        var runtime = new RecordingActorRuntime(_ => null);
+        var registry = new RecordingRegistryCommandPort();
+        var interaction = new RecordingInteractionService
+        {
+            ResultFactory = async (command, _, onAcceptedAsync, ct) =>
+            {
+                onAcceptedAsync.Should().NotBeNull();
+                await onAcceptedAsync!(
+                    new GAgentDraftRunAcceptedReceipt(
+                        command.PreferredActorId ?? "actor-1",
+                        command.ActorTypeName,
+                        command.CommandIdSeed ?? "cmd-1",
+                        command.CorrelationIdSeed ?? "corr-1",
+                        command.SessionId ?? string.Empty),
+                    ct);
+
+                throw new InvalidOperationException("pump failed");
+            },
+        };
+        var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction, activation);
+
+        var act = () => port.ExecuteAsync(
+            Request(preferredActorId: "draft-actor"),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("pump failed");
+        activation.Released.Should().BeEmpty();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        registry.UnregisteredActors.Should().BeEmpty();
+    }
+
     private static GAgentDraftRunInteractionService CreatePort(
         RecordingActorRuntime runtime,
         RecordingRegistryCommandPort registry,
         RecordingAdmissionPort admission,
-        RecordingInteractionService interaction) =>
-        new(runtime, registry, admission, interaction);
+        RecordingInteractionService interaction,
+        IGAgentDraftRunObservationScopeActivationPort? activation = null) =>
+        new(runtime, registry, admission, interaction, activation ?? new NoOpActivationPort());
 
     private static GAgentDraftRunInteractionRequest Request(
         string? actorTypeName = null,
@@ -330,6 +406,49 @@ public sealed class GAgentDraftRunInteractionPortTests
             Commands.Add(command);
             return ResultFactory?.Invoke(command, emitAsync, onAcceptedAsync, ct)
                 ?? Task.FromResult(Success(command));
+        }
+    }
+
+    private sealed class NoOpActivationPort : IGAgentDraftRunObservationScopeActivationPort
+    {
+        public Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
+            string actorId,
+            string commandId,
+            string correlationId,
+            CancellationToken ct = default) =>
+            Task.FromResult<GAgentDraftRunObservationScopeActivation?>(new GAgentDraftRunObservationScopeActivation(
+                actorId,
+                commandId,
+                correlationId));
+
+        public Task ReleaseAsync(
+            GAgentDraftRunObservationScopeActivation activation,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingActivationPort : IGAgentDraftRunObservationScopeActivationPort
+    {
+        public List<GAgentDraftRunObservationScopeActivation> Handles { get; } = [];
+        public List<GAgentDraftRunObservationScopeActivation> Released { get; } = [];
+
+        public Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
+            string actorId,
+            string commandId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            var handle = new GAgentDraftRunObservationScopeActivation(actorId, commandId, correlationId);
+            Handles.Add(handle);
+            return Task.FromResult<GAgentDraftRunObservationScopeActivation?>(handle);
+        }
+
+        public Task ReleaseAsync(
+            GAgentDraftRunObservationScopeActivation activation,
+            CancellationToken ct = default)
+        {
+            Released.Add(activation);
+            return Task.CompletedTask;
         }
     }
 
