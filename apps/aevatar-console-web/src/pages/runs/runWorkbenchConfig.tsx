@@ -14,6 +14,12 @@ import {
 import type { RecentRunEntry } from "@/shared/runs/recentRuns";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { RunTransport } from "./runEventPresentation";
+import {
+  ConsoleMessage,
+  formatConsoleMessage,
+  t,
+  type ConsoleMessageDescriptor,
+} from "@/shared/i18n/messages";
 
 export type RunFormValues = {
   prompt: string;
@@ -39,10 +45,10 @@ export type SignalFormValues = {
 
 export type RunPreset = {
   key: string;
-  title: string;
+  title: ConsoleMessageDescriptor;
   routeName: string;
   prompt: string;
-  description: string;
+  description: ConsoleMessageDescriptor;
   tags: string[];
 };
 
@@ -114,6 +120,28 @@ export type HumanInputRecord = {
   timeoutSeconds: number;
 };
 
+const runSummaryColumnMessages = {
+  activeSteps: {
+    id: "pages.runs.runworkbenchconfig.active.steps",
+    defaultMessage: "Active steps",
+  },
+  currentFocus: {
+    id: "pages.runs.runworkbenchconfig.current.focus",
+    defaultMessage: "Current focus",
+  },
+  lastEvent: {
+    id: "pages.runs.runworkbenchconfig.last.event",
+    defaultMessage: "Last event",
+  },
+} satisfies Record<string, ConsoleMessageDescriptor>;
+
+const waitingSignalColumnMessages = {
+  signalName: {
+    id: "pages.runs.runworkbenchconfig.signal.name",
+    defaultMessage: "Signal name",
+  },
+} satisfies Record<string, ConsoleMessageDescriptor>;
+
 export type ConsoleViewKey = "timeline" | "messages" | "events";
 
 export const composerRailMinWidth = 320;
@@ -131,39 +159,63 @@ const composerRailComfortBreakpoint = 1360;
 export const builtInPresets: RunPreset[] = [
   {
     key: "direct",
-    title: "Direct chat",
+    title: {
+      id: "pages.runs.runworkbenchconfig.direct.chat",
+      defaultMessage: "Direct chat",
+    },
     routeName: "direct",
     prompt:
       "Summarize what this chat bundle can do and produce a concise execution result.",
-    description:
-      "Baseline direct chat bundle for quick validation of the chat stream.",
+    description: {
+      id: "pages.runs.runworkbenchconfig.baseline.direct.chat.bundle.for",
+      defaultMessage:
+        "Baseline direct chat bundle for quick validation of the chat stream.",
+    },
     tags: ["baseline", "llm"],
   },
   {
     key: "human-input",
-    title: "Human input triage",
+    title: {
+      id: "pages.runs.runworkbenchconfig.human.input.triage",
+      defaultMessage: "Human input triage",
+    },
     routeName: "human_input_manual_triage",
     prompt:
       "A production incident needs manual classification before the run can continue.",
-    description: "Use this to verify human input prompts and resume flow.",
+    description: {
+      id: "pages.runs.runworkbenchconfig.use.this.to.verify.human",
+      defaultMessage: "Use this to verify human input prompts and resume flow.",
+    },
     tags: ["human_input", "resume"],
   },
   {
     key: "human-approval",
-    title: "Human approval gate",
+    title: {
+      id: "pages.runs.runworkbenchconfig.human.approval.gate",
+      defaultMessage: "Human approval gate",
+    },
     routeName: "human_approval_release_gate",
     prompt:
       "Prepare a release summary that requires explicit human approval before rollout.",
-    description: "Use this to verify approval flow and moderation checkpoints.",
+    description: {
+      id: "pages.runs.runworkbenchconfig.use.this.to.verify.approval",
+      defaultMessage: "Use this to verify approval flow and moderation checkpoints.",
+    },
     tags: ["human_approval", "approval"],
   },
   {
     key: "wait-signal",
-    title: "Wait signal",
+    title: {
+      id: "pages.runs.runworkbenchconfig.wait.signal",
+      defaultMessage: "Wait signal",
+    },
     routeName: "wait_signal_manual_success",
     prompt: "Wait for an external readiness signal before completing the run.",
-    description:
-      "Use this to verify waiting_signal and manual signal delivery.",
+    description: {
+      id: "pages.runs.runworkbenchconfig.use.this.to.verify.waiting",
+      defaultMessage:
+        "Use this to verify waiting_signal and manual signal delivery.",
+    },
     tags: ["wait_signal", "signal"],
   },
 ];
@@ -244,20 +296,20 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
       ),
   },
   {
-    title: "Current focus",
+    title: <ConsoleMessage descriptor={runSummaryColumnMessages.currentFocus} />,
     dataIndex: "focusStatus",
     valueType: "status" as any,
     valueEnum: runFocusValueEnum,
     render: (_, record) => <Tag color="processing">{record.focusLabel}</Tag>,
   },
   {
-    title: "Last event",
+    title: <ConsoleMessage descriptor={runSummaryColumnMessages.lastEvent} />,
     dataIndex: "lastEventAt",
     valueType: "dateTime",
     render: (_, record) => record.lastEventAt || "n/a",
   },
   {
-    title: "Active steps",
+    title: <ConsoleMessage descriptor={runSummaryColumnMessages.activeSteps} />,
     dataIndex: "activeSteps",
     render: (_, record) =>
       record.activeSteps.length > 0 ? (
@@ -269,7 +321,7 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
           ))}
         </Space>
       ) : (
-        <Tag>None</Tag>
+        <Tag>{t("pages.runs.runworkbenchconfig.none", "None")}</Tag>
       ),
   },
 ];
@@ -337,7 +389,7 @@ export const routeDescriptionColumns: ProDescriptionsItemProps<SelectedRouteReco
 export const waitingSignalColumns: ProDescriptionsItemProps<WaitingSignalRecord>[] =
   [
     {
-      title: "Signal name",
+      title: <ConsoleMessage descriptor={waitingSignalColumnMessages.signalName} />,
       dataIndex: "signalName",
     },
     {
@@ -596,12 +648,10 @@ export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
     render: (_, record) => [
       <Space key={`${record.id}-actions`}>
         <Button type="link" onClick={() => record.onRestore?.()}>
-          Restore
-        </Button>
+          {t("pages.runs.runworkbenchconfig.restore", "Restore")}</Button>
         {record.actorId ? (
           <Button type="link" onClick={() => record.onOpenActor?.()}>
-            Actor
-          </Button>
+            {t("pages.runs.runworkbenchconfig.actor", "Actor")}</Button>
         ) : null}
       </Space>,
     ],

@@ -19,6 +19,7 @@ import {
   workbenchCardStyle,
   workbenchScrollableBodyStyle,
 } from "../runWorkbenchConfig";
+import { formatConsoleMessage, t } from "@/shared/i18n/messages";
 
 type WorkflowOption = {
   label: string;
@@ -161,8 +162,8 @@ function renderRouteMiniCard(
     return (
       <div style={embeddedPanelStyle}>
         <Space wrap size={[6, 6]}>
-          <Tag color="geekblue">Command invoke</Tag>
-          <Tag>Workspace binding</Tag>
+          <Tag color="geekblue">{t("pages.runs.runslaunchrail.command.invoke", "Command invoke")}</Tag>
+          <Tag>{t("pages.runs.runslaunchrail.workspace.binding", "Workspace binding")}</Tag>
         </Space>
         <Typography.Text strong style={{ display: "block", marginTop: 10 }}>
           {activeEndpointId}
@@ -171,10 +172,7 @@ function renderRouteMiniCard(
           style={{ margin: "6px 0 0" }}
           type="secondary"
         >
-          Invoke the selected endpoint with explicit protobuf bytes, or let the
-          workbench derive bytes only for StringValue and AppScriptCommand
-          payloads.
-        </Typography.Paragraph>
+          {t("pages.runs.runslaunchrail.invoke.the.selected.endpoint.with", "Invoke the selected endpoint with explicit protobuf bytes, or let the workbench derive bytes only for StringValue and AppScriptCommand payloads.")}</Typography.Paragraph>
       </div>
     );
   }
@@ -183,7 +181,7 @@ function renderRouteMiniCard(
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="Select a route preview or endpoint to inspect the current route."
+        description={t("pages.runs.runslaunchrail.select.route.preview.or.endpoint", "Select a route preview or endpoint to inspect the current route.")}
       />
     );
   }
@@ -217,7 +215,7 @@ function renderRouteMiniCard(
           <Tag key={primitive}>{primitive}</Tag>
         ))}
         {selectedRouteDetailsPrimitives.length > 3 ? (
-          <Tag>+{selectedRouteDetailsPrimitives.length - 3} more</Tag>
+          <Tag>+{selectedRouteDetailsPrimitives.length - 3} {t("pages.runs.runslaunchrail.more", "more")}</Tag>
         ) : null}
       </Space>
     </div>
@@ -232,7 +230,7 @@ function renderRecentRunCards(
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="No local runs have been recorded yet."
+        description={t("pages.runs.runslaunchrail.no.local.runs.have.been", "No local runs have been recorded yet.")}
       />
     );
   }
@@ -287,12 +285,10 @@ function renderRecentRunCards(
             <div style={railListActionStyle}>
               <Space wrap size={[8, 8]}>
                 <Button type="link" onClick={() => record.onRestore?.()}>
-                  Restore
-                </Button>
+                  {t("pages.runs.runslaunchrail.restore", "Restore")}</Button>
                 {record.actorId ? (
                   <Button type="link" onClick={() => record.onOpenActor?.()}>
-                    Actor
-                  </Button>
+                    {t("pages.runs.runslaunchrail.actor", "Actor")}</Button>
                 ) : null}
               </Space>
             </div>
@@ -302,8 +298,7 @@ function renderRecentRunCards(
 
       <Space>
         <Button danger onClick={onClearRecentRuns}>
-          Clear local runs
-        </Button>
+          {t("pages.runs.runslaunchrail.clear.local.runs", "Clear local runs")}</Button>
       </Space>
     </div>
   );
@@ -317,7 +312,7 @@ function renderPresetCards(
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="No presets are currently available."
+        description={t("pages.runs.runslaunchrail.no.presets.are.currently.available", "No presets are currently available.")}
       />
     );
   }
@@ -329,7 +324,7 @@ function renderPresetCards(
           <div style={railListHeaderStyle}>
             <div style={railListContentStyle}>
               <Typography.Text strong style={railTitleStyle}>
-                {record.title}
+                {formatConsoleMessage(record.title)}
               </Typography.Text>
               <div style={railMetaWrapStyle}>
                 <Tag color="processing">{record.routeName}</Tag>
@@ -337,7 +332,7 @@ function renderPresetCards(
                   <Tag key={`${record.key}-${tag}`}>{tag}</Tag>
                 ))}
                 {record.tags.length > 2 ? (
-                  <Tag>+{record.tags.length - 2} more</Tag>
+                  <Tag>+{record.tags.length - 2} {t("pages.runs.runslaunchrail.more.2", "more")}</Tag>
                 ) : null}
               </div>
             </div>
@@ -348,13 +343,12 @@ function renderPresetCards(
             style={railDescriptionStyle}
             type="secondary"
           >
-            {record.description}
+            {formatConsoleMessage(record.description)}
           </Typography.Paragraph>
 
           <div style={railListActionStyle}>
             <Button type="link" onClick={() => onUsePreset(record)}>
-              Use preset
-            </Button>
+              {t("pages.runs.runslaunchrail.use.preset", "Use preset")}</Button>
           </div>
         </div>
       ))}
@@ -408,19 +402,19 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
           {!isChatVariant ? (
             <div style={quickGridStyle}>
               <div style={quickMetricStyle}>
-                <Typography.Text style={quickMetricLabelStyle}>Endpoint</Typography.Text>
+                <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.endpoint", "Endpoint")}</Typography.Text>
                 <Typography.Text style={quickMetricValueStyle}>
                   {activeEndpointId || "chat"}
                 </Typography.Text>
               </div>
               <div style={quickMetricStyle}>
-                <Typography.Text style={quickMetricLabelStyle}>Execution</Typography.Text>
+                <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.execution", "Execution")}</Typography.Text>
                 <Typography.Text style={quickMetricValueStyle}>
                   {isChatEndpoint ? "STREAM" : "INVOKE"}
                 </Typography.Text>
               </div>
               <div style={quickMetricStyle}>
-                <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
+                <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.mode", "Mode")}</Typography.Text>
                 <Typography.Text style={quickMetricValueStyle}>
                   {draftMode
                     ? isChatEndpoint
@@ -432,7 +426,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                 </Typography.Text>
               </div>
               <div style={quickMetricStyle}>
-                <Typography.Text style={quickMetricLabelStyle}>Presets</Typography.Text>
+                <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.presets", "Presets")}</Typography.Text>
                 <Typography.Text style={quickMetricValueStyle}>
                   {visiblePresets.length}
                 </Typography.Text>
@@ -503,11 +497,9 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                                   loading={streaming}
                                   onClick={() => props.form?.submit?.()}
                                 >
-                                  Start run
-                                </Button>
+                                  {t("pages.runs.runslaunchrail.start.run", "Start run")}</Button>
                                 <Button onClick={onAbortRun} disabled={!streaming}>
-                                  Abort
-                                </Button>
+                                  {t("pages.runs.runslaunchrail.abort", "Abort")}</Button>
                                 {actorId ? (
                                   <Button
                                     onClick={() =>
@@ -518,8 +510,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                                       )
                                     }
                                   >
-                                    Actor explorer
-                                  </Button>
+                                    {t("pages.runs.runslaunchrail.actor.explorer", "Actor explorer")}</Button>
                                 ) : null}
                               </Space>
                             ),
@@ -540,7 +531,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         rules={[
                           {
                             required: true,
-                            message: "Prompt is required.",
+                            message: t("pages.runs.runslaunchrail.prompt.is.required", "Prompt is required."),
                           },
                         ]}
                       />
@@ -555,7 +546,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         rules={[
                           {
                             required: true,
-                            message: "Transport is required.",
+                            message: t("pages.runs.runslaunchrail.transport.is.required", "Transport is required."),
                           },
                         ]}
                       />
@@ -563,16 +554,16 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     {!draftMode && !isChatVariant ? (
                       <ProFormSelect<RunEndpointKind>
                         name="endpointKind"
-                        label="Endpoint kind"
+                        label={t("pages.runs.runslaunchrail.endpoint.kind", "Endpoint kind")}
                         options={[
-                          { label: "Chat stream", value: "chat" },
-                          { label: "Command invoke", value: "command" },
+                          { label: t("pages.runs.runslaunchrail.chat.stream", "Chat stream"), value: "chat" },
+                          { label: t("pages.runs.runslaunchrail.command.invoke.2", "Command invoke"), value: "command" },
                         ]}
-                        extra="Chat endpoints keep the service streaming path even when the endpoint id is custom."
+                        extra={t("pages.runs.runslaunchrail.chat.endpoints.keep.the.service", "Chat endpoints keep the service streaming path even when the endpoint id is custom.")}
                         rules={[
                           {
                             required: true,
-                            message: "Endpoint kind is required.",
+                            message: t("pages.runs.runslaunchrail.endpoint.kind.is.required", "Endpoint kind is required."),
                           },
                         ]}
                       />
@@ -582,18 +573,18 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         name="routeName"
                         label={
                           draftMode
-                            ? "Draft bundle"
-                            : "Chat route (optional)"
+                            ? t("pages.runs.runslaunchrail.draft.bundle", "Draft bundle")
+                            : t("pages.runs.runslaunchrail.chat.route.optional", "Chat route (optional)")
                         }
                         placeholder={
                           draftMode
-                            ? "Studio draft bundle"
-                            : "Preview a chat route"
+                            ? t("pages.runs.runslaunchrail.studio.draft.bundle", "Studio draft bundle")
+                            : t("pages.runs.runslaunchrail.preview.chat.route", "Preview a chat route")
                         }
                         extra={
                           draftMode
-                            ? "Draft runs execute the bundled Studio draft."
-                            : "Selecting a route targets the published workspace service with the same id. Leave it empty to use the workspace default binding; binding override wins when provided."
+                            ? t("pages.runs.runslaunchrail.draft.runs.execute.bundle", "Draft runs execute the bundled Studio draft.")
+                            : t("pages.runs.runslaunchrail.selecting.route.targets.service", "Selecting a route targets the published workspace service with the same id. Leave it empty to use the workspace default binding; binding override wins when provided.")
                         }
                         disabled={draftMode}
                         options={routeOptions}
@@ -604,12 +595,11 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                           onSearch: onCatalogSearchChange,
                           notFoundContent: workflowCatalogLoading ? (
                             <Typography.Text type="secondary">
-                              Loading chat routes...
-                            </Typography.Text>
+                              {t("pages.runs.runslaunchrail.loading.chat.routes", "Loading chat routes...")}</Typography.Text>
                           ) : (
                             <Empty
                               image={Empty.PRESENTED_IMAGE_SIMPLE}
-                              description="No chat routes available."
+                              description={t("pages.runs.runslaunchrail.no.chat.routes.available", "No chat routes available.")}
                             />
                           ),
                           searchValue: catalogSearch,
@@ -619,18 +609,18 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                       <Alert
                         showIcon
                         type="info"
-                        title="Generic endpoint invoke"
-                        description="Use the prompt as the default payload text, or provide an explicit type URL and protobuf base64 payload."
+                        title={t("pages.runs.runslaunchrail.generic.endpoint.invoke", "Generic endpoint invoke")}
+                        description={t("pages.runs.runslaunchrail.use.the.prompt.as.the", "Use the prompt as the default payload text, or provide an explicit type URL and protobuf base64 payload.")}
                       />
                     )}
                     <ProFormText
                       name="scopeId"
-                      label="Workspace ID"
-                      placeholder="NyxID user / workspace id"
+                      label={t("pages.runs.runslaunchrail.workspace.id", "Workspace ID")}
+                      placeholder={t("pages.runs.runslaunchrail.nyxid.user.workspace.id", "NyxID user / workspace id")}
                       rules={[
                         {
                           required: true,
-                          message: "Workspace ID is required.",
+                          message: t("pages.runs.runslaunchrail.workspace.id.is.required", "Workspace ID is required."),
                         },
                       ]}
                     />
@@ -640,41 +630,41 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         items={[
                           {
                             key: "advanced",
-                            label: "Advanced options",
+                            label: t("pages.runs.runslaunchrail.advanced.options", "Advanced options"),
                             children: (
                               <div style={compactStackStyle}>
                                 <ProFormText
                                   name="endpointId"
                                   label="Endpoint"
-                                  placeholder="chat (or a custom chat endpoint id)"
+                                  placeholder={t("pages.runs.runslaunchrail.chat.or.custom.chat.endpoint", "chat (or a custom chat endpoint id)")}
                                   disabled={draftMode}
                                 />
                                 {!draftMode ? (
                                   <ProFormText
                                     name="serviceOverrideId"
-                                    label="Binding override (optional)"
-                                    placeholder="Leave empty to use the workspace default binding."
+                                    label={t("pages.runs.runslaunchrail.binding.override.optional", "Binding override (optional)")}
+                                    placeholder={t("pages.runs.runslaunchrail.leave.empty.to.use.the", "Leave empty to use the workspace default binding.")}
                                   />
                                 ) : null}
                                 {isChatEndpoint ? (
                                   <ProFormText
                                     name="actorId"
-                                    label="Existing actor ID"
+                                    label={t("pages.runs.runslaunchrail.existing.actor.id", "Existing actor ID")}
                                     placeholder="Actor:..."
                                     disabled={draftMode}
                                   />
                                 ) : null}
                                 <ProFormText
                                   name="payloadTypeUrl"
-                                  label="Payload type URL"
+                                  label={t("pages.runs.runslaunchrail.payload.type.url", "Payload type URL")}
                                   placeholder="type.googleapis.com/google.protobuf.StringValue"
-                                  extra="When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand."
+                                  extra={t("pages.runs.runslaunchrail.when.payload.base64.is.empty", "When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand.")}
                                 />
                                 <ProFormTextArea
                                   name="payloadBase64"
-                                  label="Payload base64 (advanced)"
+                                  label={t("pages.runs.runslaunchrail.payload.base64.advanced", "Payload base64 (advanced)")}
                                   fieldProps={{ rows: 3 }}
-                                  placeholder="Required for custom payload types; leave empty only for StringValue or AppScriptCommand."
+                                  placeholder={t("pages.runs.runslaunchrail.required.for.custom.payload.types", "Required for custom payload types; leave empty only for StringValue or AppScriptCommand.")}
                                 />
                               </div>
                             ),
@@ -695,36 +685,36 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                           rules={[
                             {
                               required: !draftMode && !isChatEndpoint,
-                              message: "Endpoint ID is required for command invokes.",
+                              message: t("pages.runs.runslaunchrail.endpoint.id.is.required.for", "Endpoint ID is required for command invokes."),
                             },
                           ]}
                         />
                         {!draftMode ? (
                           <ProFormText
                             name="serviceOverrideId"
-                            label="Binding override (optional)"
-                            placeholder="Leave empty to use the workspace default binding."
+                            label={t("pages.runs.runslaunchrail.binding.override.optional.2", "Binding override (optional)")}
+                            placeholder={t("pages.runs.runslaunchrail.leave.empty.to.use.the.2", "Leave empty to use the workspace default binding.")}
                           />
                         ) : null}
                         {isChatEndpoint ? (
                           <ProFormText
                             name="actorId"
-                            label="Existing actor ID"
+                            label={t("pages.runs.runslaunchrail.existing.actor.id.2", "Existing actor ID")}
                             placeholder="Actor:..."
                             disabled={draftMode}
                           />
                         ) : null}
                         <ProFormText
                           name="payloadTypeUrl"
-                          label="Payload type URL"
+                          label={t("pages.runs.runslaunchrail.payload.type.url.2", "Payload type URL")}
                           placeholder="type.googleapis.com/google.protobuf.StringValue"
-                          extra="When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand."
+                          extra={t("pages.runs.runslaunchrail.when.payload.base64.is.empty.2", "When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand.")}
                         />
                         <ProFormTextArea
                           name="payloadBase64"
-                          label="Payload base64 (advanced)"
+                          label={t("pages.runs.runslaunchrail.payload.base64.advanced.2", "Payload base64 (advanced)")}
                           fieldProps={{ rows: 3 }}
-                          placeholder="Required for custom payload types; leave empty only for StringValue or AppScriptCommand."
+                          placeholder={t("pages.runs.runslaunchrail.required.for.custom.payload.types.2", "Required for custom payload types; leave empty only for StringValue or AppScriptCommand.")}
                         />
                       </>
                     )}
@@ -734,7 +724,9 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
             },
             {
               key: "recent",
-              label: `Recent (${recentRunRows.length})`,
+              label: t("pages.runs.runslaunchrail.recent.count", "Recent ({count})", {
+                count: recentRunRows.length,
+              }),
               children: renderRecentRunCards(
                 recentRunRows,
                 onClearRecentRuns,
@@ -742,7 +734,9 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
             },
             {
               key: "presets",
-              label: `Presets (${visiblePresets.length})`,
+              label: t("pages.runs.runslaunchrail.presets.count", "Presets ({count})", {
+                count: visiblePresets.length,
+              }),
               children: (
                 <div style={scrollPanelStyle}>
                   {renderPresetCards(visiblePresets, onUsePreset)}

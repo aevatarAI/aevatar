@@ -32,6 +32,7 @@ import {
   resolveObservationTone,
   type MissionThemeToken,
 } from './presentation';
+import { t } from "@/shared/i18n/messages";
 
 type TopologyCanvasProps = {
   activeNodeId?: string;
@@ -242,8 +243,7 @@ function TopologyNodeCard({
       >
         <div>
           <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
-            Status
-          </Typography.Text>
+            {t("pages.missioncontrol.topologycanvas.status", "Status")}</Typography.Text>
           <Typography.Text
             style={{
               color: statusTone,
@@ -257,8 +257,7 @@ function TopologyNodeCard({
         </div>
         <div>
           <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
-            Freshness
-          </Typography.Text>
+            {t("pages.missioncontrol.topologycanvas.freshness", "Freshness")}</Typography.Text>
           <Typography.Text
             style={{
               color: observationTone,

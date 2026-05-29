@@ -16,6 +16,7 @@ import {
   ScriptsStudioResultCard,
   ScriptsStudioSection,
 } from '../ScriptsStudioChrome';
+import { t } from "@/shared/i18n/messages";
 
 type ScriptsResourceRailProps = {
   drafts: ScriptDraft[];
@@ -66,14 +67,14 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
 }) => (
   <section className="console-scripts-panel">
     <div className="console-scripts-panel-header">
-      <div className="console-scripts-eyebrow">Scripts Studio</div>
-      <div className="console-scripts-panel-header-title">Resource rail</div>
+      <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptsresourcerail.scripts.studio", "Scripts Studio")}</div>
+      <div className="console-scripts-panel-header-title">{t("modules.studio.scripts.scriptsresourcerail.resource.rail", "Resource rail")}</div>
       <div className="console-scripts-search-field">
         <SearchOutlined />
         <input
           type="search"
           className="console-scripts-search-input"
-          placeholder="Search drafts or the workspace catalog"
+          placeholder={t("modules.studio.scripts.scriptsresourcerail.search.drafts.or.the.workspace", "Search drafts or the workspace catalog")}
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
         />
@@ -89,8 +90,8 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
             type="button"
             onClick={onCreateDraft}
             className="console-scripts-icon-button"
-            title="New draft"
-            aria-label="New draft"
+            title={t("modules.studio.scripts.scriptsresourcerail.new.draft", "New draft")}
+            aria-label={t("modules.studio.scripts.scriptsresourcerail.new.draft.2", "New draft")}
           >
             <FileAddOutlined />
           </button>
@@ -99,8 +100,8 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
         <div className="console-scripts-run-list">
           {filteredDrafts.length === 0 ? (
             <ScriptsStudioEmptyState
-              title="No drafts matched"
-              copy="Try a different search, or create a new draft."
+              title={t("modules.studio.scripts.scriptsresourcerail.no.drafts.matched", "No drafts matched")}
+              copy={t("modules.studio.scripts.scriptsresourcerail.try.different.search.or.create", "Try a different search, or create a new draft.")}
             />
           ) : (
             filteredDrafts.map((draft) => {
@@ -130,8 +131,8 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
               type="button"
               onClick={onRefreshScopeScripts}
               className="console-scripts-icon-button"
-              title="Refresh workspace catalog"
-              aria-label="Refresh workspace catalog"
+              title={t("modules.studio.scripts.scriptsresourcerail.refresh.workspace.catalog", "Refresh workspace catalog")}
+              aria-label={t("modules.studio.scripts.scriptsresourcerail.refresh.workspace.catalog.2", "Refresh workspace catalog")}
               disabled={scopeScriptsLoading}
             >
               <SyncOutlined spin={scopeScriptsLoading} />
@@ -142,8 +143,8 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
         <div className="console-scripts-run-list">
           {!scopeBacked ? (
             <ScriptsStudioEmptyState
-              title="Workspace save unavailable"
-              copy="Studio has not resolved a current workspace yet, so only local drafts are available."
+              title={t("modules.studio.scripts.scriptsresourcerail.workspace.save.unavailable", "Workspace save unavailable")}
+              copy={t("modules.studio.scripts.scriptsresourcerail.studio.has.not.resolved.current", "Studio has not resolved a current workspace yet, so only local drafts are available.")}
             />
           ) : scopeScripts.length === 0 ? (
             <ScriptsStudioEmptyState
@@ -190,8 +191,8 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
             type="button"
             onClick={onRefreshRuntimeSnapshots}
             className="console-scripts-icon-button"
-            title="Refresh runtimes"
-            aria-label="Refresh runtimes"
+            title={t("modules.studio.scripts.scriptsresourcerail.refresh.runtimes", "Refresh runtimes")}
+            aria-label={t("modules.studio.scripts.scriptsresourcerail.refresh.runtimes.2", "Refresh runtimes")}
             disabled={runtimeSnapshotsLoading}
           >
             <SyncOutlined spin={runtimeSnapshotsLoading} />
@@ -236,8 +237,8 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
         <div className="console-scripts-run-list">
           {proposalDecisions.length === 0 ? (
             <ScriptsStudioEmptyState
-              title="No proposal decisions yet"
-              copy="Promotion decisions will appear here after the workspace catalog points at them."
+              title={t("modules.studio.scripts.scriptsresourcerail.no.proposal.decisions.yet", "No proposal decisions yet")}
+              copy={t("modules.studio.scripts.scriptsresourcerail.promotion.decisions.will.appear.here", "Promotion decisions will appear here after the workspace catalog points at them.")}
             />
           ) : (
             proposalDecisions.map((decision) => (

@@ -45,6 +45,7 @@ import type {
   StepInfo,
   ToolCallInfo,
 } from "./chatTypes";
+import { t } from "@/shared/i18n/messages";
 
 function renderInlineTokens(
   tokens: readonly InlineContentToken[],
@@ -523,7 +524,7 @@ function ThinkingBlock({
             strokeLinejoin="round"
           />
         </svg>
-        <span>Thinking</span>
+        <span>{t("pages.chat.chatpresentation.thinking", "Thinking")}</span>
         {isStreaming ? (
           <span
             style={{
@@ -640,8 +641,7 @@ function ApprovalCard({
               letterSpacing: "0.06em",
             }}
           >
-            TOOL APPROVAL
-          </span>
+            {t("pages.chat.chatpresentation.tool.approval", "TOOL APPROVAL")}</span>
           <div
             style={{
               color: "#111827",
@@ -679,8 +679,7 @@ function ApprovalCard({
                 padding: "3px 8px",
               }}
             >
-              Destructive
-            </span>
+              {t("pages.chat.chatpresentation.destructive", "Destructive")}</span>
           ) : (
             <span
               style={{
@@ -692,8 +691,7 @@ function ApprovalCard({
                 padding: "3px 8px",
               }}
             >
-              Safe to review
-            </span>
+              {t("pages.chat.chatpresentation.safe.to.review", "Safe to review")}</span>
           )}
           <span
             style={{
@@ -706,15 +704,14 @@ function ApprovalCard({
               padding: "3px 8px",
             }}
           >
-            Timeout {approval.timeoutSeconds}s
+            {t("pages.chat.chatpresentation.timeout", "Timeout")}{approval.timeoutSeconds}s
           </span>
         </div>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px" }}>
         <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-          Review the tool call and decide whether NyxID can continue.
-        </div>
+          {t("pages.chat.chatpresentation.review.the.tool.call.and", "Review the tool call and decide whether NyxID can continue.")}</div>
 
         <div
           style={{
@@ -732,8 +729,7 @@ function ApprovalCard({
             }}
           >
             <div style={{ color: "#9a3412", fontSize: 11, fontWeight: 700 }}>
-              Tool
-            </div>
+              {t("pages.chat.chatpresentation.tool", "Tool")}</div>
             <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 4 }}>
               {approval.toolName || "Tool call"}
             </div>
@@ -747,8 +743,7 @@ function ApprovalCard({
             }}
           >
             <div style={{ color: "#9a3412", fontSize: 11, fontWeight: 700 }}>
-              Impact
-            </div>
+              {t("pages.chat.chatpresentation.impact", "Impact")}</div>
             <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 4 }}>
               {approval.isDestructive
                 ? "This tool may change runtime state."
@@ -766,8 +761,7 @@ function ApprovalCard({
             textTransform: "uppercase",
           }}
         >
-          Request payload
-        </div>
+          {t("pages.chat.chatpresentation.request.payload", "Request payload")}</div>
 
         {approval.argumentsJson ? (
           <pre
@@ -799,8 +793,7 @@ function ApprovalCard({
               padding: "10px 12px",
             }}
           >
-            No additional arguments were provided with this request.
-          </div>
+            {t("pages.chat.chatpresentation.no.additional.arguments.were.provided", "No additional arguments were provided with this request.")}</div>
         )}
 
         <div
@@ -814,8 +807,7 @@ function ApprovalCard({
           }}
         >
           <span style={{ color: "#9a3412", fontSize: 12 }}>
-            Approve to let NyxID continue, or reject to stop this tool call.
-          </span>
+            {t("pages.chat.chatpresentation.approve.to.let.nyxid.continue", "Approve to let NyxID continue, or reject to stop this tool call.")}</span>
           <div
             style={{
               alignItems: "center",
@@ -1004,7 +996,7 @@ function RunInterventionCard({
                 padding: "3px 8px",
               }}
             >
-              Timeout {intervention.timeoutSeconds}s
+              {t("pages.chat.chatpresentation.timeout.2", "Timeout")}{intervention.timeoutSeconds}s
             </span>
           ) : null}
         </div>
@@ -1031,8 +1023,7 @@ function RunInterventionCard({
             }}
           >
             <div style={{ color: "#78716c", fontSize: 11, fontWeight: 700 }}>
-              Next action
-            </div>
+              {t("pages.chat.chatpresentation.next.action", "Next action")}</div>
             <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
               {isSignal
                 ? "Send the signal to unblock the run."
@@ -1050,8 +1041,7 @@ function RunInterventionCard({
             }}
           >
             <div style={{ color: "#78716c", fontSize: 11, fontWeight: 700 }}>
-              Context
-            </div>
+              {t("pages.chat.chatpresentation.context", "Context")}</div>
             <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
               {helperText}
             </div>
@@ -1308,8 +1298,7 @@ export function ChatMessageBubble({
               </svg>
               <span>
                 {(message.steps?.length ?? 0) + (message.toolCalls?.length ?? 0)}{" "}
-                action
-                {(message.steps?.length ?? 0) + (message.toolCalls?.length ?? 0) > 1
+                {t("pages.chat.chatpresentation.action", "action")}{(message.steps?.length ?? 0) + (message.toolCalls?.length ?? 0) > 1
                   ? "s"
                   : ""}
               </span>
@@ -1529,16 +1518,16 @@ export function ChatToolsMenu({
     {
       actionLabel: advancedOpen ? "Hide panel" : "Open panel",
       description:
-        "Inspect workspace state, launch endpoints, and review runtime evidence.",
-      label: "Advanced Console",
+        t("pages.chat.chatpresentation.inspect.workspace.state.launch.endpoints", "Inspect workspace state, launch endpoints, and review runtime evidence."),
+      label: t("pages.chat.chatpresentation.advanced.console", "Advanced Console"),
       onClick: onToggleAdvanced,
       open: advancedOpen,
     },
     {
       actionLabel: eventStreamOpen ? "Hide stream" : "Show stream",
       description:
-        "Review raw AGUI runtime events when you need protocol-level detail.",
-      label: "Event Stream",
+        t("pages.chat.chatpresentation.review.raw.agui.runtime.events", "Review raw AGUI runtime events when you need protocol-level detail."),
+      label: t("pages.chat.chatpresentation.event.stream", "Event Stream"),
       onClick: onToggleEventStream,
       open: eventStreamOpen,
     },
@@ -1567,7 +1556,7 @@ export function ChatToolsMenu({
         }}
         type="button"
       >
-        <span>Tools</span>
+        <span>{t("pages.chat.chatpresentation.tools", "Tools")}</span>
         {activeCount > 0 ? (
           <span
             style={{
@@ -1619,8 +1608,7 @@ export function ChatToolsMenu({
               textTransform: "uppercase",
             }}
           >
-            Operator Tools
-          </div>
+            {t("pages.chat.chatpresentation.operator.tools", "Operator Tools")}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {menuItems.map((item) => (
               <div
@@ -1660,8 +1648,7 @@ export function ChatToolsMenu({
                           textTransform: "uppercase",
                         }}
                       >
-                        Live
-                      </span>
+                        {t("pages.chat.chatpresentation.live", "Live")}</span>
                     ) : null}
                   </div>
                   <div
@@ -1910,7 +1897,7 @@ export function ConversationLlmConfigBar({
         }
       >
         <div className="scope-chat-llm-panel-header">
-          <div className="scope-chat-llm-panel-title">Conversation model</div>
+          <div className="scope-chat-llm-panel-title">{t("pages.chat.chatpresentation.conversation.model", "Conversation model")}</div>
           {hasOverride ? (
             <button
               className={joinInteractiveClassNames(
@@ -1923,15 +1910,14 @@ export function ConversationLlmConfigBar({
               }}
               type="button"
             >
-              Reset
-            </button>
+              {t("pages.chat.chatpresentation.reset", "Reset")}</button>
           ) : null}
         </div>
 
         <div className="scope-chat-llm-search">
           <SearchOutlined className="scope-chat-llm-search-icon" />
           <input
-            aria-label="Search conversation models"
+            aria-label={t("pages.chat.chatpresentation.search.conversation.models", "Search conversation models")}
             className="scope-chat-llm-search-input"
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
@@ -1946,9 +1932,9 @@ export function ConversationLlmConfigBar({
         </div>
 
         <div className="scope-chat-llm-route-row">
-          <span className="scope-chat-llm-route-label">Route</span>
+          <span className="scope-chat-llm-route-label">{t("pages.chat.chatpresentation.route", "Route")}</span>
           <select
-            aria-label="Conversation route"
+            aria-label={t("pages.chat.chatpresentation.conversation.route", "Conversation route")}
             className="scope-chat-llm-route-select"
             onChange={(event) =>
               onRouteChange(
@@ -1958,8 +1944,7 @@ export function ConversationLlmConfigBar({
             value={routeSelectValue}
           >
             <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>
-              Config default
-            </option>
+              {t("pages.chat.chatpresentation.config.default", "Config default")}</option>
             {routeOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -1980,15 +1965,15 @@ export function ConversationLlmConfigBar({
             >
               <div className="scope-chat-llm-option-main">
                 <CheckOutlined style={{ opacity: 0 }} />
-                <span>Use "{query.trim()}"</span>
+                <span>{t("pages.chat.chatpresentation.use", "Use \"")}{query.trim()}"</span>
               </div>
-              <span className="scope-chat-llm-option-badge">Manual</span>
+              <span className="scope-chat-llm-option-badge">{t("pages.chat.chatpresentation.manual", "Manual")}</span>
             </button>
           ) : null}
 
           {!modelsLoading && filteredGroups.length === 0 ? (
             <div className="scope-chat-llm-empty">
-              No models for {effectiveRouteLabel}
+              {t("pages.chat.chatpresentation.no.models.for", "No models for")}{effectiveRouteLabel}
             </div>
           ) : null}
 
@@ -2027,7 +2012,7 @@ export function ConversationLlmConfigBar({
       <button
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label="Conversation model settings"
+        aria-label={t("pages.chat.chatpresentation.conversation.model.settings", "Conversation model settings")}
         className={joinInteractiveClassNames(
           "scope-chat-llm-trigger",
           AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -2273,7 +2258,7 @@ export function ConversationSidebar({
         }}
       >
         <button
-          aria-label="Show conversations"
+          aria-label={t("pages.chat.chatpresentation.show.conversations", "Show conversations")}
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           onClick={onToggle}
           style={{
@@ -2334,11 +2319,10 @@ export function ConversationSidebar({
             textTransform: "uppercase",
           }}
         >
-          History
-        </span>
+          {t("pages.chat.chatpresentation.history", "History")}</span>
         <div style={{ display: "flex", gap: 4 }}>
           <button
-            aria-label="New chat"
+            aria-label={t("pages.chat.chatpresentation.new.chat", "New chat")}
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={onNewChat}
             style={{
@@ -2367,7 +2351,7 @@ export function ConversationSidebar({
             </svg>
           </button>
           <button
-            aria-label="Hide conversations"
+            aria-label={t("pages.chat.chatpresentation.hide.conversations", "Hide conversations")}
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             onClick={onToggle}
             style={{
@@ -2414,8 +2398,7 @@ export function ConversationSidebar({
               textAlign: "center",
             }}
           >
-            No conversations yet
-          </div>
+            {t("pages.chat.chatpresentation.no.conversations.yet", "No conversations yet")}</div>
         ) : null}
         {conversations.map((conversation) => {
           const isActive = conversation.id === activeId;
@@ -2466,8 +2449,7 @@ export function ConversationSidebar({
                   </span>
                 ) : null}
                 {conversation.serviceId ? " · " : ""}
-                {conversation.messageCount} msg
-                {conversation.messageCount !== 1 ? "s" : ""} ·{" "}
+                {conversation.messageCount} {t("pages.chat.chatpresentation.msg", "msg")}{conversation.messageCount !== 1 ? "s" : ""} ·{" "}
                 {formatRelativeTime(conversation.updatedAt)}
               </div>
               <button
@@ -2537,7 +2519,7 @@ export function ChatMetaStrip({
     modelLabel ? { label: "Model", value: modelLabel } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
   const detailItems = [
-    scopeId ? { label: "Workspace ID", value: scopeId } : null,
+    scopeId ? { label: t("pages.chat.chatpresentation.workspace.id", "Workspace ID"), value: scopeId } : null,
     runId ? { label: "Run", value: runId } : null,
     actorId ? { label: "Actor", value: actorId } : null,
     commandId ? { label: "Command", value: commandId } : null,
@@ -2674,8 +2656,7 @@ export function EmptyChatState({
             textTransform: "uppercase",
           }}
         >
-          Ready in Console
-        </div>
+          {t("pages.chat.chatpresentation.ready.in.console", "Ready in Console")}</div>
         <div
           style={{
             alignItems: "center",
@@ -2807,7 +2788,7 @@ export function LoadingState(): React.ReactElement {
       }}
     >
       <Empty
-        description="Loading chat workspace..."
+        description={t("pages.chat.chatpresentation.loading.chat.workspace", "Loading chat workspace...")}
         image={Empty.PRESENTED_IMAGE_SIMPLE}
       />
     </div>

@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import React from 'react';
 import type { ScriptPackageEntry } from '@/shared/studio/scriptsModels';
+import { t } from "@/shared/i18n/messages";
 
 type ScriptsPackageFileTreeProps = {
   entries: ScriptPackageEntry[];
@@ -44,8 +45,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
             type="button"
             onClick={onToggleCollapsed}
             className="console-scripts-icon-button"
-            title="展开文件列表"
-            aria-label="展开文件列表"
+            title={t("modules.studio.scripts.scriptspackagefiletree.expand.file.list", "Expand file list")}
+            aria-label={t("modules.studio.scripts.scriptspackagefiletree.expand.file.list.2", "Expand file list")}
           >
             <MenuUnfoldOutlined />
           </button>
@@ -92,16 +93,16 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
     <div className="console-scripts-package-tree">
       <div className="console-scripts-package-tree-head">
         <div>
-          <div className="console-scripts-eyebrow">文件</div>
-          <div className="console-scripts-package-tree-title">文件列表</div>
+          <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptspackagefiletree.document", "document")}</div>
+          <div className="console-scripts-package-tree-title">{t("modules.studio.scripts.scriptspackagefiletree.file.list", "file list")}</div>
         </div>
         <div className="console-scripts-inline-actions">
           <button
             type="button"
             onClick={onToggleCollapsed}
             className="console-scripts-icon-button"
-            title="收起文件列表"
-            aria-label="收起文件列表"
+            title={t("modules.studio.scripts.scriptspackagefiletree.collapse.file.list", "Collapse file list")}
+            aria-label={t("modules.studio.scripts.scriptspackagefiletree.collapse.file.list.2", "Collapse file list")}
           >
             <MenuFoldOutlined />
           </button>
@@ -109,8 +110,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
             type="button"
             onClick={() => onAddFile('csharp')}
             className="console-scripts-icon-button"
-            title="添加 C# 文件"
-            aria-label="添加 C# 文件"
+            title={t("modules.studio.scripts.scriptspackagefiletree.add.files", "Add C# files")}
+            aria-label={t("modules.studio.scripts.scriptspackagefiletree.add.files.2", "Add C# files")}
           >
             <PlusOutlined />
           </button>
@@ -118,8 +119,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
             type="button"
             onClick={() => onAddFile('proto')}
             className="console-scripts-icon-button"
-            title="添加 Proto 文件"
-            aria-label="添加 Proto 文件"
+            title={t("modules.studio.scripts.scriptspackagefiletree.add.proto.file", "Add proto file")}
+            aria-label={t("modules.studio.scripts.scriptspackagefiletree.add.proto.file.2", "Add proto file")}
           >
             <FileTextOutlined />
           </button>
@@ -129,8 +130,7 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
       <div className="console-scripts-package-tree-body">
         {entries.length === 0 ? (
           <div className="console-scripts-package-tree-empty">
-            先添加一个 C# 或 Proto 文件，再开始编写脚本行为。
-          </div>
+            {t("modules.studio.scripts.scriptspackagefiletree.add.or.proto.file", "Add a C# or Proto file before you start scripting your behavior.")}</div>
         ) : (
           entries.map((entry) => {
             const active = selectedFilePath === entry.path;
@@ -160,14 +160,14 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
                       {entry.path}
                     </div>
                     <div className="console-scripts-package-file-kind">
-                      {entry.kind === 'csharp' ? 'C# 源文件' : 'Proto 定义'}
+                      {entry.kind === 'csharp' ? t("modules.studio.scripts.scriptspackagefiletree.source.file", "C# source file") : t("modules.studio.scripts.scriptspackagefiletree.proto.definition", "Proto definition")}
                     </div>
                   </div>
                 </button>
 
                 <div className="console-scripts-package-file-footer">
                   <div className="console-scripts-package-file-state">
-                    {isEntry ? '入口文件' : '\u00a0'}
+                    {isEntry ? t("modules.studio.scripts.scriptspackagefiletree.entry.file", "Entry file") : '\u00a0'}
                   </div>
                   <div className="console-scripts-inline-actions">
                     {entry.kind === 'csharp' ? (
@@ -175,9 +175,9 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
                         type="button"
                         onClick={() => onSetEntry(entry.path)}
                         className={`console-scripts-icon-button ${isEntry ? 'active' : ''}`}
-                        title={isEntry ? '入口文件' : '设为入口文件'}
+                        title={isEntry ? t("modules.studio.scripts.scriptspackagefiletree.entry.file.2", "Entry file") : t("modules.studio.scripts.scriptspackagefiletree.set.as.entry.file", "Set as entry file")}
                         aria-label={
-                          isEntry ? '入口文件' : `将 ${entry.path} 设为入口文件`
+                          isEntry ? t("modules.studio.scripts.scriptspackagefiletree.entry.file.3", "Entry file") : t("modules.studio.scripts.scriptspackagefiletree.set.as.the.entry", "Set {value1} as the entry file", { value1: entry.path })
                         }
                       >
                         <StarFilled />
@@ -187,8 +187,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
                       type="button"
                       onClick={() => onRenameFile(entry.path)}
                       className="console-scripts-icon-button"
-                      title={`重命名 ${entry.path}`}
-                      aria-label={`重命名 ${entry.path}`}
+                      title={t("modules.studio.scripts.scriptspackagefiletree.rename", "Rename {value1}", { value1: entry.path })}
+                      aria-label={t("modules.studio.scripts.scriptspackagefiletree.rename.2", "Rename {value1}", { value1: entry.path })}
                     >
                       <EditOutlined />
                     </button>
@@ -196,8 +196,8 @@ const ScriptsPackageFileTree: React.FC<ScriptsPackageFileTreeProps> = ({
                       type="button"
                       onClick={() => onRemoveFile(entry.path)}
                       className="console-scripts-icon-button active"
-                      title={`删除 ${entry.path}`}
-                      aria-label={`删除 ${entry.path}`}
+                      title={t("modules.studio.scripts.scriptspackagefiletree.delete", "Delete {value1}", { value1: entry.path })}
+                      aria-label={t("modules.studio.scripts.scriptspackagefiletree.delete.2", "Delete {value1}", { value1: entry.path })}
                     >
                       <DeleteOutlined />
                     </button>

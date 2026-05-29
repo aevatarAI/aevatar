@@ -1153,6 +1153,67 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
   });
 
+  it("localizes every Team member lifecycle branch shown in the roster", async () => {
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(async () => ({
+      scopeId: "scope-1",
+      members: [
+        ...mockCreateTeamMembersCatalog().members,
+        {
+          memberId: "member-created",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Created Member",
+          description: "Created lifecycle",
+          implementationKind: "workflow",
+          lifecycleStage: "created",
+          publishedServiceId: "",
+          lastBoundRevisionId: null,
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+        {
+          memberId: "member-build-ready",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Build Ready Member",
+          description: "Build lifecycle",
+          implementationKind: "workflow",
+          lifecycleStage: "build_ready",
+          publishedServiceId: "",
+          lastBoundRevisionId: null,
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+        {
+          memberId: "member-buildready",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Buildready Member",
+          description: "Compact build lifecycle",
+          implementationKind: "workflow",
+          lifecycleStage: "buildready",
+          publishedServiceId: "",
+          lastBoundRevisionId: null,
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+
+    expect(await screen.findByText("Created Member")).toBeTruthy();
+    expect(screen.getByText("已创建")).toBeTruthy();
+    expect(screen.getAllByText("可构建").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("可调用")).toBeTruthy();
+    expect(screen.queryByText("Build ready")).toBeNull();
+    expect(screen.queryByText("Created")).toBeNull();
+  });
+
   it("shows the configured Team entry member without treating it as the service target", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -1162,7 +1223,7 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText("调用这支 Team 时会先路由到这个成员。")).toBeTruthy();
+    expect(screen.getByText("调用这支团队时会先路由到这个成员。")).toBeTruthy();
     expect(screen.getByRole("button", { name: "清除入口成员" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
@@ -1209,7 +1270,7 @@ describe("TeamDetailPage", () => {
       );
     });
     expect(message.info).toHaveBeenCalledWith(
-      "Team entry 变更已提交，正在等待同步确认。",
+      "团队入口变更已提交，正在等待同步确认。",
     );
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
@@ -1229,7 +1290,7 @@ describe("TeamDetailPage", () => {
       );
     });
     expect(message.info).toHaveBeenCalledWith(
-      "Team entry 清除已提交，正在等待同步确认。",
+      "团队入口清除已提交，正在等待同步确认。",
     );
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
@@ -1399,10 +1460,10 @@ describe("TeamDetailPage", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "设为入口并测试" }));
 
-    expect(await screen.findByText("Team entry 正在同步")).toBeTruthy();
+    expect(await screen.findByText("团队入口正在同步")).toBeTruthy();
     expect(
       screen.getAllByText(
-        "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后重试测试团队。",
+        "团队入口已被后端受理，但读模型还没有确认新入口成员。请稍后重试测试团队。",
       ).length,
     ).toBeGreaterThan(0);
     expect(runtimeRunsApi.streamTeamChat).not.toHaveBeenCalled();
@@ -1423,9 +1484,9 @@ describe("TeamDetailPage", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
 
-    expect(await screen.findByText("后端暂不支持 Team Test")).toBeTruthy();
+    expect(await screen.findByText("后端暂不支持团队测试")).toBeTruthy();
     expect(
-      screen.getAllByText(/当前后端还没有部署 Team entry-member/).length,
+      screen.getAllByText(/当前后端还没有部署团队入口成员或团队调用接口/).length,
     ).toBeGreaterThan(0);
   });
 
@@ -1447,10 +1508,10 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("未设置入口成员")).toBeTruthy();
     expect(
       screen.getAllByText(
-        "这支 Team 还没有入口成员，请先选择一个已绑定的成员作为入口。",
+        "这支团队还没有入口成员，请先选择一个已绑定的成员作为入口。",
       ).length,
     ).toBeGreaterThan(0);
-    expect(screen.queryByText("后端暂不支持 Team Test")).toBeNull();
+    expect(screen.queryByText("后端暂不支持团队测试")).toBeNull();
   });
 
   it("does not treat router Team not found as an undeployed backend", async () => {
@@ -1470,13 +1531,13 @@ describe("TeamDetailPage", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
 
-    expect(await screen.findByText("Team 不存在")).toBeTruthy();
+    expect(await screen.findByText("团队不存在")).toBeTruthy();
     expect(
       screen.getAllByText(
-        "这支 Team 在当前 Scope 中不可见，请返回 Teams 列表重新选择。",
+        "这支团队在当前工作区中不可见，请返回团队列表重新选择。",
       ).length,
     ).toBeGreaterThan(0);
-    expect(screen.queryByText("后端暂不支持 Team Test")).toBeNull();
+    expect(screen.queryByText("后端暂不支持团队测试")).toBeNull();
   });
 
   it("routes member build actions into Studio with Team context", async () => {
@@ -1601,7 +1662,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("已启用")).toBeTruthy();
     expect((await screen.findAllByText("Team summary")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("3 个成员").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("来自 Team 更新时间").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("来自团队更新时间").length).toBeGreaterThan(0);
     expect(screen.getByText("当前态势")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("配置明细")).toBeTruthy();

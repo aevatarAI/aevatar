@@ -16,6 +16,7 @@ import {
   ScriptsStudioEmptyState,
   ScriptsStudioResultCard,
 } from '../ScriptsStudioChrome';
+import { t } from "@/shared/i18n/messages";
 
 type SnapshotView = {
   input: string;
@@ -95,8 +96,8 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
     if (!selectedSnapshot) {
       return (
         <ScriptsStudioEmptyState
-          title="还没有测试结果"
-          copy="执行一次测试运行后，这里会显示运行时的物化结果。"
+          title={t("modules.studio.scripts.scriptresultspanel.no.test.results.yet", "No test results yet")}
+          copy={t("modules.studio.scripts.scriptresultspanel.after.executing.test.run", "After executing a test run, the runtime materialization results are displayed here.")}
         />
       );
     }
@@ -105,20 +106,20 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
       <div className="console-scripts-detail-grid">
         <div className="console-scripts-detail-grid two-column">
           <div className="console-scripts-detail-card">
-            <div className="console-scripts-section-label">Runtime output</div>
+            <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.runtime.output", "Runtime output")}</div>
             <div className="console-scripts-detail-copy">
               <div>Actor: {selectedSnapshot.actorId}</div>
               <div>Revision: {selectedSnapshot.revision}</div>
-              <div>State version: {selectedSnapshot.stateVersion}</div>
+              <div>{t("modules.studio.scripts.scriptresultspanel.state.version", "State version:")}{selectedSnapshot.stateVersion}</div>
               <div>Status: {selectedSnapshotView.status || '-'}</div>
             </div>
           </div>
           <div className="console-scripts-detail-card">
-            <div className="console-scripts-section-label">Command view</div>
+            <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.command.view", "Command view")}</div>
             <div className="console-scripts-detail-copy">
               <div>Input: {selectedSnapshotView.input || '-'}</div>
               <div>Output: {selectedSnapshotView.output || '-'}</div>
-              <div>Last command: {selectedSnapshotView.lastCommandId || '-'}</div>
+              <div>{t("modules.studio.scripts.scriptresultspanel.last.command", "Last command:")}{selectedSnapshotView.lastCommandId || '-'}</div>
               <div>
                 Notes: {selectedSnapshotView.notes.join(', ') || '-'}
               </div>
@@ -126,11 +127,11 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
           </div>
         </div>
         <div className="console-scripts-detail-card muted">
-          <div className="console-scripts-section-label">Runtime activity</div>
+          <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.runtime.activity", "Runtime activity")}</div>
           <div className="console-scripts-detail-copy">
             <div>Input: {selectedSnapshot.input || '-'}</div>
             <div>Output: {selectedSnapshot.output || '-'}</div>
-            <div>Last command: {selectedSnapshot.lastCommandId || '-'}</div>
+            <div>{t("modules.studio.scripts.scriptresultspanel.last.command.2", "Last command:")}{selectedSnapshot.lastCommandId || '-'}</div>
             <div>Notes: {selectedSnapshot.notes.join(', ') || '-'}</div>
           </div>
         </div>
@@ -142,8 +143,8 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
     if (!scopeDetail?.script) {
       return (
         <ScriptsStudioEmptyState
-          title="还没有保存到当前工作空间"
-          copy="先把当前草稿保存到工作空间里，这里才会显示已保存版本的目录状态。"
+          title={t("modules.studio.scripts.scriptresultspanel.not.saved.to.current", "Not saved to current workspace yet")}
+          copy={t("modules.studio.scripts.scriptresultspanel.save.the.current.draft", "Save the current draft to the workspace first, then the directory status of the saved version will be displayed here.")}
         />
       );
     }
@@ -152,24 +153,24 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
       <div className="console-scripts-detail-grid">
         <div className="console-scripts-detail-grid two-column">
           <div className="console-scripts-detail-card">
-            <div className="console-scripts-section-label">Catalog</div>
+            <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.catalog", "Catalog")}</div>
             <div className="console-scripts-detail-copy">
-              <div>Workspace ID: {scopeDetail.scopeId}</div>
+              <div>{t("modules.studio.scripts.scriptresultspanel.workspace.id", "Workspace ID:")}{scopeDetail.scopeId}</div>
               <div>Revision: {scopeDetail.script.activeRevision}</div>
               <div>Updated: {formatScriptDateTime(scopeDetail.script.updatedAt)}</div>
             </div>
           </div>
           <div className="console-scripts-detail-card">
-            <div className="console-scripts-section-label">Actors</div>
+            <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.actors", "Actors")}</div>
             <div className="console-scripts-detail-copy">
               <div>Definition: {scopeDetail.script.definitionActorId}</div>
               <div>Catalog: {scopeDetail.script.catalogActorId}</div>
-              <div>Script ID: {scopeDetail.script.scriptId}</div>
+              <div>{t("modules.studio.scripts.scriptresultspanel.script.id", "Script ID:")}{scopeDetail.script.scriptId}</div>
             </div>
           </div>
         </div>
         <div className="console-scripts-detail-card muted">
-          <div className="console-scripts-section-label">Revision line</div>
+          <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.revision.line", "Revision line")}</div>
           <div className="console-scripts-detail-copy">
             <div>Previous: {selectedCatalog?.previousRevision || '-'}</div>
             <div>
@@ -178,9 +179,9 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
                 ? selectedCatalog.revisionHistory.join(' -> ')
                 : scopeDetail.script.activeRevision}
             </div>
-            <div>Last proposal: {selectedCatalog?.lastProposalId || '-'}</div>
+            <div>{t("modules.studio.scripts.scriptresultspanel.last.proposal", "Last proposal:")}{selectedCatalog?.lastProposalId || '-'}</div>
             <div>
-              Source hash:{' '}
+              {t("modules.studio.scripts.scriptresultspanel.source.hash", "Source hash:")}{' '}
               {selectedCatalog?.activeSourceHash ||
                 scopeDetail.script.activeSourceHash ||
                 '-'}
@@ -195,8 +196,8 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
     if (!selectedDecision) {
       return (
         <ScriptsStudioEmptyState
-          title="还没有发布记录"
-          copy="当草稿稳定后，使用“发布”提交演进提案，这里会显示发布结果。"
+          title={t("modules.studio.scripts.scriptresultspanel.no.release.record.yet", "No release record yet")}
+          copy={t("modules.studio.scripts.scriptresultspanel.when.the.draft.is", "When the draft is stable, use \"Publish\" to submit the evolution proposal, and the publication results will be displayed here.")}
         />
       );
     }
@@ -217,16 +218,16 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
       <div className="console-scripts-detail-grid">
         <div className="console-scripts-detail-grid two-column">
           <div className="console-scripts-detail-card">
-            <div className="console-scripts-section-label">Revision</div>
+            <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.revision", "Revision")}</div>
             <div className="console-scripts-detail-copy">
               <div>Proposal: {selectedDecision.proposalId}</div>
               <div>Base: {selectedDecision.baseRevision || '-'}</div>
               <div>Candidate: {selectedDecision.candidateRevision || '-'}</div>
-              <div>Script ID: {selectedDecision.scriptId || '-'}</div>
+              <div>{t("modules.studio.scripts.scriptresultspanel.script.id.2", "Script ID:")}{selectedDecision.scriptId || '-'}</div>
             </div>
           </div>
           <div className="console-scripts-detail-card">
-            <div className="console-scripts-section-label">Decision</div>
+            <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.decision", "Decision")}</div>
             <div className="console-scripts-detail-copy">
               <div>
                 Status:{' '}
@@ -242,14 +243,13 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
         {selectedDecision.definitionSnapshot ? (
           <div className="console-scripts-detail-card muted">
             <div className="console-scripts-section-label">
-              Definition snapshot
-            </div>
+              {t("modules.studio.scripts.scriptresultspanel.definition.snapshot", "Definition snapshot")}</div>
             <div className="console-scripts-detail-copy">
               <div>
                 Revision: {selectedDecision.definitionSnapshot.revision || '-'}
               </div>
               <div>
-                Source hash:{' '}
+                {t("modules.studio.scripts.scriptresultspanel.source.hash.2", "Source hash:")}{' '}
                 {selectedDecision.definitionSnapshot.sourceHash || '-'}
               </div>
               <div>
@@ -266,12 +266,11 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
               <div>
                 Files:{' '}
                 {definitionSnapshotSummary.fileCount}{' '}
-                total ·{' '}
+                {t("modules.studio.scripts.scriptresultspanel.total", "total ·")}{' '}
                 {definitionSnapshotSummary.csharpCount}{' '}
-                C# ·{' '}
+                {t("modules.studio.scripts.scriptresultspanel.copy", "C# ·")}{' '}
                 {definitionSnapshotSummary.protoCount}{' '}
-                proto
-              </div>
+                {t("modules.studio.scripts.scriptresultspanel.proto", "proto")}</div>
               <div>
                 Contract:{' '}
                 {definitionSnapshotSummary.contractLabel}
@@ -281,8 +280,7 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
         ) : null}
         <div className="console-scripts-detail-card muted">
           <div className="console-scripts-section-label">
-            Validation diagnostics
-          </div>
+            {t("modules.studio.scripts.scriptresultspanel.validation.diagnostics", "Validation diagnostics")}</div>
           {diagnostics.length > 0 ? (
             <div className="console-scripts-detail-grid" style={{ marginTop: 12 }}>
               {diagnostics.map((item, index) => (
@@ -293,8 +291,7 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
             </div>
           ) : (
             <div className="console-scripts-detail-copy">
-              No validation diagnostics were returned.
-            </div>
+              {t("modules.studio.scripts.scriptresultspanel.no.validation.diagnostics.were.returned", "No validation diagnostics were returned.")}</div>
           )}
         </div>
       </div>
@@ -304,7 +301,7 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
   if (validationError) {
       return (
         <div className="console-scripts-detail-card">
-        <div className="console-scripts-section-label">校验失败</div>
+        <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptresultspanel.verification.failed", "Verification failed")}</div>
         <div className="console-scripts-detail-copy">{validationError}</div>
       </div>
     );
@@ -313,11 +310,11 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
   if (!validationResult?.diagnostics.length) {
     return (
       <ScriptsStudioEmptyState
-        title={validationPending ? '正在校验' : '没有诊断信息'}
+        title={validationPending ? t("modules.studio.scripts.scriptresultspanel.verifying", "Verifying") : t("modules.studio.scripts.scriptresultspanel.no.diagnostic.information", "No diagnostic information")}
         copy={
           validationPending
-            ? '正在编译并校验当前草稿。'
-            : '编译器和合约问题会显示在这里。'
+            ? t("modules.studio.scripts.scriptresultspanel.compiling.and.verifying.the", "Compiling and verifying the current draft.")
+            : t("modules.studio.scripts.scriptresultspanel.compiler.and.contract.issues", "Compiler and contract issues will appear here.")
         }
       />
     );
@@ -354,23 +351,23 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
 
 const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
   const validationSummary = props.validationPending
-    ? '校验中'
+    ? t("modules.studio.scripts.scriptresultspanel.checking", "Checking")
     : props.validationResult?.errorCount
-      ? `${props.validationResult.errorCount} 个错误`
+      ? t("modules.studio.scripts.scriptresultspanel.errors", "{value1} errors", { value1: props.validationResult.errorCount })
       : props.validationResult?.warningCount
-        ? `${props.validationResult.warningCount} 个警告`
-        : '通过';
+        ? t("modules.studio.scripts.scriptresultspanel.warnings", "{value1} warnings", { value1: props.validationResult.warningCount })
+        : t("modules.studio.scripts.scriptresultspanel.pass", "pass");
 
   const runtimeSummary = props.selectedSnapshot
-    ? props.selectedSnapshotView.output || props.selectedSnapshotView.status || '运行结果已就绪'
-    : '开始一次测试运行后，这里会显示运行时快照。';
+    ? props.selectedSnapshotView.output || props.selectedSnapshotView.status || t("modules.studio.scripts.scriptresultspanel.the.running.result.is", "The running result is ready")
+    : t("modules.studio.scripts.scriptresultspanel.after.starting.test.run", "After starting a test run, a runtime snapshot is displayed here.");
   const saveSummary = props.scopeDetail?.script
-    ? `当前工作空间 ${props.scopeDetail.scopeId} 正在指向 ${props.scopeDetail.script.activeRevision}。`
-    : '当前草稿还没有保存到工作空间目录。';
+    ? t("modules.studio.scripts.scriptresultspanel.the.current.workspace.is", "The current workspace {value1} is pointing to {value2}.", { value1: props.scopeDetail.scopeId, value2: props.scopeDetail.script.activeRevision })
+    : t("modules.studio.scripts.scriptresultspanel.the.current.draft.has", "The current draft has not been saved to the workspace directory.");
   const promotionSummary = props.selectedDecision
     ? props.selectedDecision.failureReason ||
       `Candidate ${props.selectedDecision.candidateRevision || '-'}`
-    : '草稿稳定后，可以提交发布提案。';
+    : t("modules.studio.scripts.scriptresultspanel.once.the.draft.is", "Once the draft is stable, a publication proposal can be submitted.");
 
   return (
     <div className="console-scripts-panel" style={{ borderRadius: 24 }}>
@@ -378,25 +375,25 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
         <div className="console-scripts-detail-grid">
           <ScriptsStudioResultCard
             active={props.activeResultTab === 'diagnostics'}
-            title="诊断"
+            title={t("modules.studio.scripts.scriptresultspanel.diagnosis", "diagnosis")}
             meta={
-              props.validationPending ? '正在校验' : validationSummary
+              props.validationPending ? t("modules.studio.scripts.scriptresultspanel.verifying.2", "Verifying") : validationSummary
             }
             summary={
               props.validationError ||
               props.validationResult?.diagnostics[0]?.message ||
-              '编译器和合约问题会显示在这里。'
+              t("modules.studio.scripts.scriptresultspanel.compiler.and.contract.issues.2", "Compiler and contract issues will appear here.")
             }
             status={props.validationPending ? 'pending' : ''}
             onClick={() => props.onChangeActiveResultTab('diagnostics')}
           />
           <ScriptsStudioResultCard
             active={props.activeResultTab === 'runtime'}
-            title="测试运行"
+            title={t("modules.studio.scripts.scriptresultspanel.test.run", "test run")}
             meta={
               props.selectedSnapshot
                 ? formatScriptDateTime(props.selectedSnapshot.updatedAt)
-                : '还未运行'
+                : t("modules.studio.scripts.scriptresultspanel.not.running.yet", "Not running yet")
             }
             summary={runtimeSummary}
             status={props.selectedSnapshotView.status || ''}
@@ -404,11 +401,11 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
           />
           <ScriptsStudioResultCard
             active={props.activeResultTab === 'save'}
-            title="已保存"
+            title={t("modules.studio.scripts.scriptresultspanel.saved", "saved")}
             meta={
               props.scopeDetail?.script
                 ? formatScriptDateTime(props.scopeDetail.script.updatedAt)
-                : '还未保存'
+                : t("modules.studio.scripts.scriptresultspanel.not.saved.yet", "Not saved yet")
             }
             summary={saveSummary}
             status={props.scopeDetail?.script ? 'saved' : 'pending'}
@@ -416,11 +413,11 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
           />
           <ScriptsStudioResultCard
             active={props.activeResultTab === 'promotion'}
-            title="发布"
+            title={t("modules.studio.scripts.scriptresultspanel.release", "release")}
             meta={
               props.selectedDecision?.candidateRevision ||
               props.selectedDecision?.proposalId ||
-              '暂无候选版本'
+              t("modules.studio.scripts.scriptresultspanel.no.candidate.version.yet", "No candidate version yet")
             }
             summary={promotionSummary}
             status={
@@ -437,15 +434,15 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
           <div className="console-scripts-detail-card muted">
             <div className="console-scripts-inline-actions" style={{ justifyContent: 'space-between' }}>
               <div>
-                <div className="console-scripts-eyebrow">Activity</div>
+                <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptresultspanel.activity", "Activity")}</div>
                 <div className="console-scripts-section-title">
                   {props.activeResultTab === 'runtime'
-                    ? '测试运行'
+                    ? t("modules.studio.scripts.scriptresultspanel.test.run.2", "test run")
                     : props.activeResultTab === 'save'
-                      ? '已保存状态'
+                      ? t("modules.studio.scripts.scriptresultspanel.saved.status", "Saved status")
                       : props.activeResultTab === 'promotion'
-                        ? '发布结果'
-                        : '诊断'}
+                        ? t("modules.studio.scripts.scriptresultspanel.publish.results", "publish results")
+                        : t("modules.studio.scripts.scriptresultspanel.diagnosis.2", "diagnosis")}
                 </div>
               </div>
               {props.validationPending ? <SyncOutlined spin /> : null}

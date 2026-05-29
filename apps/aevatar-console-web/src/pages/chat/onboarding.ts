@@ -5,6 +5,7 @@ import type {
   StudioSettings,
 } from "@/shared/studio/models";
 import type { ServiceOption } from "./chatTypes";
+import { t } from "@/shared/i18n/messages";
 
 export const onboardingServiceId = "onboarding";
 export const onboardingServiceLabel = "Onboarding";
@@ -28,7 +29,7 @@ export function createOnboardingServiceOption(): ServiceOption {
   return {
     endpoints: [
       {
-        description: "Guide the operator through provider setup for NyxID Chat.",
+        description: t("pages.chat.onboarding.guide.the.operator.through.provider", "Guide the operator through provider setup for NyxID Chat."),
         displayName: "Chat",
         endpointId: "chat",
         kind: "chat",

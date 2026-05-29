@@ -23,6 +23,7 @@ import type {
   MissionTopologyNode,
   MissionTopologyNodeKind,
 } from './models';
+import { t } from "@/shared/i18n/messages";
 
 type MissionSessionLike = {
   context?: {
@@ -419,7 +420,7 @@ function buildTimelineIntervention(
         Number.isFinite(timeoutMs) && timeoutMs > 0
           ? `Times out in ${Math.max(1, Math.round(timeoutMs / 1000))}s`
           : undefined,
-      title: `Waiting for ${signalName}`,
+      title: t("pages.missioncontrol.runtimeadapter.waiting.for.signal.name", "Waiting for {signalName}", { signalName }),
       primaryActionLabel: 'Send Signal',
       secondaryActionLabel: 'Inspect Gate',
     };
@@ -488,7 +489,7 @@ function buildIntervention(
         typeof waitingSignal.timeoutMs === 'number'
           ? `Times out in ${Math.max(1, Math.round(waitingSignal.timeoutMs / 1000))}s`
           : undefined,
-      title: `Waiting for ${waitingSignal.signalName ?? 'signal'}`,
+      title: t("pages.missioncontrol.runtimeadapter.waiting.for.signal.name.2", "Waiting for {signalName}", { signalName: waitingSignal.signalName ?? 'signal' }),
       primaryActionLabel: 'Send Signal',
       secondaryActionLabel: 'Inspect Gate',
     };
@@ -596,7 +597,7 @@ function buildReasoningChain(
     return [
       {
         id: `${node.nodeId}/reasoning/fallback`,
-        title: 'No standalone reasoning yet',
+        title: t("pages.missioncontrol.runtimeadapter.no.standalone.reasoning.yet", "No standalone reasoning yet"),
         summary: 'This node does not have independent timeline evidence yet, so the inspector is showing graph properties and the latest synchronized state.',
         evidence: Object.entries(node.properties)
           .filter(([, value]) => value.length > 0)
@@ -1029,25 +1030,25 @@ export function buildMissionSnapshotFromRuntime(
     metrics: [
       {
         key: 'steps',
-        label: 'Completed Steps',
+        label: t("pages.missioncontrol.runtimeadapter.completed.steps", "Completed Steps"),
         trend: 'steady',
         value: `${artifacts.graph.snapshot.completedSteps}/${artifacts.graph.snapshot.totalSteps}`,
       },
       {
         key: 'replies',
-        label: 'Role Replies',
+        label: t("pages.missioncontrol.runtimeadapter.role.replies", "Role Replies"),
         trend: 'up',
         value: String(artifacts.graph.snapshot.roleReplyCount),
       },
       {
         key: 'state-version',
-        label: 'State Version',
+        label: t("pages.missioncontrol.runtimeadapter.state.version", "State Version"),
         trend: 'steady',
         value: String(artifacts.graph.snapshot.stateVersion),
       },
       {
         key: 'last-success',
-        label: 'Last Success',
+        label: t("pages.missioncontrol.runtimeadapter.last.success", "Last Success"),
         tone: artifacts.graph.snapshot.lastSuccess === false ? 'warning' : 'success',
         trend: 'steady',
         value:
@@ -1094,9 +1095,9 @@ export function buildMissionRuntimePlaceholderSnapshot(input: {
       workflowName: idle ? 'Mission Control' : 'Mission Control Runtime',
     },
     metrics: [
-      { key: 'steps', label: 'Completed Steps', trend: 'steady', value: '--' },
-      { key: 'replies', label: 'Role Replies', trend: 'steady', value: '--' },
-      { key: 'state-version', label: 'State Version', trend: 'steady', value: '--' },
+      { key: 'steps', label: t("pages.missioncontrol.runtimeadapter.completed.steps.2", "Completed Steps"), trend: 'steady', value: '--' },
+      { key: 'replies', label: t("pages.missioncontrol.runtimeadapter.role.replies.2", "Role Replies"), trend: 'steady', value: '--' },
+      { key: 'state-version', label: t("pages.missioncontrol.runtimeadapter.state.version.2", "State Version"), trend: 'steady', value: '--' },
       {
         key: 'connection',
         label: 'Connection',

@@ -10,6 +10,7 @@ import {
   ScriptsStudioEmptyState,
   ScriptsStudioSection,
 } from '../ScriptsStudioChrome';
+import { t } from "@/shared/i18n/messages";
 
 type ScriptInspectorPanelProps = {
   appContext: StudioAppContext;
@@ -39,13 +40,13 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
     return (
       <section className="console-scripts-panel">
         <div className="console-scripts-panel-header">
-          <div className="console-scripts-eyebrow">脚本信息</div>
-          <div className="console-scripts-panel-header-title">当前脚本</div>
+          <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptinspectorpanel.script.information", "Script information")}</div>
+          <div className="console-scripts-panel-header-title">{t("modules.studio.scripts.scriptinspectorpanel.current.script", "current script")}</div>
         </div>
         <div className="console-scripts-panel-body">
           <ScriptsStudioEmptyState
-            title="还没有选中脚本。"
-            copy="选择一个脚本草稿后，这里会显示脚本信息、行为合约和发布状态。"
+            title={t("modules.studio.scripts.scriptinspectorpanel.no.script.has.been", "No script has been selected yet.")}
+            copy={t("modules.studio.scripts.scriptinspectorpanel.after.selecting.script.draft", "After selecting a script draft, the script information, behavior contract, and release status are displayed here.")}
           />
         </div>
       </section>
@@ -54,16 +55,16 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
 
   const isEmbeddedMode = appContext.mode === 'embedded';
   const availableActions = [
-    '校验',
-    ...(scopeBacked ? ['保存', '发布'] : []),
-    ...(isEmbeddedMode ? ['测试运行', 'AI 辅助'] : []),
+    t("modules.studio.scripts.scriptinspectorpanel.check", "check"),
+    ...(scopeBacked ? [t("modules.studio.scripts.scriptinspectorpanel.save", "save"), t("modules.studio.scripts.scriptinspectorpanel.release", "release")] : []),
+    ...(isEmbeddedMode ? [t("modules.studio.scripts.scriptinspectorpanel.test.run", "test run"), t("modules.studio.scripts.scriptinspectorpanel.ai.assisted", "AI-assisted")] : []),
   ];
   const unavailableActions = [
     ...(!scopeBacked
-      ? ['保存（需要当前工作空间）', '发布（需要当前工作空间）']
+      ? [t("modules.studio.scripts.scriptinspectorpanel.save.requires.current.workspace", "Save (requires current workspace)"), t("modules.studio.scripts.scriptinspectorpanel.publish.requires.current.workspace", "Publish (requires current workspace)")]
       : []),
     ...(!isEmbeddedMode
-      ? ['测试运行（需要嵌入式 Host）', 'AI 辅助（需要嵌入式 Host）']
+      ? [t("modules.studio.scripts.scriptinspectorpanel.test.run.embedded.host", "Test run (embedded Host required)"), t("modules.studio.scripts.scriptinspectorpanel.ai.assistance.embedded.host", "AI assistance (embedded Host required)")]
       : []),
   ];
   const scopeScript = selectedDraft.scopeDetail?.script || null;
@@ -71,34 +72,37 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
   return (
     <section className="console-scripts-panel">
       <div className="console-scripts-panel-header">
-        <div className="console-scripts-eyebrow">脚本信息</div>
+        <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptinspectorpanel.script.information.2", "Script information")}</div>
         <div className="console-scripts-panel-header-title">
           {selectedDraft.package.entryBehaviorTypeName || selectedDraft.scriptId}
         </div>
       </div>
       <div className="console-scripts-panel-body">
-        <ScriptsStudioSection eyebrow="概要" title="当前脚本">
+        <ScriptsStudioSection
+          eyebrow={t("modules.studio.scripts.scriptinspectorpanel.summary", "Summary")}
+          title={t("modules.studio.scripts.scriptinspectorpanel.current.script.2", "current script")}
+        >
           <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">脚本 ID</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.script.id", "Script ID")}</div>
               <div className="console-scripts-field-value">
                 {selectedDraft.scriptId}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">已保存版本</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.saved.version", "saved version")}</div>
               <div className="console-scripts-field-value">
                 {renderValue(selectedDraft.revision)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">入口类</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.entry.class", "Entry class")}</div>
               <div className="console-scripts-field-value">
                 {renderValue(selectedDraft.package.entryBehaviorTypeName)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">当前文件</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.current.file", "current file")}</div>
               <div className="console-scripts-field-value">
                 {renderValue(selectedDraft.selectedFilePath)}
               </div>
@@ -107,32 +111,32 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
         </ScriptsStudioSection>
 
         <ScriptsStudioSection
-          eyebrow="合约"
-          title="行为合约"
+          eyebrow={t("modules.studio.scripts.scriptinspectorpanel.contract", "Contract")}
+          title={t("modules.studio.scripts.scriptinspectorpanel.behavioral.contract", "behavioral contract")}
         >
           <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">存储位置</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.storage.location", "storage location")}</div>
               <div className="console-scripts-field-value">
                 {scopeBacked
-                  ? `工作空间 ID · ${appContext.scopeId}`
-                  : '仅本地草稿'}
+                  ? t("modules.studio.scripts.scriptinspectorpanel.workspace.id", "Workspace ID · {value1}", { value1: appContext.scopeId })
+                  : t("modules.studio.scripts.scriptinspectorpanel.local.draft.only", "Local draft only")}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">输入类型</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.input.type", "input type")}</div>
               <div className="console-scripts-copy-value">
                 {appContext.scriptContract.inputType}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">ReadModel 字段</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.readmodel.field", "ReadModel field")}</div>
               <div className="console-scripts-field-value">
                 {appContext.scriptContract.readModelFields.join(', ') || '-'}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Host 模式</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.host.mode", "Host mode")}</div>
               <div className="console-scripts-field-value">
                 {formatStudioHostModeLabel(appContext.mode)}
               </div>
@@ -140,18 +144,21 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
           </div>
         </ScriptsStudioSection>
 
-        <ScriptsStudioSection eyebrow="操作" title="当前可用操作">
+        <ScriptsStudioSection
+          eyebrow={t("modules.studio.scripts.scriptinspectorpanel.actions", "Actions")}
+          title={t("modules.studio.scripts.scriptinspectorpanel.currently.available.operations", "Currently available operations")}
+        >
           <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">当前可用</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.currently.available", "Currently available")}</div>
               <div className="console-scripts-field-value">
                 {availableActions.join(', ')}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">当前不可用</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.currently.unavailable", "Currently unavailable")}</div>
               <div className="console-scripts-field-value">
-                {unavailableActions.join(', ') || '无'}
+                {unavailableActions.join(', ') || t("modules.studio.scripts.scriptinspectorpanel.none", "none")}
               </div>
             </div>
           </div>
@@ -165,68 +172,69 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
               onClick={onOpenAskAi}
               disabled={!canAskAi}
             >
-              AI 辅助
-            </button>
+              {t("modules.studio.scripts.scriptinspectorpanel.ai.assisted.2", "AI-assisted")}</button>
             <button
               type="button"
               className="console-scripts-solid-action"
               onClick={onOpenBindScope}
               disabled={!canBindScope}
             >
-              绑定到团队
-            </button>
+              {t("modules.studio.scripts.scriptinspectorpanel.bind.to.team", "Bind to team")}</button>
           </div>
           <div className="console-scripts-detail-copy">
             {getStudioHostModeTooltip(appContext.mode)}
           </div>
         </ScriptsStudioSection>
 
-        <ScriptsStudioSection eyebrow="更多信息" title="运行与发布">
+        <ScriptsStudioSection
+          eyebrow={t("modules.studio.scripts.scriptinspectorpanel.more.information", "More information")}
+          title={t("modules.studio.scripts.scriptinspectorpanel.run.and.publish", "Run and publish")}
+        >
           <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">定义 Actor</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.define.actor", "Define actor")}</div>
               <div className="console-scripts-copy-value">
                 {renderValue(selectedDraft.definitionActorId)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">运行 Actor</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.run.actor", "Run actor")}</div>
               <div className="console-scripts-copy-value">
                 {renderValue(selectedDraft.runtimeActorId)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">源码哈希</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.source.code.hash", "Source code hash")}</div>
               <div className="console-scripts-copy-value">
                 {renderValue(selectedDraft.lastSourceHash)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">已发布版本</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.published.version", "Published version")}</div>
               <div className="console-scripts-field-value">
                 {renderValue(scopeScript?.activeRevision)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">目录 Actor</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.directory.actors", "Directory Actors")}</div>
               <div className="console-scripts-copy-value">
                 {renderValue(scopeScript?.catalogActorId)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">入口源文件</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.entry.source.file", "Entry source file")}</div>
               <div className="console-scripts-field-value">
                 {renderValue(selectedDraft.package.entrySourcePath)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">基线版本</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.baseline.version", "baseline version")}</div>
               <div className="console-scripts-field-value">
                 {renderValue(selectedDraft.baseRevision)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">更新时间</div>
+              <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptinspectorpanel.update.time", "Update time")}</div>
               <div className="console-scripts-field-value">
                 {formatScriptDateTime(selectedDraft.updatedAtUtc)}
               </div>

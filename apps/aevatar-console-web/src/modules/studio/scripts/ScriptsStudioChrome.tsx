@@ -3,6 +3,7 @@ import {
   DownOutlined,
 } from '@ant-design/icons';
 import React from 'react';
+import { t } from "@/shared/i18n/messages";
 
 export function ScriptsStudioEmptyState(props: {
   title: string;
@@ -121,8 +122,8 @@ export function ScriptsStudioModal(props: {
           <button
             type="button"
             onClick={props.onClose}
-            title="Close dialog"
-            aria-label="Close dialog"
+            title={t("modules.studio.scripts.scriptsstudiochrome.close.dialog", "Close dialog")}
+            aria-label={t("modules.studio.scripts.scriptsstudiochrome.close.dialog.2", "Close dialog")}
             className="console-scripts-icon-button"
           >
             <CloseOutlined />

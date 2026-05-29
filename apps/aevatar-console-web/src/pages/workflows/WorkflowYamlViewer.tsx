@@ -6,6 +6,7 @@ import {
 import { Button, Empty, Modal, message, Space, Tag, Typography } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { cardStackStyle, embeddedPanelStyle } from '@/shared/ui/proComponents';
+import { t } from "@/shared/i18n/messages";
 
 type WorkflowYamlViewerProps = {
   yaml: string;
@@ -292,20 +293,18 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             type="secondary"
             style={{ margin: 0, maxWidth: 720 }}
           >
-            Read-only workflow definition with syntax highlighting, inline copy,
-            and editor-style controls.
-          </Typography.Paragraph>
+            {t("pages.workflows.workflowyamlviewer.read.only.workflow.definition.with", "Read-only workflow definition with syntax highlighting, inline copy, and editor-style controls.")}</Typography.Paragraph>
           <Space wrap size={[8, 8]}>
-            <Tag color="blue">Read only</Tag>
-            <Tag>{yamlStats.lineCount} lines</Tag>
-            <Tag>{yamlStats.charCount} chars</Tag>
-            <Tag>{yamlStats.longestLine} max columns</Tag>
+            <Tag color="blue">{t("pages.workflows.workflowyamlviewer.read.only", "Read only")}</Tag>
+            <Tag>{yamlStats.lineCount} {t("pages.workflows.workflowyamlviewer.lines", "lines")}</Tag>
+            <Tag>{yamlStats.charCount} {t("pages.workflows.workflowyamlviewer.chars", "chars")}</Tag>
+            <Tag>{yamlStats.longestLine} {t("pages.workflows.workflowyamlviewer.max.columns", "max columns")}</Tag>
           </Space>
         </div>
 
         <div style={editorActionsStyle}>
           <Button
-            aria-label="Toggle YAML line wrap"
+            aria-label={t("pages.workflows.workflowyamlviewer.toggle.yaml.line.wrap", "Toggle YAML line wrap")}
             type={wrapLines ? 'primary' : 'default'}
             onClick={() => setWrapLines((current) => !current)}
           >
@@ -331,12 +330,11 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             {fullscreenMode ? 'Exit fullscreen' : 'Open fullscreen'}
           </Button>
           <Button
-            aria-label="Copy workflow YAML"
+            aria-label={t("pages.workflows.workflowyamlviewer.copy.workflow.yaml", "Copy workflow YAML")}
             icon={<CopyOutlined />}
             onClick={() => void handleCopy()}
           >
-            Copy YAML
-          </Button>
+            {t("pages.workflows.workflowyamlviewer.copy.yaml", "Copy YAML")}</Button>
         </div>
       </div>
 
@@ -398,7 +396,7 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
         {contextHolder}
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No YAML is available for this workflow."
+          description={t("pages.workflows.workflowyamlviewer.no.yaml.is.available.for", "No YAML is available for this workflow.")}
         />
       </>
     );
@@ -431,7 +429,7 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             marginBottom: 16,
           },
         }}
-        title="Workflow YAML"
+        title={t("pages.workflows.workflowyamlviewer.workflow.yaml", "Workflow YAML")}
         width="100vw"
       >
         {renderYamlPanel(fullscreenHeight, true)}

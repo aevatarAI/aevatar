@@ -28,6 +28,7 @@ import {
   workbenchScrollableBodyStyle,
 } from "../runWorkbenchConfig";
 import { AevatarHelpTooltip } from "@/shared/ui/aevatarPageShells";
+import { t } from "@/shared/i18n/messages";
 
 type RunsInspectorPaneProps = {
   actorSnapshot?: WorkflowActorSnapshot;
@@ -188,7 +189,7 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
 
 function renderPrimitiveTags(primitives: string[]): React.ReactNode {
   if (primitives.length === 0) {
-    return <Typography.Text type="secondary">No primitives listed.</Typography.Text>;
+    return <Typography.Text type="secondary">{t("pages.runs.runsinspectorpane.no.primitives.listed", "No primitives listed.")}</Typography.Text>;
   }
 
   return (
@@ -196,7 +197,7 @@ function renderPrimitiveTags(primitives: string[]): React.ReactNode {
       {primitives.slice(0, 3).map((primitive) => (
         <Tag key={primitive}>{primitive}</Tag>
       ))}
-      {primitives.length > 3 ? <Tag>+{primitives.length - 3} more</Tag> : null}
+      {primitives.length > 3 ? <Tag>+{primitives.length - 3} {t("pages.runs.runsinspectorpane.more", "more")}</Tag> : null}
     </Space>
   );
 }
@@ -209,7 +210,7 @@ function renderInteractionSummary(
     return (
       <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         <Space wrap size={[6, 6]}>
-          <Tag color="warning">Human input</Tag>
+          <Tag color="warning">{t("pages.runs.runsinspectorpane.human.input", "Human input")}</Tag>
           <Tag>{humanInputRecord.suspensionType || "n/a"}</Tag>
         </Space>
         <div style={summaryFieldGridStyle}>
@@ -221,7 +222,7 @@ function renderInteractionSummary(
           />
         </div>
         <div>
-          <Typography.Text style={summaryFieldLabelStyle}>Prompt</Typography.Text>
+          <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.prompt", "Prompt")}</Typography.Text>
           <Typography.Paragraph
             ellipsis={{ rows: 3, expandable: true, symbol: "more" }}
             style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
@@ -237,7 +238,7 @@ function renderInteractionSummary(
     return (
       <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         <Space wrap size={[6, 6]}>
-          <Tag color="warning">Waiting signal</Tag>
+          <Tag color="warning">{t("pages.runs.runsinspectorpane.waiting.signal", "Waiting signal")}</Tag>
           <Tag>{waitingSignalRecord.signalName || "n/a"}</Tag>
         </Space>
         <div style={summaryFieldGridStyle}>
@@ -252,7 +253,7 @@ function renderInteractionSummary(
           <SummaryField label="Run" value={waitingSignalRecord.runId || "n/a"} />
         </div>
         <div>
-          <Typography.Text style={summaryFieldLabelStyle}>Prompt</Typography.Text>
+          <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.prompt.2", "Prompt")}</Typography.Text>
           <Typography.Paragraph
             ellipsis={{ rows: 3, expandable: true, symbol: "more" }}
             style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
@@ -264,7 +265,7 @@ function renderInteractionSummary(
     );
   }
 
-  return <Typography.Text type="secondary">No pending interaction.</Typography.Text>;
+  return <Typography.Text type="secondary">{t("pages.runs.runsinspectorpane.no.pending.interaction", "No pending interaction.")}</Typography.Text>;
 }
 
 const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
@@ -289,7 +290,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
             help="A compact summary of the current run state, identifiers, and latest visible output."
-            title="Run summary"
+            title={t("pages.runs.runsinspectorpane.run.summary", "Run summary")}
           />
           <div
             style={{
@@ -331,36 +332,36 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
               value={String(runSummaryRecord.eventCount)}
             />
             <SummaryMetric
-              label="Active steps"
+              label={t("pages.runs.runsinspectorpane.active.steps", "Active steps")}
               tone={
                 runSummaryRecord.activeSteps.length > 0 ? "warning" : "default"
               }
               value={String(runSummaryRecord.activeSteps.length)}
             />
             <SummaryMetric
-              label="Last event"
+              label={t("pages.runs.runsinspectorpane.last.event", "Last event")}
               value={runSummaryRecord.lastEventAt || "n/a"}
             />
           </div>
           <div style={summaryFieldGridStyle}>
             <SummaryField
               copyable
-              label="Run ID"
+              label={t("pages.runs.runsinspectorpane.run.id", "Run ID")}
               value={runSummaryRecord.runId || "n/a"}
             />
             <SummaryField
               copyable
-              label="Actor ID"
+              label={t("pages.runs.runsinspectorpane.actor.id", "Actor ID")}
               value={runSummaryRecord.actorId || "n/a"}
             />
             <SummaryField
               copyable
-              label="Command ID"
+              label={t("pages.runs.runsinspectorpane.command.id", "Command ID")}
               value={runSummaryRecord.commandId || "n/a"}
             />
           </div>
           <div>
-            <Typography.Text style={summaryFieldLabelStyle}>Active steps</Typography.Text>
+            <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.active.steps.2", "Active steps")}</Typography.Text>
             <div style={{ marginTop: 8 }}>
               {runSummaryRecord.activeSteps.length > 0 ? (
                 <Space wrap size={[6, 6]}>
@@ -371,13 +372,13 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                   ))}
                 </Space>
               ) : (
-                <Typography.Text type="secondary">No active steps.</Typography.Text>
+                <Typography.Text type="secondary">{t("pages.runs.runsinspectorpane.no.active.steps", "No active steps.")}</Typography.Text>
               )}
             </div>
           </div>
           {latestMessagePreview ? (
             <div>
-              <Typography.Text style={summaryFieldLabelStyle}>Latest message</Typography.Text>
+              <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.latest.message", "Latest message")}</Typography.Text>
               <Typography.Paragraph
                 ellipsis={{ rows: 4, expandable: true, symbol: "more" }}
                 style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
@@ -393,7 +394,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
             help="The currently selected timeline item and its raw event payload."
-            title="Selected event"
+            title={t("pages.runs.runsinspectorpane.selected.event", "Selected event")}
             action={
               selectedTraceItem ? (
                 <Space wrap size={[6, 6]}>
@@ -411,7 +412,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                   value={selectedTraceItem.timestamp || "n/a"}
                 />
                 <SummaryField
-                  label="Event type"
+                  label={t("pages.runs.runsinspectorpane.event.type", "Event type")}
                   value={selectedTraceItem.eventType || "n/a"}
                 />
                 <SummaryField
@@ -423,12 +424,12 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                   value={selectedTraceItem.stepId || "n/a"}
                 />
                 <SummaryField
-                  label="Step type"
+                  label={t("pages.runs.runsinspectorpane.step.type", "Step type")}
                   value={selectedTraceItem.stepType || "n/a"}
                 />
               </div>
               <div>
-                <Typography.Text style={summaryFieldLabelStyle}>Description</Typography.Text>
+                <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.description", "Description")}</Typography.Text>
                 <Typography.Paragraph
                   style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
                 >
@@ -436,7 +437,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                 </Typography.Paragraph>
               </div>
               <div>
-                <Typography.Text style={summaryFieldLabelStyle}>Raw payload</Typography.Text>
+                <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.raw.payload", "Raw payload")}</Typography.Text>
                 <pre
                   style={{
                     background: "var(--ant-color-fill-quaternary)",
@@ -456,8 +457,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
             </>
           ) : (
             <Typography.Text type="secondary">
-              Select a timeline row to inspect its detail.
-            </Typography.Text>
+              {t("pages.runs.runsinspectorpane.select.timeline.row.to.inspect", "Select a timeline row to inspect its detail.")}</Typography.Text>
           )}
         </Space>
       </div>
@@ -473,7 +473,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
               <SectionHeader
                 action={
                   showInteractionAction && onOpenInspector ? (
-                    <Button onClick={onOpenInspector}>Open details</Button>
+                    <Button onClick={onOpenInspector}>{t("pages.runs.runsinspectorpane.open.details", "Open details")}</Button>
                   ) : undefined
                 }
                 title="Interaction"
@@ -515,35 +515,34 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
               ) : (
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="Select a route preview to inspect its snapshot."
+                  description={t("pages.runs.runsinspectorpane.select.route.preview.to.inspect", "Select a route preview to inspect its snapshot.")}
                 />
               )}
             </div>
 
             <div style={sectionDividerStyle}>
-              <SectionHeader title="Actor state" />
+              <SectionHeader title={t("pages.runs.runsinspectorpane.actor.state", "Actor state")} />
               {actorSnapshotLoading ? (
                 <Typography.Text type="secondary">
-                  Loading actor snapshot...
-                </Typography.Text>
+                  {t("pages.runs.runsinspectorpane.loading.actor.snapshot", "Loading actor snapshot...")}</Typography.Text>
               ) : actorSnapshot ? (
                 <>
                   <div style={summaryFieldGridStyle}>
                     <SummaryField
                       copyable
-                      label="Actor ID"
+                      label={t("pages.runs.runsinspectorpane.actor.id.2", "Actor ID")}
                       value={actorSnapshot.actorId}
                     />
                     <SummaryField
-                      label="State version"
+                      label={t("pages.runs.runsinspectorpane.state.version", "State version")}
                       value={String(actorSnapshot.stateVersion)}
                     />
                     <SummaryField
-                      label="Completed steps"
+                      label={t("pages.runs.runsinspectorpane.completed.steps", "Completed steps")}
                       value={`${actorSnapshot.completedSteps}/${actorSnapshot.totalSteps}`}
                     />
                     <SummaryField
-                      label="Role replies"
+                      label={t("pages.runs.runsinspectorpane.role.replies", "Role replies")}
                       value={String(actorSnapshot.roleReplyCount)}
                     />
                   </div>
@@ -553,16 +552,16 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                       value={actorSnapshot.lastUpdatedAt || "n/a"}
                     />
                     <SummaryField
-                      label="Last command"
+                      label={t("pages.runs.runsinspectorpane.last.command", "Last command")}
                       value={actorSnapshot.lastCommandId || "n/a"}
                     />
                     <SummaryField
-                      label="Last event"
+                      label={t("pages.runs.runsinspectorpane.last.event.2", "Last event")}
                       value={actorSnapshot.lastEventId || "n/a"}
                     />
                   </div>
                   <div>
-                    <Typography.Text style={summaryFieldLabelStyle}>Last output</Typography.Text>
+                    <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.last.output", "Last output")}</Typography.Text>
                     <Typography.Paragraph
                       ellipsis={{ rows: 3, expandable: true, symbol: "more" }}
                       style={{ margin: "8px 0 0" }}
@@ -573,8 +572,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                 </>
               ) : (
                 <Typography.Text type="secondary">
-                  Actor state will appear after the run binds to an actor.
-                </Typography.Text>
+                  {t("pages.runs.runsinspectorpane.actor.state.will.appear.after", "Actor state will appear after the run binds to an actor.")}</Typography.Text>
               )}
             </div>
           </div>
@@ -594,7 +592,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       {...moduleCardProps}
       style={workbenchCardStyle}
       bodyStyle={workbenchCardBodyStyle}
-      extra={<Typography.Text type="secondary">Digest and drill-down</Typography.Text>}
+      extra={<Typography.Text type="secondary">{t("pages.runs.runsinspectorpane.digest.and.drill.down", "Digest and drill-down")}</Typography.Text>}
     >
       <div style={workbenchScrollableBodyStyle}>{content}</div>
     </ProCard>

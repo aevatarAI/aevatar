@@ -19,6 +19,7 @@ function buildModuleNameMapper(baseModuleNameMapper?: Record<string, unknown>) {
       'mocks',
       'monacoEditor.tsx',
     ),
+    '^@umijs/max$': resolveFromRoot('tests', 'mocks', 'umijsMax.tsx'),
     '^@ant-design/pro-components$': resolveFromRoot(
       'tests',
       'mocks',

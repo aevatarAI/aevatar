@@ -81,6 +81,7 @@ import {
   type FloatingOffset,
 } from './floatingLayout';
 import './scriptsStudio.css';
+import { t } from "@/shared/i18n/messages";
 
 const STORAGE_KEY = 'aevatar:console:scripts-studio:v1';
 const FLOATING_STORAGE_KEY = 'aevatar:console:scripts-studio:floating:v1';
@@ -1237,7 +1238,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     setSelectedDraftKey(nextDraft.key);
     setNotice({
       type: 'info',
-      message: `Created ${nextDraft.scriptId}.`,
+      message: t(
+        'modules.studio.scripts.scriptsworkbenchpage.created.script',
+        'Created {scriptId}.',
+        { scriptId: nextDraft.scriptId },
+      ),
     });
   }, [drafts.length]);
 
@@ -1261,7 +1266,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       onSelectScriptId?.(detail.script?.scriptId || '');
       setNotice({
         type: 'info',
-        message: `Loaded ${detail.script?.scriptId || 'workspace script'} into the active draft list.`,
+        message: t(
+          'modules.studio.scripts.scriptsworkbenchpage.loaded.script.into.active',
+          'Loaded {scriptId} into the active draft list.',
+          { scriptId: detail.script?.scriptId || t('modules.studio.scripts.scriptsworkbenchpage.workspace.script', 'workspace script') },
+        ),
       });
     },
     [drafts, onSelectScriptId],
@@ -1275,7 +1284,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     setSelectedDraftKey((current) => (current === draftKey ? '' : current));
     setNotice({
       type: 'info',
-      message: `Removed ${scriptId}.`,
+      message: t('modules.studio.scripts.scriptsworkbenchpage.removed.script', 'Removed {scriptId}.', { scriptId }),
     });
   }, []);
 
@@ -1314,7 +1323,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         mode: 'rename',
         kind: entry.kind,
         originalPath: filePath,
-        title: 'Rename file',
+        title: t("modules.studio.scripts.scriptsworkbenchpage.rename.file", "Rename file"),
         confirmLabel: 'Rename file',
         value: filePath,
       });
@@ -1373,7 +1382,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       });
       setNotice({
         type: 'success',
-        message: `Added ${nextFilePath}.`,
+        message: t('modules.studio.scripts.scriptsworkbenchpage.added.file', 'Added {filePath}.', { filePath: nextFilePath }),
       });
     } else {
       updateSelectedDraft((draft) => {
@@ -1396,7 +1405,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       });
       setNotice({
         type: 'success',
-        message: `Renamed ${fileDialog.originalPath} to ${nextFilePath}.`,
+        message: t(
+          'modules.studio.scripts.scriptsworkbenchpage.renamed.file',
+          'Renamed {from} to {to}.',
+          { from: fileDialog.originalPath, to: nextFilePath },
+        ),
       });
     }
 
@@ -1412,7 +1425,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       handleRemoveFile(removalTarget.filePath);
       setNotice({
         type: 'info',
-        message: `Removed ${removalTarget.filePath}.`,
+        message: t('modules.studio.scripts.scriptsworkbenchpage.removed.file', 'Removed {filePath}.', { filePath: removalTarget.filePath }),
       });
     } else {
       removeDraft(removalTarget.draftKey, removalTarget.scriptId);
@@ -1637,7 +1650,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       scopeId: accepted.acceptedScript.scopeId,
       scriptId: accepted.acceptedScript.scriptId,
       status: 'pending',
-      message: `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the workspace catalog.`,
+      message: t(
+        'modules.studio.scripts.scriptsworkbenchpage.save.request.waiting.catalog',
+        'Save request for {scriptId} is still waiting to appear in the workspace catalog.',
+        { scriptId: accepted.acceptedScript.scriptId },
+      ),
       currentScript: null,
       isTerminal: false,
     };
@@ -1676,7 +1693,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const accepted = await saveCurrentDraftToScope();
       setNotice({
         type: 'info',
-        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the workspace catalog to catch up.`,
+        message: t(
+          'modules.studio.scripts.scriptsworkbenchpage.save.accepted.waiting.catalog',
+          'Save accepted for {scriptId}. Waiting for the workspace catalog to catch up.',
+          { scriptId: accepted.acceptedScript.scriptId },
+        ),
       });
       const observation = await observeAcceptedSave(accepted);
       await refreshScopeScripts();
@@ -1749,7 +1770,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!scriptRevision) {
       setNotice({
         type: 'warning',
-        message: 'Save the current script into the workspace before binding it.',
+        message: t("modules.studio.scripts.scriptsworkbenchpage.save.the.current.script.into", "Save the current script into the workspace before binding it."),
       });
       return;
     }
@@ -1771,19 +1792,27 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       openWorkspaceSection('activity');
       setNotice({
         type: 'success',
-        message: `Updated workspace ${result.scopeId} to serve script ${result.targetName} on revision ${result.revisionId}.`,
+        message: t(
+          'modules.studio.scripts.scriptsworkbenchpage.updated.workspace.serve.script',
+          'Updated workspace {scopeId} to serve script {targetName} on revision {revisionId}.',
+          {
+            revisionId: result.revisionId,
+            scopeId: result.scopeId,
+            targetName: result.targetName,
+          },
+        ),
         description:
-          'Review the active binding, revision rollout, and saved script assets from the team views.',
+          t("modules.studio.scripts.scriptsworkbenchpage.review.the.active.binding.revision", "Review the active binding, revision rollout, and saved script assets from the team views."),
         actions: [
           {
-            label: 'Open Team Assets',
+            label: t("modules.studio.scripts.scriptsworkbenchpage.open.team.assets", "Open Team Assets"),
             href: buildScopePageHref('/scopes/assets', resolvedScopeId, {
               tab: 'scripts',
               scriptId,
             }),
           },
           {
-            label: 'Open Team Workspace',
+            label: t("modules.studio.scripts.scriptsworkbenchpage.open.team.workspace", "Open Team Workspace"),
             href: buildTeamWorkspaceRoute(resolvedScopeId),
           },
         ],
@@ -1819,7 +1848,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!isEmbeddedMode) {
       setNotice({
         type: 'warning',
-        message: 'Test Run requires an embedded Studio host.',
+        message: t("modules.studio.scripts.scriptsworkbenchpage.test.run.requires.an.embedded", "Test Run requires an embedded Studio host."),
       });
       return;
     }
@@ -1827,7 +1856,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!resolvedScopeId) {
       setNotice({
         type: 'warning',
-        message: 'Test Run requires the current workspace.',
+        message: t("modules.studio.scripts.scriptsworkbenchpage.test.run.requires.the.current", "Test Run requires the current workspace."),
       });
       return;
     }
@@ -1870,7 +1899,14 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       openWorkspaceSection('activity');
       setNotice({
         type: 'success',
-        message: `Started draft run ${result.runId} on runtime ${result.runtimeActorId}.`,
+        message: t(
+          'modules.studio.scripts.scriptsworkbenchpage.started.draft.run.runtime',
+          'Started draft run {runId} on runtime {runtimeActorId}.',
+          {
+            runId: result.runId,
+            runtimeActorId: result.runtimeActorId,
+          },
+        ),
       });
     } catch (error) {
       setNotice({
@@ -1901,7 +1937,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!scopeBacked) {
       setNotice({
         type: 'warning',
-        message: 'Promotion is only available after Studio resolves the current workspace.',
+        message: t("modules.studio.scripts.scriptsworkbenchpage.promotion.is.only.available.after", "Promotion is only available after Studio resolves the current workspace."),
       });
       return;
     }
@@ -1911,7 +1947,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!baseRevision) {
       setNotice({
         type: 'warning',
-        message: 'Save the script into the workspace before proposing a promotion.',
+        message: t("modules.studio.scripts.scriptsworkbenchpage.save.the.script.into.the", "Save the script into the workspace before proposing a promotion."),
       });
       return;
     }
@@ -2022,7 +2058,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     setAskAiPending(false);
     setNotice({
       type: 'info',
-      message: 'Cancelled AI generation.',
+      message: t("modules.studio.scripts.scriptsworkbenchpage.cancelled.ai.generation", "Cancelled AI generation."),
     });
   }, []);
 
@@ -2090,7 +2126,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       );
       setNotice({
         type: 'success',
-        message: 'Generated script changes are ready to review and apply.',
+        message: t("modules.studio.scripts.scriptsworkbenchpage.generated.script.changes.are.ready", "Generated script changes are ready to review and apply."),
       });
     } catch (error) {
       if (controller.signal.aborted) {
@@ -2139,7 +2175,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     resetAskAiOutput();
     setNotice({
       type: 'success',
-      message: 'Applied AI-generated script changes to the active draft.',
+      message: t("modules.studio.scripts.scriptsworkbenchpage.applied.ai.generated.script.changes", "Applied AI-generated script changes to the active draft."),
     });
   }, [askAiGeneratedFilePath, askAiGeneratedPackage, resetAskAiOutput, selectedDraft, updateSelectedDraft]);
 
@@ -2433,7 +2469,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     },
     {
       key: 'test-run',
-      label: 'Test Run',
+      label: t("modules.studio.scripts.scriptsworkbenchpage.test.run", "Test Run"),
       icon: <PlayCircleOutlined />,
       disabled: !canRun,
       onClick: () => {
@@ -2571,7 +2607,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                   className="console-scripts-title-input"
                   value={selectedDraft?.scriptId || ''}
                   placeholder="script-id"
-                  aria-label="Script ID"
+                  aria-label={t("modules.studio.scripts.scriptsworkbenchpage.script.id", "Script ID")}
                   onChange={(event) =>
                     updateSelectedDraft((draft) => ({
                       ...draft,
@@ -2609,7 +2645,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 </span>
               ) : null}
               <Tooltip
-                title="Create a fresh local draft without changing the workspace catalog"
+                title={t("modules.studio.scripts.scriptsworkbenchpage.create.fresh.local.draft.without", "Create a fresh local draft without changing the workspace catalog")}
                 placement="bottom"
               >
                 <span className="console-scripts-tooltip-anchor">
@@ -2617,10 +2653,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                     type="button"
                     className="console-scripts-ghost-action console-scripts-header-text-action"
                     onClick={createNewDraft}
-                    aria-label="New draft"
+                    aria-label={t("modules.studio.scripts.scriptsworkbenchpage.new.draft", "New draft")}
                   >
                     <FileAddOutlined />
-                    <span>New draft</span>
+                    <span>{t("modules.studio.scripts.scriptsworkbenchpage.new.draft.2", "New draft")}</span>
                   </button>
                 </span>
               </Tooltip>
@@ -2655,10 +2691,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                     className="console-scripts-solid-action console-scripts-header-text-action"
                     onClick={handleOpenBindScope}
                     disabled={!canBindScope}
-                    aria-label="Update default route"
+                    aria-label={t("modules.studio.scripts.scriptsworkbenchpage.update.default.route", "Update default route")}
                   >
                     <SafetyCertificateOutlined />
-                    <span>Bind</span>
+                    <span>{t("modules.studio.scripts.scriptsworkbenchpage.bind", "Bind")}</span>
                   </button>
                 </span>
               </Tooltip>
@@ -2670,11 +2706,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 <button
                   type="button"
                   className="console-scripts-ghost-action console-scripts-header-text-action"
-                  aria-label="More script actions"
+                  aria-label={t("modules.studio.scripts.scriptsworkbenchpage.more.script.actions", "More script actions")}
                   disabled={!selectedDraft}
                 >
                   <AppstoreOutlined />
-                  <span>More</span>
+                  <span>{t("modules.studio.scripts.scriptsworkbenchpage.more", "More")}</span>
                   <DownOutlined />
                 </button>
               </Dropdown>
@@ -2688,7 +2724,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           <section className="console-scripts-editor-shell">
             <div className="console-scripts-editor-head">
               <div>
-                <div className="console-scripts-eyebrow">Editor</div>
+                <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptsworkbenchpage.editor", "Editor")}</div>
                 <div className="console-scripts-editor-title">
                   {selectedPackageEntry?.path ||
                     validationResult?.primarySourcePath ||
@@ -2699,8 +2735,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
               <div className="console-scripts-meta-strip">
                 {hasScopeChanges ? (
                   <span className="console-scripts-chip dirty">
-                    Unsaved scope changes
-                  </span>
+                    {t("modules.studio.scripts.scriptsworkbenchpage.unsaved.scope.changes", "Unsaved scope changes")}</span>
                 ) : null}
                 <span>{formatScriptDateTime(selectedDraft?.updatedAtUtc)}</span>
               </div>
@@ -2798,8 +2833,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                       }}
                     >
                       <ScriptsStudioEmptyState
-                        title="Create or select a script draft"
-                        copy="Add a file to the package or select an existing draft to start editing."
+                        title={t("modules.studio.scripts.scriptsworkbenchpage.create.or.select.script.draft", "Create or select a script draft")}
+                        copy={t("modules.studio.scripts.scriptsworkbenchpage.add.file.to.the.package", "Add a file to the package or select an existing draft to start editing.")}
                       />
                     </div>
                   )}
@@ -2809,7 +2844,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
             <div className="console-scripts-editor-footer">
               <div className="console-scripts-compiler-copy">
-                <div className="console-scripts-eyebrow">Compiler</div>
+                <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptsworkbenchpage.compiler", "Compiler")}</div>
                 <div className="console-scripts-compiler-summary">
                   {compilerSummary}
                 </div>
@@ -2829,10 +2864,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                     )}
                   >
                     <FileSearchOutlined />
-                    Problems {visibleProblems.length}
+                    {t("modules.studio.scripts.scriptsworkbenchpage.problems", "Problems")}{visibleProblems.length}
                   </button>
                 ) : (
-                  <div className="console-scripts-validation-pill">Clean</div>
+                  <div className="console-scripts-validation-pill">{t("modules.studio.scripts.scriptsworkbenchpage.clean", "Clean")}</div>
                 )}
               </div>
             </div>
@@ -2859,8 +2894,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
               type="button"
               onClick={closeRightDrawer}
               className="console-scripts-icon-button"
-              title="Close drawer"
-              aria-label="Close drawer"
+              title={t("modules.studio.scripts.scriptsworkbenchpage.close.drawer", "Close drawer")}
+              aria-label={t("modules.studio.scripts.scriptsworkbenchpage.close.drawer.2", "Close drawer")}
             >
               <CloseOutlined />
             </button>
@@ -2874,22 +2909,19 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                   onClick={() => setWorkspaceSection('library')}
                   className={surfaceActionClass(workspaceSection === 'library')}
                 >
-                  Library
-                </button>
+                  {t("modules.studio.scripts.scriptsworkbenchpage.library", "Library")}</button>
                 <button
                   type="button"
                   onClick={() => setWorkspaceSection('activity')}
                   className={surfaceActionClass(workspaceSection === 'activity')}
                 >
-                  Activity
-                </button>
+                  {t("modules.studio.scripts.scriptsworkbenchpage.activity", "Activity")}</button>
                 <button
                   type="button"
                   onClick={() => setWorkspaceSection('details')}
                   className={surfaceActionClass(workspaceSection === 'details')}
                 >
-                  Details
-                </button>
+                  {t("modules.studio.scripts.scriptsworkbenchpage.details", "Details")}</button>
               </div>
               <div className="console-scripts-drawer-body">
                 <div style={{ height: '100%', minHeight: 0, overflow: 'hidden', padding: 16 }}>
@@ -3005,30 +3037,28 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onPointerDown={beginFloatingDrag}
               >
                 <div>
-                  <div className="console-scripts-eyebrow">Source</div>
-                  <div className="console-scripts-section-title">Ask AI</div>
+                  <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptsworkbenchpage.source", "Source")}</div>
+                  <div className="console-scripts-section-title">{t("modules.studio.scripts.scriptsworkbenchpage.ask.ai", "Ask AI")}</div>
                 </div>
                 <button
                   type="button"
                   onClick={closeAskAiComposer}
                   onPointerDown={(event) => event.stopPropagation()}
                   className="console-scripts-icon-button"
-                  title="Close Ask AI"
-                  aria-label="Close Ask AI"
+                  title={t("modules.studio.scripts.scriptsworkbenchpage.close.ask.ai", "Close Ask AI")}
+                  aria-label={t("modules.studio.scripts.scriptsworkbenchpage.close.ask.ai.2", "Close Ask AI")}
                 >
                   <CloseOutlined />
                 </button>
               </div>
               <div className="console-scripts-ask-ai-body">
                 <div className="console-scripts-ask-ai-copy">
-                  Describe the script change you want. Cancel stops the current
-                  generation without touching the active draft.
-                </div>
+                  {t("modules.studio.scripts.scriptsworkbenchpage.describe.the.script.change.you", "Describe the script change you want. Cancel stops the current generation without touching the active draft.")}</div>
 
                 <textarea
                   rows={5}
                   className="console-scripts-textarea"
-                  placeholder="Build a script that validates an email address, normalizes it, and returns a JSON summary."
+                  placeholder={t("modules.studio.scripts.scriptsworkbenchpage.build.script.that.validates.an", "Build a script that validates an email address, normalizes it, and returns a JSON summary.")}
                   value={askAiPrompt}
                   onChange={(event) => setAskAiPrompt(event.target.value)}
                   style={{ marginTop: 16 }}
@@ -3049,8 +3079,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                         onClick={cancelAskAiGeneration}
                         className="console-scripts-ghost-action"
                       >
-                        Cancel
-                      </button>
+                        {t("modules.studio.scripts.scriptsworkbenchpage.cancel", "Cancel")}</button>
                     ) : null}
                     <button
                       type="button"
@@ -3058,8 +3087,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                       className="console-scripts-ghost-action"
                       disabled={askAiPending || !askAiGeneratedPackage}
                     >
-                      Apply
-                    </button>
+                      {t("modules.studio.scripts.scriptsworkbenchpage.apply", "Apply")}</button>
                     <button
                       type="button"
                       onClick={() => void handleAskAiGenerate()}
@@ -3072,7 +3100,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 </div>
 
                 <div className="console-scripts-ai-preview">
-                  <div className="console-scripts-section-label">Thinking</div>
+                  <div className="console-scripts-section-label">{t("modules.studio.scripts.scriptsworkbenchpage.thinking", "Thinking")}</div>
                   <pre className="console-scripts-pre" style={{ marginTop: 8 }}>
                     {askAiReasoning || 'LLM reasoning will stream here.'}
                   </pre>
@@ -3081,8 +3109,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 <div className="console-scripts-ai-preview">
                   <div className="console-scripts-inline-actions" style={{ justifyContent: 'space-between' }}>
                     <div className="console-scripts-section-label">
-                      Generated Preview
-                    </div>
+                      {t("modules.studio.scripts.scriptsworkbenchpage.generated.preview", "Generated Preview")}</div>
                     <div className="console-scripts-eyebrow">
                       {askAiGeneratedSource ? 'Ready to apply' : 'Waiting'}
                     </div>
@@ -3090,9 +3117,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                   {askAiGeneratedPackage ? (
                     <div className="console-scripts-detail-copy">
                       {askAiPreviewEntry?.path || askAiGeneratedFilePath || '-'} ·{' '}
-                      {askAiGeneratedPackage.csharpSources.length} C# ·{' '}
-                      {askAiGeneratedPackage.protoFiles.length} proto
-                    </div>
+                      {askAiGeneratedPackage.csharpSources.length} {t("modules.studio.scripts.scriptsworkbenchpage.copy", "C# ·")}{' '}
+                      {askAiGeneratedPackage.protoFiles.length} {t("modules.studio.scripts.scriptsworkbenchpage.proto", "proto")}</div>
                   ) : null}
                   <pre className="console-scripts-pre" style={{ marginTop: 8 }}>
                     {askAiGeneratedSource ||
@@ -3132,7 +3158,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                     ? 'Ask AI to generate script code.'
                     : askAiUnavailableMessage
                 }
-                aria-label="Ask AI to generate script code."
+                aria-label={t("modules.studio.scripts.scriptsworkbenchpage.ask.ai.to.generate.script", "Ask AI to generate script code.")}
                 disabled={!canUseAskAi}
               >
                 <RobotOutlined />
@@ -3144,7 +3170,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         <ScriptsStudioModal
           open={runModalOpen}
           eyebrow="Runtime"
-          title="Test Run"
+          title={t("modules.studio.scripts.scriptsworkbenchpage.test.run.2", "Test Run")}
           onClose={() => setRunModalOpen(false)}
           actions={
             <>
@@ -3153,8 +3179,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setRunModalOpen(false)}
                 className="console-scripts-ghost-action"
               >
-                Cancel
-              </button>
+                {t("modules.studio.scripts.scriptsworkbenchpage.cancel.2", "Cancel")}</button>
               <button
                 type="button"
                 onClick={() => void handleRun()}
@@ -3167,12 +3192,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           }
         >
           <div className="console-scripts-detail-copy">
-            Test Run executes the current draft directly through
-            <code style={{ marginInline: 4 }}>/api/scopes/{'{scopeId}'}/scripts/draft-run</code>
-            without rebinding the workspace default service.
-          </div>
+            {t("modules.studio.scripts.scriptsworkbenchpage.test.run.executes.the.current", "Test Run executes the current draft directly through")}<code style={{ marginInline: 4 }}>/api/scopes/{'{scopeId}'}/scripts/draft-run</code>
+            {t("modules.studio.scripts.scriptsworkbenchpage.without.rebinding.the.workspace.default", "without rebinding the workspace default service.")}</div>
           <textarea
-            aria-label="Script test run input"
+            aria-label={t("modules.studio.scripts.scriptsworkbenchpage.script.test.run.input", "Script test run input")}
             rows={5}
             className="console-scripts-textarea"
             value={runInputDraft}
@@ -3184,7 +3207,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         <ScriptsStudioModal
           open={promotionModalOpen}
           eyebrow="Evolution"
-          title="Promote draft"
+          title={t("modules.studio.scripts.scriptsworkbenchpage.promote.draft", "Promote draft")}
           onClose={() => setPromotionModalOpen(false)}
           actions={
             <>
@@ -3193,8 +3216,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setPromotionModalOpen(false)}
                 className="console-scripts-ghost-action"
               >
-                Cancel
-              </button>
+                {t("modules.studio.scripts.scriptsworkbenchpage.cancel.3", "Cancel")}</button>
               <button
                 type="button"
                 onClick={() => void handlePromote()}
@@ -3207,9 +3229,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           }
         >
           <div className="console-scripts-detail-copy">
-            Promotion keeps test-run iteration separate from scope rollout. The current
-            scope revision is used as the base.
-          </div>
+            {t("modules.studio.scripts.scriptsworkbenchpage.promotion.keeps.test.run.iteration", "Promotion keeps test-run iteration separate from scope rollout. The current scope revision is used as the base.")}</div>
           <textarea
             rows={4}
             className="console-scripts-textarea"
@@ -3222,7 +3242,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         <ScriptsStudioModal
           open={bindModalOpen}
           eyebrow="Workspace"
-          title="Bind saved script"
+          title={t("modules.studio.scripts.scriptsworkbenchpage.bind.saved.script", "Bind saved script")}
           onClose={() => setBindModalOpen(false)}
           actions={
             <>
@@ -3231,8 +3251,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setBindModalOpen(false)}
                 className="console-scripts-ghost-action"
               >
-                Cancel
-              </button>
+                {t("modules.studio.scripts.scriptsworkbenchpage.cancel.4", "Cancel")}</button>
               <button
                 type="button"
                 onClick={() => void handleBindScope()}
@@ -3245,22 +3264,20 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           }
         >
           <div className="console-scripts-detail-copy">
-            Bind the saved workspace script to the default service for this workspace.
-            Existing workflow authoring stays available alongside this flow.
-          </div>
+            {t("modules.studio.scripts.scriptsworkbenchpage.bind.the.saved.workspace.script", "Bind the saved workspace script to the default service for this workspace. Existing workflow authoring stays available alongside this flow.")}</div>
           <div style={{ marginTop: 16 }}>
-            <div className="console-scripts-eyebrow">Script</div>
+            <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptsworkbenchpage.script", "Script")}</div>
             <div className="console-scripts-detail-copy">
               {scopeBindingScript?.scriptId || selectedDraft?.scriptId || '-'} ·{' '}
               {scopeBindingRevision || 'save required'}
             </div>
           </div>
           <div style={{ marginTop: 16 }}>
-            <div className="console-scripts-eyebrow">Display name</div>
+            <div className="console-scripts-eyebrow">{t("modules.studio.scripts.scriptsworkbenchpage.display.name", "Display name")}</div>
             <Input
               value={bindDisplayNameDraft}
               onChange={(event) => setBindDisplayNameDraft(event.target.value)}
-              placeholder="Script display name"
+              placeholder={t("modules.studio.scripts.scriptsworkbenchpage.script.display.name", "Script display name")}
               style={{ marginTop: 8 }}
             />
           </div>
@@ -3269,7 +3286,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         <ScriptsStudioModal
           open={leaveConfirmOpen}
           eyebrow="Scripts"
-          title="Leave Scripts Studio?"
+          title={t("modules.studio.scripts.scriptsworkbenchpage.leave.scripts.studio", "Leave Scripts Studio?")}
           onClose={() => settlePendingLeaveDecision(false)}
           actions={
             <>
@@ -3278,24 +3295,19 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => settlePendingLeaveDecision(false)}
                 className="console-scripts-ghost-action"
               >
-                Continue editing
-              </button>
+                {t("modules.studio.scripts.scriptsworkbenchpage.continue.editing", "Continue editing")}</button>
               <button
                 type="button"
                 onClick={() => settlePendingLeaveDecision(true)}
                 className="console-scripts-solid-action"
               >
-                Leave page
-              </button>
+                {t("modules.studio.scripts.scriptsworkbenchpage.leave.page", "Leave page")}</button>
             </>
           }
           width={560}
         >
           <div className="console-scripts-detail-copy" style={{ marginTop: 0 }}>
-            The current script changes have not been saved to the workspace yet. Your
-            local draft will still be kept in this browser, but these changes
-            will not be visible in the workspace until you save them.
-          </div>
+            {t("modules.studio.scripts.scriptsworkbenchpage.the.current.script.changes.have", "The current script changes have not been saved to the workspace yet. Your local draft will still be kept in this browser, but these changes will not be visible in the workspace until you save them.")}</div>
         </ScriptsStudioModal>
 
         <ScriptsStudioModal
@@ -3310,8 +3322,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setFileDialog(null)}
                 className="console-scripts-ghost-action"
               >
-                Cancel
-              </button>
+                {t("modules.studio.scripts.scriptsworkbenchpage.cancel.5", "Cancel")}</button>
               <button
                 type="button"
                 onClick={handleConfirmFileDialog}
@@ -3325,12 +3336,12 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           width={560}
         >
           <label className="console-scripts-field">
-            <div className="console-scripts-field-label">File path</div>
+            <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptsworkbenchpage.file.path", "File path")}</div>
             <input
               autoFocus
               className="console-scripts-input"
               value={fileDialog?.value || ''}
-              aria-label="File path"
+              aria-label={t("modules.studio.scripts.scriptsworkbenchpage.file.path.2", "File path")}
               onChange={(event) =>
                 setFileDialog((current) =>
                   current
@@ -3382,15 +3393,13 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setRemovalTarget(null)}
                 className="console-scripts-ghost-action"
               >
-                Cancel
-              </button>
+                {t("modules.studio.scripts.scriptsworkbenchpage.cancel.6", "Cancel")}</button>
               <button
                 type="button"
                 onClick={handleConfirmRemoval}
                 className="console-scripts-solid-action"
               >
-                Remove
-              </button>
+                {t("modules.studio.scripts.scriptsworkbenchpage.remove", "Remove")}</button>
             </>
           }
           width={520}

@@ -12,6 +12,7 @@ import {
   trimPreview,
   truncateMiddle,
 } from './studioInvokeUi';
+import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokeHistoryPanelProps = {
   readonly entries: readonly InvokeHistoryEntry[];
@@ -158,23 +159,21 @@ const StudioMemberInvokeHistoryPanel: React.FC<
   style,
 }) => (
   <details
-    aria-label="Run history"
+    aria-label={t("pages.studio.studiomemberinvokehistorypanel.run.history", "Run history")}
     data-testid="studio-invoke-history-panel"
     style={{ ...historyPanelStyle, ...style }}
   >
     <summary style={historySummaryStyle}>
-      <span style={historyTitleStyle}>Run history ({entries.length})</span>
+      <span style={historyTitleStyle}>{t("pages.studio.studiomemberinvokehistorypanel.run.history.2", "Run history (")}{entries.length})</span>
       {entries.length === 0 ? (
         <Typography.Text style={helperTextStyle} type="secondary">
-          No runs yet
-        </Typography.Text>
+          {t("pages.studio.studiomemberinvokehistorypanel.no.runs.yet", "No runs yet")}</Typography.Text>
       ) : null}
     </summary>
     <div data-testid="studio-invoke-history-scroll" style={historyBodyStyle}>
       {entries.length === 0 ? (
         <Typography.Text style={helperTextStyle} type="secondary">
-          No runs yet
-        </Typography.Text>
+          {t("pages.studio.studiomemberinvokehistorypanel.no.runs.yet.2", "No runs yet")}</Typography.Text>
       ) : (
         entries.map((entry) => {
           const isSelected = selectedHistoryId === entry.id;
@@ -229,13 +228,13 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                     {formatRunElapsed(entry.startedAt, entry.completedAt)}
                   </span>
                   <span>·</span>
-                  <span>{entry.eventCount} events</span>
+                  <span>{entry.eventCount} {t("pages.studio.studiomemberinvokehistorypanel.events", "events")}</span>
                   <span>·</span>
                   <span>{entry.endpointLabel || 'chat'}</span>
                   {runId ? (
                     <>
                       <span>·</span>
-                      <span>Run {truncateMiddle(runId, 6, 4)}</span>
+                      <span>{t("pages.studio.studiomemberinvokehistorypanel.run", "Run")}{truncateMiddle(runId, 6, 4)}</span>
                     </>
                   ) : null}
                 </div>
@@ -251,8 +250,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       onCopyInput(entry.id);
                     }}
                   >
-                    Copy input
-                  </Button>
+                    {t("pages.studio.studiomemberinvokehistorypanel.copy.input", "Copy input")}</Button>
                   <Button
                     disabled={!hasOutput}
                     icon={<CopyOutlined />}
@@ -262,8 +260,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       onCopyOutput(entry.id);
                     }}
                   >
-                    Copy output
-                  </Button>
+                    {t("pages.studio.studiomemberinvokehistorypanel.copy.output", "Copy output")}</Button>
                   <Button
                     disabled={!runId}
                     icon={<CopyOutlined />}
@@ -273,8 +270,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       onCopyRunId(entry.id);
                     }}
                   >
-                    Copy run id
-                  </Button>
+                    {t("pages.studio.studiomemberinvokehistorypanel.copy.run.id", "Copy run id")}</Button>
                   <Button
                     icon={<ReloadOutlined />}
                     size="small"
@@ -283,8 +279,7 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                       onRetryAsNewRun(entry.id);
                     }}
                   >
-                    Retry as new run
-                  </Button>
+                    {t("pages.studio.studiomemberinvokehistorypanel.retry.as.new.run", "Retry as new run")}</Button>
                 </div>
               ) : null}
             </div>

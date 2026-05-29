@@ -2,6 +2,7 @@ import type {
   WorkflowActorSnapshot,
   WorkflowActorTimelineItem,
 } from "@/shared/models/runtime/actors";
+import { t } from "@/shared/i18n/messages";
 
 export type RuntimeTimelineBlockingSummary = {
   kind: "human_input" | "human_approval" | "wait_signal";
@@ -116,7 +117,7 @@ export function buildTimelineBlockingSummary(
           ? `Times out in ${Math.max(1, Math.round(timeoutMs / 1000))}s`
           : undefined,
       timestamp: latestBlocking.timestamp,
-      title: `Waiting for ${signalName}`,
+      title: t("pages.chat.runtimeinspector.waiting.for.signal.name", "Waiting for {signalName}", { signalName }),
     };
   }
 
