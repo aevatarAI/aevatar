@@ -80,7 +80,7 @@ public sealed class ChatRunActorTests
         var history = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
         history.ToolCallId.Should().Be("call_stream");
         history.RunId.Should().Be("run_stream");
-        history.ResultJson.Should().Contain("aevatar://actors/actor-1/runs/run_stream");
+        history.InternalResultJson.Should().Contain("aevatar://actors/actor-1/runs/run_stream");
         history.LlmRound.Should().Be(1);
     }
 
@@ -104,12 +104,12 @@ public sealed class ChatRunActorTests
         {
             RunId = "run_complete",
             Status = "RunFinished",
-            ResultJson = """{"run_id":"run_complete","status":"RunFinished","content":"done"}""",
+            InternalResultJson = """{"run_id":"run_complete","status":"RunFinished","content":"done"}""",
         });
 
         actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
         actor.State.ToolCallHistory.Should().ContainSingle()
-            .Which.ResultJson.Should().Contain("\"content\":\"done\"");
+            .Which.InternalResultJson.Should().Contain("\"content\":\"done\"");
         actor.State.Messages.Should().ContainSingle(message =>
             message.Role == "tool" &&
             message.ToolCallId == "call_complete" &&
@@ -160,7 +160,7 @@ public sealed class ChatRunActorTests
         await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
         {
             RunId = "run_second",
-            ResultJson = """{"run_id":"run_second","content":"second"}""",
+            InternalResultJson = """{"run_id":"run_second","content":"second"}""",
         });
 
         actor.State.ActiveSubRunSubscriptions.Should().ContainSingle()
@@ -173,7 +173,7 @@ public sealed class ChatRunActorTests
         await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
         {
             RunId = "run_first",
-            ResultJson = """{"run_id":"run_first","content":"first"}""",
+            InternalResultJson = """{"run_id":"run_first","content":"first"}""",
         });
 
         actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
@@ -183,9 +183,9 @@ public sealed class ChatRunActorTests
             .Should()
             .Equal("call_second", "call_first");
         actor.State.ToolCallHistory.Single(call => call.RunId == "run_first")
-            .ResultJson.Should().Contain("first");
+            .InternalResultJson.Should().Contain("first");
         actor.State.ToolCallHistory.Single(call => call.RunId == "run_second")
-            .ResultJson.Should().Contain("second");
+            .InternalResultJson.Should().Contain("second");
     }
 
     [Fact]
@@ -305,7 +305,7 @@ public sealed class ChatRunActorTests
         {
             RunId = "run_publish",
             Status = "RunFinished",
-            ResultJson = """{"run_id":"run_publish","content":"published"}""",
+            InternalResultJson = """{"run_id":"run_publish","content":"published"}""",
             ActorId = "actor-1",
             CompletionObserved = true,
         });
@@ -313,7 +313,7 @@ public sealed class ChatRunActorTests
         var published = await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
         published.RunId.Should().Be("run_publish");
         published.CallerToolCallId.Should().Be("call_publish");
-        published.ResultJson.Should().Contain("published");
+        published.InternalResultJson.Should().Contain("published");
         published.Status.Should().Be("RunFinished");
         published.ActorId.Should().Be("actor-1");
         published.CompletionObserved.Should().BeTrue();
@@ -346,7 +346,7 @@ public sealed class ChatRunActorTests
         actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
         var folded = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
         folded.RunId.Should().Be("run_forwarded");
-        folded.ResultJson.Should().Contain("\"content\":\"forwarded done\"");
+        folded.InternalResultJson.Should().Contain("\"content\":\"forwarded done\"");
 
         var foldedEvent = (await eventStore.GetEventsAsync(actor.Id))
             .Select(static evt => evt.EventData)
@@ -434,7 +434,7 @@ public sealed class ChatRunActorTests
             ToolCallId = toolCallId,
             ToolName = "aevatar_invoke_gagent",
             Arguments = BuildArguments(waitMode),
-            ResultJson = resultJson,
+            InternalResultJson = resultJson,
             RunId = runId,
             TargetKind = ChatRunSubRunTargetKind.Gagent,
             TargetId = actorId,

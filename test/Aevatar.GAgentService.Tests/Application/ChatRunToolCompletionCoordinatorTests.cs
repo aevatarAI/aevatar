@@ -58,7 +58,7 @@ public sealed class ChatRunToolCompletionCoordinatorTests
                         terminal.Status == "RunFinished" &&
                         terminal.ServiceId == "service-1" &&
                         terminal.EndpointId == "entry" &&
-                        terminal.ResultJson.Contains("\"completion_observed\": true", StringComparison.Ordinal));
+                        terminal.InternalResultJson.Contains("\"completion_observed\": true", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public sealed class ChatRunToolCompletionCoordinatorTests
         harness.ChatRunPort.ObservedTerminals.Should().ContainSingle().Which.Should().Match<ChatRunSubRunTerminalObserved>(
             terminal => terminal.RunId == "wf-command" &&
                         terminal.Status == "completion_not_observed" &&
-                        terminal.ResultJson.Contains("completion_not_observed", StringComparison.Ordinal));
+                        terminal.InternalResultJson.Contains("completion_not_observed", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public sealed class ChatRunToolCompletionCoordinatorTests
                     RunId = observed.RunId,
                     CallerToolCallId = request.ToolCall.Id,
                     ToolName = request.ToolCall.Name,
-                    ResultJson = observed.ResultJson,
+                    InternalResultJson = observed.InternalResultJson,
                     LlmRound = request.LlmRound,
                     Status = observed.Status,
                     ActorId = observed.ActorId,

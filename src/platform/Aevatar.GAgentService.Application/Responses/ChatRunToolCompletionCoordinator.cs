@@ -37,6 +37,7 @@ public sealed class ChatRunToolCompletionCoordinator
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
 
+    // Refactor (issue1334): Old pattern: ChatRun completion coordination named folded actor results as generic ResultJson. New principle: actor-internal terminal payloads use internal_result_json and only boundary dispatch JSON remains boundary-named.
     public ChatRunToolCompletionCoordinator(
         IChatRunActorPort chatRunActorPort,
         IActorEventSubscriptionProvider subscriptionProvider,
@@ -134,7 +135,7 @@ public sealed class ChatRunToolCompletionCoordinator
         if (terminal == null && isGAgentInvocation)
         {
             var observed = await readySource.Task.WaitAsync(ct);
-            return observed.ResultJson;
+            return observed.InternalResultJson;
         }
 
         terminal ??= BuildTerminal(
@@ -143,11 +144,11 @@ public sealed class ChatRunToolCompletionCoordinator
             BuildCompletionNotObservedResult(toolCall.Name, completionRequest),
             completionObserved: false);
         if (string.IsNullOrWhiteSpace(terminal.RunId))
-            return terminal.ResultJson;
+            return terminal.InternalResultJson;
 
         await _chatRunActorPort.ObserveSubRunTerminalAsync(actorId, terminal, ct);
 
-        return (await readySource.Task.WaitAsync(ct)).ResultJson;
+        return (await readySource.Task.WaitAsync(ct)).InternalResultJson;
     }
 
     // Refactor (iter290/cluster001): Old pattern: observation targets were recovered from tool ResultJson after dispatch. New principle: observation target fields are normalized before entering actor observation.
@@ -259,7 +260,7 @@ public sealed class ChatRunToolCompletionCoordinator
         {
             RunId = dispatch.RunId,
             Status = status,
-            ResultJson = resultJson,
+            InternalResultJson = resultJson,
             ActorId = dispatch.ActorId,
             ServiceId = dispatch.ServiceId,
             EndpointId = dispatch.EndpointId,
