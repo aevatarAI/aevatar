@@ -1,10 +1,22 @@
 ---
 title: Tool-First Chat Ingress — Collapse Forward Actions to Model + Tools
-status: Proposed
+status: Accepted
 owner: eanzhao
 ---
 
 # ADR-0026: Tool-First Chat Ingress — Collapse Forward Actions to Model + Tools
+
+## Implementation status
+
+Accepted for the current `ChatRouteAction` contract: the active oneof variants
+are `ForwardToModel` and `Reject`; legacy
+`ForwardToGAgent`/`ForwardToTeam`/`ForwardToWorkflow`/`Bypass` names are
+reserved only. The `ForwardToModel.tool_set_ref + tool_choice_hint` fields are
+the current encoding for GAgent, team, workflow, and voice target hints.
+
+D5/D6 describe the later session-owned execution topology. `ChatRunActor` and
+`VoiceSessionActor` are not implemented by this ADR slice, and ordinary
+`/ws/voice` pure `ForwardToModel` execution remains deferred to Stage 5.
 
 ## Context
 

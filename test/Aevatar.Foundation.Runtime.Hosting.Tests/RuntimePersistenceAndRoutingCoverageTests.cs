@@ -84,6 +84,52 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
     }
 
     [Fact]
+    public async Task LocalActorRuntime_LinkAndUnlink_ShouldRegisterAndRemoveReverseCommittedFactsRelay()
+    {
+        var registry = new InMemoryStreamForwardingRegistry();
+        var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
+        var services = new ServiceCollection().BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, services, streams);
+
+        var parent = await runtime.CreateAsync<CoverageTestAgent>("parent-relay");
+        var child = await runtime.CreateAsync<CoverageTestAgent>("child-relay");
+
+        await runtime.LinkAsync(parent.Id, child.Id);
+
+        var childBindings = await registry.ListBySourceAsync(child.Id, CancellationToken.None);
+        var reverseRelay = childBindings.Should().ContainSingle(x => x.TargetStreamId == parent.Id).Subject;
+        reverseRelay.DirectionFilter.Should().BeEquivalentTo([TopologyAudience.Unspecified]);
+
+        await runtime.UnlinkAsync(child.Id);
+
+        (await registry.ListBySourceAsync(child.Id, CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync(parent.Id, CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LocalActorRuntime_DestroyAsync_ShouldRemoveReverseCommittedFactsRelays()
+    {
+        var registry = new InMemoryStreamForwardingRegistry();
+        var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
+        var services = new ServiceCollection().BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, services, streams);
+
+        var parent = await runtime.CreateAsync<CoverageTestAgent>("parent-destroy-relay");
+        var child = await runtime.CreateAsync<CoverageTestAgent>("child-destroy-relay");
+        await runtime.LinkAsync(parent.Id, child.Id);
+
+        (await registry.ListBySourceAsync(child.Id, CancellationToken.None))
+            .Should()
+            .ContainSingle(x => x.TargetStreamId == parent.Id);
+
+        await runtime.DestroyAsync(child.Id);
+
+        (await registry.ListBySourceAsync(child.Id, CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync(parent.Id, CancellationToken.None)).Should().BeEmpty();
+        (await parent.GetChildrenIdsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task LocalActorRuntime_ShouldEmitTopologyAndDeactivateActivities()
     {
         var stopped = new ConcurrentQueue<Activity>();

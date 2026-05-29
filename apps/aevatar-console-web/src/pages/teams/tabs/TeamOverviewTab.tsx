@@ -29,6 +29,9 @@ type TeamOverviewTabProps = {
   readonly currentDeploymentPillText: string;
   readonly currentHeaderStatusFriendly: string;
   readonly currentHeaderStatusStyle: React.CSSProperties;
+  readonly currentMemberCardCaption: string;
+  readonly currentMemberCardTooltip: string;
+  readonly currentMemberLabel: string;
   readonly currentRunCardCaption: string;
   readonly currentRunCardTooltip: string;
   readonly currentRunFriendly: string;
@@ -67,6 +70,9 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   currentDeploymentPillText,
   currentHeaderStatusFriendly,
   currentHeaderStatusStyle,
+  currentMemberCardCaption,
+  currentMemberCardTooltip,
+  currentMemberLabel,
   currentRunCardCaption,
   currentRunCardTooltip,
   currentRunFriendly,
@@ -129,6 +135,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           }}
         >
+          <SignalCard
+            label="当前成员"
+            value={currentMemberLabel}
+            caption={currentMemberCardCaption}
+            captionTooltip={currentMemberCardTooltip}
+          />
           <SignalCard
             label="当前服务"
             value={currentServiceFriendly}

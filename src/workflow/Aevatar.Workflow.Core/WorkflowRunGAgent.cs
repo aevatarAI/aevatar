@@ -534,8 +534,19 @@ public sealed class WorkflowRunGAgent
         ArgumentNullException.ThrowIfNull(envelope);
 
         if (WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
+        {
             await PersistDomainEventAsync(artifactFact, CancellationToken.None);
+            if (artifactFact is WorkflowRoleReplyRecordedEvent roleReply)
+                await DispatchCommittedRoleReplyArtifactAsync(roleReply);
+        }
     }
+
+    // Refactor (issue1271/first-slice):
+    //   Old pattern: LLM-like modules completed steps from live TextMessageEndEvent / ChatResponseEvent frames.
+    //   New principle: child role committed facts are first persisted as WorkflowRoleReplyRecordedEvent.
+    //   The same fact is then fed through the existing workflow module bridge for SessionId reconciliation.
+    private Task DispatchCommittedRoleReplyArtifactAsync(WorkflowRoleReplyRecordedEvent roleReply) =>
+        PublishAsync(roleReply, TopologyAudience.Self);
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
     {

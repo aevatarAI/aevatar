@@ -69,9 +69,9 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
     }
 
-    // Refactor (iter161/cluster-001-first):
-    //   Old pattern: WorkflowCapabilitiesStartupArtifact marked ProjectionExempt yet implemented IProjectionReadModel with synthetic StateVersion=0 / LastEventId=""
-    //   New principle: capabilities DTO 来自窄 provider(IWorkflowModulePack + connector config + current-state catalog readmodel),不进 projection store
+    // Refactor (iter161-cluster-001 #1257-first):
+    //   Old pattern: workflow capabilities were modeled as a startup artifact proto/partial surface after readmodel framing was removed.
+    //   New principle: capabilities DTOs come from the narrow provider path and do not create a persisted artifact surface.
     public async Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

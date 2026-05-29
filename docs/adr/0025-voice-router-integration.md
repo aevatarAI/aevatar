@@ -29,9 +29,13 @@ and provider state machines.
 - The Host boundary reads `ChatRoutePolicyCurrentStateDocument` through
   `IChatRoutePolicyQueryPort`, then calls the stateless `ChatRouteResolver`
   before WebSocket upgrade.
-- v1 supports `ForwardToGAgent(actor_id, voice_module_name)` for voice.
-  `ForwardToModel` returns HTTP 501 before upgrade; voice scratch actors are out
-  of scope.
+- ADR-0026 supersedes the old voice wire action. Current voice policy accepts
+  `ForwardToModel` only when it carries
+  `tool_set_ref = voice.realtime` and
+  `tool_choice_hint.tool_name = aevatar_invoke_gagent`, with the actor target
+  provided as typed prefilled arguments. Plain model voice routing and the
+  `VoiceSessionActor` Stage 5 topology are not implemented in this milestone;
+  unsupported `ForwardToModel` voice routes still fail before upgrade.
 - Route policy and authorization remain separate. After policy resolves a
   target actor, the caller must still pass `IUserAgentCatalogQueryPort` attach
   permission.

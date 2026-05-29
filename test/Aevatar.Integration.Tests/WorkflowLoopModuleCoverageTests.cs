@@ -656,7 +656,26 @@ public sealed class WorkflowLoopModuleCoverageTests
         await module.HandleAsync(ctx.CreateScheduledEnvelope(scheduled), ctx, CancellationToken.None);
 
         var timeoutEvent = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        timeoutEvent.Success.Should().BeFalse();
+        timeoutEvent.Output.Should().BeEmpty();
         timeoutEvent.Error.Should().Contain("TIMEOUT");
+
+        await module.HandleAsync(Envelope(timeoutEvent), ctx, CancellationToken.None);
+        ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel").Active.Should().BeFalse();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = "run-timeout",
+                Success = true,
+                Output = "late-success",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
     }
 
     [Fact]
