@@ -105,7 +105,9 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             Url = NormalizeOptional(command.Url) ?? string.Empty,
             Query = NormalizeOptional(command.Query) ?? string.Empty,
             CacheHit = command.CacheHit,
-            // Refactor (issue1251-first-r2): Old: typed result writes left legacy Value empty. New: typed remains primary and Value is retained as readmodel fallback.
+            // Refactor (iter161-cluster-001 #1251-first):
+            //   Old pattern: typed result writes left legacy Value empty.
+            //   New principle: typed remains primary and Value is retained as readmodel fallback.
             Result = command.Result?.Clone() ?? ResponsesWebResultJson.ToLegacyValue(command.TypedResult),
             TypedResult = command.TypedResult?.Clone(),
             ObservedAt = observedAt,

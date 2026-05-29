@@ -98,7 +98,9 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
         if (typedResult != null && typedResult.ResultCase != ResponsesWebToolResult.ResultOneofCase.None)
             return typedResult.Clone();
 
-        // Refactor (issue1251-first): Old: query snapshots exposed legacy Value directly. New: typed result is primary; legacy Value is converted only for old readmodels.
+        // Refactor (iter161-cluster-001 #1251-first):
+        //   Old pattern: query snapshots exposed legacy Value directly.
+        //   New principle: typed result is primary; legacy Value is converted only for old readmodels.
         return ResponsesWebResultJson.FromLegacyValue(legacyResult);
     }
 

@@ -4,7 +4,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Abstractions.Responses;
 
-// Refactor (issue1251-first):
+// Refactor (iter161-cluster-001 #1251-first):
 //   Old pattern: Responses Web fetch/search/error results moved through google.protobuf.Value
 //   as the normal internal contract, so actor state, cache, readmodels, and Host JSON each
 //   interpreted the same untyped payload shape.
@@ -37,7 +37,7 @@ public static class ResponsesWebResultJson
             },
         };
 
-    // Refactor (issue1251-first):
+    // Refactor (iter161-cluster-001 #1251-first):
     //   Old pattern: query snapshots exposed legacy google.protobuf.Value directly.
     //   New principle: old readmodels are lifted into typed ResponsesWebToolResult before
     //   leaving the projection query boundary.
@@ -90,7 +90,7 @@ public static class ResponsesWebResultJson
         return FromError("legacy_value_result", ToBoundaryJson(value));
     }
 
-    // Refactor (issue1251-first):
+    // Refactor (iter161-cluster-001 #1251-first):
     //   Old pattern: Host-facing JSON was assembled from whichever untyped Value branch
     //   happened to be present.
     //   New principle: boundary JSON is rendered from typed ResponsesWebToolResult, with
@@ -143,7 +143,7 @@ public static class ResponsesWebResultJson
             message = error?.Message ?? string.Empty,
         });
 
-    // Refactor (issue1251-first):
+    // Refactor (iter161-cluster-001 #1251-first):
     //   Old pattern: normal writes persisted stable Web result semantics as Value.
     //   New principle: writes carry typed ResponsesWebToolResult; Value is emitted only
     //   for legacy storage/readmodel compatibility during the migration slice.

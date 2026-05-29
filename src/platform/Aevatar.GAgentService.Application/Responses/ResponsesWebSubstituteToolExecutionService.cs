@@ -53,7 +53,9 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 
         var url = validation.NormalizedUrl!;
         var cacheKey = ComputeCacheKey(request.ToolName, url);
-        // Refactor (issue1251-first): Old: fetch trace/cache result was downgraded to Value before recording. New: trace/cache normal writes carry typed ResponsesWebToolResult.
+        // Refactor (iter161-cluster-001 #1251-first):
+        //   Old pattern: fetch trace/cache result was downgraded to Value before recording.
+        //   New principle: trace/cache normal writes carry typed ResponsesWebToolResult.
         var cached = await _queryPort.GetWebCacheEntryAsync(
             request.ScopeId,
             request.OwnerSubject,
@@ -115,7 +117,9 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         maxResults = Math.Clamp(maxResults, 1, 20);
         var cacheValue = $"{query.Trim()}\n{maxResults}";
         var cacheKey = ComputeCacheKey(request.ToolName, cacheValue);
-        // Refactor (issue1251-first): Old: search/error trace/cache results were written as Value. New: typed search/error results are written through the existing command->actor->projection chain.
+        // Refactor (iter161-cluster-001 #1251-first):
+        //   Old pattern: search/error trace/cache results were written as Value.
+        //   New principle: typed search/error results are written through the existing command->actor->projection chain.
         var cached = await _queryPort.GetWebCacheEntryAsync(
             request.ScopeId,
             request.OwnerSubject,

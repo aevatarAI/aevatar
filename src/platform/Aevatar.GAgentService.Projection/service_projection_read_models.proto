@@ -324,7 +324,7 @@ message ResponsesWebTraceReadModel {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  // Refactor (issue1251-first):
+  // Refactor (iter161-cluster-001 #1251-first):
   //   Old pattern: projected Web result readmodel carried only Value.
   //   New principle: typed_result mirrors actor-owned typed result; result is legacy fallback only.
   google.protobuf.Value result = 8;
@@ -337,7 +337,7 @@ message ResponsesWebCacheEntryReadModel {
   string tool_name = 2;
   string url = 3;
   string query = 4;
-  // Refactor (issue1251-first):
+  // Refactor (iter161-cluster-001 #1251-first):
   //   Old pattern: projected cache result carried only Value.
   //   New principle: typed_result is the normal query path; result is legacy fallback only.
   google.protobuf.Value result = 5;

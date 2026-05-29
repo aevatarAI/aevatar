@@ -55,7 +55,9 @@ internal sealed class ResponsesWebSubstituteBackendAdapter : IResponsesWebSubsti
             input.Query,
             input.MaxResults,
             ct).ConfigureAwait(false);
-        // Refactor (issue1251-first): Old: Host adapter passed provider Value into Application. New: Host maps provider JSON-like Value into Responses-owned typed search output.
+        // Refactor (iter161-cluster-001 #1251-first):
+        //   Old pattern: Host adapter passed provider Value into Application.
+        //   New principle: Host maps provider JSON-like Value into Responses-owned typed search output.
         return new ResponsesWebSearchBoundaryResult(ToSearchOutput(result));
     }
 

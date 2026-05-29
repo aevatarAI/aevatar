@@ -507,7 +507,7 @@ message ResponsesWebTrace {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  // Refactor (issue1251-first):
+  // Refactor (iter161-cluster-001 #1251-first):
   //   Old pattern: normal writes stored stable Web results in google.protobuf.Value.
   //   New principle: normal writes use typed ResponsesWebToolResult; result remains legacy read fallback only.
   google.protobuf.Value result = 8;
@@ -520,7 +520,7 @@ message ResponsesWebCacheEntry {
   string tool_name = 2;
   string url = 3;
   string query = 4;
-  // Refactor (issue1251-first):
+  // Refactor (iter161-cluster-001 #1251-first):
   //   Old pattern: cache result facts were written as google.protobuf.Value.
   //   New principle: typed_result is the write path; result is legacy read fallback only.
   google.protobuf.Value result = 5;
@@ -585,7 +585,7 @@ message ResponsesWebToolResult {
 
 message ResponsesWebSubstituteToolExecutionResult {
   oneof result {
-    // Refactor (issue1251-first):
+    // Refactor (iter161-cluster-001 #1251-first):
     //   Old pattern: cached/error/search used Value in the normal path.
     //   New principle: typed fields carry stable Responses Web result semantics; Value arms are legacy fallback only.
     google.protobuf.Value cached = 1;
@@ -658,7 +658,7 @@ message RecordResponsesWebTraceRequested {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  // Refactor (issue1251-first):
+  // Refactor (iter161-cluster-001 #1251-first):
   //   Old pattern: command carried normal Web result as Value.
   //   New principle: typed_result is the write path; result is legacy fallback only.
   google.protobuf.Value result = 8;
