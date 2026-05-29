@@ -379,7 +379,7 @@ function WorkflowBuildHarness({
         'nyxid.route_preference': '/api/v1/proxy/s/openai',
       }}
       onRunPromptChange={setRunPrompt}
-      onSaveDraft={() => onSaveDraft(draftYaml)}
+      onSaveDraft={(pendingDraft) => onSaveDraft(pendingDraft ?? draftYaml)}
       onSetDraftYaml={setDraftYaml}
       runtimePrimitives={runtimePrimitivesOverride ?? [
         {
@@ -1265,6 +1265,39 @@ describe('StudioWorkflowBuildPanel', () => {
     }
     expect(JSON.parse(appliedDraft.parametersText)).toEqual({
       prompt_prefix: 'Translate the input to Japanese.',
+    });
+  });
+
+  it('passes unsaved llm_call prompt edits to save draft', async () => {
+    const handleSaveDraft = jest.fn();
+
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={handleSaveDraft}
+      />,
+    );
+
+    const promptPrefixInput = await screen.findByLabelText(
+      'Parameter prompt_prefix',
+    );
+    fireEvent.change(promptPrefixInput, {
+      target: {
+        value: 'Classify the refund request before answering.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => {
+      expect(handleSaveDraft).toHaveBeenCalledTimes(1);
+    });
+    const pendingDraft = handleSaveDraft.mock.calls.at(0)?.[0];
+    if (!pendingDraft || typeof pendingDraft === 'string') {
+      throw new Error('Expected Save draft to receive the pending step draft.');
+    }
+    expect(pendingDraft.stepId).toBe('draft_step');
+    expect(JSON.parse(pendingDraft.draft.parametersText)).toEqual({
+      prompt_prefix: 'Classify the refund request before answering.',
     });
   });
 

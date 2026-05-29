@@ -713,6 +713,24 @@ function updateStepDraftParameterValue(
   };
 }
 
+function areStepInspectorDraftsEqual(
+  left: StudioStepInspectorDraft | null,
+  right: StudioStepInspectorDraft | null,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.id === right.id &&
+    left.type === right.type &&
+    left.targetRole === right.targetRole &&
+    left.next === right.next &&
+    left.parametersText === right.parametersText &&
+    left.branchesText === right.branchesText
+  );
+}
+
 async function consumeAguiDraftRun(
   response: Response,
   signal: AbortSignal,
@@ -905,7 +923,12 @@ function ScriptLeaveDialog(props: {
 export type StudioWorkflowBuildPanelProps = {
   readonly draftYaml: string;
   readonly onSetDraftYaml: (value: string) => void;
-  readonly onSaveDraft: () => void;
+  readonly onSaveDraft: (
+    draft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ) => void;
   readonly savePending: boolean;
   readonly canSaveWorkflow: boolean;
   readonly saveNotice?: { readonly type: 'success' | 'error'; readonly message: string } | null;
@@ -1003,14 +1026,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             current: StudioStepInspectorDraft | null,
           ) => StudioStepInspectorDraft | null),
     ) => {
-      setStepDraft((current) => {
-        const nextDraft =
-          typeof updater === 'function'
-            ? updater(current)
-            : updater;
-        stepDraftRef.current = nextDraft;
-        return nextDraft;
-      });
+      const nextDraft =
+        typeof updater === 'function'
+          ? updater(stepDraftRef.current)
+          : updater;
+      stepDraftRef.current = nextDraft;
+      setStepDraft(nextDraft);
     },
     [],
   );
@@ -1276,6 +1297,20 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     }
   }, [onApplyStepDraft]);
 
+  const handleSaveDraft = React.useCallback(() => {
+    const currentStepDraft = stepDraftRef.current;
+    onSaveDraft(
+      currentStepDraft &&
+        selectedStepDraftSeed &&
+        !areStepInspectorDraftsEqual(currentStepDraft, selectedStepDraftSeed)
+        ? {
+            stepId: selectedStepId,
+            draft: currentStepDraft,
+          }
+        : null,
+    );
+  }, [onSaveDraft, selectedStepDraftSeed, selectedStepId]);
+
   const handleRemoveStep = React.useCallback(async () => {
     if (stepMutationPendingRef.current) {
       return;
@@ -1375,7 +1410,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               disabled={!canSaveWorkflow}
               loading={savePending}
-              onClick={onSaveDraft}
+              onClick={handleSaveDraft}
             >
               Save draft
             </Button>

@@ -394,6 +394,7 @@ let mockConnectorDraftResponse: any;
 let mockRoleCatalog: any;
 let mockRoleDraftResponse: any;
 let mockSettings: any;
+let mockLastWorkflowBuildPanelProps: any;
 const defaultStudioAppContext = {
   mode: "proxy",
   scopeId: null,
@@ -1719,6 +1720,7 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 jest.mock("./components/StudioBuildPanels", () => {
   const mockReact = require("react");
   const StudioWorkflowBuildPanel = (props: any) => {
+    mockLastWorkflowBuildPanelProps = props;
     const [detailsMode, setDetailsMode] = mockReact.useState("step");
     const [addStepType, setAddStepType] = mockReact.useState(
       props.availableStepTypes?.[0] || "llm_call"
@@ -1731,25 +1733,35 @@ jest.mock("./components/StudioBuildPanels", () => {
         null
       );
     }, [props.selectedGraphNodeId, props.workflowGraph?.steps]);
-    const [stepDraft, setStepDraft] = mockReact.useState(() => ({
+    const selectedStepDraftSeed = mockReact.useMemo(() => ({
+      kind: "step",
       id: selectedStep?.id || "",
       type: selectedStep?.type || "llm_call",
       targetRole: selectedStep?.targetRole || "",
       next: selectedStep?.next || "",
       parametersText: JSON.stringify(selectedStep?.parameters || {}, null, 2),
       branchesText: JSON.stringify(selectedStep?.branches || {}, null, 2),
-    }));
+    }), [
+      selectedStep?.id,
+      selectedStep?.type,
+      selectedStep?.targetRole,
+      selectedStep?.next,
+      JSON.stringify(selectedStep?.parameters || {}),
+      JSON.stringify(selectedStep?.branches || {}),
+    ]);
+    const [stepDraft, setStepDraft] = mockReact.useState(() => selectedStepDraftSeed);
+    const stepDraftRef = mockReact.useRef(stepDraft);
+
+    const updateStepDraft = mockReact.useCallback((updater: any) => {
+      const nextDraft =
+        typeof updater === "function" ? updater(stepDraftRef.current) : updater;
+      stepDraftRef.current = nextDraft;
+      setStepDraft(nextDraft);
+    }, []);
 
     mockReact.useEffect(() => {
-      setStepDraft({
-        id: selectedStep?.id || "",
-        type: selectedStep?.type || "llm_call",
-        targetRole: selectedStep?.targetRole || "",
-        next: selectedStep?.next || "",
-        parametersText: JSON.stringify(selectedStep?.parameters || {}, null, 2),
-        branchesText: JSON.stringify(selectedStep?.branches || {}, null, 2),
-      });
-    }, [selectedStep]);
+      updateStepDraft(selectedStepDraftSeed);
+    }, [selectedStepDraftSeed]);
 
     return mockReact.createElement("div", { "data-testid": "studio-workflow-build-panel" }, [
       mockReact.createElement("div", { key: "eyebrow" }, "DAG Canvas"),
@@ -1837,7 +1849,7 @@ jest.mock("./components/StudioBuildPanels", () => {
               "aria-label": "Step ID",
               value: stepDraft.id,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({ ...current, id: event.target.value })),
+                updateStepDraft((current: any) => ({ ...current, id: event.target.value })),
             }),
             mockReact.createElement(
               "select",
@@ -1845,7 +1857,7 @@ jest.mock("./components/StudioBuildPanels", () => {
                 "aria-label": "Step type",
                 value: stepDraft.type,
                 onChange: (event: MockValueEvent) =>
-                  setStepDraft((current: any) => ({ ...current, type: event.target.value })),
+                  updateStepDraft((current: any) => ({ ...current, type: event.target.value })),
               },
               (props.availableStepTypes || ["llm_call"]).map((stepType: string) =>
                 mockReact.createElement("option", { key: stepType, value: stepType }, stepType)
@@ -1855,7 +1867,7 @@ jest.mock("./components/StudioBuildPanels", () => {
               "aria-label": "Target role",
               value: stepDraft.targetRole,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({
+                updateStepDraft((current: any) => ({
                   ...current,
                   targetRole: event.target.value,
                 })),
@@ -1864,13 +1876,13 @@ jest.mock("./components/StudioBuildPanels", () => {
               "aria-label": "Next step",
               value: stepDraft.next,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({ ...current, next: event.target.value })),
+                updateStepDraft((current: any) => ({ ...current, next: event.target.value })),
             }),
             mockReact.createElement("textarea", {
               "aria-label": "Step parameters",
               value: stepDraft.parametersText,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({
+                updateStepDraft((current: any) => ({
                   ...current,
                   parametersText: event.target.value,
                 })),
@@ -1879,7 +1891,7 @@ jest.mock("./components/StudioBuildPanels", () => {
               "aria-label": "Step branches",
               value: stepDraft.branchesText,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({
+                updateStepDraft((current: any) => ({
                   ...current,
                   branchesText: event.target.value,
                 })),
@@ -1930,7 +1942,40 @@ jest.mock("./components/StudioBuildPanels", () => {
           key: "save",
           type: "button",
           disabled: !props.canSaveWorkflow,
-          onClick: () => props.onSaveDraft?.(),
+          onClick: () => {
+            const currentParametersText =
+              (
+                globalThis.document.querySelector(
+                  'textarea[aria-label="Step parameters"]'
+                ) as HTMLTextAreaElement | null
+              )?.value ?? stepDraftRef.current.parametersText;
+            const currentBranchesText =
+              (
+                globalThis.document.querySelector(
+                  'textarea[aria-label="Step branches"]'
+                ) as HTMLTextAreaElement | null
+              )?.value ?? stepDraftRef.current.branchesText;
+            const currentStepDraft = {
+              ...stepDraftRef.current,
+              parametersText: currentParametersText,
+              branchesText: currentBranchesText,
+            };
+            const currentHasPendingStepDraft =
+              currentStepDraft.id !== selectedStepDraftSeed.id ||
+              currentStepDraft.type !== selectedStepDraftSeed.type ||
+              currentStepDraft.targetRole !== selectedStepDraftSeed.targetRole ||
+              currentStepDraft.next !== selectedStepDraftSeed.next ||
+              currentStepDraft.parametersText !== selectedStepDraftSeed.parametersText ||
+              currentStepDraft.branchesText !== selectedStepDraftSeed.branchesText;
+            props.onSaveDraft?.(
+              currentHasPendingStepDraft
+                ? {
+                    stepId: selectedStep?.id || "",
+                    draft: currentStepDraft,
+                  }
+                : null
+            );
+          },
         },
         "Save draft"
       ),
@@ -4928,6 +4973,64 @@ describe("StudioPage", () => {
     });
     expect(bindSurface.parentElement).not.toHaveStyle({
       overflow: "hidden",
+    });
+  });
+
+  it("saves pending workflow step prompt edits without requiring Apply changes", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    await waitFor(() => {
+      expect(mockLastWorkflowBuildPanelProps?.onSaveDraft).toEqual(expect.any(Function));
+      expect(mockLastWorkflowBuildPanelProps?.canSaveWorkflow).toBe(true);
+    });
+    (studioApi.serializeYaml as jest.Mock).mockClear();
+    await act(async () => {
+      await mockLastWorkflowBuildPanelProps.onSaveDraft({
+        stepId: "draft_step",
+        draft: {
+          kind: "step",
+          id: "draft_step",
+          type: "llm_call",
+          targetRole: "assistant",
+          next: "approve_step",
+          parametersText: JSON.stringify(
+            {
+              prompt_prefix: "Classify the refund request before answering.",
+            },
+            null,
+            2
+          ),
+          branchesText: "{}",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                id: "draft_step",
+                parameters: expect.objectContaining({
+                  prompt_prefix: "Classify the refund request before answering.",
+                }),
+              }),
+            ]),
+          }),
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          yaml: expect.stringContaining(
+            "prompt_prefix: Classify the refund request before answering."
+          ),
+        })
+      );
     });
   });
 
