@@ -59,6 +59,104 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
         stored.Should().BeEquivalentTo(projected);
     }
 
+    [Fact]
+    public async Task RevokeBindingDispatch_ShouldDeleteProjectionAndQueryReturnsNull()
+    {
+        var observer = new ObservingExternalIdentityBindingWriter();
+        using var host = await StartSiloHostAsync(observer);
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "tenant-issue1343-revoke",
+            ExternalUserId = $"user-{Guid.NewGuid():N}",
+        };
+        var actorId = subject.ToActorId();
+
+        var commitDispatch = host.Services.GetRequiredService<
+            ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
+        var revokeDispatch = host.Services.GetRequiredService<
+            ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
+
+        var commitResult = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd-issue1343-revoke",
+        });
+
+        commitResult.Succeeded.Should().BeTrue();
+        var committed = await observer.WaitForUpsertAsync(actorId, TestTimeout);
+        committed.BindingId.Should().Be("bnd-issue1343-revoke");
+
+        var revokeResult = await revokeDispatch.DispatchAsync(new RevokeBindingCommand
+        {
+            ExternalSubject = subject,
+            Reason = "user_unbind",
+        });
+
+        revokeResult.Succeeded.Should().BeTrue();
+        await observer.WaitForDeleteAsync(actorId, TestTimeout);
+
+        var reader = host.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>();
+        var stored = await reader.GetAsync(actorId);
+        stored.Should().BeNull();
+
+        var query = host.Services.GetRequiredService<IExternalIdentityBindingQueryPort>();
+        var resolved = await query.ResolveAsync(subject);
+        resolved.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DuplicateCommitDispatch_ShouldKeepFirstBindingAndNotProduceSecondEffectiveUpsert()
+    {
+        var observer = new ObservingExternalIdentityBindingWriter();
+        using var host = await StartSiloHostAsync(observer);
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "tenant-issue1343-duplicate",
+            ExternalUserId = $"user-{Guid.NewGuid():N}",
+        };
+        var actorId = subject.ToActorId();
+
+        var commitDispatch = host.Services.GetRequiredService<
+            ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
+        var revokeDispatch = host.Services.GetRequiredService<
+            ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
+
+        var firstResult = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd-issue1343-first",
+        });
+
+        firstResult.Succeeded.Should().BeTrue();
+        var firstProjection = await observer.WaitForUpsertAsync(actorId, TestTimeout);
+        firstProjection.BindingId.Should().Be("bnd-issue1343-first");
+        firstProjection.StateVersion.Should().Be(1);
+
+        var duplicateResult = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd-issue1343-second",
+        });
+
+        duplicateResult.Succeeded.Should().BeTrue();
+
+        var revokeResult = await revokeDispatch.DispatchAsync(new RevokeBindingCommand
+        {
+            ExternalSubject = subject,
+            Reason = "duplicate-test-barrier",
+        });
+
+        revokeResult.Succeeded.Should().BeTrue();
+        await observer.WaitForDeleteAsync(actorId, TestTimeout);
+
+        var upserts = observer.GetAppliedUpserts(actorId);
+        upserts.Should().ContainSingle();
+        upserts[0].BindingId.Should().Be("bnd-issue1343-first");
+        upserts[0].StateVersion.Should().Be(1);
+    }
+
     private static TimeSpan TestTimeout => TimeSpan.FromSeconds(20);
 
     private static Task<IHost> StartSiloHostAsync(ObservingExternalIdentityBindingWriter observer) =>
@@ -88,12 +186,22 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
     {
         private readonly object _gate = new();
         private readonly Dictionary<string, TaskCompletionSource<ExternalIdentityBindingDocument>> _upsertsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<ExternalIdentityBindingDocument>> _appliedUpsertsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TaskCompletionSource<string>> _deletesById = new(StringComparer.Ordinal);
 
         public void ObserveUpsert(ExternalIdentityBindingDocument document)
         {
             TaskCompletionSource<ExternalIdentityBindingDocument> completion;
             lock (_gate)
             {
+                if (!_appliedUpsertsById.TryGetValue(document.Id, out var upserts))
+                {
+                    upserts = [];
+                    _appliedUpsertsById[document.Id] = upserts;
+                }
+
+                upserts.Add(document.Clone());
+
                 if (!_upsertsById.TryGetValue(document.Id, out completion!))
                 {
                     completion = new TaskCompletionSource<ExternalIdentityBindingDocument>(
@@ -103,6 +211,22 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             }
 
             completion.TrySetResult(document.Clone());
+        }
+
+        public void ObserveDelete(string id)
+        {
+            TaskCompletionSource<string> completion;
+            lock (_gate)
+            {
+                if (!_deletesById.TryGetValue(id, out completion!))
+                {
+                    completion = new TaskCompletionSource<string>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    _deletesById[id] = completion;
+                }
+            }
+
+            completion.TrySetResult(id);
         }
 
         public Task<ExternalIdentityBindingDocument> WaitForUpsertAsync(string id, TimeSpan timeout)
@@ -119,6 +243,32 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             }
 
             return completion.Task.WaitAsync(timeout);
+        }
+
+        public Task<string> WaitForDeleteAsync(string id, TimeSpan timeout)
+        {
+            TaskCompletionSource<string> completion;
+            lock (_gate)
+            {
+                if (!_deletesById.TryGetValue(id, out completion!))
+                {
+                    completion = new TaskCompletionSource<string>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    _deletesById[id] = completion;
+                }
+            }
+
+            return completion.Task.WaitAsync(timeout);
+        }
+
+        public IReadOnlyList<ExternalIdentityBindingDocument> GetAppliedUpserts(string id)
+        {
+            lock (_gate)
+            {
+                return _appliedUpsertsById.TryGetValue(id, out var upserts)
+                    ? upserts.Select(static document => document.Clone()).ToArray()
+                    : [];
+            }
         }
     }
 
@@ -137,8 +287,13 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             return result;
         }
 
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
-            inner.DeleteAsync(id, ct);
+        public async Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            var result = await inner.DeleteAsync(id, ct);
+            if (result.IsApplied)
+                observer.ObserveDelete(id);
+            return result;
+        }
     }
 }
 
