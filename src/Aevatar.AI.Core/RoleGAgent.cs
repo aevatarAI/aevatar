@@ -131,10 +131,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             // AgentToolRequestContext accessors without durable request bearer.
             try
             {
-                using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
-                           pending.Metadata.Count > 0
-                               ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
-                               : null)))
+                // Refactor (issue1253-first):
+                //   Old pattern: Approval resume rebuilt control context from pending.Metadata.
+                //   New principle: Use typed pending.ToolContext first, with metadata only for old persisted state fallback.
+                var pendingToolContext = ResolvePendingApprovalToolContext(pending);
+                using (AgentToolContextScope.Push(pendingToolContext))
                 {
                     // Execute the yielded tool call
                     var toolResult = await Tools.ExecuteToolCallAsync(
@@ -166,6 +167,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         Prompt = continuation,
                         SessionId = Guid.NewGuid().ToString("N"),
                         ScopeId = pending.SessionId,
+                        ToolContext = pendingToolContext.ToPayload(),
                     };
                     foreach (var kv in ScrubPendingApprovalMetadata(pending.Metadata))
                         continuationRequest.Metadata[kv.Key] = kv.Value;
@@ -238,6 +240,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.ArgumentsJson,
                     ToolApprovalMode.Auto,
                     pending.IsDestructive,
+                    // Refactor (issue1253-first):
+                    //   Old pattern: Remote approval received scrubbed durable metadata that could include legacy control keys.
+                    //   New principle: Remote approval only receives open annotations.
                     new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
                 CancellationToken.None);
 
@@ -301,6 +306,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 new RemoteToolApprovalStatusQuery(
                     pending.RequestId,
                     pending.RemoteApprovalId,
+                    // Refactor (issue1253-first):
+                    //   Old pattern: Status checks forwarded pending.Metadata as a control surface.
+                    //   New principle: Status checks forward annotations only.
                     new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
                 CancellationToken.None);
         }
@@ -424,9 +432,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     ArgumentsJson = args,
                     IsDestructive = true,
                 };
-                // Refactor (iter159/cluster-613-first):
-                //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
-                //   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
+                // Refactor (issue1253-first):
+                //   Old pattern: Pending approval persisted stable context in metadata.
+                //   New principle: Persist typed durable-safe context and keep metadata as open annotations only.
+                pending.ToolContext = CreateDurablePendingApprovalToolContext(request);
                 foreach (var kv in ScrubPendingApprovalMetadata(request.Metadata))
                     pending.Metadata[kv.Key] = kv.Value;
 
@@ -541,6 +550,35 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private static IReadOnlyDictionary<string, string> ScrubPendingApprovalMetadata(
         IReadOnlyDictionary<string, string>? metadata) =>
         AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata);
+
+    private static AgentToolExecutionContext ResolvePendingApprovalToolContext(PendingToolApprovalState pending)
+    {
+        var context = pending.ToolContext != null
+            ? AgentToolExecutionContextMapper.FromPayload(pending.ToolContext)
+            : AgentToolExecutionContextMapper.FromMetadata(
+                pending.Metadata.Count > 0
+                    ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
+                    : null);
+
+        return context with { Credentials = AgentToolCredentials.Empty };
+    }
+
+    private static AgentToolExecutionContextPayload CreateDurablePendingApprovalToolContext(ChatRequestEvent request)
+    {
+        var baseContext = request.ToolContext != null
+            ? AgentToolExecutionContextMapper.FromPayload(request.ToolContext)
+            : AgentToolExecutionContextMapper.FromMetadata(request.Metadata);
+        var context = LLMControlContextMapper.FromPayload(request.LlmControl)
+            .ToToolContext(baseContext);
+
+        context = context with
+        {
+            Credentials = AgentToolCredentials.Empty,
+            ExternalMetadata = ScrubPendingApprovalMetadata(request.Metadata),
+        };
+
+        return context.ToPayload();
+    }
 
     // ─── Pending approval state transitions ───
 

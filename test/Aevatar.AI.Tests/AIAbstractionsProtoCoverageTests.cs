@@ -268,6 +268,16 @@ public sealed class AIAbstractionsProtoCoverageTests
                 ArgumentsJson = "{}",
                 IsDestructive = true,
                 TimeoutCallbackId = "timeout-1",
+                ToolContext = (AgentToolExecutionContext.Empty with
+                {
+                    Request = new AgentToolRequestIdentity("req-1", "call-1"),
+                    Caller = new AgentToolCallerContext("scope-1", "owner-1", "response-1"),
+                    Routing = new LLMRequestRoutingContext("model-a", "route-a", 7, "remember"),
+                    ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["trace-id"] = "trace-1",
+                    },
+                }).ToPayload(),
                 RemoteApprovalId = "remote-1",
                 RemoteStatusCheckAttempt = 2,
                 RemoteApprovalExpiresAtUnixMs = 123456,
@@ -338,10 +348,56 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
         state.PendingApproval.Should().NotBeNull();
         state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
+        state.PendingApproval.ToolContext.Should().NotBeNull();
+        state.PendingApproval.ToolContext.Request.RequestId.Should().Be("req-1");
+        state.PendingApproval.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        state.PendingApproval.ToolContext.Routing.ModelOverride.Should().Be("model-a");
+        state.PendingApproval.ToolContext.ExternalMetadata["trace-id"].Should().Be("trace-1");
         state.PendingApproval.RemoteStatusCheckAttempt.Should().Be(2);
         state.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(123456);
         state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
         state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
+    }
+
+    [Fact]
+    public void PendingToolApprovalState_ShouldRoundTripTypedToolContext_AndLegacyAnnotations()
+    {
+        var pending = RoundTrip(new PendingToolApprovalState
+        {
+            RequestId = "req-typed",
+            SessionId = "session-typed",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-typed",
+            ArgumentsJson = "{}",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
+                Credentials = new AgentToolCredentials("token-should-only-appear-in-this-explicit-roundtrip", null, null),
+                Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
+                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1"),
+                SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+                Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
+                ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["trace-id"] = "trace-typed",
+                },
+            }).ToPayload(),
+            Metadata =
+            {
+                ["annotation"] = "value",
+            },
+        }, PendingToolApprovalState.Parser);
+
+        pending.ToolContext.Should().NotBeNull();
+        pending.ToolContext.Request.RequestId.Should().Be("req-typed");
+        pending.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
+        pending.ToolContext.Channel.Platform.Should().Be("lark");
+        pending.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
+        pending.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
+        pending.ToolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
+        pending.ToolContext.ExternalMetadata["trace-id"].Should().Be("trace-typed");
+        pending.Metadata["annotation"].Should().Be("value");
     }
 
     [Fact]
