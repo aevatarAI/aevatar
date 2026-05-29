@@ -164,6 +164,34 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task RemoteSkillFetcher_DefaultsWorkflowIdToFirstSortedWorkflowFileNameWithoutFrontmatterEntry()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Workflow Skill",
+                "description": "Runs a workflow",
+                "files": {
+                  "SKILL.md": "---\nname: wf-skill\ndescription: Use workflow skill\n---\nRun it.",
+                  "workflows/z-child.yml": "name: z-child\nsteps: []\n",
+                  "workflows/a-main.yaml": "name: a-main\nsteps: []\n"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Workflow Skill");
+
+        skill.Should().NotBeNull();
+        var workflow = skill!.Workflows.Should().ContainSingle().Subject;
+        workflow.WorkflowId.Should().Be("a-main");
+        workflow.WorkflowYamls.Should().Equal(
+            "name: a-main\nsteps: []",
+            "name: z-child\nsteps: []");
+    }
+
+    [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenNyxIdProxyReportsError()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson(

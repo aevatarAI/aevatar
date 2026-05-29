@@ -69,7 +69,7 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         if (files is not { Count: > 0 })
             return [];
 
-        // Refactor (issue1259-first):
+        // Refactor (iter161/cluster-triage-ornn-skill-workflow-tool-signal #1259-first):
         //   Old pattern: Ornn workflow YAML files stayed in AssociatedFiles as untyped text, so the model had to infer tool handoff from generic attachments.
         //   New principle: Keep the existing Ornn Files surface, but lift non-empty workflows/*.yaml|*.yml files into a typed skill workflow descriptor for aevatar_start_workflow.
         var workflowFiles = files
