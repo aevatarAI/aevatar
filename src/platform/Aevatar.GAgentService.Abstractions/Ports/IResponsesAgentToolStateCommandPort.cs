@@ -1,6 +1,4 @@
 using Aevatar.GAgentService.Abstractions.Queries;
-using Google.Protobuf.WellKnownTypes;
-
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
 public interface IResponsesAgentToolStateCommandPort
@@ -30,7 +28,7 @@ public sealed record ResponsesWebTraceResult(
     string TraceId,
     string CacheKey,
     bool CacheHit,
-    Value Result);
+    ResponsesWebToolResult Result);
 
 public sealed record ResponsesWebTraceInput(
     string TraceId,
@@ -39,4 +37,4 @@ public sealed record ResponsesWebTraceInput(
     string Url,
     string Query,
     bool CacheHit,
-    Value Result);
+    ResponsesWebToolResult Result);

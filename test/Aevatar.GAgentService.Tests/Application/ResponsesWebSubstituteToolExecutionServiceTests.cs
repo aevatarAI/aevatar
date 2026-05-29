@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
 using Google.Protobuf;
@@ -27,12 +28,13 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             "WebFetch",
             """{"url":"http://example.com/docs"}"""));
 
-        result.Cached.StructValue.Fields["content"].StringValue.Should().Be("cached");
+        result.TypedCached.Fetch.Content.Should().Be("cached");
         backend.FetchCalls.Should().BeEmpty();
         state.WebTraces.Should().ContainSingle();
         state.WebTraces[0].Trace.CacheKey.Should().Be(cacheKey);
         state.WebTraces[0].Trace.Url.Should().Be("https://example.com/docs");
         state.WebTraces[0].Trace.CacheHit.Should().BeTrue();
+        state.WebTraces[0].Trace.Result.Fetch.Content.Should().Be("cached");
     }
 
     [Fact]
@@ -60,6 +62,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         backend.FetchCalls[0].Url.Should().Be("https://example.com/docs");
         state.WebTraces.Should().ContainSingle();
         state.WebTraces[0].Trace.CacheHit.Should().BeFalse();
+        state.WebTraces[0].Trace.Result.Fetch.Content.Should().Be("fresh body");
     }
 
     [Fact]
@@ -73,7 +76,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             "WebFetch",
             """{"url":"http://127.0.0.1/admin"}"""));
 
-        result.Error.StructValue.Fields["error"].StringValue.Should().Be("blocked_private_address");
+        result.TypedError.Code.Should().Be("blocked_private_address");
         backend.FetchCalls.Should().BeEmpty();
         state.WebTraces.Should().BeEmpty();
     }
@@ -85,7 +88,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         var backend = new RecordingResponsesWebSubstituteBackend
         {
             SearchResult = new ResponsesWebSearchBoundaryResult(
-                StructValue(("results", ListValueValue(StructValue(("title", ProtoValue.ForString("fresh"))))))),
+                SearchOutput(("fresh", "https://example.com/fresh", "snippet"))),
         };
         var service = CreateService(state, backend);
 
@@ -94,9 +97,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             """{"query":"aevatar docs","max_results":99}""",
             token: "secret-token"));
 
-        result.Search.StructValue.Fields["results"].ListValue.Values[0].StructValue.Fields["title"].StringValue
-            .Should()
-            .Be("fresh");
+        result.TypedSearch.Results[0].Title.Should().Be("fresh");
         backend.SearchCalls.Should().ContainSingle();
         backend.SearchCalls[0].NyxIdAccessToken.Should().Be("secret-token");
         backend.SearchCalls[0].Query.Should().Be("aevatar docs");
@@ -104,6 +105,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         state.WebTraces.Should().ContainSingle();
         state.WebTraces[0].Trace.Query.Should().Be("aevatar docs");
         state.WebTraces[0].Trace.CacheHit.Should().BeFalse();
+        state.WebTraces[0].Trace.Result.Search.Results[0].Title.Should().Be("fresh");
     }
 
     [Fact]
@@ -118,9 +120,8 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             """{"query":"aevatar docs"}""",
             token: string.Empty));
 
-        result.Search.StructValue.Fields["error"].StringValue
-            .Should()
-            .Be("No NyxID access token available. User must be authenticated.");
+        result.TypedError.Code.Should().Be("auth_required");
+        result.TypedError.Message.Should().Be("No NyxID access token available. User must be authenticated.");
         backend.SearchCalls.Should().BeEmpty();
         state.WebTraces.Should().ContainSingle();
         state.WebTraces[0].Trace.CacheHit.Should().BeFalse();
@@ -228,7 +229,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         public List<ResponsesWebFetchBoundaryInput> FetchCalls { get; } = [];
 
         public ResponsesWebSearchBoundaryResult SearchResult { get; init; } =
-            new(StructValue(("results", ListValueValue())));
+            new(new ResponsesWebSearchToolOutput());
 
         public ResponsesWebFetchBoundaryResult FetchResult { get; init; } = new(
             "https://example.com",
@@ -244,7 +245,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
             CancellationToken ct)
         {
             SearchCalls.Add(input);
-            return Task.FromResult(new ResponsesWebSearchBoundaryResult(SearchResult.Value.Clone()));
+            return Task.FromResult(new ResponsesWebSearchBoundaryResult(SearchResult.Output.Clone()));
         }
 
         public Task<ResponsesWebFetchBoundaryResult> ExecuteWebFetchAsync(
@@ -273,7 +274,7 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
                 toolName,
                 value,
                 string.Empty,
-                JsonParser.Default.Parse<ProtoValue>(resultJson),
+                ResponsesWebResultMigration.FromLegacyValue(JsonParser.Default.Parse<ProtoValue>(resultJson)),
                 DateTimeOffset.UtcNow,
                 null,
                 0);
@@ -322,18 +323,15 @@ public sealed class ResponsesWebSubstituteToolExecutionServiceTests
         }
     }
 
-    private static ProtoValue StructValue(params (string Key, ProtoValue Value)[] fields)
+    private static ResponsesWebSearchToolOutput SearchOutput(params (string Title, string Url, string Snippet)[] items)
     {
-        var value = new ProtoValue { StructValue = new Struct() };
-        foreach (var (key, fieldValue) in fields)
-            value.StructValue.Fields[key] = fieldValue;
-        return value;
-    }
-
-    private static ProtoValue ListValueValue(params ProtoValue[] values)
-    {
-        var value = new ProtoValue { ListValue = new Google.Protobuf.WellKnownTypes.ListValue() };
-        value.ListValue.Values.AddRange(values);
-        return value;
+        var output = new ResponsesWebSearchToolOutput();
+        output.Results.AddRange(items.Select(static item => new ResponsesWebSearchResultItem
+        {
+            Title = item.Title,
+            Url = item.Url,
+            Snippet = item.Snippet,
+        }));
+        return output;
     }
 }

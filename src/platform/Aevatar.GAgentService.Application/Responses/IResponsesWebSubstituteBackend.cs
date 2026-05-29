@@ -1,3 +1,5 @@
+using Aevatar.GAgentService.Abstractions;
+
 namespace Aevatar.GAgentService.Application.Responses;
 
 // Refactor (iter159/cluster-1215):
@@ -34,5 +36,8 @@ public sealed record ResponsesWebSearchBoundaryInput(
     int MaxResults,
     string NyxIdAccessToken);
 
+// Refactor (iter161-cluster-001 #1251-first):
+//   Old pattern: Host returned untyped provider Value for Application to interpret.
+//   New principle: Host returns the Responses-owned typed Web search output.
 public sealed record ResponsesWebSearchBoundaryResult(
-    Google.Protobuf.WellKnownTypes.Value Value);
+    ResponsesWebSearchToolOutput Output);

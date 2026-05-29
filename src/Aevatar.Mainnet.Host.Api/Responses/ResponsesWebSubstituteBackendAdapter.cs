@@ -1,7 +1,6 @@
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Application.Responses;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
 
@@ -56,6 +55,38 @@ internal sealed class ResponsesWebSubstituteBackendAdapter : IResponsesWebSubsti
             input.Query,
             input.MaxResults,
             ct).ConfigureAwait(false);
-        return new ResponsesWebSearchBoundaryResult(result);
+        // Refactor (iter161-cluster-001 #1251-first):
+        //   Old pattern: Host adapter passed provider Value into Application.
+        //   New principle: Host maps provider JSON-like Value into Responses-owned typed search output.
+        return new ResponsesWebSearchBoundaryResult(ToSearchOutput(result));
+    }
+
+    private static ResponsesWebSearchToolOutput ToSearchOutput(Google.Protobuf.WellKnownTypes.Value value)
+    {
+        var output = new ResponsesWebSearchToolOutput();
+        if (value.KindCase != Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StructValue ||
+            !value.StructValue.Fields.TryGetValue("results", out var results) ||
+            results.KindCase != Google.Protobuf.WellKnownTypes.Value.KindOneofCase.ListValue)
+        {
+            return output;
+        }
+
+        output.Results.AddRange(results.ListValue.Values
+            .Where(static item => item.KindCase == Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StructValue)
+            .Select(static item => new ResponsesWebSearchResultItem
+            {
+                Title = ReadString(item, "title"),
+                Url = ReadString(item, "url"),
+                Snippet = ReadString(item, "snippet"),
+            }));
+        return output;
+    }
+
+    private static string ReadString(Google.Protobuf.WellKnownTypes.Value item, string key)
+    {
+        return item.StructValue.Fields.TryGetValue(key, out var value) &&
+               value.KindCase == Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StringValue
+            ? value.StringValue
+            : string.Empty;
     }
 }
