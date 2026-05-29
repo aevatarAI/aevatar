@@ -18,16 +18,20 @@ FILES=(
   "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
 )
 
-capabilities_artifact_hits="$(
-  rg -n "public .*WorkflowCapabilitiesStartupArtifact.*IProjectionReadModel|IProjection(DocumentReader|WriteDispatcher|DocumentMetadataProvider)<WorkflowCapabilitiesStartupArtifact|ProjectionStore<WorkflowCapabilitiesStartupArtifact|DocumentProjectionStore<WorkflowCapabilitiesStartupArtifact" \
+capabilities_artifact_surface_hits="$(
+  rg -n "WorkflowCapabilitiesStartupArtifact|WorkflowPrimitiveCapabilityReadModel|WorkflowPrimitiveParameterCapabilityReadModel|WorkflowConnectorCapabilityReadModel" \
     src/workflow src/platform \
     -g '*.cs' \
+    -g '*.proto' \
     || true
 )"
 
-if [[ -n "${capabilities_artifact_hits}" ]]; then
-  echo "${capabilities_artifact_hits}"
-  echo "WorkflowCapabilitiesStartupArtifact must not use projection readmodel/store framing."
+if [[ -n "${capabilities_artifact_surface_hits}" ]]; then
+  echo "${capabilities_artifact_surface_hits}"
+  # Refactor (iter161-cluster-001 #1257-first):
+  #   Old pattern: guard only blocked re-entry into projection store framing while unused startup artifact symbols remained.
+  #   New principle: first slice deletes the residual capabilities artifact proto/partial surface entirely.
+  echo "Workflow capabilities startup artifact surface must stay deleted."
   exit 1
 fi
 

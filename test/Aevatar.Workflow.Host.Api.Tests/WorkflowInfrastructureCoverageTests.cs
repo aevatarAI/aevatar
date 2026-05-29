@@ -428,32 +428,20 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void WorkflowPrimitiveCapabilityReadModelProto_ShouldReserveRemovedClosedWorldBlockedField()
+    public void WorkflowProjectionTransportProto_ShouldNotExposeStartupCapabilityArtifactMessages()
     {
-        var descriptor = WorkflowPrimitiveCapabilityReadModel.Descriptor;
-        var proto = descriptor.ToProto();
+        // Refactor (iter161-cluster-001 #1257-first):
+        //   Old pattern: proto kept WorkflowCapabilitiesStartupArtifact and capability entry messages as unused typed artifact surface.
+        //   New principle: no persisted capability artifact exists until a durable consumer contract is designed.
+        var messageNames = WorkflowCatalogCurrentStateDocument.Descriptor.File.MessageTypes
+            .Select(message => message.Name);
 
-        proto.ReservedRange.Should().Contain(range => range.Start <= 5 && range.End > 5);
-        descriptor.Fields.InFieldNumberOrder()
-            .Select(field => field.FieldNumber)
-            .Should().NotContain(5);
-        descriptor.FindFieldByName("closed_world_blocked").Should().BeNull();
-    }
-
-    [Fact]
-    public void WorkflowCapabilitiesStartupArtifactProto_ShouldExposeOnlyArtifactWatermarks()
-    {
-        var descriptor = WorkflowCapabilitiesStartupArtifact.Descriptor;
-        var proto = descriptor.ToProto();
-
-        proto.ReservedRange.Should().Contain(range => range.Start <= 2 && range.End > 2);
-        proto.ReservedRange.Should().Contain(range => range.Start <= 3 && range.End > 3);
-        proto.ReservedRange.Should().Contain(range => range.Start <= 5 && range.End > 5);
-        descriptor.FindFieldByName("state_version").Should().BeNull();
-        descriptor.FindFieldByName("last_event_id").Should().BeNull();
-        descriptor.FindFieldByName("actor_id").Should().BeNull();
-        descriptor.FindFieldByName("generated_at_utc_value").Should().NotBeNull();
-        descriptor.FindFieldByName("schema_version").Should().NotBeNull();
+        messageNames.Should().NotContain([
+            "WorkflowCapabilitiesStartupArtifact",
+            "WorkflowPrimitiveCapabilityReadModel",
+            "WorkflowPrimitiveParameterCapabilityReadModel",
+            "WorkflowConnectorCapabilityReadModel"
+        ]);
     }
 
     [Fact]
