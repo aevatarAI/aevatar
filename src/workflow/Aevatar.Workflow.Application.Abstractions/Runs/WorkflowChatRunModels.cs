@@ -30,23 +30,90 @@ public enum WorkflowChatSourceKind
     Direct = 4,
 }
 
-public sealed record WorkflowChatSource(
-    WorkflowChatSourceKind Kind,
-    string? WorkflowName = null,
-    string? ActorId = null,
-    IReadOnlyList<string>? WorkflowYamls = null)
+public sealed record WorkflowChatCatalogNameSource(string WorkflowName);
+
+public sealed record WorkflowChatDefinitionActorSource(string ActorId, string? WorkflowName = null);
+
+public sealed record WorkflowChatInlineYamlDocument(string Name, string Yaml);
+
+public sealed record WorkflowChatInlineYamlBundleSource(
+    string? EntryName,
+    IReadOnlyList<WorkflowChatInlineYamlDocument> YamlDocuments,
+    string? ActorId = null);
+
+// Refactor (iter165/cluster-007):
+//   Old pattern: InlineYamlBundle reused WorkflowName, ActorId, and WorkflowYamls on the parent source, so one field meant lookup identity or inline content depending on Kind.
+//   New principle: each source variant owns a single-purpose typed submessage; legacy parent properties are read-only migration views.
+public sealed record WorkflowChatSource
 {
+    public WorkflowChatSource(
+        WorkflowChatSourceKind kind,
+        WorkflowChatCatalogNameSource? catalogName = null,
+        WorkflowChatDefinitionActorSource? definitionActorSource = null,
+        WorkflowChatInlineYamlBundleSource? inlineBundle = null)
+    {
+        Kind = kind;
+        CatalogName = catalogName;
+        DefinitionActorSource = definitionActorSource;
+        InlineBundle = inlineBundle;
+    }
+
+    public WorkflowChatSourceKind Kind { get; init; }
+    public WorkflowChatCatalogNameSource? CatalogName { get; init; }
+    public WorkflowChatDefinitionActorSource? DefinitionActorSource { get; init; }
+    public WorkflowChatInlineYamlBundleSource? InlineBundle { get; init; }
+
+    public string? WorkflowName => Kind switch
+    {
+        WorkflowChatSourceKind.CatalogWorkflow => CatalogName?.WorkflowName,
+        WorkflowChatSourceKind.DefinitionActor => DefinitionActorSource?.WorkflowName,
+        WorkflowChatSourceKind.InlineYamlBundle => InlineBundle?.EntryName,
+        _ => null,
+    };
+
+    public string? ActorId => Kind switch
+    {
+        WorkflowChatSourceKind.DefinitionActor => DefinitionActorSource?.ActorId,
+        WorkflowChatSourceKind.InlineYamlBundle => InlineBundle?.ActorId,
+        WorkflowChatSourceKind.Direct => DefinitionActorSource?.ActorId,
+        _ => null,
+    };
+
+    public IReadOnlyList<string>? WorkflowYamls =>
+        InlineBundle?.YamlDocuments.Select(static document => document.Yaml).ToArray();
+
     public static WorkflowChatSource CatalogWorkflow(string workflowName) =>
-        new(WorkflowChatSourceKind.CatalogWorkflow, WorkflowName: workflowName);
+        new(
+            WorkflowChatSourceKind.CatalogWorkflow,
+            catalogName: new WorkflowChatCatalogNameSource(workflowName));
 
     public static WorkflowChatSource DefinitionActor(string actorId, string? workflowName = null) =>
-        new(WorkflowChatSourceKind.DefinitionActor, WorkflowName: workflowName, ActorId: actorId);
+        new(
+            WorkflowChatSourceKind.DefinitionActor,
+            definitionActorSource: new WorkflowChatDefinitionActorSource(actorId, workflowName));
+
+    public static WorkflowChatSource InlineYamlBundle(
+        string? entryName,
+        IReadOnlyList<WorkflowChatInlineYamlDocument> yamlDocuments,
+        string? actorId = null) =>
+        new(
+            WorkflowChatSourceKind.InlineYamlBundle,
+            inlineBundle: new WorkflowChatInlineYamlBundleSource(entryName, yamlDocuments, actorId));
 
     public static WorkflowChatSource InlineYamlBundle(IReadOnlyList<string> workflowYamls, string? workflowName = null, string? actorId = null) =>
-        new(WorkflowChatSourceKind.InlineYamlBundle, WorkflowName: workflowName, ActorId: actorId, WorkflowYamls: workflowYamls);
+        InlineYamlBundle(
+            workflowName,
+            workflowYamls.Select(static (yaml, index) => new WorkflowChatInlineYamlDocument(
+                string.Empty,
+                yaml)).ToArray(),
+            actorId);
 
     public static WorkflowChatSource Direct(string? actorId = null) =>
-        new(WorkflowChatSourceKind.Direct, ActorId: actorId);
+        new(
+            WorkflowChatSourceKind.Direct,
+            definitionActorSource: string.IsNullOrWhiteSpace(actorId)
+                ? null
+                : new WorkflowChatDefinitionActorSource(actorId));
 }
 
 // Refactor (iter112/cluster-3): Old pattern: application commands carried typed source plus legacy mirror fields. New principle: Application owns one typed WorkflowChatSource representation.

@@ -29,7 +29,7 @@ public sealed class WorkflowDirectFallbackPolicy
             return false;
         if (!IsWhitelistedException(ex))
             return false;
-        if (request.Source.WorkflowYamls is { Count: > 0 })
+        if (request.Source.InlineBundle?.YamlDocuments is { Count: > 0 })
             return false;
 
         var workflowName = ResolveEffectiveWorkflowName(request);
@@ -72,7 +72,16 @@ public sealed class WorkflowDirectFallbackPolicy
         // Refactor (iter112/cluster-3): Old pattern: effective workflow resolution read WorkflowName directly. New principle: workflow identity is read through WorkflowChatSource.
         ArgumentNullException.ThrowIfNull(request);
 
-        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.Source.WorkflowName);
+        var requestedWorkflowName = request.Source.Kind switch
+        {
+            WorkflowChatSourceKind.CatalogWorkflow =>
+                WorkflowRunNameNormalizer.NormalizeWorkflowName(request.Source.CatalogName?.WorkflowName),
+            WorkflowChatSourceKind.DefinitionActor =>
+                WorkflowRunNameNormalizer.NormalizeWorkflowName(request.Source.DefinitionActorSource?.WorkflowName),
+            WorkflowChatSourceKind.InlineYamlBundle =>
+                WorkflowRunNameNormalizer.NormalizeWorkflowName(request.Source.InlineBundle?.EntryName),
+            _ => string.Empty,
+        };
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
             return requestedWorkflowName;
 
