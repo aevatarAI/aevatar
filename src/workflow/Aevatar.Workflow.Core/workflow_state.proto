@@ -432,6 +432,32 @@ message LLMCallModuleState
   map<string, int32> attempts_by_step_id = 2;
 }
 
+message PendingConnectorCallState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string operation_id = 3;
+  string input = 4;
+  string connector_name = 5;
+  string operation = 6;
+  int32 attempt = 7;
+  int32 attempts = 8;
+  int32 timeout_ms = 9;
+  bool on_error_continue = 10;
+  WorkflowRuntimeCallbackLeaseState timeout_lease = 11;
+  string timeout_callback_id = 12;
+  string execution_id = 13;
+  map<string, string> parameters = 14;
+  bool secure_step = 15;
+  string connector_type = 16;
+}
+
+message ConnectorCallModuleState
+{
+  map<string, PendingConnectorCallState> pending_by_operation_id = 1;
+  map<string, string> pending_operation_id_by_step_id = 2;
+}
+
 message EvalContextState
 {
   string step_id = 1;

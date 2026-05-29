@@ -84,6 +84,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
             var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
             await parent.RemoveChildAsync(id);
             await _streams.GetStream(parentId).RemoveRelayAsync(id, ct);
+            await _streams.GetStream(id).RemoveRelayAsync(parentId, ct);
         }
 
         var children = await grain.GetChildrenAsync();
@@ -91,6 +92,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
         {
             await _grainFactory.GetGrain<IRuntimeActorGrain>(childId).ClearParentAsync();
             await _streams.GetStream(id).RemoveRelayAsync(childId, ct);
+            await _streams.GetStream(childId).RemoveRelayAsync(id, ct);
         }));
 
         await grain.PurgeAsync();
@@ -127,6 +129,13 @@ public sealed class OrleansActorRuntime : IActorRuntime
         await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
+        // Refactor (issue1271/first-slice): Old pattern: parent-side observation depended on runtime-
+        // specific linkage details. New principle: Orleans registers the same committed-facts relay
+        // contract as local runtime, keeping reverse observation on the unified stream forwarding path
+        // instead of a separate projection or in-memory lookup path.
+        await _streams.GetStream(childId).UpsertRelayAsync(
+            StreamForwardingRules.CreateCommittedFactsObserverBinding(childId, parentId),
+            ct);
         _logger.LogInformation("Link: {Parent} -> {Child}", parentId, childId);
     }
 
@@ -141,6 +150,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
             var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
             await parent.RemoveChildAsync(childId);
             await _streams.GetStream(parentId).RemoveRelayAsync(childId, ct);
+            await _streams.GetStream(childId).RemoveRelayAsync(parentId, ct);
         }
 
         await child.ClearParentAsync();

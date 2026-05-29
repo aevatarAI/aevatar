@@ -45,6 +45,8 @@ export type TeamTestLastResult = {
 
 type TeamTestPanelProps = {
   readonly createMemberHref: string;
+  readonly currentMemberId?: string | null;
+  readonly currentMemberLabel?: string;
   readonly disabled?: boolean;
   readonly entryActionBusyMemberId?: string;
   readonly entryMemberId?: string | null;
@@ -141,6 +143,8 @@ function formatLifecycleLabelForTeamTest(label: string): string {
 
 const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
   createMemberHref,
+  currentMemberId,
+  currentMemberLabel,
   disabled = false,
   entryActionBusyMemberId = "",
   entryMemberId,
@@ -163,6 +167,10 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
 }) => {
   const { token } = theme.useToken();
   const normalizedEntryMemberId = entryMemberId?.trim() ?? "";
+  const normalizedCurrentMemberId = currentMemberId?.trim() ?? "";
+  const showCurrentMemberContext =
+    normalizedCurrentMemberId.length > 0 &&
+    normalizedCurrentMemberId !== normalizedEntryMemberId;
   const entryMember =
     rosterRows.find((row) => row.memberId === normalizedEntryMemberId) ?? null;
   const readyRows = rosterRows.filter((row) => row.canInvokeAsEntry);
@@ -475,6 +483,12 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           <Typography.Text style={{ fontSize: 13 }} type="secondary">
             通过入口成员发起一次真实 Team 调用。
           </Typography.Text>
+          {showCurrentMemberContext ? (
+            <Typography.Text style={{ fontSize: 12 }} type="secondary">
+              当前页面选中的是 {currentMemberLabel || normalizedCurrentMemberId}
+              ，Team 测试仍通过入口成员发起。
+            </Typography.Text>
+          ) : null}
         </div>
         {lastResult ? (
           <div

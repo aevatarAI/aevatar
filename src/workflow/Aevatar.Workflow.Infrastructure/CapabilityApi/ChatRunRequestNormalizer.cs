@@ -47,8 +47,8 @@ internal static class ChatRunRequestNormalizer
             return ChatRunRequestNormalizationResult.Failed(sourceResult.Error);
 
         var source = sourceResult.Source!;
-        var requestedWorkflowName = source.WorkflowName ?? string.Empty;
-        var inlineWorkflowYamls = source.WorkflowYamls ?? [];
+        var requestedWorkflowName = ResolveRequestedWorkflowName(source);
+        var inlineWorkflowYamls = source.InlineBundle?.YamlDocuments.Select(static document => document.Yaml).ToArray() ?? [];
 
         var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
         if (rawPrompt.Length == 0)
@@ -57,7 +57,7 @@ internal static class ChatRunRequestNormalizer
         var normalizedPrompt = WorkflowAuthoringSkillPromptAugmentor.AugmentPrompt(
             rawPrompt,
             requestedWorkflowName,
-            inlineWorkflowYamls.Count > 0,
+            inlineWorkflowYamls.Length > 0,
             normalizedMetadata,
             capabilities);
 
@@ -122,9 +122,9 @@ internal static class ChatRunRequestNormalizer
             inlineWorkflowYamls = [legacyWorkflowYaml!];
 
         if (inlineWorkflowYamls.Count > 0)
-            return SourceNormalizationResult.Success(WorkflowChatSource.InlineYamlBundle(
-                inlineWorkflowYamls,
+            return SourceNormalizationResult.Success(ToInlineYamlBundleSource(
                 string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
+                inlineWorkflowYamls,
                 string.IsNullOrWhiteSpace(normalizedAgentId) ? null : normalizedAgentId));
 
         if (!string.IsNullOrWhiteSpace(normalizedAgentId))
@@ -141,9 +141,9 @@ internal static class ChatRunRequestNormalizer
     private static SourceNormalizationResult NormalizeTypedSource(WorkflowChatSourceInput source)
     {
         var kind = NormalizeSourceKind(source.Kind);
-        var workflowName = NormalizeWorkflowName(source.WorkflowName);
-        var actorId = NormalizeAgentId(source.ActorId);
-        var workflowYamls = NormalizeInlineWorkflowYamls(source.WorkflowYamls);
+        var workflowName = ResolveTypedWorkflowName(source, kind);
+        var actorId = ResolveTypedActorId(source, kind);
+        var inlineYamlDocuments = ResolveTypedInlineYamlDocuments(source, kind);
 
         return kind switch
         {
@@ -155,12 +155,13 @@ internal static class ChatRunRequestNormalizer
                 SourceNormalizationResult.Failed(WorkflowChatRunStartError.AgentNotFound),
             WorkflowChatSourceKind.DefinitionActor =>
                 SourceNormalizationResult.Success(WorkflowChatSource.DefinitionActor(actorId, string.IsNullOrWhiteSpace(workflowName) ? null : workflowName)),
-            WorkflowChatSourceKind.InlineYamlBundle when workflowYamls.Count == 0 || workflowYamls.Any(string.IsNullOrWhiteSpace) =>
+            WorkflowChatSourceKind.InlineYamlBundle when inlineYamlDocuments.Count == 0 ||
+                                                          inlineYamlDocuments.Any(static document => string.IsNullOrWhiteSpace(document.Yaml)) =>
                 SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
             WorkflowChatSourceKind.InlineYamlBundle =>
                 SourceNormalizationResult.Success(WorkflowChatSource.InlineYamlBundle(
-                    workflowYamls,
                     string.IsNullOrWhiteSpace(workflowName) ? null : workflowName,
+                    inlineYamlDocuments,
                     string.IsNullOrWhiteSpace(actorId) ? null : actorId)),
             WorkflowChatSourceKind.Direct =>
                 SourceNormalizationResult.Success(WorkflowChatSource.Direct(actorId)),
@@ -191,6 +192,68 @@ internal static class ChatRunRequestNormalizer
             normalized.Add(yaml ?? string.Empty);
         return normalized;
     }
+
+    private static string ResolveRequestedWorkflowName(WorkflowChatSource source)
+    {
+        return source.Kind switch
+        {
+            WorkflowChatSourceKind.CatalogWorkflow => source.CatalogName?.WorkflowName ?? string.Empty,
+            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActorSource?.WorkflowName ?? string.Empty,
+            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.EntryName ?? string.Empty,
+            _ => string.Empty,
+        };
+    }
+
+    private static string ResolveTypedWorkflowName(WorkflowChatSourceInput source, WorkflowChatSourceKind kind)
+    {
+        var value = kind switch
+        {
+            WorkflowChatSourceKind.CatalogWorkflow => source.CatalogName?.WorkflowName ?? source.WorkflowName,
+            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActor?.WorkflowName ?? source.WorkflowName,
+            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.EntryName ?? source.WorkflowName,
+            _ => source.WorkflowName,
+        };
+        return NormalizeWorkflowName(value);
+    }
+
+    private static string ResolveTypedActorId(WorkflowChatSourceInput source, WorkflowChatSourceKind kind)
+    {
+        var value = kind switch
+        {
+            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActor?.ActorId ?? source.ActorId,
+            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.ActorId ?? source.ActorId,
+            _ => source.ActorId,
+        };
+        return NormalizeAgentId(value);
+    }
+
+    private static IReadOnlyList<WorkflowChatInlineYamlDocument> ResolveTypedInlineYamlDocuments(
+        WorkflowChatSourceInput source,
+        WorkflowChatSourceKind kind)
+    {
+        if (kind != WorkflowChatSourceKind.InlineYamlBundle)
+            return ToUnnamedInlineYamlDocuments(NormalizeInlineWorkflowYamls(source.WorkflowYamls));
+
+        if (source.InlineBundle?.YamlDocuments is not { Count: > 0 } documents)
+            return ToUnnamedInlineYamlDocuments(NormalizeInlineWorkflowYamls(source.WorkflowYamls));
+
+        return documents.Select(static document => new WorkflowChatInlineYamlDocument(
+            string.IsNullOrWhiteSpace(document?.Name) ? string.Empty : document.Name.Trim(),
+            document?.Yaml ?? string.Empty)).ToArray();
+    }
+
+    private static WorkflowChatSource ToInlineYamlBundleSource(
+        string? entryName,
+        IReadOnlyList<string> workflowYamls,
+        string? actorId)
+    {
+        var documents = ToUnnamedInlineYamlDocuments(workflowYamls);
+        return WorkflowChatSource.InlineYamlBundle(entryName, documents, actorId);
+    }
+
+    private static IReadOnlyList<WorkflowChatInlineYamlDocument> ToUnnamedInlineYamlDocuments(
+        IReadOnlyList<string> workflowYamls) =>
+        workflowYamls.Select(static yaml => new WorkflowChatInlineYamlDocument(string.Empty, yaml)).ToArray();
 
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();

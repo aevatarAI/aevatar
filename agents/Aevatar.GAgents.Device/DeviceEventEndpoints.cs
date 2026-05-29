@@ -179,7 +179,7 @@ public static class DeviceEventEndpoints
         using var doc = JsonDocument.Parse(bodyBytes);
         var root = doc.RootElement;
 
-        // content.text contains the raw device event JSON (same in both old and new format)
+        // content.text contains the raw device event JSON at the adapter boundary.
         var contentText = root.GetProperty("content").GetProperty("text").GetString()
                           ?? throw new JsonException("content.text is required");
 
@@ -192,24 +192,89 @@ public static class DeviceEventEndpoints
                      : string.Empty;
         }
 
-        // Parse the inner device event JSON from content.text
+        // Refactor (iter1281/cluster-001-device-inbound-typed-payload): Old pattern: pass content.text through as DeviceInbound.PayloadJson.
+        // New principle: terminate NyxID callback JSON at the Host/Adapter boundary.
+        // Known device events are allowlisted and mapped to typed Protobuf payload cases.
+        // Unknown or malformed content is rejected before any EventEnvelope dispatch can happen.
         using var innerDoc = JsonDocument.Parse(contentText);
         var inner = innerDoc.RootElement;
+        if (inner.ValueKind != JsonValueKind.Object)
+            throw new JsonException("content.text must contain a device event object");
 
         var eventId = inner.TryGetProperty("event_id", out var eid) ? eid.GetString() ?? string.Empty : string.Empty;
         var source = inner.TryGetProperty("source", out var src) ? src.GetString() ?? string.Empty : string.Empty;
         var eventType = inner.TryGetProperty("event_type", out var et) ? et.GetString() ?? string.Empty : string.Empty;
         var timestamp = inner.TryGetProperty("timestamp", out var ts) ? ts.GetString() ?? string.Empty : string.Empty;
 
-        return new DeviceInbound
+        var inbound = new DeviceInbound
         {
             EventId = eventId,
             Source = source,
             EventType = eventType,
             Timestamp = timestamp,
-            PayloadJson = contentText,
             DeviceId = senderId,
         };
+
+        ApplyKnownPayload(inbound, inner);
+        return inbound;
+    }
+
+    private static void ApplyKnownPayload(DeviceInbound inbound, JsonElement inner)
+    {
+        switch (inbound.EventType)
+        {
+            case "temperature_change":
+                inbound.Sensor = new SensorDeviceInboundPayload
+                {
+                    Temperature = GetOptionalDouble(inner, "temperature"),
+                    Humidity = GetOptionalDouble(inner, "humidity"),
+                    LightLevel = GetOptionalDouble(inner, "light_level"),
+                    MotionDetected = GetOptionalBoolean(inner, "motion"),
+                };
+                break;
+            case "person_detected":
+            case "scene_summary":
+                inbound.Camera = new CameraDeviceInboundPayload
+                {
+                    SceneDescription = GetOptionalString(inner, "description"),
+                };
+                break;
+            case "motion_detected":
+                inbound.Motion = new MotionDeviceInboundPayload
+                {
+                    Detected = GetOptionalBoolean(inner, "motion", defaultValue: true),
+                };
+                break;
+            case "speech_detected":
+                inbound.Speech = new SpeechDeviceInboundPayload
+                {
+                    Text = GetOptionalString(inner, "text"),
+                };
+                break;
+            default:
+                throw new JsonException($"Unsupported device event_type '{inbound.EventType}'");
+        }
+    }
+
+    private static string GetOptionalString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    private static double GetOptionalDouble(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetDouble()
+            : 0;
+    }
+
+    private static bool GetOptionalBoolean(JsonElement root, string propertyName, bool defaultValue = false)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetBoolean()
+            : defaultValue;
     }
 
     // ─── Registration CRUD ───

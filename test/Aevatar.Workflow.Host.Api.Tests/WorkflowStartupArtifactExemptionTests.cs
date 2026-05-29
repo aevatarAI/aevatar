@@ -1,5 +1,3 @@
-using System.Reflection;
-using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 
@@ -8,14 +6,18 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowStartupArtifactExemptionTests
 {
     [Fact]
-    public void WorkflowCapabilitiesStartupArtifact_ShouldDeclareStartupBootstrapExemption()
+    public void WorkflowCapabilitiesStartupArtifact_ShouldNotRemainInProjectionAssembly()
     {
-        var exemption = typeof(WorkflowCapabilitiesStartupArtifact)
-            .GetCustomAttribute<ProjectionExemptAttribute>(inherit: false);
+        // Refactor (iter161-cluster-001 #1257-first):
+        //   Old pattern: WorkflowCapabilitiesStartupArtifact survived as a ProjectionExempt partial shell after readmodel framing was removed.
+        //   New principle: capabilities stay on IWorkflowCapabilitiesPort; projection assembly exposes no startup artifact symbol.
+        var assembly = typeof(WorkflowCatalogCurrentStateDocument).Assembly;
 
-        exemption.Should().NotBeNull();
-        exemption!.Category.Should().Be(ProjectionExemptionCategory.StartupBootstrap);
-        exemption.Reason.Should().Be(
-            "Workflow capabilities are startup artifacts materialized by WorkflowCapabilitiesStartupMaterializer from module and connector capability sources.");
+        assembly.GetType("Aevatar.Workflow.Projection.ReadModels.WorkflowCapabilitiesStartupArtifact")
+            .Should().BeNull();
+        assembly.GetType("Aevatar.Workflow.Projection.ReadModels.WorkflowPrimitiveCapabilityReadModel")
+            .Should().BeNull();
+        assembly.GetType("Aevatar.Workflow.Projection.ReadModels.WorkflowConnectorCapabilityReadModel")
+            .Should().BeNull();
     }
 }

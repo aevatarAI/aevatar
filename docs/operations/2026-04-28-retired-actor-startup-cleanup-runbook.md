@@ -17,9 +17,9 @@ Older deployments persisted runtime actor identities such as:
 
 After the split into `Aevatar.GAgents.Channel.Runtime`, `Aevatar.GAgents.Device`,
 and `Aevatar.GAgents.Scheduled`, those actor implementation types no longer exist.
-When Orleans activates the persisted actors before the new projection startup path
-can rebuild them, activation fails and can abort pod startup. The same pattern
-appears whenever a runtime CLR type is renamed or moved across assemblies.
+When Orleans activates the persisted actors during startup or rebuild paths,
+activation fails and can abort pod startup. The same pattern appears whenever a
+runtime CLR type is renamed or moved across assemblies.
 
 `LegacyClrTypeName` remains a protobuf payload compatibility tool for renamed
 state messages; it does not make a retired actor implementation type safe to
@@ -29,8 +29,9 @@ names, not every legacy protobuf alias.
 ## Architecture
 
 `RetiredActorCleanupHostedService` (in `Aevatar.Foundation.Runtime.Hosting`) is
-registered by `Mainnet.Host.Api` via `services.AddRetiredActorCleanup()`, ahead of
-the per-module projection startup services. It iterates every
+registered by `Mainnet.Host.Api` via `services.AddRetiredActorCleanup()`. It is a
+best-effort, restart-idempotent maintenance pass, not a cross-pod completion
+barrier for per-module projection startup services. It iterates every
 `IRetiredActorSpec` registered in the container.
 
 Each retired module ships its own `IRetiredActorSpec` implementation alongside its
@@ -122,7 +123,8 @@ the targets are fully cleaned (and remains a no-op afterwards). No changes to
 - If the owning pod dies before completion, another pod takes over after
   `InProgressTimeoutSeconds`.
 - New projection startup recreates the needed actors using the current runtime
-  types and rebuild paths.
+  types and rebuild paths. The cleanup lease coordinates cleanup ownership only;
+  it is not a startup-wide readiness barrier.
 
 ## Validation
 
@@ -138,7 +140,8 @@ transient error logs like `Unable to resolve agent type …` for those actors
 before the cleanup removes them. Treat those as expected only when they are
 followed by `Retired actor cleanup completed for spec …`.
 
-The failure signatures below should disappear after the cleanup has completed:
+The failure signatures below should disappear once the relevant retired actor
+targets have been cleaned by one of the idempotent startup passes:
 
 - `Unable to resolve agent type Aevatar.GAgents.ChannelRuntime.*`
 - `projection.durable.scope:* is not a ProjectionMaterializationScopeGAgent<...new namespace...>`

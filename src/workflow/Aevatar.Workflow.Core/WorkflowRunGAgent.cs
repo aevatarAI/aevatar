@@ -22,11 +22,9 @@ namespace Aevatar.Workflow.Core;
     "Maintainability",
     "CA1506:Avoid excessive class coupling",
     Justification = "WorkflowRunGAgent is the run-scoped orchestration boundary and intentionally coordinates workflow execution dependencies.")]
-// Refactor (iter115/cluster-3):
-//   Old pattern: WorkflowRunGAgent kept durable control/security facts in
-//                process-local runtime context.
-//   New principle: durable control/security facts live in typed WorkflowRunState;
-//                  runtime context carries only same-turn passthrough metadata.
+// Refactor (iter159/cluster-613-first):
+//   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+//   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
 // Refactor (iter149/issue1132): Old pattern: workflow role initialization preferred handled-dispatch when available.  New principle: role initialization uses accepted-only IActorDispatchPort and observes completion through workflow events.
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
@@ -39,7 +37,6 @@ public sealed class WorkflowRunGAgent
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
-    private const string WorkflowCommandIdMetadataKey = "workflow.command_id";
 
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
@@ -248,8 +245,13 @@ public sealed class WorkflowRunGAgent
             return;
         }
 
-        if (request.Headers.TryGetValue(WorkflowCommandIdMetadataKey, out var commandId) &&
-            !string.IsNullOrWhiteSpace(commandId))
+        // Refactor (iter163/cluster-002-first):
+        //   Old pattern: actor read command id from request.Headers[workflow.command_id],
+        //                making Headers a stable control flow channel.
+        //   New principle: actor reads command id from ActiveInboundEnvelope.Id,
+        //                  the typed envelope identity.
+        var commandId = ActiveInboundEnvelope?.Id;
+        if (!string.IsNullOrWhiteSpace(commandId))
         {
             await PersistDomainEventAsync(
                 new WorkflowCommandObservedEvent
@@ -532,8 +534,19 @@ public sealed class WorkflowRunGAgent
         ArgumentNullException.ThrowIfNull(envelope);
 
         if (WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
+        {
             await PersistDomainEventAsync(artifactFact, CancellationToken.None);
+            if (artifactFact is WorkflowRoleReplyRecordedEvent roleReply)
+                await DispatchCommittedRoleReplyArtifactAsync(roleReply);
+        }
     }
+
+    // Refactor (issue1271/first-slice):
+    //   Old pattern: LLM-like modules completed steps from live TextMessageEndEvent / ChatResponseEvent frames.
+    //   New principle: child role committed facts are first persisted as WorkflowRoleReplyRecordedEvent.
+    //   The same fact is then fed through the existing workflow module bridge for SessionId reconciliation.
+    private Task DispatchCommittedRoleReplyArtifactAsync(WorkflowRoleReplyRecordedEvent roleReply) =>
+        PublishAsync(roleReply, TopologyAudience.Self);
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
     {

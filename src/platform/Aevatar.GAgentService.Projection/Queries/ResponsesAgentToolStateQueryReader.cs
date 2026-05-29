@@ -60,16 +60,6 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 todo.SourceResponseId,
                 todo.CreatedAt,
                 todo.UpdatedAt)).ToArray(),
-            document.Tasks.Select(static task => new ResponsesTaskTraceSnapshot(
-                task.TaskId,
-                task.SourceResponseId,
-                task.ChildActorId,
-                task.Description,
-                task.Status,
-                ResponsesJsonValues.ToBoundaryJson(task.Arguments),
-                ResponsesJsonValues.ToBoundaryJson(task.Result),
-                task.CreatedAt,
-                task.UpdatedAt)).ToArray(),
             document.WebTraces.Select(static trace => new ResponsesWebTraceSnapshot(
                 trace.TraceId,
                 trace.SourceResponseId,
@@ -78,17 +68,30 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 trace.Url,
                 trace.Query,
                 trace.CacheHit,
-                ResponsesJsonValues.ToBoundaryJson(trace.Result),
+                ResolveWebResult(trace.TypedResult, trace.Result),
                 trace.ObservedAt)).ToArray(),
             document.WebCacheEntries.Select(static entry => new ResponsesWebCacheEntrySnapshot(
                 entry.CacheKey,
                 entry.ToolName,
                 entry.Url,
                 entry.Query,
-                ResponsesJsonValues.ToBoundaryJson(entry.Result),
+                ResolveWebResult(entry.TypedResult, entry.Result),
                 entry.CachedAt,
                 entry.LastHitAt,
                 entry.HitCount)).ToArray());
+
+    private static ResponsesWebToolResult ResolveWebResult(
+        ResponsesWebToolResult? typedResult,
+        Google.Protobuf.WellKnownTypes.Value? legacyResult)
+    {
+        if (typedResult != null && typedResult.ResultCase != ResponsesWebToolResult.ResultOneofCase.None)
+            return typedResult.Clone();
+
+        // Refactor (iter161-cluster-001 #1251-first):
+        //   Old pattern: query snapshots exposed legacy Value directly.
+        //   New principle: typed result is primary; legacy Value is converted only for old readmodels.
+        return ResponsesWebResultMigration.FromLegacyValue(legacyResult);
+    }
 
     private async Task<ResponsesAgentToolStateCurrentStateReadModel?> GetDocumentAsync(
         string scopeId,

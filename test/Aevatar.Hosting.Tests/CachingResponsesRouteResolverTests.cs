@@ -56,11 +56,8 @@ public sealed class ResponsesRouteResolverTests
     }
 
     [Fact]
-    public async Task ResolveRouteValueAsync_ShouldReadCurrentCatalogOnEachCall()
+    public async Task ResolveRouteValueAsync_ShouldUseCatalogPortResultWithoutOwningCache()
     {
-        // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
-        //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
-        //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
         var catalog = new MutableCatalogPort(new NyxIdLlmServicesResult(
         [
             MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
@@ -77,7 +74,7 @@ public sealed class ResponsesRouteResolverTests
 
         (await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None))
             .Should().Be("/api/v1/llm/anthropic/v2");
-        catalog.FetchCount.Should().Be(2, "route facts are read from the current request catalog, not singleton memory");
+        catalog.FetchCount.Should().Be(2, "the resolver delegates catalog freshness to IUserLlmCatalogPort");
     }
 
     [Fact]
@@ -92,7 +89,7 @@ public sealed class ResponsesRouteResolverTests
         await resolver.ResolveRouteValueAsync("anthropic", "bearer-A", CancellationToken.None);
         await resolver.ResolveRouteValueAsync("anthropic", "bearer-B", CancellationToken.None);
 
-        catalog.FetchCount.Should().Be(2, "each request bearer is resolved against its current catalog");
+        catalog.FetchCount.Should().Be(2, "caller/authority cache boundaries are owned by IUserLlmCatalogPort");
     }
 
     private static NyxIdLlmService MakeService(string slug, string routeValue, bool allowed) =>

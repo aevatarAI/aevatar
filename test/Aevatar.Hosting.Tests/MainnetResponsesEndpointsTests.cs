@@ -65,6 +65,8 @@ public sealed class MainnetResponsesEndpointsTests
             """),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -118,6 +120,14 @@ public sealed class MainnetResponsesEndpointsTests
         // Tool providers read the bearer from AgentToolRequestContext (separate path).
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("secret-token");
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<StubResponsesCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "secret-token",
+            "identity-token",
+            "delegation-token"));
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
@@ -329,14 +339,10 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task AevatarSubstituteTools_ShouldPersistTodoAndTaskThroughAgentToolStatePort()
+    public async Task AevatarSubstituteTools_ShouldPersistTodoWithoutRegisteringFakeTask()
     {
         var commandPort = new RecordingResponsesAgentToolStatePort();
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -357,11 +363,11 @@ public sealed class MainnetResponsesEndpointsTests
             var todoResult = await todoTool.ExecuteAsync(
                 """{"todos":[{"id":"todo-1","content":"Ship prototype","status":"in_progress"}]}""");
 
-            var taskTool = substituteTools.Single(x => x.Name == "Task");
-            var taskResult = await taskTool.ExecuteAsync("""{"prompt":"summarize state"}""");
-
             todoResult.Should().Contain("stored");
-            taskResult.Should().Contain("accepted");
+            substituteTools.Select(static tool => tool.Name)
+                .Should()
+                .Contain("TodoWrite")
+                .And.NotContain(["Task", "task"]);
         }
         finally
         {
@@ -372,8 +378,6 @@ public sealed class MainnetResponsesEndpointsTests
         commandPort.TodoWrites[0].ScopeId.Should().Be("scope-1");
         commandPort.TodoWrites[0].OwnerSubject.Should().Be("owner-1");
         commandPort.TodoWrites[0].SourceResponseId.Should().Be("resp_1");
-        commandPort.Tasks.Should().ContainSingle();
-        commandPort.Tasks[0].ArgumentsJson.Should().Contain("summarize state");
     }
 
     [Fact]
@@ -384,11 +388,7 @@ public sealed class MainnetResponsesEndpointsTests
             "WebFetch",
             "https://example.com/docs",
             """{"url":"https://example.com/docs","content":"cached"}""");
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -428,11 +428,7 @@ public sealed class MainnetResponsesEndpointsTests
             "WebSearch",
             "aevatar docs\n3",
             """{"results":[{"title":"cached docs"}]}""");
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -1286,6 +1282,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_previous/cancel");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -1299,6 +1297,14 @@ public sealed class MainnetResponsesEndpointsTests
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
             .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<StubResponsesCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "secret-token",
+            "identity-token",
+            "delegation-token"));
         provider.LastRequest.Should().BeNull();
     }
 
@@ -2535,14 +2541,14 @@ public sealed class MainnetResponsesEndpointsTests
     {
         public async Task<ResponsesCreateCommandResult> CreateAsync(
             ResponsesCommandRequest request,
-            string bearerToken,
+            ResponsesCallerScopeResolutionContext callerScopeContext,
             CancellationToken ct = default)
         {
             if (request.Stream == true)
-                return await inner.CreateAsync(request, bearerToken, ct);
+                return await inner.CreateAsync(request, callerScopeContext, ct);
 
             var planRequest = request with { Stream = true };
-            var result = await inner.CreateAsync(planRequest, bearerToken, ct);
+            var result = await inner.CreateAsync(planRequest, callerScopeContext, ct);
             if (result.Error is not null || result.StreamPlan is null)
                 return result;
 
@@ -2572,9 +2578,9 @@ public sealed class MainnetResponsesEndpointsTests
 
         public Task<ResponsesCancelCommandResult> CancelAsync(
             string responseId,
-            string bearerToken,
+            ResponsesCallerScopeResolutionContext callerScopeContext,
             CancellationToken ct = default) =>
-            inner.CancelAsync(responseId, bearerToken, ct);
+            inner.CancelAsync(responseId, callerScopeContext, ct);
 
         public async Task<ResponsesStreamCommandResult> StreamAsync(
             ResponsesCreateCommandPlan plan,
@@ -2906,10 +2912,15 @@ public sealed class MainnetResponsesEndpointsTests
             _scope = new ResponsesCallerScope(scopeId, ownerSubject, originKind);
         }
 
+        public ResponsesCallerScopeResolutionContext? LastContext { get; private set; }
+
         public Task<ResponsesCallerScope> ResolveAsync(
-            string nyxIdAccessToken,
-            CancellationToken ct = default) =>
-            Task.FromResult(_scope);
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default)
+        {
+            LastContext = context;
+            return Task.FromResult(_scope);
+        }
     }
 
     private sealed class TokenAwareResponsesCallerScopeResolver(ResponsesCallerScope scope)
@@ -2918,10 +2929,10 @@ public sealed class MainnetResponsesEndpointsTests
         public List<string> ResolvedTokens { get; } = [];
 
         public Task<ResponsesCallerScope> ResolveAsync(
-            string nyxIdAccessToken,
+            ResponsesCallerScopeResolutionContext context,
             CancellationToken ct = default)
         {
-            ResolvedTokens.Add(nyxIdAccessToken);
+            ResolvedTokens.Add(context.InboundBearerToken);
             return Task.FromResult(scope);
         }
     }
@@ -2985,6 +2996,37 @@ public sealed class MainnetResponsesEndpointsTests
             });
     }
 
+    private static ResponsesAevatarToolProvider CreateResponsesAevatarToolProvider(
+        RecordingResponsesAgentToolStatePort port)
+    {
+        var service = new ResponsesWebSubstituteToolExecutionService(
+            port,
+            port,
+            new StubResponsesWebSubstituteBackend());
+        return new ResponsesAevatarToolProvider(port, service);
+    }
+
+    private sealed class StubResponsesWebSubstituteBackend : IResponsesWebSubstituteBackend
+    {
+        public int DefaultMaxSearchResults => 10;
+
+        public Task<ResponsesWebFetchBoundaryResult> ExecuteWebFetchAsync(
+            ResponsesWebFetchBoundaryInput input,
+            CancellationToken ct) =>
+            Task.FromResult(new ResponsesWebFetchBoundaryResult(
+                input.Url,
+                200,
+                "text/plain",
+                "body",
+                string.Empty));
+
+        public Task<ResponsesWebSearchBoundaryResult> ExecuteWebSearchAsync(
+            ResponsesWebSearchBoundaryInput input,
+            CancellationToken ct) =>
+            Task.FromResult(new ResponsesWebSearchBoundaryResult(
+                new ResponsesWebSearchToolOutput()));
+    }
+
     private sealed class StubAgentTool : IAgentTool
     {
         public StubAgentTool(string name, string description)
@@ -3012,8 +3054,6 @@ public sealed class MainnetResponsesEndpointsTests
 
         public List<(string ScopeId, string OwnerSubject, string SourceResponseId, string ArgumentsJson)> TodoWrites { get; } = [];
 
-        public List<(string ScopeId, string OwnerSubject, string SourceResponseId, string ArgumentsJson)> Tasks { get; } = [];
-
         public List<(string ScopeId, string OwnerSubject, string SourceResponseId, ResponsesWebTraceInput Trace)> WebTraces { get; } = [];
 
         public string SeedWebCache(string toolName, string value, string resultJson)
@@ -3024,7 +3064,7 @@ public sealed class MainnetResponsesEndpointsTests
                 toolName,
                 value,
                 string.Empty,
-                resultJson,
+                ResponsesWebResultMigration.FromLegacyValue(ResponsesJsonValues.ParseBoundaryPayload(resultJson)),
                 DateTimeOffset.UtcNow,
                 null,
                 0);
@@ -3053,22 +3093,6 @@ public sealed class MainnetResponsesEndpointsTests
                 ]));
         }
 
-        public Task<ResponsesTaskDispatchResult> RecordTaskAsync(
-            string scopeId,
-            string ownerSubject,
-            string sourceResponseId,
-            string argumentsJson,
-            CancellationToken ct = default)
-        {
-            Tasks.Add((scopeId, ownerSubject, sourceResponseId, argumentsJson));
-            return Task.FromResult(new ResponsesTaskDispatchResult(
-                "responses-agent-tools-test",
-                "task_1",
-                "responses-agent-tools-test-task-1",
-                "accepted",
-                """{"status":"accepted"}"""));
-        }
-
         public Task<ResponsesWebTraceResult> RecordWebTraceAsync(
             string scopeId,
             string ownerSubject,
@@ -3082,7 +3106,7 @@ public sealed class MainnetResponsesEndpointsTests
                 trace.TraceId,
                 trace.CacheKey,
                 trace.CacheHit,
-                trace.ResultJson));
+                trace.Result.Clone()));
         }
 
         public Task<ResponsesAgentToolStateSnapshot?> GetAsync(

@@ -272,6 +272,18 @@ message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; i
 message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id = 2; int32 delay_ms = 3; int32 next_attempt = 4; }
 message DelayStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 duration_ms = 3; }
 message LlmCallWatchdogTimeoutFiredEvent { string run_id = 1; string step_id = 2; string session_id = 3; int32 timeout_ms = 4; }
+message WorkflowConnectorTimeoutFiredEvent { string run_id = 1; string step_id = 2; string operation_id = 3; int32 timeout_ms = 4; int32 attempt = 5; }
+message WorkflowConnectorAttemptCompletedEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string operation_id = 3;
+  int32 attempt = 4;
+  bool success = 5;
+  string output = 6;
+  string error = 7;
+  map<string, string> annotations = 8;
+  string execution_id = 9;
+}
 message WorkflowSignalBufferedEvent
 {
   string run_id = 1;

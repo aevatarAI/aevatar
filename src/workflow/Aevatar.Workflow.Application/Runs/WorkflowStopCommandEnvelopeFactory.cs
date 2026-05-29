@@ -15,7 +15,11 @@ internal sealed class WorkflowStopCommandEnvelopeFactory : ICommandEnvelopeFacto
 
         return new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
+            // Refactor (issue1277/first-slice):
+            // Old pattern: stop envelopes could use a factory-local random id.
+            // New principle: the accepted command id is the envelope identity.
+            // Correlation remains propagation context, not the target envelope id.
+            Id = context.CommandId,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new WorkflowStoppedEvent
             {

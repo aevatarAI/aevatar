@@ -169,16 +169,23 @@ disown
 **铁律**:每次 `gh pr merge` 成功后,controller **必须**手动 `gh issue close <linked-issue>` + label transition `🎉 phase:merged`,不依赖 GitHub auto-close。
 
 ```bash
-# 标准 merge 流程(必须 chain issue close)
-gh pr merge $PR --squash --delete-branch
-ISSUE=$(gh pr view $PR --json body --jq '.body' | grep -oE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1)
-if [ -n "$ISSUE" ]; then
-  gh issue close $ISSUE -c "🎉 已通过 PR #${PR} merge。⟦AI:AUTO-LOOP⟧" --reason completed
-  gh issue edit $ISSUE --remove-label "🚀 phase:pr-open" --remove-label "🛠️ phase:implementing" --add-label "🎉 phase:merged"
+# 标准 merge 流程(必须 chain issue close 且 verify merge 成功)
+# 2026-05-30 修复:merge 失败仍 close issue 是严重 bug;必须 verify $? == 0
+if gh pr merge $PR --squash --delete-branch 2>&1; then
+  ISSUE=$(gh pr view $PR --json body --jq '.body' | grep -oE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1)
+  if [ -n "$ISSUE" ]; then
+    gh issue close $ISSUE -c "🎉 已通过 PR #${PR} merge。⟦AI:AUTO-LOOP⟧" --reason completed
+    gh issue edit $ISSUE --remove-label "🚀 phase:pr-open" --remove-label "🛠️ phase:implementing" --remove-label "👀 phase:reviewing" --add-label "🎉 phase:merged"
+  fi
+else
+  echo "MERGE_FAILED:$PR — 保留 issue open,可能 conflict / CI 红 / 重新打开。controller 必须查 PR mss + dispatch conflict-resolve 或 fix"
+  # 不允许直接 close issue
 fi
 ```
 
-事故记录(2026-05-25):session 累计 8 个 issue(#959/#967/#968/#969/#971/#974/#977/#988)merge 后未 close,显示在 open issue list 误导 maintainer。每次 wakeup sweep 见 `🚀 phase:pr-open` label 但关联 PR 已 merged → 必须立即补 close。
+事故记录(2026-05-25):session 累计 8 个 issue(#959/#967/#968/#969/#971/#974/#977/#988)merge 后未 close,显示在 open issue list 误导 maintainer。
+
+事故记录(2026-05-30):batch merge 5 个 PR 时 4 个有 merge conflict(`GraphQL: Pull Request has merge conflicts`)但 controller **未 verify exit code** → 直接 close 关联 4 个 issue(#1247/#1226/#1207/#1200)→ 错误关闭 in-flight 工作。必须用 `if gh pr merge ...; then ... fi` 包,merge 失败时**保留** issue + label `🚀 phase:pr-open`,**禁止** close。
 
 ### Controller helper 库:`.claude/skills/codex-refactor-loop/scripts/controller_lib.sh`(强制,per Auric 2026-05-21 "搞错了吧 #690" + "改一下脚本")
 
@@ -913,16 +920,19 @@ nohup python3 .claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py \
 disown
 ```
 
-Daemon 工作流:
-1. cd `$REPO_ROOT`,确认 HEAD = `auto-refact-dev`(不是则 skip)
-2. Working tree dirty → skip(controller 在工作)
-3. 但若 `.git/MERGE_HEAD` 存在 + 无 in-flight codex → **dispatch codex resolve**(防止上次 codex 死)
-4. `git fetch origin` + `git rev-list --count HEAD..origin/dev`
-5. behind=0 → idle skip
-6. behind>0 → 尝试 `git merge --ff-only`,成功则 push;失败则 `git merge --no-ff`(merge commit)
-7. **冲突** → 写 `prompts/dev-sync-conflict-<ts>.md` + spawn-codex resolve(timeout 5400s)
-8. codex 在同一 worktree resolve 文件 + `git add` + `git merge --continue`(不 push,daemon 后续 push)
-9. codex 完成 marker:`DEV_SYNC_RESOLVED:<files>` 或 `DEV_SYNC_BLOCKED:<reason>`
+Daemon 工作流(2026-05-30 重写 — PR-based 双向 sync):
+1. 双向 tick:**forward**(dev → auto-refact-dev)+ **reverse**(auto-refact-dev → dev rollup)
+2. 每方向:计算 source ahead of target = N;N==0 → skip
+3. 没 open sync PR → 创 sync branch + open PR(forward 立即 enable auto-merge;reverse 等 maintainer review)
+4. 有 open sync PR + `mergeStateStatus`:
+   - **DIRTY** → spawn codex resolve in REVERSE_WT/FORWARD_WT
+   - **BEHIND** → `gh api .../update-branch`(GitHub merge base into PR head)
+   - **CI fail** → spawn codex fix-ci
+   - **CLEAN + sync_branch behind source by N > 0**(stale)→ 自动 `git reset --hard origin/<source>` + `git push --force-with-lease`(2026-05-30 修复:之前会卡在 CLEAN 状态等 maintainer 看陈旧 PR)
+   - **CLEAN + sync 同步** → 等 GitHub auto-merge(forward)/ maintainer review(reverse)
+5. Reverse gate:trunk 落后 dev > 0 → reverse 暂停(先完 forward 让 trunk superset of dev)
+
+事故记录(2026-05-30):PR #1167(reverse rollup auto-refact-dev → dev)2 天没动。期间 cluster PR 持续合到 auto-refact-dev → sync_branch 落后 source(auto-refact-dev)56 commits,但 daemon 只看 `mss=CLEAN` 未检 sync_branch vs source 落后,死循环 log "等 maintainer review + merge"。修法:CLEAN 后追加 `src_ahead_of_sync` 检测 + force-reset 到 source tip + force-push。
 
 ### Daemon vs controller 分工
 
@@ -1935,25 +1945,52 @@ Concretely, this means:
 | `>= 5` | 不抢资源,保持现状 |
 | `< 5` | 立即派 `5 - 当前数` 个新 codex 填满 floor;优先级如下 |
 
-**填 floor 优先级**(从高到低,per Auric 2026-05-29 "优先处理已经存在的issues而不是skills"):
+**填 floor 优先级**(从高到低,per Auric 2026-05-29 "默认优先处理已经存在的issues/pr, 无任务时才审计"):
 
-1. **未处理 / 长期未动 open issue**(>3h 未 update):batch `auto-loop-triage` label,daemon spawn triage codex — **最高优先级**
-2. **stuck label 3h+** issue:派 fresh reflector(per "## Stuck issue 3h 超时" 节)
-3. **现有 phase9 / phase8 in-flight**:派下一步 codex(solver / judge / reviewer / fix)
-4. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)
-5. **next-next iter audit**(N+2,speculative parallel)
-6. **Phase 10 advisory review**(eligible open PR 池)
-7. **Phase 11 triage**(eligible open issue 池,5-10 oldest 一批 label)
-8. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue 漏 follow-up
-9. **`.claude/skills/codex-refactor-loop/scripts` self-audit codex** — 仅当 open issue 池**已清** + open auto-loop PR **全 in-flight** 时才允许;否则跳过(per Auric 2026-05-29 "skill 不优先")
-10. **docs sync codex** / **CI guard completeness codex** — 同上,issue 池清后才允许
+**铁律:audit 是 backfill,不是默认动作**。floor < 5 时**必须**先穷尽下列 1-8 的所有 actionable 工作,**全部空**才允许派 audit(优先级 9)。
+
+1. **stale `🛠️ phase:implementing` issue**(implement log EXIT=0 >30min 但未开 PR / 未切 reviewer):**最高优先级**,controller 必须接 IMPLEMENT_DONE marker(commit/push/open PR + 派 Phase 8 reviewer × 3)— 之前 marker 漏处理累积是头号 bug
+2. **stale `🚀 phase:pr-open` + `👀 phase:reviewing` PR**:扫 reviewer log,有 REVIEW_DONE × 3 + reject → 派 fix r+1;有 FIX_DONE → 派 reviewer r+1;all-approve + CI 绿 → merge
+3. **CI 红 PR**(`gh pr checks` bucket=fail):立即拉 fail log + 派 fix codex(per "CI 监控即时推进")
+4. **stuck label 3h+ issue**(`auto-loop-stuck` / `🆘 human:卡死` / `👤 human:需-maintainer-决策`):派 fresh reflector(per "Stuck issue 3h 超时" 节)
+5. **未处理 / 长期未动 open issue**(>3h 未 update,non-bot):batch `auto-loop-triage` label,daemon spawn triage codex
+6. **active Phase 9 issue 等 judge / r+1 solver**:派下一步 codex
+7. **Phase 10 advisory review**(eligible open PR 池,非 auto-loop)
+8. **Phase 11 triage**(eligible open issue 池,5-10 oldest 一批 label)
+9. **下一 iter audit**(若 1-8 全部 actionable 为空 + 上一 iter audit `AUDIT_DONE` + 对应 N+1 audit log 不存在)— **仅 backfill**
+10. **next-next iter audit**(N+2,speculative parallel)— 同 9,backfill
+11. **历史 closed design issue retrospective codex** — 仅 1-10 全空
+12. **`.claude/skills/codex-refactor-loop/scripts` self-audit codex** — 仅当 open issue 池**已清** + open auto-loop PR **全 in-flight** 时才允许;否则跳过(per Auric 2026-05-29 "skill 不优先")
+13. **docs sync codex** / **CI guard completeness codex** — 同上,issue 池清后才允许
 
 **反面禁止**:
-- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 5 才允许 ScheduleWakeup
-- ❌ "iter N 还没完"作为不派 N+1 / N+2 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
+- ❌ floor < 5 直接派 audit 而不先扫 implementing/reviewing 积压 → 头号违规(2026-05-29 事故:连续派 audit 200-257 共 50+ 次,期间 20+ implement issue IMPLEMENT_DONE 漏处理)
+- ❌ 看到 `🛠️ phase:implementing` label 假设有 codex 在跑,不查 log marker → 必须 `tail -5 .refactor-loop/logs/implement-issue<N>.log` 找 `EXIT=` / `IMPLEMENT_DONE:`
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先按 1-8 顺序填到 5 才允许 ScheduleWakeup
+- ❌ "iter N 还没完"作为不派 N+1 audit 的理由 — 但反之"audit 是 backfill"才是规则:audit 与 cluster impl 独立但 audit **优先级 9 在 issue/PR 推进之后**
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
-- ❌ 所有 5 slot 都派 audit → 单一职责堆积,应混合 audit + retrospective + 自审
-- ❌ **open issue 池有 untouched / stale issue 时派 skill self-audit**(per Auric 2026-05-29 "优先处理已经存在的issues而不是skills")→ issue 池清后才允许 skill 自审
+- ❌ 所有 5 slot 都派 audit → 单一职责堆积,违反 audit-is-backfill 原则
+- ❌ **open issue 池有 untouched / stale issue 时派 skill self-audit**(per Auric 2026-05-29 "skill 不优先")→ issue 池清后才允许 skill 自审
+
+**强制 sweep 顺序**(每 wakeup):
+```bash
+# Step A: 扫 implementing issue,接 IMPLEMENT_DONE marker
+for n in $(gh issue list --label "🛠️ phase:implementing" --state open --json number --jq '.[].number'); do
+  log=".refactor-loop/logs/implement-issue${n}.log"
+  [ -f "$log" ] || log=$(ls -t .refactor-loop/logs/implement-*${n}*.log 2>/dev/null | head -1)
+  [ -z "$log" ] && continue
+  if grep -q "^IMPLEMENT_DONE:.*:ok" "$log" 2>/dev/null && ! gh pr list --search "in:body #${n}" --state open --json number --jq 'length' | grep -q '[1-9]'; then
+    echo "STALE IMPLEMENT: #${n} done but no PR open — controller must commit/push/open PR"
+    # 这里 controller 必须当 turn 内处理
+  fi
+done
+
+# Step B: 扫 reviewing PR,接 REVIEW_DONE / FIX_DONE marker
+# Step C: 扫 CI 红 PR
+# Step D: stuck issue 3h+ 触发 reflector
+# Step E: 未处理 open issue 加 auto-loop-triage
+# Step F: 上面全空才派 audit
+```
 
 **判定脚本**(controller wakeup step 1.5):
 
@@ -2455,7 +2492,17 @@ Bash(
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
 8. **All user-facing output is in 中文 by default** (per Auric 2026-05-19 "默认工作语言中文吧, 不双语了"). Every GitHub issue body, PR description, design notification, and any natural-language artifact uses 中文 as the working language. Code identifiers, file paths, log markers, CLI commands, and proto/yaml structure stay original (English). English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
-9. **gh pr merge 前必须 CI 全 required check 绿**(per Auric 2026-05-25 "改一下分支保护，必须ci 绿了才能合并"). auto-refact-dev 已设 branch protection(8 required:`fast-gates` / `console-web` / `coverage-quality` / `projection-provider-e2e` / `kafka-transport-integration` / `event-sourcing-regression` / `host-composition-smoke` / `slow-test-guards`,`strict: true`,`enforce_admins: true`)。**禁止**用 `--admin` / `--bypass` flag 绕过(已不可能;enforce_admins=true)。每次 `gh pr merge` 前 controller **必须** verify:`gh pr checks <PR> --required --json bucket --jq 'all(.[]; .bucket == "pass")'` 返回 `true`,否则**等 CI 完成**(arm Monitor watch + ScheduleWakeup,不要立即重试 merge)。事故记录:2026-05-25 session 11 个 cluster PR 全在 reviewer 3/3 approve 后 squash merge,**没等 GitHub Actions CI** → trunk auto-refact-dev 5 个 integration test 挂(hotfix `ef7962d` 修)。今后此情形不可能发生(branch protection 拦)。
+9. **gh pr merge 前 verify CI green(无 required check 后改用 fail==0 + pending==0 判定)**(per Auric 2026-05-30 "auto-refact-dev 分支可以不 push 保护")。auto-refact-dev branch protection 已删,`--required` 查询返回 `no required checks reported`,`mergeStateStatus=UNKNOWN`。**新 CI verify 方法**:
+    ```bash
+    fail=$(gh pr checks $PR --json bucket --jq '[.[]|select(.bucket=="fail")]|length')
+    pending=$(gh pr checks $PR --json bucket --jq '[.[]|select(.bucket=="pending")]|length')
+    pass=$(gh pr checks $PR --json bucket --jq '[.[]|select(.bucket=="pass")]|length')
+    [ "$fail" -eq 0 ] && [ "$pending" -eq 0 ] && [ "$pass" -gt 0 ] && echo OK || echo WAIT
+    ```
+    - 仍**等 CI 完成**(fail=0 + pending=0 + pass>0)才 merge cluster PR(防 2026-05-25 trunk break)
+    - skill / daemon / hotfix commit 可直 push 到 `auto-refact-dev`(无 protection 拦)
+    - **禁用** `gh pr checks <PR> --required ...`(已无 required check)
+    - 事故记录(2026-05-25):11 个 cluster PR 在 reviewer 3/3 approve 后 squash merge,没等 GitHub Actions CI → trunk 5 个 integration test 挂(hotfix `ef7962d` 修)。今后 controller 必须 verify fail==0 + pending==0 + pass>0 再 merge。
 
 10. **本地必须跑 full slnx test verify 后才出 DONE marker**(强制,per Auric 2026-05-27 "一次次反复修不好的原因是什么?为什么不本地一次修好?非要让 ci 发现问题?"). **CI 是 fault detector,不是 fix-loop driver**。所有 `sync` / `fix` / `implement` / `test-add` codex 在打 DONE marker 之前**必须**跑 full slnx test:
     ```bash
@@ -2515,65 +2562,57 @@ Per Auric (2026-05-19) 二次确认 "github上的也都中文,除了注释英文
 
 ---
 
-## Auto-stop / Throttle 条件(强制,per Auric 2026-05-25 "设置一下停止条件或者降速条件吧")
+## 并发豁免删除(强制,per Auric 2026-05-30 "禁止任何并发豁免, 如果并发不足, 则处理已经存在的issues、pr或者提新的审计来产生issues")
 
-Controller 每 wakeup 在 sweep 之后、派 codex 之前,evaluate 下列条件。**stop** 优先于 throttle。
+**2026-05-30 重写**:之前 stop / throttle / "floor=3 throttle 底线" 是并发豁免,允许 controller 在某些条件下 floor < 5 甚至 = 0。Auric 明确**取消所有豁免**:
 
-### Stop(硬停 — controller 不再派任何 codex,仅 push notification + 写 `.refactor-loop/.auto-stopped` 标记)
+### 唯一停止信号
 
-任一命中即 stop:
+**只有** `.refactor-loop/.pause` 文件存在时 controller 才允许 0 codex(maintainer 手动 touch)。删除文件后立即恢复 floor=5。
 
-1. **Audit 干涸**:最近 2 次 audit 报告 `AUDIT_DONE:iter-N:0`(0 cluster)。
-2. **Intake 池空**:open `auto-loop` 标签 issue 中,非 `🎉 phase:merged` 且非 `🆘 human:卡死` 的 actionable 数 == 0,且 open `auto-loop` PR 数 == 0。
-3. **Reflector 连续 escalate**:最近 3 次 reflector 决议都是 `META_RESOLVED:escalate-human`(说明 CLAUDE.md 规则解释跨多 cluster 都需人决策)。
-4. **PR 吞吐崩**:最近 48h 0 PR merged 且最近 24h 0 fix 收敛(只在死循环 fix/reject)。
-5. **Loop 标记文件**:仓库根存在 `.refactor-loop/.auto-stopped` 或 `.refactor-loop/.pause`(maintainer 手动 touch)。
+`.refactor-loop/.auto-stopped` 已废弃 — controller **不允许**自己写 stop 标记。
 
-stop 触发动作:
-- post PushNotification 给 user(中文):"auto-loop 停止,原因 X,Y 个 in-flight codex 自然完成后不再续派"
-- 写 `.refactor-loop/.auto-stopped` 含 timestamp + reason
-- ScheduleWakeup **不调用**(loop 真停)
-- 不 kill 在跑 codex(让自然完成,各自的 fix/merge 流程走完)
+### 禁止任何 throttle/stop 自决
 
-### Throttle(降速 — 仍派 codex 但降并发或换角度)
+**全删除**:
+- ❌ Audit 干涸 → 继续派 audit(新 iter audit 总能产生 candidates,或证明 codebase 干净进入 retrospective 模式)
+- ❌ Intake 池空 → 派 audit-N+1 产生新 issues
+- ❌ Reflector 连续 escalate → 继续 reflector,不停 loop
+- ❌ PR 吞吐崩 → 继续派 codex 处理 in-flight + audit
+- ❌ Audit 候选少 → 仍派下一 audit
+- ❌ Reflector 频繁 → 仍派新 design issue
+- ❌ Reviewer reject 率高 → 仍派新 implement
+- ❌ Triage eligible 率低 → 仍主动 scan
+- ❌ concurrency floor 任何"降到 3"豁免
 
-任一命中即 throttle(可叠加):
+**铁律**:任何时刻 `ps -ef | grep "codex exec"` < 5 + 无 `.pause` 文件 → controller **必须**派满 floor=5,**优先处理已存在 issues/PRs**;**没有可派工作**时**派新 audit** 产生 issues。
 
-1. **Audit 候选少**:最近 audit `AUDIT_DONE:iter-N:1`(只 1 cluster)→ 不再 prefetch 下一 audit,等当前 cluster 进 Phase 8 才派 audit-N+1。
-2. **Reflector 频繁**:最近 5 PR 里 >= 2 PR 需要 reflector → 暂停新 design issue intake(只跑 in-flight fix/review),concurrency floor 5→3。
-3. **Reviewer reject 率高**:最近 3 PR 累计 reviewer reject 率 >= 60% → 暂停新 implement 派出,集中 fix loop。
-4. **Triage eligible 率低**:最近 5 个 triage `TRIAGE_DONE:N:not-eligible` 占 >= 60% → 不再主动 scan open issue,等 maintainer 显式 label。
-5. **0 codex 但有 actionable**:concurrency_monitor `zero_streak >= 5` → 强制 wakeup 立即派(已有规则,此为保留兼容)。
+### 派什么填底线(优先级,严格,无豁免)
 
-throttle 触发动作:
-- post 中文 status banner 到任一最近活跃 PR/issue(说明降速 + 原因)
-- concurrency floor 调整 5→3,wakeup heartbeat 1500s→2400s
-- 不写 `.auto-stopped`(loop 仍存活)
+1. **stale `🛠️ phase:implementing` issue**(implement log EXIT=0 但未开 PR)→ controller 接 IMPLEMENT_DONE marker
+2. **stale `👀 phase:reviewing` PR**(REVIEW_DONE × 3 但未推进)→ 按 verdict 派 fix r+1 / merge
+3. **CI 红 PR fix codex 未派** → 立刻派
+4. **triaged design issue 未派 r1 solver** → 派 3 solver
+5. **active Phase 9 issue 等 judge** → 派 judge
+6. **stuck label 3h+ issue** → 派 reflector
+7. **未处理 open issue >3h** → label `auto-loop-triage`,daemon 接
+8. **conflict PR** → 派 conflict-resolve codex
+9. **Phase 10 advisory review**(eligible 非 auto-loop PR)
+10. **Phase 11 triage**(eligible 非 auto-loop issue)
+11. **下一 iter audit** → 即使 1-10 有 in-flight,floor < 5 时仍派(audit 不阻塞 cluster work)
+12. **next-next iter audit**(N+2 speculative)— floor 仍不足继续派
+13. **历史 closed design issue retrospective**
 
-### Resume(从 stop 恢复)
-
-stop 后 loop 不会自动 resume。**只有以下信号**才重启:
-- maintainer 删 `.refactor-loop/.auto-stopped` 或 `.refactor-loop/.pause`
-- maintainer 显式 `/loop` 命令重启
-- maintainer 把 `phase9-auto-solve` 加到 fresh issue(monitor daemon 不主动接,等 manual resume)
-
-恢复后 controller wakeup 第一动作:删除 stop 标记文件 + post "resumed at <ts> by <signal>" banner。
-
-### 自检
-
-Controller 每 wakeup 第一动作:
-```bash
-[[ -f .refactor-loop/.auto-stopped || -f .refactor-loop/.pause ]] && { echo STOP_MARKER_FOUND; cat .refactor-loop/.auto-stopped 2>/dev/null; exit 0; }
-```
-
-无标记继续 sweep 流程;有标记直接 ScheduleWakeup omit + push notification 重申状态。
+**重点变化**:audit 从"backfill only"升级为 **floor < 5 即可派**(原先要求 1-11 全空)。理由:audit 是产生新工作的唯一入口,不应被"等其他在跑"借口阻塞。
 
 ### 反面(❌ 严禁)
 
-- ❌ stop 后仍派 codex(违反"controller 不再派任何 codex")
-- ❌ throttle 时把 concurrency floor 降到 0(应至少保 1 codex 处理 in-flight fix)
-- ❌ 自动 resume(无 maintainer 信号 = stay stopped)
-- ❌ 把 `🆘 human` issue 数算入 actionable 池(那是等人,不是 actionable)
+- ❌ 看到 floor < 5 但不补派 → 违规
+- ❌ 用"throttle 降到 3"借口不补 → 已删除豁免
+- ❌ 用"等 CI 跑完"借口不补 → CI 不算 codex
+- ❌ 用"Audit 干涸"借口停 loop → 应继续产新 audit
+- ❌ 自己写 `.auto-stopped` → 只 `.pause` 是 maintainer 信号
+- ❌ ScheduleWakeup 时 floor < 5 + 无 `.pause` → P0 bug
 
 ### Hard floor = 5 codex(强制,per Auric 2026-05-26 "把最小并发数改回5",此前 2026-05-25 一度降到 2 后已回滚)
 
@@ -2581,39 +2620,49 @@ Controller 每 wakeup 第一动作:
 
 throttle 状态可降到 3(per "Throttle 条件"节,2 个触发任一)。**正常 floor 5,绝对底线 throttle 3**。Stop 状态(`.refactor-loop/.auto-stopped` 存在)是唯一允许 0 codex 的合法情况。
 
-**派什么填底线**(优先级,从前往后选):
+**派什么填底线**(优先级,从前往后选,per Auric 2026-05-29 "默认优先处理已经存在的issues/pr, 无任务时才审计"):
 1. **当前 fix loop / hotfix 在跑** → 自然满足(等待 task-notification 即可)
-2. **CI 红的 PR fix codex 还没派** → 立即派(per SKILL "CI 监控即时推进")
-3. **triaged design issue 池有 phase9-auto-solve 但未派 r1 solver** → 拿一个派 3 个 r1 solver
-4. **active Phase 9 issue 等 judge** → 派 judge
-5. **PR 刚 push 等 CI** → arm CI Monitor(Monitor 不算 codex,但事件驱动 wake;同时确保至少 1 个 codex 在某处工作)
-6. **审计 backlog**:派 `audit-iter-N+1`(若上一 audit 已完成 + N+1 log 不存在)
-7. **Phase 10 advisory review**(新 phase):扫 eligible open PR 派 3 reviewer
-8. **Phase 11 issue intake**:label `auto-loop-triage` 给 eligible open issue
-9. **next-next iter audit**(speculative parallel)
+2. **stale `🛠️ phase:implementing` issue**(implement log EXIT=0 但未开 PR / 未切 reviewer)→ controller 接 IMPLEMENT_DONE marker:commit/push/open PR + 派 Phase 8 reviewer × 3
+3. **stale `👀 phase:reviewing` PR**(REVIEW_DONE × 3 但未推进)→ 按 verdict 表派 fix r+1 / auto-merge
+4. **CI 红的 PR fix codex 还没派** → 立即派(per SKILL "CI 监控即时推进")
+5. **triaged design issue 池有 phase9-auto-solve 但未派 r1 solver** → 拿一个派 3 个 r1 solver
+6. **active Phase 9 issue 等 judge** → 派 judge
+7. **stuck label 3h+ issue** → 派 reflector(per "Stuck issue 3h 超时")
+8. **未处理 open issue >3h** → 加 `auto-loop-triage` label,daemon 接
+9. **PR 刚 push 等 CI** → arm CI Monitor(Monitor 不算 codex)
+10. **Phase 10 advisory review** → 扫 eligible 非 auto-loop open PR 派 3 reviewer
+11. **Phase 11 issue intake** → label `auto-loop-triage` 给 eligible 非 auto-loop open issue
+12. **下一 iter audit**:floor < 5 即可派(无需 1-11 全空,per Auric 2026-05-30 "禁止任何并发豁免, 如果并发不足, 则处理已经存在的issues、pr或者提新的审计来产生issues")。audit 与 cluster impl 独立,不阻塞 in-flight 工作。
+13. **next-next iter audit**:同 12,floor < 5 即派
+
+**关键变化(2026-05-30)**:audit 从"backfill only"(原 priority 12,要求 1-11 全空)升级为 **floor < 5 即可派**。理由:Auric 明确"禁止任何并发豁免",任何时刻 floor < 5 必须补,而 audit 是产生新工作的唯一稳定入口。
 
 **自检脚本**(每 wakeup 第一动作之后):
 ```bash
 ACTIVE=$(ps -ef | grep "codex exec" | grep -v grep | wc -l | tr -d ' ')
-if [ -f .refactor-loop/.auto-stopped ] || [ -f .refactor-loop/.pause ]; then
-  : # stop 状态允许 0
+if [ -f .refactor-loop/.pause ]; then
+  : # 唯一 stop 状态:maintainer 手动 touch .pause
 elif (( ACTIVE < 5 )); then
   echo "FLOOR_VIOLATION: active=$ACTIVE < 5 — must dispatch before end-turn"
-  # 按上面优先级派 (5 - ACTIVE) 个
+  # 按上面优先级派 (5 - ACTIVE) 个,priority 1-10 + audit(11-13)穷举
 fi
 ```
 
-注:per Auric 2026-05-26 "ps grep timeout" undercount(spawn-codex 启动 codex exec subprocess,wrapper 不同 timeout 包装层级)→ 改用 `grep "codex exec"` 直接抓 codex exec 进程,更准。
+`.refactor-loop/.auto-stopped` 已废弃 — controller **不允许**自己写 stop。
+
+注:per Auric 2026-05-26 "ps grep timeout" undercount,改用 `grep "codex exec"` 直接抓 codex exec 进程。
 
 **反面**:
-- ❌ wakeup 结束时 `ACTIVE < 5` 且无 stop / throttle 标记 + 无 ScheduleWakeup → 死循环不前进
-- ❌ "等 CI 跑完"作为 0 codex 理由 → CI 跑时 controller 应该派下一波 Phase 9 r1(triaged 池有);CI Monitor 是 wake 信号不是 codex
-- ❌ 跨 turn 累积"等 r4 完成"+"等 Monitor"双重等待 0 codex → 必须主动派
-- ❌ floor 2 借口"等其他在跑"→ 主动派出新 audit / Phase 10 / Phase 11 填到 5
+- ❌ wakeup 结束时 `ACTIVE < 5` 且无 `.pause` → P0 bug
+- ❌ "等 CI 跑完"作为 0 codex 理由 → 派下一波 audit/Phase 10/11
+- ❌ "Audit 干涸"借口停 loop → 仍派下一 audit
+- ❌ 自己写 `.refactor-loop/.auto-stopped` → 仅 maintainer `.pause` 是合法 stop 信号
+- ❌ floor < 5 派 audit 之前要求"1-11 全空"→ 已废止此 gate
 
 事故记录:
-- 2026-05-25 一度把 hard floor 从 5 降到 2(per "强制检测最少2个 codex"),实际跑下来 floor 频繁 hit 1-2 critical violation,响应慢
-- 2026-05-26 Auric 显式指令"把最小并发数改回5",回滚到 5。throttle 3 是降速档,不是日常 floor
+- 2026-05-25 floor 从 5 降到 2 → 响应慢,2026-05-26 回滚 5
+- 2026-05-29 audit 误用"backfill only"导致连续派 audit 50+ 次漏 IMPLEMENT_DONE → priority 列表 1-10 优先 issue/PR,audit 升级为 priority 11(floor < 5 即派,无 1-10 全空 gate)
+- 2026-05-30 Auric 删所有并发豁免(throttle / stop / `.auto-stopped`)→ floor 严格 = 5,只 `.pause` 允许 0
 
 ---
 
