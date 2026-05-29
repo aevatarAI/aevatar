@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using ProtoValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
@@ -50,11 +51,11 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         snapshot.Tasks[0].ArgumentsJson.Should().Be("{}");
         snapshot.Tasks[0].ResultJson.Should().Be("""{"status":"accepted"}""");
         snapshot.WebTraces.Should().ContainSingle(x => x.TraceId == "trace-1");
-        snapshot.WebTraces[0].ResultJson.Should().Be("""{"content":"fresh"}""");
+        snapshot.WebTraces[0].Result.Fetch.Content.Should().Be("fresh");
 
         var cache = await reader.GetWebCacheEntryAsync(ScopeId, OwnerSubject, "WebFetch", "cache-1");
         cache.Should().NotBeNull();
-        ResponsesJsonValues.ToBoundaryJson(cache!.Result).Should().Be("""{"content":"fresh"}""");
+        cache!.Result.Fetch.Content.Should().Be("fresh");
     }
 
     [Fact]
@@ -96,6 +97,66 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         second.Todos.Should().ContainSingle(x => x.Id == "todo-1" && x.Content == "Store changed");
         second.Tasks.Should().ContainSingle(x => x.TaskId == "task_1" && x.ChildActorId == "child-2");
         second.WebCacheEntries.Should().ContainSingle(x => x.CacheKey == "cache-1" && x.HitCount == 9);
+    }
+
+    [Fact]
+    public async Task QueryReader_ShouldUseLegacyValueFallback_WhenReadModelHasNoTypedResult()
+    {
+        var store = new RecordingDocumentStore<ResponsesAgentToolStateCurrentStateReadModel>(x => x.Id);
+        var observedAt = DateTimeOffset.Parse("2026-05-12T00:01:00+00:00");
+        var legacyResult = new ProtoValue { StructValue = new Struct() };
+        legacyResult.StructValue.Fields["url"] = ProtoValue.ForString("https://legacy.example.com");
+        legacyResult.StructValue.Fields["status_code"] = ProtoValue.ForNumber(202);
+        legacyResult.StructValue.Fields["content"] = ProtoValue.ForString("legacy");
+
+        await store.UpsertAsync(new ResponsesAgentToolStateCurrentStateReadModel
+        {
+            Id = ActorId,
+            ActorId = ActorId,
+            ScopeId = ScopeId,
+            OwnerSubject = OwnerSubject,
+            StateVersion = 3,
+            CreatedAt = observedAt.AddMinutes(-1),
+            UpdatedAt = observedAt,
+            WebTraces =
+            {
+                new ResponsesWebTraceReadModel
+                {
+                    TraceId = "trace-legacy",
+                    SourceResponseId = "resp_legacy",
+                    ToolName = "WebFetch",
+                    CacheKey = "cache-legacy",
+                    Url = "https://legacy.example.com",
+                    Result = legacyResult.Clone(),
+                    ObservedAt = observedAt,
+                },
+            },
+            WebCacheEntries =
+            {
+                new ResponsesWebCacheEntryReadModel
+                {
+                    CacheKey = "cache-legacy",
+                    ToolName = "WebFetch",
+                    Url = "https://legacy.example.com",
+                    Result = legacyResult.Clone(),
+                    CachedAt = observedAt,
+                    HitCount = 2,
+                },
+            },
+        });
+
+        var reader = new ResponsesAgentToolStateQueryReader(store);
+
+        var snapshot = await reader.GetAsync(ScopeId, OwnerSubject);
+        var cache = await reader.GetWebCacheEntryAsync(ScopeId, OwnerSubject, "WebFetch", "cache-legacy");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.WebTraces.Should().ContainSingle();
+        snapshot.WebTraces[0].Result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Fetch);
+        snapshot.WebTraces[0].Result.Fetch.Content.Should().Be("legacy");
+        cache.Should().NotBeNull();
+        cache!.Result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Fetch);
+        cache.Result.Fetch.StatusCode.Should().Be(202);
     }
 
     private static EventEnvelope WrapCommittedState(DateTimeOffset observedAt)
@@ -140,7 +201,12 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             ToolName = "WebFetch",
             CacheKey = "cache-1",
             Url = "https://example.com",
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"content":"fresh"}"""),
+            TypedResult = ResponsesWebResultMigration.FromFetch(new ResponsesWebFetchToolOutput
+            {
+                Url = "https://example.com",
+                StatusCode = 200,
+                Content = "fresh",
+            }),
             ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
         state.WebCacheEntries.Add(new ResponsesWebCacheEntry
@@ -148,7 +214,12 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             CacheKey = "cache-1",
             ToolName = "WebFetch",
             Url = "https://example.com",
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"content":"fresh"}"""),
+            TypedResult = ResponsesWebResultMigration.FromFetch(new ResponsesWebFetchToolOutput
+            {
+                Url = "https://example.com",
+                StatusCode = 200,
+                Content = "fresh",
+            }),
             CachedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
 
