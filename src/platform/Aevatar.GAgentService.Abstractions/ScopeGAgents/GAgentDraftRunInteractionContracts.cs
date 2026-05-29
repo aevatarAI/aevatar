@@ -12,7 +12,9 @@ public sealed record GAgentDraftRunInteractionRequest(
     string? NyxIdAccessToken = null,
     string? ModelOverride = null,
     string? PreferredLlmRoute = null,
-    IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null);
+    IReadOnlyDictionary<string, string>? Headers = null,
+    IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
+    bool UseCorrelationIdAsFallbackSessionId = true);
 
 public sealed record GAgentDraftRunPreparedActor(
     string ScopeId,

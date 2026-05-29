@@ -99,6 +99,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
         services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionArtifactQueryPort>());
+        services.TryAddSingleton<IWorkflowChatRunObservationScopeActivationPort, WorkflowChatRunObservationScopeActivationPort>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         services.AddProjectionArtifactMaterializer<
             WorkflowBindingProjectionContext,

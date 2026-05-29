@@ -416,6 +416,35 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
+    public async Task HandleDraftRunAsync_ShouldReturnServiceUnavailable_WhenInteractionReportsProjectionUnavailable()
+    {
+        var interactionPort = new FakeGAgentDraftRunInteractionPort
+        {
+            ResultFactory = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
+                    GAgentDraftRunStartError.ProjectionUnavailable))
+        };
+        var logger = LoggerFactory.Create(_ => { });
+        var context = CreateDraftRunContext();
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                typeof(FakeAgent).AssemblyQualifiedName!,
+                "hello"),
+            interactionPort,
+            logger,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.ServiceUnavailable);
+        context.Response.ContentType.Should().Be("application/json");
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("GAGENT_PROJECTION_UNAVAILABLE");
+        body.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
     public async Task HandleDraftRunAsync_ShouldDelegateNormalizedRequestToInteractionPort()
     {
         var interactionPort = new FakeGAgentDraftRunInteractionPort
