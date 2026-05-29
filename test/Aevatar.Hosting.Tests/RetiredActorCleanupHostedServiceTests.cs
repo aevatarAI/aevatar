@@ -2,8 +2,11 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Maintenance;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgents.Channel.Runtime;
@@ -551,6 +554,120 @@ public sealed class RetiredActorCleanupHostedServiceTests
         (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
     }
 
+    [Fact]
+    public async Task StartAsync_ShouldDispatchCoordinatorLeaseCommands_AndAvoidEventStoreMarkers()
+    {
+        // Refactor (issue1056/impl): Old pattern: hosted-service EventStore marker replay/write. New principle: actor-owned cleanup lease via IActorDispatchPort + EventEnvelope + narrow command-result contract (Phase 9 r6 consensus).
+        var eventStore = new InMemoryEventStore();
+        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
+        var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
+        {
+            ["channel-bot-registration-store"] =
+                "Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent, Aevatar.GAgents.ChannelRuntime",
+        });
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new CoordinatedCleanupDispatchPort();
+        var resultPort = dispatchPort.ResultPort;
+        var service = CreateService(
+            typeProbe,
+            runtime,
+            new RecordingStreamProvider(),
+            eventStore,
+            CreateChannelRuntimeSpec(),
+            dispatchPort: dispatchPort,
+            resultPort: resultPort);
+
+        await service.StartAsync(CancellationToken.None);
+
+        runtime.CreatedByKind.Should().Contain((
+            RetiredActorCleanupCoordinatorGAgent.Kind,
+            RetiredActorCleanupCoordinatorGAgent.ActorId));
+        dispatchPort.Payloads.Should().Contain(payload => payload is RetiredActorCleanupAcquireLeaseCommand);
+        dispatchPort.Payloads.Should().Contain(payload => payload is RetiredActorCleanupCheckLeaseCommand);
+        dispatchPort.Payloads.Should().Contain(payload => payload is RetiredActorCleanupReleaseLeaseCommand);
+        var retiredMarkerStreamId = string.Join(
+            ':',
+            "__maintenance",
+            "retired-actor-cleanup",
+            "channel-runtime-retired-actors");
+        (await eventStore.GetVersionAsync(retiredMarkerStreamId))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CoordinatorGAgent_ShouldGrantDenyCheckRelease_AndRecordFailureWithTypedResults()
+    {
+        // Refactor (issue1056/impl): Old pattern: hosted-service EventStore marker replay/write. New principle: actor-owned cleanup lease via IActorDispatchPort + EventEnvelope + narrow command-result contract (Phase 9 r6 consensus).
+        var resultPort = new RecordingCleanupResultPort();
+        var agent = CreateCoordinatorAgent(resultPort);
+        await agent.ActivateAsync(CancellationToken.None);
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupAcquireLeaseCommand
+        {
+            CommandId = "cmd-acquire-a",
+            SpecId = "spec-a",
+            OwnerToken = "owner-a",
+            LeaseTimeoutSeconds = 300,
+            RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ResultStreamId = "result-a",
+        }));
+
+        resultPort.AcquireResults.Single().Status.Should()
+            .Be(RetiredActorCleanupAcquireLeaseStatus.Granted);
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupAcquireLeaseCommand
+        {
+            CommandId = "cmd-acquire-b",
+            SpecId = "spec-a",
+            OwnerToken = "owner-b",
+            LeaseTimeoutSeconds = 300,
+            RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ResultStreamId = "result-b",
+        }));
+
+        resultPort.AcquireResults.Last().Status.Should()
+            .Be(RetiredActorCleanupAcquireLeaseStatus.Denied);
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupCheckLeaseCommand
+        {
+            CommandId = "cmd-check-a",
+            SpecId = "spec-a",
+            OwnerToken = "owner-a",
+            CheckedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ResultStreamId = "result-check",
+        }));
+
+        resultPort.CheckResults.Single().Status.Should()
+            .Be(RetiredActorCleanupCheckLeaseStatus.StillOwner);
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupRecordFailureCommand
+        {
+            CommandId = "cmd-failure-a",
+            SpecId = "spec-a",
+            OwnerToken = "owner-a",
+            Reason = "cleanup failed",
+            OccurredAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ResultStreamId = "result-failure",
+        }));
+
+        resultPort.RecordFailureResults.Single().Status.Should()
+            .Be(RetiredActorCleanupRecordFailureStatus.Recorded);
+        resultPort.RecordFailureResults.Single().FailureCount.Should().Be(1);
+
+        await agent.HandleEventAsync(CreateEnvelope(new RetiredActorCleanupReleaseLeaseCommand
+        {
+            CommandId = "cmd-release-a",
+            SpecId = "spec-a",
+            OwnerToken = "owner-a",
+            ReleasedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            ResultStreamId = "result-release",
+        }));
+
+        resultPort.ReleaseResults.Single().Status.Should()
+            .Be(RetiredActorCleanupReleaseLeaseStatus.Released);
+        agent.State.Leases.Should().BeEmpty();
+    }
+
     private static IRetiredActorSpec CreateChannelRuntimeSpec() => new ChannelRuntimeRetiredActorSpec();
 
     private static IRetiredActorSpec CreateDeviceSpec() => new DeviceRetiredActorSpec();
@@ -563,8 +680,10 @@ public sealed class RetiredActorCleanupHostedServiceTests
         RecordingStreamProvider streamProvider,
         InMemoryEventStore eventStore,
         IRetiredActorSpec spec,
-        IServiceProvider? services = null) =>
-        CreateService(typeProbe, runtime, streamProvider, eventStore, [spec], services);
+        IServiceProvider? services = null,
+        IActorDispatchPort? dispatchPort = null,
+        IRetiredActorCleanupCoordinatorResultPort? resultPort = null) =>
+        CreateService(typeProbe, runtime, streamProvider, eventStore, [spec], services, dispatchPort, resultPort);
 
     private static RetiredActorCleanupHostedService CreateService(
         IActorTypeProbe typeProbe,
@@ -572,7 +691,9 @@ public sealed class RetiredActorCleanupHostedServiceTests
         RecordingStreamProvider streamProvider,
         InMemoryEventStore eventStore,
         IReadOnlyList<IRetiredActorSpec> specs,
-        IServiceProvider? services = null)
+        IServiceProvider? services = null,
+        IActorDispatchPort? dispatchPort = null,
+        IRetiredActorCleanupCoordinatorResultPort? resultPort = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -583,11 +704,17 @@ public sealed class RetiredActorCleanupHostedServiceTests
             .Build();
 
         var resolvedServices = services ?? BuildSpecServices(eventStore, typeProbe);
+        var resolvedDispatchPort = dispatchPort ?? new CoordinatedCleanupDispatchPort();
+        var resolvedResultPort = resultPort ??
+                                 (resolvedDispatchPort as CoordinatedCleanupDispatchPort)?.ResultPort ??
+                                 new RecordingCleanupResultPort();
 
         return new RetiredActorCleanupHostedService(
             specs,
             typeProbe,
             runtime,
+            resolvedDispatchPort,
+            resolvedResultPort,
             streamProvider,
             eventStore,
             eventStore,
@@ -706,6 +833,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
     private sealed class RecordingActorRuntime : IActorRuntime
     {
         public List<string> DestroyedActorIds { get; } = [];
+        public List<(string Kind, string Id)> CreatedByKind { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -713,6 +841,13 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CreatedByKind.Add((agentKind, id ?? string.Empty));
+            return Task.FromResult<IActor>(new NoopActor(id ?? agentKind));
+        }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
@@ -723,13 +858,222 @@ public sealed class RetiredActorCleanupHostedServiceTests
 
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
+        public Task<bool> ExistsAsync(string id) =>
+            Task.FromResult(CreatedByKind.Any(created => string.Equals(created.Id, id, StringComparison.Ordinal)));
 
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class NoopActor(string id) : IActor
+    {
+        public string Id => id;
+
+        public IAgent Agent => throw new NotSupportedException();
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private static RetiredActorCleanupCoordinatorGAgent CreateCoordinatorAgent(
+        RecordingCleanupResultPort resultPort)
+    {
+        var eventStore = new InMemoryEventStore();
+        return new RetiredActorCleanupCoordinatorGAgent(resultPort)
+        {
+            EventSourcingBehaviorFactory =
+                new DefaultEventSourcingBehaviorFactory<RetiredActorCleanupCoordinatorState>(eventStore),
+            Services = new ServiceCollection()
+                .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
+                .BuildServiceProvider(),
+        };
+    }
+
+    private static EventEnvelope CreateEnvelope(IMessage payload) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect("test", RetiredActorCleanupCoordinatorGAgent.ActorId),
+        };
+
+    private sealed class CoordinatedCleanupDispatchPort : IActorDispatchPort
+    {
+        public RecordingCleanupResultPort ResultPort { get; } = new();
+
+        public List<IMessage> Payloads { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            actorId.Should().Be(RetiredActorCleanupCoordinatorGAgent.ActorId);
+            envelope.Payload.Should().NotBeNull();
+
+            if (envelope.Payload!.TryUnpack<RetiredActorCleanupAcquireLeaseCommand>(out var acquire))
+            {
+                Payloads.Add(acquire);
+                ResultPort.Complete(acquire.CommandId, new RetiredActorCleanupAcquireLeaseResult
+                {
+                    CommandId = acquire.CommandId,
+                    SpecId = acquire.SpecId,
+                    OwnerToken = acquire.OwnerToken,
+                    Status = RetiredActorCleanupAcquireLeaseStatus.Granted,
+                    CurrentOwnerToken = acquire.OwnerToken,
+                });
+            }
+            else if (envelope.Payload.TryUnpack<RetiredActorCleanupCheckLeaseCommand>(out var check))
+            {
+                Payloads.Add(check);
+                ResultPort.Complete(check.CommandId, new RetiredActorCleanupCheckLeaseResult
+                {
+                    CommandId = check.CommandId,
+                    SpecId = check.SpecId,
+                    OwnerToken = check.OwnerToken,
+                    Status = RetiredActorCleanupCheckLeaseStatus.StillOwner,
+                    CurrentOwnerToken = check.OwnerToken,
+                });
+            }
+            else if (envelope.Payload.TryUnpack<RetiredActorCleanupReleaseLeaseCommand>(out var release))
+            {
+                Payloads.Add(release);
+                ResultPort.Complete(release.CommandId, new RetiredActorCleanupReleaseLeaseResult
+                {
+                    CommandId = release.CommandId,
+                    SpecId = release.SpecId,
+                    OwnerToken = release.OwnerToken,
+                    Status = RetiredActorCleanupReleaseLeaseStatus.Released,
+                });
+            }
+            else if (envelope.Payload.TryUnpack<RetiredActorCleanupRecordFailureCommand>(out var failure))
+            {
+                Payloads.Add(failure);
+                ResultPort.Complete(failure.CommandId, new RetiredActorCleanupRecordFailureResult
+                {
+                    CommandId = failure.CommandId,
+                    SpecId = failure.SpecId,
+                    OwnerToken = failure.OwnerToken,
+                    Status = RetiredActorCleanupRecordFailureStatus.Recorded,
+                    CurrentOwnerToken = failure.OwnerToken,
+                    FailureCount = 1,
+                });
+            }
+
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class RecordingCleanupResultPort : IRetiredActorCleanupCoordinatorResultPort
+    {
+        private readonly Dictionary<string, IMessage> _completed = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TaskCompletionSource<IMessage>> _waiters = new(StringComparer.Ordinal);
+
+        public List<RetiredActorCleanupAcquireLeaseResult> AcquireResults { get; } = [];
+
+        public List<RetiredActorCleanupCheckLeaseResult> CheckResults { get; } = [];
+
+        public List<RetiredActorCleanupReleaseLeaseResult> ReleaseResults { get; } = [];
+
+        public List<RetiredActorCleanupRecordFailureResult> RecordFailureResults { get; } = [];
+
+        public string CreateResultStreamId(string commandId) => $"test-result:{commandId}";
+
+        public async Task<T> AwaitResultAsync<T>(string commandId, string resultStreamId, CancellationToken ct)
+            where T : class, IMessage<T>, new()
+        {
+            _ = resultStreamId;
+            ct.ThrowIfCancellationRequested();
+            if (_completed.TryGetValue(commandId, out var completed))
+                return (T)completed;
+
+            if (!_waiters.TryGetValue(commandId, out var waiter))
+            {
+                waiter = new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters[commandId] = waiter;
+            }
+
+            await using var registration = ct.UnsafeRegister(
+                static state => ((TaskCompletionSource<IMessage>)state!).TrySetCanceled(),
+                waiter);
+
+            return (T)await waiter.Task.ConfigureAwait(false);
+        }
+
+        public Task PublishAsync(
+            string resultStreamId,
+            RetiredActorCleanupCoordinatorCommandResult result,
+            CancellationToken ct = default)
+        {
+            _ = resultStreamId;
+            ct.ThrowIfCancellationRequested();
+            switch (result.ResultCase)
+            {
+                case RetiredActorCleanupCoordinatorCommandResult.ResultOneofCase.AcquireLease:
+                    Complete(result.AcquireLease.CommandId, result.AcquireLease);
+                    break;
+                case RetiredActorCleanupCoordinatorCommandResult.ResultOneofCase.CheckLease:
+                    Complete(result.CheckLease.CommandId, result.CheckLease);
+                    break;
+                case RetiredActorCleanupCoordinatorCommandResult.ResultOneofCase.ReleaseLease:
+                    Complete(result.ReleaseLease.CommandId, result.ReleaseLease);
+                    break;
+                case RetiredActorCleanupCoordinatorCommandResult.ResultOneofCase.RecordFailure:
+                    Complete(result.RecordFailure.CommandId, result.RecordFailure);
+                    break;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public void Complete(string commandId, IMessage result)
+        {
+            _completed[commandId] = result;
+            switch (result)
+            {
+                case RetiredActorCleanupAcquireLeaseResult acquire:
+                    AcquireResults.Add(acquire);
+                    break;
+                case RetiredActorCleanupCheckLeaseResult check:
+                    CheckResults.Add(check);
+                    break;
+                case RetiredActorCleanupReleaseLeaseResult release:
+                    ReleaseResults.Add(release);
+                    break;
+                case RetiredActorCleanupRecordFailureResult failure:
+                    RecordFailureResults.Add(failure);
+                    break;
+            }
+
+            if (_waiters.TryGetValue(commandId, out var waiter))
+                waiter.TrySetResult(result);
+        }
+    }
+
+    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private class RecordingStreamProvider : IStreamProvider

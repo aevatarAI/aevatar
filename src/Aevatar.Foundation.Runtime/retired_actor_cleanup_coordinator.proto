@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+package aevatar.foundation.runtime;
+
+option csharp_namespace = "Aevatar.Foundation.Runtime.Maintenance";
+
+import "google/protobuf/timestamp.proto";
+
+// Refactor (issue1056/impl): Old pattern: hosted-service EventStore marker replay/write. New principle: actor-owned cleanup lease via IActorDispatchPort + EventEnvelope + narrow command-result contract (Phase 9 r6 consensus).
+
+message RetiredActorCleanupLeaseEntry {
+  string spec_id = 1;
+  string owner_token = 2;
+  google.protobuf.Timestamp acquired_at = 3;
+  google.protobuf.Timestamp heartbeat_at = 4;
+  int32 failure_count = 5;
+  google.protobuf.Timestamp last_failure_at = 6;
+  string last_failure_reason = 7;
+}
+
+message RetiredActorCleanupCoordinatorState {
+  map<string, RetiredActorCleanupLeaseEntry> leases = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+}
+
+message RetiredActorCleanupAcquireLeaseCommand {
+  string command_id = 1;
+  string spec_id = 2;
+  string owner_token = 3;
+  int64 lease_timeout_seconds = 4;
+  google.protobuf.Timestamp requested_at = 5;
+  string result_stream_id = 6;
+}
+
+message RetiredActorCleanupCheckLeaseCommand {
+  string command_id = 1;
+  string spec_id = 2;
+  string owner_token = 3;
+  google.protobuf.Timestamp checked_at = 4;
+  string result_stream_id = 5;
+}
+
+message RetiredActorCleanupReleaseLeaseCommand {
+  string command_id = 1;
+  string spec_id = 2;
+  string owner_token = 3;
+  google.protobuf.Timestamp released_at = 4;
+  string result_stream_id = 5;
+}
+
+message RetiredActorCleanupRecordFailureCommand {
+  string command_id = 1;
+  string spec_id = 2;
+  string owner_token = 3;
+  string reason = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  string result_stream_id = 6;
+}
+
+enum RetiredActorCleanupAcquireLeaseStatus {
+  RETIRED_ACTOR_CLEANUP_ACQUIRE_LEASE_STATUS_UNSPECIFIED = 0;
+  RETIRED_ACTOR_CLEANUP_ACQUIRE_LEASE_STATUS_GRANTED = 1;
+  RETIRED_ACTOR_CLEANUP_ACQUIRE_LEASE_STATUS_DENIED = 2;
+  RETIRED_ACTOR_CLEANUP_ACQUIRE_LEASE_STATUS_INVALID = 3;
+}
+
+enum RetiredActorCleanupCheckLeaseStatus {
+  RETIRED_ACTOR_CLEANUP_CHECK_LEASE_STATUS_UNSPECIFIED = 0;
+  RETIRED_ACTOR_CLEANUP_CHECK_LEASE_STATUS_STILL_OWNER = 1;
+  RETIRED_ACTOR_CLEANUP_CHECK_LEASE_STATUS_NOT_OWNER = 2;
+  RETIRED_ACTOR_CLEANUP_CHECK_LEASE_STATUS_INVALID = 3;
+}
+
+enum RetiredActorCleanupReleaseLeaseStatus {
+  RETIRED_ACTOR_CLEANUP_RELEASE_LEASE_STATUS_UNSPECIFIED = 0;
+  RETIRED_ACTOR_CLEANUP_RELEASE_LEASE_STATUS_RELEASED = 1;
+  RETIRED_ACTOR_CLEANUP_RELEASE_LEASE_STATUS_NOT_OWNER = 2;
+  RETIRED_ACTOR_CLEANUP_RELEASE_LEASE_STATUS_INVALID = 3;
+}
+
+enum RetiredActorCleanupRecordFailureStatus {
+  RETIRED_ACTOR_CLEANUP_RECORD_FAILURE_STATUS_UNSPECIFIED = 0;
+  RETIRED_ACTOR_CLEANUP_RECORD_FAILURE_STATUS_RECORDED = 1;
+  RETIRED_ACTOR_CLEANUP_RECORD_FAILURE_STATUS_IGNORED = 2;
+  RETIRED_ACTOR_CLEANUP_RECORD_FAILURE_STATUS_INVALID = 3;
+}
+
+message RetiredActorCleanupAcquireLeaseResult {
+  string command_id = 1;
+  string spec_id = 2;
+  string owner_token = 3;
+  RetiredActorCleanupAcquireLeaseStatus status = 4;
+  string current_owner_token = 5;
+  google.protobuf.Timestamp acquired_at = 6;
+  google.protobuf.Timestamp heartbeat_at = 7;
+  string message = 8;
+}
+
+message RetiredActorCleanupCheckLeaseResult {
+  string command_id = 1;
+  string spec_id = 2;
+  string owner_token = 3;
+  RetiredActorCleanupCheckLeaseStatus status = 4;
+  string current_owner_token = 5;
+  google.protobuf.Timestamp heartbeat_at = 6;
+  string message = 7;
+}
+
+message RetiredActorCleanupReleaseLeaseResult {
+  string command_id = 1;
+  string spec_id = 2;
+  string owner_token = 3;
+  RetiredActorCleanupReleaseLeaseStatus status = 4;
+  string current_owner_token = 5;
+  string message = 6;
+}
+
+message RetiredActorCleanupRecordFailureResult {
+  string command_id = 1;
+  string spec_id = 2;
+  string owner_token = 3;
+  RetiredActorCleanupRecordFailureStatus status = 4;
+  string current_owner_token = 5;
+  int32 failure_count = 6;
+  string message = 7;
+}
+
+message RetiredActorCleanupCoordinatorCommandResult {
+  oneof result {
+    RetiredActorCleanupAcquireLeaseResult acquire_lease = 1;
+    RetiredActorCleanupCheckLeaseResult check_lease = 2;
+    RetiredActorCleanupReleaseLeaseResult release_lease = 3;
+    RetiredActorCleanupRecordFailureResult record_failure = 4;
+  }
+}
+
+message RetiredActorCleanupLeaseAcquiredEvent {
+  string spec_id = 1;
+  string owner_token = 2;
+  google.protobuf.Timestamp acquired_at = 3;
+  google.protobuf.Timestamp heartbeat_at = 4;
+}
+
+message RetiredActorCleanupLeaseHeartbeatRecordedEvent {
+  string spec_id = 1;
+  string owner_token = 2;
+  google.protobuf.Timestamp heartbeat_at = 3;
+}
+
+message RetiredActorCleanupLeaseReleasedEvent {
+  string spec_id = 1;
+  string owner_token = 2;
+  google.protobuf.Timestamp released_at = 3;
+}
+
+message RetiredActorCleanupLeaseFailureRecordedEvent {
+  string spec_id = 1;
+  string owner_token = 2;
+  string reason = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}

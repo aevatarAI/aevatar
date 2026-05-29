@@ -7,6 +7,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
+using Aevatar.Foundation.Runtime.Maintenance;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -66,6 +67,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
+        services.TryAddSingleton<IRetiredActorCleanupCoordinatorResultPort, RetiredActorCleanupCoordinatorResultPort>();
 
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
@@ -79,7 +81,7 @@ public static class ServiceCollectionExtensions
         // extensions; the runtime guarantees the registry is available
         // here so RuntimeActorGrain.OnActivateAsync can resolve identities
         // without holding a reflection scan itself.
-        services.AddAevatarAgentKindRegistry();
+        services.AddAevatarAgentKindRegistry(builder => builder.Register<RetiredActorCleanupCoordinatorGAgent>());
         services.TryAddSingleton<IActorEventSubscriptionProvider>(sp =>
             new StreamProviderActorEventSubscriptionProvider(sp.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>()));
         services.AddAevatarFoundationRuntimeOrleansStreaming();

@@ -18,6 +18,7 @@ using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Runtime.Maintenance;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -85,6 +86,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<ILocalActivationIndexStore, InMemoryLocalActivationIndexStore>();
+        services.TryAddSingleton<IRetiredActorCleanupCoordinatorResultPort, RetiredActorCleanupCoordinatorResultPort>();
 
         // Deduplication
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
@@ -100,7 +102,7 @@ public static class ServiceCollectionExtensions
         // Kind-token identity registry (issue #498). Mirrors the Orleans
         // runtime registration so in-memory + Orleans paths share the same
         // identity model.
-        services.AddAevatarAgentKindRegistry();
+        services.AddAevatarAgentKindRegistry(builder => builder.Register<RetiredActorCleanupCoordinatorGAgent>());
 
         return services;
     }
