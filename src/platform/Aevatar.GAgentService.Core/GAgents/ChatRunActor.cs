@@ -137,9 +137,15 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             ToolName = pending.ToolName,
             ResultJson = resultJson,
             LlmRound = pending.LlmRound,
+            Status = observed.Status ?? string.Empty,
+            ActorId = FirstNonEmpty(observed.ActorId, pending.ActorId),
+            ServiceId = FirstNonEmpty(observed.ServiceId, pending.ServiceId),
+            EndpointId = FirstNonEmpty(observed.EndpointId, pending.EndpointId),
+            CompletionObserved = observed.CompletionObserved,
             ObservedAt = observed.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
         });
 
+        // Refactor (iter290/cluster001): Old pattern: ready notifications required consumers to parse ResultJson for completion facts. New principle: ready notifications publish typed completion facts with the result payload.
         await PublishAsync(new ChatRunToolResultReady
         {
             ResponseId = State.ResponseId,
@@ -148,6 +154,11 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             ToolName = pending.ToolName,
             ResultJson = resultJson,
             LlmRound = pending.LlmRound,
+            Status = observed.Status ?? string.Empty,
+            ActorId = FirstNonEmpty(observed.ActorId, pending.ActorId),
+            ServiceId = FirstNonEmpty(observed.ServiceId, pending.ServiceId),
+            EndpointId = FirstNonEmpty(observed.EndpointId, pending.EndpointId),
+            CompletionObserved = observed.CompletionObserved,
         }, TopologyAudience.Self);
     }
 
@@ -188,6 +199,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             ActorId = pending.ActorId,
             ServiceId = pending.ServiceId,
             EndpointId = pending.EndpointId,
+            CompletionObserved = true,
             ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
     }

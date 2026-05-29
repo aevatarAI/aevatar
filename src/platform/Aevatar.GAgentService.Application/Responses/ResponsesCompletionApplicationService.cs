@@ -301,7 +301,7 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                                 request,
                                 toolCall,
                                 argumentsJson,
-                                tool.ExecuteAsync,
+                                (completionRequest, token) => ExecuteChatRunToolAsync(tool, completionRequest, token),
                                 llmRound,
                                 ct)
                             : await tool.ExecuteAsync(argumentsJson, ct);
@@ -319,6 +319,19 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 messages.Add(ChatMessage.Tool(toolCall.Id, result));
             }
         }
+    }
+
+    // Refactor (iter290/cluster001): Old pattern: completion orchestration treated every tool as ResultJson-only. New principle: chat-run-aware tools may return typed control fields alongside boundary JSON.
+    private static async Task<ChatRunToolCompletionRequest> ExecuteChatRunToolAsync(
+        IAgentTool tool,
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct)
+    {
+        if (tool is IChatRunToolCompletionControlExecutor typedExecutor)
+            return await typedExecutor.ExecuteForChatRunAsync(request, ct);
+
+        var resultJson = await tool.ExecuteAsync(request.ArgumentsJson, ct);
+        return request with { ToolExecutionResultJson = resultJson };
     }
 
     private static async Task<(string Text, TokenUsage? Usage, IReadOnlyList<ToolCall> ToolCalls)> CollectStreamCompletionAsync(

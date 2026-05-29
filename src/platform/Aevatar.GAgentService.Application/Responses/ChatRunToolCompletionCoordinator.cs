@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -8,6 +7,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Google.Protobuf;
+using System.Text.Json;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Application.Responses;
@@ -65,7 +65,7 @@ public sealed class ChatRunToolCompletionCoordinator
         LLMRequest request,
         ToolCall toolCall,
         string argumentsJson,
-        Func<string, CancellationToken, Task<string>> executeToolAsync,
+        Func<ChatRunToolCompletionRequest, CancellationToken, Task<ChatRunToolCompletionRequest>> executeToolAsync,
         int llmRound,
         CancellationToken ct = default)
     {
@@ -110,34 +110,38 @@ public sealed class ChatRunToolCompletionCoordinator
                 ct);
         }
 
-        var dispatchResult = await executeToolAsync(argumentsJson, ct);
-        var completionRequest = new ChatRunToolCompletionRequest(
+        var initialRequest = new ChatRunToolCompletionRequest(
             responseId,
             request.Model,
             request.Messages,
             toolCall,
             argumentsJson,
-            dispatchResult,
+            string.Empty,
             llmRound);
+        var completionRequest = await executeToolAsync(initialRequest, ct);
+        var dispatchResult = completionRequest.ToolExecutionResultJson ?? string.Empty;
         await _chatRunActorPort.SubmitToolCallAsync(actorId, completionRequest, ct);
 
-        var parsed = ParseDispatchResult(dispatchResult);
-        if (!string.IsNullOrWhiteSpace(parsed.ErrorCode))
+        if (!string.IsNullOrWhiteSpace(completionRequest.ErrorCode))
             return dispatchResult;
 
-        parsed = NormalizeDispatchResultForObservation(toolCall, argumentsJson, parsed);
+        completionRequest = NormalizeDispatchResultForObservation(toolCall, argumentsJson, completionRequest);
         if (!isGAgentInvocation || !hasInlineGAgentActorId)
             await _chatRunActorPort.BeginSubRunObservationAsync(actorId, completionRequest, ct);
 
-        var terminal = TryBuildTerminalFromDispatchResult(parsed) ??
-                       await ResolveTerminalAsync(toolCall.Name, parsed, ct);
+        var terminal = TryBuildTerminalFromDispatchResult(completionRequest) ??
+                       await ResolveTerminalAsync(toolCall.Name, completionRequest, ct);
         if (terminal == null && isGAgentInvocation)
         {
             var observed = await readySource.Task.WaitAsync(ct);
             return observed.ResultJson;
         }
 
-        terminal ??= BuildTerminal(parsed, "completion_not_observed", BuildCompletionNotObservedResult(toolCall.Name, parsed));
+        terminal ??= BuildTerminal(
+            completionRequest,
+            "completion_not_observed",
+            BuildCompletionNotObservedResult(toolCall.Name, completionRequest),
+            completionObserved: false);
         if (string.IsNullOrWhiteSpace(terminal.RunId))
             return terminal.ResultJson;
 
@@ -146,24 +150,25 @@ public sealed class ChatRunToolCompletionCoordinator
         return (await readySource.Task.WaitAsync(ct)).ResultJson;
     }
 
-    private static ParsedDispatchResult NormalizeDispatchResultForObservation(
+    // Refactor (iter290/cluster001): Old pattern: observation targets were recovered from tool ResultJson after dispatch. New principle: observation target fields are normalized before entering actor observation.
+    private static ChatRunToolCompletionRequest NormalizeDispatchResultForObservation(
         ToolCall toolCall,
         string argumentsJson,
-        ParsedDispatchResult parsed)
+        ChatRunToolCompletionRequest request)
     {
         if (string.Equals(toolCall.Name, "aevatar_invoke_gagent", StringComparison.Ordinal) &&
-            string.IsNullOrWhiteSpace(parsed.ActorId) &&
+            string.IsNullOrWhiteSpace(request.ActorId) &&
             TryReadString(argumentsJson, "actor_id", out var actorId))
         {
-            return parsed with { ActorId = actorId };
+            return request with { ActorId = actorId };
         }
 
-        return parsed;
+        return request;
     }
 
     private async Task<ChatRunSubRunTerminalObserved?> ResolveTerminalAsync(
         string toolName,
-        ParsedDispatchResult dispatch,
+        ChatRunToolCompletionRequest dispatch,
         CancellationToken ct)
     {
         if (string.Equals(toolName, "aevatar_invoke_gagent", StringComparison.Ordinal))
@@ -179,7 +184,7 @@ public sealed class ChatRunToolCompletionCoordinator
     }
 
     private async Task<ChatRunSubRunTerminalObserved?> ResolveGAgentTerminalAsync(
-        ParsedDispatchResult dispatch,
+        ChatRunToolCompletionRequest dispatch,
         CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(dispatch.ActorId) && !string.IsNullOrWhiteSpace(dispatch.RunId))
@@ -189,14 +194,14 @@ public sealed class ChatRunToolCompletionCoordinator
                 dispatch.RunId,
                 ct);
             if (snapshot != null && snapshot.Status != GAgentRunTerminalStatus.Unknown)
-                return BuildTerminal(dispatch, snapshot.Status.ToString(), ToJson(snapshot));
+                return BuildTerminal(dispatch, snapshot.Status.ToString(), ToJson(snapshot), completionObserved: true);
         }
 
         return null;
     }
 
     private async Task<ChatRunSubRunTerminalObserved?> ResolveTeamTerminalAsync(
-        ParsedDispatchResult dispatch,
+        ChatRunToolCompletionRequest dispatch,
         CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(dispatch.ServiceId) && !string.IsNullOrWhiteSpace(dispatch.RunId))
@@ -207,14 +212,14 @@ public sealed class ChatRunToolCompletionCoordinator
                 dispatch.RunId,
                 ct);
             if (snapshot != null && IsTerminalServiceRunStatus(snapshot.Status))
-                return BuildTerminal(dispatch, snapshot.Status.ToString(), ToJson(snapshot));
+                return BuildTerminal(dispatch, snapshot.Status.ToString(), ToJson(snapshot), completionObserved: true);
         }
 
         return null;
     }
 
     private async Task<ChatRunSubRunTerminalObserved?> ResolveWorkflowTerminalAsync(
-        ParsedDispatchResult dispatch,
+        ChatRunToolCompletionRequest dispatch,
         CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(dispatch.ActorId))
@@ -224,30 +229,32 @@ public sealed class ChatRunToolCompletionCoordinator
                 string.Equals(snapshot.LastCommandId, dispatch.RunId, StringComparison.Ordinal) &&
                 IsTerminalWorkflowStatus(snapshot.CompletionStatus))
             {
-                return BuildTerminal(dispatch, snapshot.CompletionStatus.ToString(), ProtoJson(snapshot));
+                return BuildTerminal(dispatch, snapshot.CompletionStatus.ToString(), ProtoJson(snapshot), completionObserved: true);
             }
         }
 
         return null;
     }
 
-    private static ChatRunSubRunTerminalObserved? TryBuildTerminalFromDispatchResult(ParsedDispatchResult dispatch)
+    private static ChatRunSubRunTerminalObserved? TryBuildTerminalFromDispatchResult(ChatRunToolCompletionRequest dispatch)
     {
         if (string.IsNullOrWhiteSpace(dispatch.RunId) ||
-            string.IsNullOrWhiteSpace(dispatch.ResultJson) ||
+            string.IsNullOrWhiteSpace(dispatch.CompletionResultJson) ||
             !IsTerminalDispatchStatus(dispatch.Status) ||
-            DispatchResultExplicitlyIncomplete(dispatch.ResultJson))
+            !dispatch.CompletionObserved)
         {
             return null;
         }
 
-        return BuildTerminal(dispatch, dispatch.Status, dispatch.ResultJson);
+        return BuildTerminal(dispatch, dispatch.Status, dispatch.CompletionResultJson, completionObserved: true);
     }
 
+    // Refactor (iter290/cluster001): Old pattern: terminal observation rebuilt control facts from ResultJson. New principle: terminal observation copies typed dispatch fields into the actor event.
     private static ChatRunSubRunTerminalObserved BuildTerminal(
-        ParsedDispatchResult dispatch,
+        ChatRunToolCompletionRequest dispatch,
         string status,
-        string resultJson) =>
+        string resultJson,
+        bool completionObserved) =>
         new()
         {
             RunId = dispatch.RunId,
@@ -256,35 +263,9 @@ public sealed class ChatRunToolCompletionCoordinator
             ActorId = dispatch.ActorId,
             ServiceId = dispatch.ServiceId,
             EndpointId = dispatch.EndpointId,
+            CompletionObserved = completionObserved,
             ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
-
-    private static ParsedDispatchResult ParseDispatchResult(string json)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-            return ParsedDispatchResult.Empty;
-
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object)
-        {
-            return ParsedDispatchResult.Empty with
-            {
-                ErrorCode = ReadString(error, "code"),
-            };
-        }
-
-        return new ParsedDispatchResult(
-            RunId: ReadString(root, "run_id"),
-            Status: ReadString(root, "status"),
-            ResultJson: ReadRawJson(root, "result"),
-            ActorId: ReadString(root, "actor_id"),
-            ServiceId: ReadString(root, "service_id"),
-            EndpointId: ReadString(root, "endpoint_id"),
-            StreamTopic: ReadString(root, "stream_topic"),
-            ScopeId: ReadScopeId(root),
-            ErrorCode: string.Empty);
-    }
 
     private static string ResolveResponseId(LLMRequest request) =>
         request.CallerContext?.ResponseId?.Trim()
@@ -312,31 +293,6 @@ public sealed class ChatRunToolCompletionCoordinator
         }
     }
 
-    private static string ReadScopeId(JsonElement root)
-    {
-        if (root.TryGetProperty("scope_id", out var scopeId) &&
-            scopeId.ValueKind == JsonValueKind.String)
-        {
-            return scopeId.GetString()?.Trim() ?? string.Empty;
-        }
-
-        return string.Empty;
-    }
-
-    private static string ReadString(JsonElement root, string propertyName) =>
-        root.ValueKind == JsonValueKind.Object &&
-        root.TryGetProperty(propertyName, out var property) &&
-        property.ValueKind == JsonValueKind.String
-            ? property.GetString()?.Trim() ?? string.Empty
-            : string.Empty;
-
-    private static string ReadRawJson(JsonElement root, string propertyName) =>
-        root.ValueKind == JsonValueKind.Object &&
-        root.TryGetProperty(propertyName, out var property) &&
-        property.ValueKind is not JsonValueKind.Undefined and not JsonValueKind.Null
-            ? property.GetRawText()
-            : string.Empty;
-
     private static bool IsTerminalDispatchStatus(string status)
     {
         if (string.IsNullOrWhiteSpace(status))
@@ -347,21 +303,6 @@ public sealed class ChatRunToolCompletionCoordinator
                !status.Equals("running", StringComparison.OrdinalIgnoreCase) &&
                !status.Equals("in_progress", StringComparison.OrdinalIgnoreCase) &&
                !status.Equals("unknown", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool DispatchResultExplicitlyIncomplete(string resultJson)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(resultJson);
-            return document.RootElement.ValueKind == JsonValueKind.Object &&
-                   document.RootElement.TryGetProperty("completion_observed", out var observed) &&
-                   observed.ValueKind == JsonValueKind.False;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static bool IsTerminalServiceRunStatus(ServiceRunStatus status) =>
@@ -375,7 +316,7 @@ public sealed class ChatRunToolCompletionCoordinator
             or WorkflowRunCompletionStatus.NotFound
             or WorkflowRunCompletionStatus.Disabled;
 
-    private static string BuildCompletionNotObservedResult(string toolName, ParsedDispatchResult dispatch) =>
+    private static string BuildCompletionNotObservedResult(string toolName, ChatRunToolCompletionRequest dispatch) =>
         ToJson(new
         {
             run_id = EmptyToNull(dispatch.RunId),
@@ -410,6 +351,13 @@ public sealed class ChatRunToolCompletionCoordinator
         }
     }
 
+    private static string ReadString(JsonElement root, string propertyName) =>
+        root.ValueKind == JsonValueKind.Object &&
+        root.TryGetProperty(propertyName, out var property) &&
+        property.ValueKind == JsonValueKind.String
+            ? property.GetString()?.Trim() ?? string.Empty
+            : string.Empty;
+
     private static string ToJson<T>(T value) =>
         JsonSerializer.Serialize(value, JsonOptions);
 
@@ -418,28 +366,4 @@ public sealed class ChatRunToolCompletionCoordinator
 
     private static string? EmptyToNull(string value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
-
-    private sealed record ParsedDispatchResult(
-        string RunId,
-        string Status,
-        string ResultJson,
-        string ActorId,
-        string ServiceId,
-        string EndpointId,
-        string StreamTopic,
-        string ScopeId,
-        string ErrorCode)
-    {
-        public static ParsedDispatchResult Empty { get; } = new(
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            string.Empty);
-    }
-
 }
