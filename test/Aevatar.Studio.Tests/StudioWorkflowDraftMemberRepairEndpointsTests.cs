@@ -77,8 +77,9 @@ public sealed class StudioWorkflowDraftMemberRepairEndpointsTests
         IStudioWorkspaceQueryPort workspaceQueryPort) =>
         new(
             workspaceQueryPort,
-            new RecordingBootstrap(),
-            CreateCommandDispatch(new RecordingDispatchPort()),
+            new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap(),
+            StudioWorkflowDraftMemberCommandDispatchTestHarness.CreateCommandDispatch(
+                new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingDispatchPort()),
             new StudioWorkflowDraftMemberEnsureCommandFactory());
 
     private sealed class StubWorkspaceQueryPort(IReadOnlyList<StudioWorkflowDraftRecord> drafts)
@@ -109,55 +110,6 @@ public sealed class StudioWorkflowDraftMemberRepairEndpointsTests
 
         public Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default) =>
             Task.FromException<StudioWorkspaceSnapshot>(exception);
-    }
-
-    private sealed class RecordingBootstrap : IStudioActorBootstrap
-    {
-        public Task<IActor> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
-            where TAgent : IAgent, IProjectedActor =>
-            Task.FromResult<IActor>(new StubActor(actorId));
-    }
-
-    private sealed class StubActor(string id) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent => throw new NotSupportedException();
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
-            Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class RecordingDispatchPort : IActorDispatchPort
-    {
-        public Task<DispatchAdmission> DispatchAsync(
-            string actorId,
-            EventEnvelope envelope,
-            CancellationToken ct = default) =>
-            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
-    }
-
-    private static StudioProjectionActorCommandDispatch CreateCommandDispatch(IActorDispatchPort dispatchPort)
-    {
-        var service = new DefaultCommandDispatchService<
-            StudioProjectionActorCommand,
-            StudioProjectionActorCommandTarget,
-            StudioProjectionActorCommandReceipt,
-            StudioProjectionActorCommandStartError>(
-            new DefaultCommandDispatchPipeline<
-                StudioProjectionActorCommand,
-                StudioProjectionActorCommandTarget,
-                StudioProjectionActorCommandReceipt,
-                StudioProjectionActorCommandStartError>(
-                new StudioProjectionActorCommandTargetResolver(),
-                new DefaultCommandContextPolicy(),
-                new StudioProjectionActorCommandEnvelopeFactory(),
-                new ActorCommandTargetDispatcher<StudioProjectionActorCommandTarget>(dispatchPort),
-                new StudioProjectionActorCommandReceiptFactory()));
-        return new StudioProjectionActorCommandDispatch(service);
     }
 
     private static HttpContext CreateAuthenticatedContext(string claimedScopeId)

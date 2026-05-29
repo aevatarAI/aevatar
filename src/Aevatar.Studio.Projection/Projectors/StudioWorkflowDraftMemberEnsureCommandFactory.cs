@@ -12,6 +12,11 @@ internal sealed record StudioWorkflowDraftMemberEnsureCommandPlan(
     string CommandId,
     string DeduplicationOperationId);
 
+// Refactor (iter1357/cluster-explicit-scope-draft-member-repair):
+//   Old pattern: live committed-draft projection built EnsureStudioMember
+//   commands inline, leaving the explicit one-shot repair path free to drift.
+//   New principle: live projection and scoped repair share one typed command
+//   plan so actor identity, command id, and deduplication semantics stay equal.
 internal sealed class StudioWorkflowDraftMemberEnsureCommandFactory
 {
     internal const string PublisherId = "aevatar.studio.projection.workflow-draft-member-ensure";

@@ -20,8 +20,8 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
             NewDraft("workflow-1", "Workflow One"),
             NewDraft("workflow-2", "Workflow Two"),
         ]);
-        var bootstrap = new RecordingBootstrap();
-        var dispatch = new RecordingDispatchPort();
+        var bootstrap = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap();
+        var dispatch = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingDispatchPort();
         var service = NewService(workspace, bootstrap, dispatch);
 
         var result = await service.RepairScopeAsync("scope-1");
@@ -52,8 +52,11 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
         var workspace = new StubWorkspaceQueryPort([
             NewDraft("   ", "Missing Id"),
         ]);
-        var dispatch = new RecordingDispatchPort();
-        var service = NewService(workspace, new RecordingBootstrap(), dispatch);
+        var dispatch = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingDispatchPort();
+        var service = NewService(
+            workspace,
+            new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap(),
+            dispatch);
 
         var result = await service.RepairScopeAsync("scope-1");
 
@@ -74,8 +77,8 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
         ]);
         var service = NewService(
             workspace,
-            new RecordingBootstrap(),
-            new ThrowingDispatchPort());
+            new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap(),
+            new StudioWorkflowDraftMemberCommandDispatchTestHarness.ThrowingDispatchPort());
 
         var result = await service.RepairScopeAsync("scope-1");
 
@@ -123,7 +126,7 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
         new(
             workspaceQueryPort,
             bootstrap,
-            CreateCommandDispatch(dispatchPort),
+            StudioWorkflowDraftMemberCommandDispatchTestHarness.CreateCommandDispatch(dispatchPort),
             new StudioWorkflowDraftMemberEnsureCommandFactory());
 
     private static StudioWorkflowDraftRecord NewDraft(string workflowId, string name) =>
@@ -161,7 +164,11 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
                 UpdatedAtUtc: DateTimeOffset.Parse("2026-05-25T00:00:00Z")));
     }
 
-    private sealed class RecordingBootstrap : IStudioActorBootstrap
+}
+
+internal static class StudioWorkflowDraftMemberCommandDispatchTestHarness
+{
+    public class RecordingBootstrap : IStudioActorBootstrap
     {
         public List<string> EnsuredActorIds { get; } = [];
 
@@ -173,20 +180,7 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
         }
     }
 
-    private sealed class StubActor(string id) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent => throw new NotSupportedException();
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
-            Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class RecordingDispatchPort : IActorDispatchPort
+    public class RecordingDispatchPort : IActorDispatchPort
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
 
@@ -202,7 +196,7 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
         public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);
     }
 
-    private sealed class ThrowingDispatchPort : IActorDispatchPort
+    public class ThrowingDispatchPort : IActorDispatchPort
     {
         public Task<DispatchAdmission> DispatchAsync(
             string actorId,
@@ -211,7 +205,7 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
             throw new InvalidOperationException("dispatch failed");
     }
 
-    private static StudioProjectionActorCommandDispatch CreateCommandDispatch(IActorDispatchPort dispatchPort)
+    public static StudioProjectionActorCommandDispatch CreateCommandDispatch(IActorDispatchPort dispatchPort)
     {
         var service = new DefaultCommandDispatchService<
             StudioProjectionActorCommand,
@@ -229,5 +223,18 @@ public sealed class StudioWorkflowDraftMemberRepairServiceTests
                 new ActorCommandTargetDispatcher<StudioProjectionActorCommandTarget>(dispatchPort),
                 new StudioProjectionActorCommandReceiptFactory()));
         return new StudioProjectionActorCommandDispatch(service);
+    }
+
+    private sealed class StubActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+        public IAgent Agent => throw new NotSupportedException();
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
+            Task.FromResult<IReadOnlyList<string>>([]);
     }
 }

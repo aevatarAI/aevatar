@@ -34,6 +34,11 @@ public sealed record StudioWorkflowDraftMemberRepairItem(
 /// dispatching the existing typed EnsureStudioMember command to the member
 /// actor. No progress, retry, or cross-request state is retained here.
 /// </summary>
+// Refactor (iter1357/cluster-explicit-scope-draft-member-repair):
+//   Old pattern: historical scoped workflow drafts could miss StudioMember
+//   authority creation until another committed draft event replayed.
+//   New principle: an explicit scope-bounded repair reads the workspace
+//   readmodel and reuses the committed-draft EnsureStudioMember command path.
 public sealed class StudioWorkflowDraftMemberRepairService
 {
     private readonly IStudioWorkspaceQueryPort _workspaceQueryPort;
