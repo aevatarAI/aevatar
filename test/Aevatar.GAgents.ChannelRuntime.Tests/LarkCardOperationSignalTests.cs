@@ -292,9 +292,10 @@ public sealed class LarkCardOperationSignalTests
                 },
             }));
 
+        var finalizeCall = await runner.WaitForFinalizeCallAsync();
         runner.FinalizeCalls.Should().ContainSingle();
-        runner.FinalizeCalls[0].FinalText.Should().Be("Sorry, I couldn't complete this reply. Please try again.");
-        runner.FinalizeCalls[0].FinalTextDiffersFromLastFlushed.Should().BeTrue();
+        finalizeCall.FinalText.Should().Be("Sorry, I couldn't complete this reply. Please try again.");
+        finalizeCall.FinalTextDiffersFromLastFlushed.Should().BeTrue();
 
         var finalizing = agent.State.ActiveReplyLifecycles.Single();
         finalizing.Phase.Should().Be(ConversationReplyLifecyclePhase.LarkCardStreaming);
@@ -436,10 +437,16 @@ public sealed class LarkCardOperationSignalTests
 
     private sealed class RecordingCardRunner : IConversationCardTurnRunner
     {
+        private readonly TaskCompletionSource<(string FinalText, bool FinalTextDiffersFromLastFlushed, long Sequence)> _finalizeCall =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public ConversationCardCreateResult CreateResult { get; init; } =
             ConversationCardCreateResult.Succeeded("card_ok", "om_card_msg");
 
         public List<(string FinalText, bool FinalTextDiffersFromLastFlushed, long Sequence)> FinalizeCalls { get; } = [];
+
+        public async Task<(string FinalText, bool FinalTextDiffersFromLastFlushed, long Sequence)> WaitForFinalizeCallAsync() =>
+            await _finalizeCall.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         public Task<ConversationCardCreateResult> RunCardCreateAsync(
             LlmReplyCardStreamChunkEvent chunk,
@@ -467,7 +474,9 @@ public sealed class LarkCardOperationSignalTests
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct)
         {
-            FinalizeCalls.Add((finalText, finalTextDiffersFromLastFlushed, sequence));
+            var call = (finalText, finalTextDiffersFromLastFlushed, sequence);
+            FinalizeCalls.Add(call);
+            _finalizeCall.TrySetResult(call);
             return Task.FromResult(ConversationCardFinalizeResult.Succeeded());
         }
     }

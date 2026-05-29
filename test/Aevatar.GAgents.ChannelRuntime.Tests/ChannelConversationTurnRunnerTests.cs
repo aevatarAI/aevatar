@@ -98,6 +98,33 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldIncludeLarkOperatorIdsInLlmMetadata_WhenAvailable()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-lark-operator-ids",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxLarkOperatorUserId = "ou_operator_1",
+                    NyxLarkOperatorOpenId = "ou_open_operator_1",
+                    NyxLarkOperatorUnionId = "on_operator_1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().Be("ou_operator_1");
+        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorOpenId].Should().Be("ou_open_operator_1");
+        result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUnionId].Should().Be("on_operator_1");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldApplyOwnerUserConfigOverridesToLlmControl_WhenSourceRegistered()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

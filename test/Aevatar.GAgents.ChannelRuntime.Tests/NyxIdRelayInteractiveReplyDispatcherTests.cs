@@ -177,6 +177,61 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_lark_action_intent_sends_text_fallback_even_when_native_is_text()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK,
+            JsonSerializer.Serialize(new { message_id = "mid", platform_message_id = "pmid" }));
+        var client = CreateClient(handler);
+        var producer = Substitute.For<IChannelNativeMessageProducer>();
+        producer.Channel.Returns(ChannelId.From("lark"));
+        producer.Evaluate(Arg.Any<MessageContent>(), Arg.Any<ComposeContext>())
+            .Returns(ComposeCapability.Degraded);
+        producer.Produce(Arg.Any<MessageContent>(), Arg.Any<ComposeContext>())
+            .Returns(new ChannelNativeMessage(
+                Text: "Pick one",
+                CardPayload: null,
+                MessageType: "text",
+                Capability: ComposeCapability.Degraded));
+        var registry = new ChannelMessageComposerRegistry(
+            Array.Empty<IMessageComposer>(),
+            new[] { producer });
+        var dispatcher = new NyxIdRelayInteractiveReplyDispatcher(
+            registry,
+            client,
+            NullLogger<NyxIdRelayInteractiveReplyDispatcher>.Instance);
+        var intent = new MessageContent { Text = "Pick one" };
+        var card = new CardBlock { Title = "Routing", Text = "Choose a route" };
+        card.Fields.Add(new CardField { Title = "Current", Text = "gpt-4.1" });
+        intent.Cards.Add(card);
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "use-fast",
+            Label = "Use fast model",
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            ChannelId.From("lark"),
+            "msg-lark-native-text-actions",
+            "relay-token",
+            intent,
+            new ComposeContext());
+
+        result.Succeeded.Should().BeTrue();
+        result.FellBackToText.Should().BeTrue();
+        producer.DidNotReceive().Produce(Arg.Any<MessageContent>(), Arg.Any<ComposeContext>());
+        using var document = JsonDocument.Parse(handler.LastRequestBody!);
+        document.RootElement
+            .GetProperty("reply")
+            .GetProperty("text")
+            .GetString()
+            .Should()
+            .Be("Pick one\nRouting\nChoose a route\nCurrent: gpt-4.1\n• Use fast model");
+        handler.LastRequestBody.Should().NotContain("metadata");
+        handler.LastRequestBody.Should().NotContain("card");
+    }
+
+    [Fact]
     public async Task DispatchAsync_without_producer_synthesizes_fallback_text_from_cards()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK,
@@ -255,10 +310,11 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
     }
 
     [Fact]
-    public void BuildTextFallback_existing_text_includes_non_input_action_labels()
+    public void BuildTextFallback_existing_text_includes_card_fields_and_non_input_action_labels()
     {
         var intent = new MessageContent { Text = "explicit text" };
-        var card = new CardBlock { Title = "ignored-card-title" };
+        var card = new CardBlock { Title = "card-title", Text = "card-body" };
+        card.Fields.Add(new CardField { Title = "Service", Text = "nyxid" });
         intent.Cards.Add(card);
         intent.Actions.Add(new ActionElement
         {
@@ -275,9 +331,27 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
 
         var fallback = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(intent);
 
-        fallback.Should().Be("explicit text\n• Confirm");
-        fallback.Should().NotContain("ignored-card-title");
+        fallback.Should().Be("explicit text\ncard-title\ncard-body\nService: nyxid\n• Confirm");
         fallback.Should().NotContain("Comment");
+    }
+
+    [Fact]
+    public void BuildTextFallback_select_action_includes_option_labels()
+    {
+        var intent = new MessageContent { Text = "Choose a model" };
+        var select = new ActionElement
+        {
+            Kind = ActionElementKind.Select,
+            ActionId = "model",
+            Label = "Model",
+        };
+        select.Options.Add(new ActionOption { Label = "GPT-4.1", Value = "gpt-4.1" });
+        select.Options.Add(new ActionOption { Label = "Claude Sonnet", Value = "sonnet" });
+        intent.Actions.Add(select);
+
+        var fallback = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(intent);
+
+        fallback.Should().Be("Choose a model\n• Model\n  - GPT-4.1\n  - Claude Sonnet");
     }
 
     [Fact]

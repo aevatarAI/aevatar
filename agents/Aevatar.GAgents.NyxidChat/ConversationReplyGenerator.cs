@@ -235,8 +235,8 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
-        var toolContext = llmControl.ToToolContext(baseToolContext ?? AgentToolExecutionContextMapper.FromMetadata(effectiveMetadata));
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(effectiveMetadata);
+        var toolContext = llmControl.ToToolContext(baseToolContext ?? AgentToolExecutionContextMapper.FromMetadata(effectiveMetadata));
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
@@ -260,7 +260,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt()),
+                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -616,10 +616,13 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         return valid.Length == 0 ? null : valid;
     }
 
-    private string BuildSystemPrompt()
+    private string BuildSystemPrompt(IReadOnlyDictionary<string, string> metadata)
     {
         var prompt = LoadBaseSystemPrompt();
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
+        var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
+        if (!string.IsNullOrWhiteSpace(channelContext))
+            prompt += "\n\n" + channelContext;
 
         if (_localSkillCatalog is not null && _localSkillCatalog.Count > 0)
         {

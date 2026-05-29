@@ -235,6 +235,37 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldExposeLarkOperatorIds_FromCardActionRawPlatformData()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-operator-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_123", "type": "group" },
+              "sender": { "platform_id": "ou_sender_123", "display_name": "User One" },
+              "content": { "type": "card_action", "text": "{\"approved\":true}" },
+              "raw_platform_data": {
+                "event": {
+                  "operator": {
+                    "user_id": "ou_operator_1",
+                    "open_id": "ou_open_operator_1",
+                    "union_id": "on_operator_1"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.TransportExtras.NyxLarkOperatorUserId.Should().Be("ou_operator_1");
+        parsed.Activity.TransportExtras.NyxLarkOperatorOpenId.Should().Be("ou_open_operator_1");
+        parsed.Activity.TransportExtras.NyxLarkOperatorUnionId.Should().Be("on_operator_1");
+    }
+
+    [Fact]
     public void Parse_ShouldPopulateCardAction_ForAgentBuilderFormSubmit()
     {
         var body = """

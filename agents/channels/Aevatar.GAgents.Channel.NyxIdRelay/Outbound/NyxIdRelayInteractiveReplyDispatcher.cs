@@ -65,8 +65,7 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
             return await SendTextFallbackAsync(relayToken, messageId, BuildTextFallback(intent), capability, cancellationToken);
         }
 
-        var native = producer.Produce(intent, context);
-        if (ShouldUseTextOnlyFallback(channel, intent, native))
+        if (ShouldUseTextOnlyFallback(channel, intent))
         {
             _logger.LogInformation(
                 "Interactive reply dispatcher is degrading action card intent to text for channel {Channel}.",
@@ -79,6 +78,7 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
                 cancellationToken);
         }
 
+        var native = producer.Produce(intent, context);
         var body = new ChannelRelayReplyBody(
             Text: native.Text,
             Metadata: native.CardPayload is null ? null : new ChannelRelayReplyMetadata(native.CardPayload));
@@ -95,20 +95,17 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
 
     private static bool ShouldUseTextOnlyFallback(
         ChannelId channel,
-        MessageContent intent,
-        ChannelNativeMessage native)
+        MessageContent intent)
     {
         if (!string.Equals(channel.Value, "lark", StringComparison.OrdinalIgnoreCase))
             return false;
-        if (!native.IsInteractive)
-            return false;
 
-        return HasNonInputActions(intent.Actions) ||
-               intent.Cards.Any(card => HasNonInputActions(card.Actions));
+        return HasUserVisibleActions(intent.Actions) ||
+               intent.Cards.Count > 0;
     }
 
-    private static bool HasNonInputActions(IEnumerable<ActionElement> actions) =>
-        actions.Any(action => action.Kind != ActionElementKind.TextInput);
+    private static bool HasUserVisibleActions(IEnumerable<ActionElement> actions) =>
+        actions.Any(action => action.Kind != ActionElementKind.TextInput || action.Options.Count > 0);
 
     private async Task<InteractiveReplyDispatchResult> SendTextFallbackAsync(
         string relayToken,
@@ -145,24 +142,21 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
         if (!string.IsNullOrWhiteSpace(intent.Text))
             parts.Add(intent.Text);
 
-        if (parts.Count == 0)
+        foreach (var card in intent.Cards)
         {
-            foreach (var card in intent.Cards)
-            {
-                if (!string.IsNullOrWhiteSpace(card.Title))
-                    parts.Add(card.Title);
-                if (!string.IsNullOrWhiteSpace(card.Text))
-                    parts.Add(card.Text);
+            if (!string.IsNullOrWhiteSpace(card.Title))
+                parts.Add(card.Title);
+            if (!string.IsNullOrWhiteSpace(card.Text))
+                parts.Add(card.Text);
 
-                foreach (var field in card.Fields)
-                {
-                    if (!string.IsNullOrWhiteSpace(field.Title) && !string.IsNullOrWhiteSpace(field.Text))
-                        parts.Add($"{field.Title}: {field.Text}");
-                    else if (!string.IsNullOrWhiteSpace(field.Text))
-                        parts.Add(field.Text);
-                    else if (!string.IsNullOrWhiteSpace(field.Title))
-                        parts.Add(field.Title);
-                }
+            foreach (var field in card.Fields)
+            {
+                if (!string.IsNullOrWhiteSpace(field.Title) && !string.IsNullOrWhiteSpace(field.Text))
+                    parts.Add($"{field.Title}: {field.Text}");
+                else if (!string.IsNullOrWhiteSpace(field.Text))
+                    parts.Add(field.Text);
+                else if (!string.IsNullOrWhiteSpace(field.Title))
+                    parts.Add(field.Title);
             }
         }
 
@@ -177,12 +171,23 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
     {
         foreach (var action in actions)
         {
-            if (action.Kind == ActionElementKind.TextInput)
+            if (action.Kind == ActionElementKind.TextInput && action.Options.Count == 0)
                 continue;
-            if (!string.IsNullOrWhiteSpace(action.Label))
-                parts.Add($"• {action.Label}");
-            else if (!string.IsNullOrWhiteSpace(action.ActionId))
-                parts.Add($"• {action.ActionId}");
+
+            var label = !string.IsNullOrWhiteSpace(action.Label)
+                ? action.Label
+                : action.ActionId;
+            if (!string.IsNullOrWhiteSpace(label))
+                parts.Add($"• {label}");
+
+            foreach (var option in action.Options)
+            {
+                var optionLabel = !string.IsNullOrWhiteSpace(option.Label)
+                    ? option.Label
+                    : option.Value;
+                if (!string.IsNullOrWhiteSpace(optionLabel))
+                    parts.Add($"  - {optionLabel}");
+            }
         }
     }
 }

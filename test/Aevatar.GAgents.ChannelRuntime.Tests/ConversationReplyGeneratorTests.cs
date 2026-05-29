@@ -9,6 +9,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -188,6 +189,39 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().Contain("chrono-ai-daily");
         systemPrompt.Should().Contain("When you are following a loaded skill and you hit a missing capability");
         systemPrompt.Should().Contain("ornn_search_skills");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkOperatorUserIdInSystemPrompt()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            llmMiddlewares: [new ChannelContextMiddleware(NullLogger<ChannelContextMiddleware>.Instance)]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-lark-operator-context",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_1",
+                [ChannelMetadataKeys.ConversationId] = "oc_1",
+                [ChannelMetadataKeys.LarkOperatorUserId] = "ou_operator_1",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("operator_user_id: \"ou_operator_1\"");
     }
 
     [Fact]

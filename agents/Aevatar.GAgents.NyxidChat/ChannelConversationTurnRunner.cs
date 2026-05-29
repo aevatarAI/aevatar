@@ -1415,6 +1415,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkChatId))
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
 
+        var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorUserId))
+            metadata[ChannelMetadataKeys.LarkOperatorUserId] = larkOperatorUserId;
+
+        var larkOperatorOpenId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorOpenId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorOpenId))
+            metadata[ChannelMetadataKeys.LarkOperatorOpenId] = larkOperatorOpenId;
+
+        var larkOperatorUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUnionId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
+            metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
+
         return metadata;
     }
 
