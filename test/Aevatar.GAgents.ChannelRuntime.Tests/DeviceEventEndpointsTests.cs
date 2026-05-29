@@ -96,6 +96,29 @@ public class DeviceEventEndpointsTests
 
         inbound.DeviceId.Should().Be("legacy-device-1");
         inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.Motion.Detected.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_motion_detected_explicit_false_maps_to_false()
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-003",
+            event_type = "motion_detected",
+            motion = false,
+        });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = innerEvent },
+            sender = new { id = "device-3" },
+        });
+
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.Motion.Detected.Should().BeFalse();
     }
 
     [Fact]

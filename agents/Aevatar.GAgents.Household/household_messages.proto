@@ -153,7 +153,7 @@ message SpeechDeviceInboundPayload {
 // Defined in Household domain because it's the inbound contract for
 // HouseholdEntity; DeviceEventEndpoints (boundary layer) references
 // this project, keeping dependency direction correct (Host → Domain).
-// Refactor (issue1255-first):
+// Refactor (iter162-cluster-001 #1255-first):
 //   Old pattern: DeviceInbound carried raw payload_json through the actor boundary.
 //   New principle: DeviceInbound carries only known typed payload cases.
 message DeviceInbound {
