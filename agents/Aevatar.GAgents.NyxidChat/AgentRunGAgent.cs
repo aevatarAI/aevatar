@@ -536,8 +536,12 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (stepState.PendingToolCalls.Count > 0)
             return false;
 
+        // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+        // slash silently consumed.
+        // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+        // non-slash text path unchanged (owner-LLM chat fallback).
         if (stepState.FinalNoToolsStep)
-            return true;
+            return isCompletedLlmStep;
 
         if (isCompletedLlmStep && string.IsNullOrWhiteSpace(stepState.AccumulatedText))
             return true;
