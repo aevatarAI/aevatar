@@ -1517,9 +1517,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             CorrelationId = activity.Id,
             // Refactor (iter98/cluster-002): Old=correlation_id doubled as run identity; New=run_id is explicit before persistence/dispatch.
             RunId = AgentRunId.New().Value,
-            TargetActorId = ConversationGAgent.BuildActorId(activity.Conversation!.CanonicalKey),
             RegistrationId = registration.Id,
             Activity = requestActivity,
+            // Refactor (iter394/cluster-issue-394-design): Old pattern: runner filled a canonical TargetActorId placeholder. New principle: ConversationGAgent stamps its owning actor id before persistence/dispatch.
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
