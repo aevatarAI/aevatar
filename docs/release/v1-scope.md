@@ -1,3 +1,9 @@
+---
+title: v1 Scope Freeze Decision Table
+status: active
+owner: loning
+---
+
 # v1 Scope Freeze Decision Table
 
 本文档冻结 2026-05-30 查询到的 `milestone:p0:v1-target` open issue 范围,作为 v1 first-slice 收口与 v2 延后判断依据。
