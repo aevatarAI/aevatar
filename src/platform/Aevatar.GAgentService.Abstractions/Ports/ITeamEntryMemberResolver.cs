@@ -1,5 +1,8 @@
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
+// Refactor (iter-v1/issue1450-first):
+//   Old: resolver contract could be misread as a composite team readiness/status read model.
+//   New: resolver is only for InvokeTeam command target admission and exposes no cross-authority team status.
 /// <summary>
 /// Resolves the Studio team entry member for command target admission. This
 /// contract is not a stable team status/readiness read model and must not be

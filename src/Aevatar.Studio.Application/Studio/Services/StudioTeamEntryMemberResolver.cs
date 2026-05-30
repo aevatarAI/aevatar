@@ -4,6 +4,9 @@ using Aevatar.Studio.Application.Studio.Contracts;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
+// Refactor (iter-v1/issue1450-first):
+//   Old: implementation reads team and member read models and could be misused as composite status.
+//   New: implementation is only for command target admission and returns no composite team readiness.
 /// <summary>
 /// Command target resolver for Studio team entry-member invocation. It reads
 /// the team and member read models only to admit a command and select the
