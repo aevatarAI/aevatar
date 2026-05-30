@@ -43,8 +43,8 @@ public static class DeviceEventEndpoints
     /// Receives a device event callback from NyxID relay.
     /// 1. Lookup registration from projection read model.
     /// 2. HMAC verification (configurable).
-    /// 3. Parse CallbackPayload → DeviceInbound.
-    /// 4. Dispatch via typed device callback command facade.
+    /// 3. Parse CallbackPayload → DeviceInbound known typed payload.
+    /// 4. Reject unknown event_type values before command facade dispatch.
     /// 5. Return 202 Accepted (or 502 on dispatch failure — NyxID retries at transport level).
     /// </summary>
     // Refactor (iter47/issue-873-device-endpoint-direct-runtime-dispatch):
@@ -82,7 +82,8 @@ public static class DeviceEventEndpoints
             return Results.Unauthorized();
         }
 
-        // Parse callback payload
+        // Parse callback payload into the v1 typed DeviceInbound allowlist.
+        // Unknown event_type values are rejected here, before actor/read-model/projection dispatch.
         DeviceInbound inbound;
         try
         {
@@ -196,6 +197,7 @@ public static class DeviceEventEndpoints
         // New principle: terminate NyxID callback JSON at the Host/Adapter boundary.
         // Known device events are allowlisted and mapped to typed Protobuf payload cases.
         // Unknown or malformed content is rejected before any EventEnvelope dispatch can happen.
+        // This endpoint does not accept a raw payload bag for later actor-side interpretation.
         using var innerDoc = JsonDocument.Parse(contentText);
         var inner = innerDoc.RootElement;
         if (inner.ValueKind != JsonValueKind.Object)

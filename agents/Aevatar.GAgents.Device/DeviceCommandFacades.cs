@@ -255,6 +255,7 @@ internal sealed class DeviceCallbackCommandEnvelopeFactory
         // Refactor (iter1281/cluster-001-device-inbound-typed-payload): Old pattern risk was adding a second callback envelope shape.
         // New principle: keep the existing command facade as the only dispatch skeleton.
         // DeviceInbound is packed once into the single EventEnvelope payload used by the actor system.
+        // The endpoint must have already rejected unknown adapter event_type values; this facade only dispatches typed inbound payloads.
         // Payload typing changes at the message contract, not by adding a new transport abstraction.
         return new EventEnvelope
         {

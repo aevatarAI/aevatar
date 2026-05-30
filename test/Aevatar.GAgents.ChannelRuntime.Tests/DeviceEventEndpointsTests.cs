@@ -3,6 +3,11 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Device;
 
@@ -61,6 +66,34 @@ public class DeviceEventEndpointsTests
         inbound.Sensor.Humidity.Should().Be(65.0);
         inbound.Sensor.LightLevel.Should().Be(70.0);
         inbound.Sensor.MotionDetected.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("temperature_change", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Sensor)]
+    [InlineData("person_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera)]
+    [InlineData("scene_summary", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera)]
+    [InlineData("motion_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion)]
+    [InlineData("speech_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Speech)]
+    public void ParseCallbackPayload_known_v1_event_types_map_to_typed_payload_cases(
+        string eventType,
+        Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase expectedPayloadCase)
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = $"evt-{eventType}",
+            source = "device-adapter",
+            event_type = eventType,
+            temperature = 22.5,
+            description = "Person near the front door",
+            detected = true,
+            text = "Lights on",
+        });
+
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "device-v1");
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.EventType.Should().Be(eventType);
+        inbound.PayloadCase.Should().Be(expectedPayloadCase);
     }
 
     [Fact]
@@ -193,6 +226,50 @@ public class DeviceEventEndpointsTests
     }
 
     [Fact]
+    public void DeviceInbound_contract_should_not_expose_raw_payload_bag_fields()
+    {
+        var fieldNames = Aevatar.GAgents.Household.DeviceInbound.Descriptor.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .ToArray();
+
+        fieldNames.Should().NotContain("payload_json");
+        fieldNames.Should().NotContain("raw_payload");
+        fieldNames.Should().NotContain("payload_bytes");
+        fieldNames.Should().NotContain("metadata");
+        Aevatar.GAgents.Household.DeviceInbound.Descriptor.Oneofs
+            .Should().ContainSingle(oneof => oneof.Name == "payload");
+    }
+
+    [Fact]
+    public async Task HandleDeviceCallbackAsync_unknown_event_type_returns_reject_status_and_does_not_dispatch()
+    {
+        var queryPort = Substitute.For<IDeviceRegistrationQueryPort>();
+        var callbackService = Substitute.For<IDeviceCallbackCommandService>();
+        queryPort.GetAsync("reg-unknown", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<DeviceRegistrationEntry?>(MakeRegistration()));
+
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-unknown",
+            event_type = "unknown_type",
+            payload = new { raw = "not admitted" },
+        });
+        var context = CreateJsonHttpContext(EncodeCallbackPayload(innerEvent));
+
+        var result = await InvokeHandleDeviceCallbackAsync(
+            context,
+            "reg-unknown",
+            queryPort,
+            callbackService);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("Invalid callback payload");
+        await callbackService.DidNotReceiveWithAnyArgs()
+            .DispatchCallbackAsync(default!, default);
+    }
+
+    [Fact]
     public void ParseCallbackPayload_inner_json_array_throws_before_dispatch_mapping()
     {
         var payload = JsonSerializer.Serialize(new
@@ -287,6 +364,56 @@ public class DeviceEventEndpointsTests
             content = new { content_type = "text", text = innerEvent, attachments = Array.Empty<object>() },
             timestamp = "2026-04-09T10:00:00Z",
         });
+    }
+
+    private static HttpContext CreateJsonHttpContext(string body)
+    {
+        var builder = WebApplication.CreateBuilder();
+        var context = new DefaultHttpContext();
+        context.RequestServices = builder.Services.BuildServiceProvider();
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
+        context.Response.Body = new MemoryStream();
+        return context;
+    }
+
+    private static async Task<IResult> InvokeHandleDeviceCallbackAsync(
+        HttpContext context,
+        string registrationId,
+        IDeviceRegistrationQueryPort queryPort,
+        IDeviceCallbackCommandService callbackCommandService)
+    {
+        var method = typeof(DeviceEventEndpoints)
+            .GetMethod("HandleDeviceCallbackAsync", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("HandleDeviceCallbackAsync was not found.");
+
+        var invocationResult = method.Invoke(null, new object[]
+        {
+            context,
+            registrationId,
+            queryPort,
+            callbackCommandService,
+            Options.Create(new DeviceEventOptions { SkipHmacVerification = true }),
+            LoggerFactory.Create(static _ => { }),
+            CancellationToken.None,
+        });
+
+        if (invocationResult is Task<IResult> resultTask)
+            return await resultTask;
+
+        throw new InvalidOperationException("HandleDeviceCallbackAsync did not return Task<IResult>.");
+    }
+
+    private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
+    {
+        var builder = WebApplication.CreateBuilder();
+        var context = new DefaultHttpContext();
+        context.RequestServices = builder.Services.BuildServiceProvider();
+        context.Response.Body = new MemoryStream();
+        await result.ExecuteAsync(context);
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body, Encoding.UTF8);
+        return (context.Response.StatusCode, await reader.ReadToEndAsync());
     }
 
     private static (HttpContext context, byte[] bodyBytes) CreateContextWithSignature(
