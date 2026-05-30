@@ -152,7 +152,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
         {
             ForwardToModel = new ForwardToModel
             {
-                ToolSetRef = new ChatRouteToolSetRef { Name = "voice.realtime" },
+                ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
                 ToolChoiceHint = new ChatRouteToolChoiceHint
                 {
                     ToolName = "aevatar_invoke_gagent",

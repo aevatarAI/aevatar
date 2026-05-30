@@ -49,7 +49,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
                     Priority = 900,
                     Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
                     Action = GAgentToolHint("old-agent", "voice_presence_openai"),
-                    Description = "replace stale voice demo rule",
+                    Description = "remove stale voice demo rule",
                 },
             ]);
         var routePolicyQueryPort = new StaticRoutePolicyQueryPort(existing);
@@ -94,11 +94,39 @@ public sealed class VoiceDemoBootstrapEndpointsTests
             "Refactor (issue1321-first): bootstrap removes the stale route that used tool_choice_hint as actor addressing");
     }
 
+    [Fact]
+    public async Task Bootstrap_DoesNotCreateRoutePolicy_WhenNoExistingPolicyExists()
+    {
+        var voiceDemoCommandPort = new RecordingVoiceDemoAgentCommandPort();
+        var catalogCommandPort = new RecordingCatalogCommandPort();
+        var routePolicyQueryPort = new StaticRoutePolicyQueryPort(null);
+        var routePolicyCommandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(
+            voiceDemoCommandPort,
+            catalogCommandPort,
+            routePolicyCommandPort,
+            routePolicyQueryPort);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync("/api/demo/voice/bootstrap", content: null);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, object?>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+        voiceDemoCommandPort.Commands.Should().ContainSingle()
+            .Which.Should().Be((Scope, "voice_presence_openai"));
+        catalogCommandPort.Commands.Should().ContainSingle()
+            .Which.AgentId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
+        routePolicyCommandPort.Upserts.Should().BeEmpty(
+            "bootstrap must not create a placeholder route policy for unsupported voice realtime execution");
+        body.Should().ContainKey("route_policy_actor_id").WhoseValue.Should().BeNull();
+        body.Should().ContainKey("route_policy_command_id").WhoseValue.Should().BeNull();
+    }
+
     private static ChatRouteAction GAgentToolHint(string actorId, string voiceModuleName) => new()
     {
         ForwardToModel = new ForwardToModel
         {
-            ToolSetRef = new ChatRouteToolSetRef { Name = "voice.realtime" },
+            ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
             ToolChoiceHint = new ChatRouteToolChoiceHint
             {
                 ToolName = "aevatar_invoke_gagent",
