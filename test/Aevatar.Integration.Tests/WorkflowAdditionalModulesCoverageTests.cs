@@ -773,6 +773,24 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         await module.HandleAsync(
             Envelope(new StepRequestEvent
             {
+                StepId = "approval-camel-legacy",
+                StepType = "human_approval",
+                RunId = "run-camel-legacy",
+                Parameters =
+                {
+                    ["deliveryAgentId"] = "legacy-agent-camel",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var camelLegacySuspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        camelLegacySuspended.DeliveryTargetId.Should().Be("legacy-agent-camel");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
                 StepId = "approval-precedence",
                 StepType = "human_approval",
                 RunId = "run-precedence",
