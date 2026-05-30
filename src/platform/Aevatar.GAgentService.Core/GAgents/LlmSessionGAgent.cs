@@ -579,8 +579,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         CancellationToken ct)
     {
         var provider = Services.GetRequiredService<ILLMProviderFactory>().GetDefault();
-        var contextMetadata = BuildToolContextMetadata(command);
-        var tools = await BuildEffectiveToolsAsync(command, contextMetadata, ct);
+        var toolContext = BuildToolContext(command);
+        var tools = await BuildEffectiveToolsAsync(command, toolContext, ct);
         var messages = command.Messages.Select(ToChatMessage).ToList();
         var outputText = new System.Text.StringBuilder();
         TokenUsage? usage = null;
@@ -598,6 +598,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                     command.ResponseId,
                     new LLMRequestCallerCredentials(command.BearerToken)),
                 Tools = tools,
+                ToolContext = toolContext,
                 LlmControl = new LLMControlContext(
                     NyxIdAccessToken: null,
                     NyxIdOrgToken: null,
@@ -612,7 +613,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             };
 
             var toolCalls = new RuntimeToolCallAccumulator();
-            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(contextMetadata)))
+            using (AgentToolContextScope.Push(toolContext))
             {
                 await foreach (var chunk in provider.ChatStreamAsync(roundRequest, ct))
                 {
@@ -696,7 +697,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                 Role = "assistant",
                 ToolCalls = localToolCalls,
             });
-            await ExecuteLocalToolCallsAsync(command, runId, round, localToolCalls, tools, messages, contextMetadata, ct);
+            await ExecuteLocalToolCallsAsync(command, runId, round, localToolCalls, tools, messages, toolContext, ct);
         }
 
         await PersistDomainEventAsync(new LlmRunCompleted
@@ -711,16 +712,18 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
     private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
         LlmRunRequested command,
-        IReadOnlyDictionary<string, string> contextMetadata,
+        AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
         var providers = Services.GetServices<IResponsesToolProvider>().ToArray();
         var context = new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
-                command.ScopeId,
-                command.OwnerSubject,
-                State.Record?.OriginKind.ToString() ?? string.Empty),
-            contextMetadata);
+            toolContext with
+            {
+                Channel = toolContext.Channel with
+                {
+                    Platform = State.Record?.OriginKind.ToString(),
+                },
+            });
 
         var substituteTools = new List<IAgentTool>();
         var additiveTools = new List<IAgentTool>();
@@ -776,7 +779,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         IReadOnlyList<ToolCall> localToolCalls,
         IReadOnlyList<IAgentTool> tools,
         List<ChatMessage> messages,
-        IReadOnlyDictionary<string, string> contextMetadata,
+        AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
         var toolsByName = tools
@@ -784,10 +787,11 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
 
-        using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(contextMetadata)))
+        using (AgentToolContextScope.Push(toolContext))
         {
             foreach (var toolCall in localToolCalls)
             {
+                using var _ = AgentToolContextScope.Push(toolContext.WithCallId(toolCall.Id));
                 var result = toolsByName.TryGetValue(toolCall.Name, out var tool)
                     ? await tool.ExecuteAsync(
                         string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson,
@@ -813,16 +817,19 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         }
     }
 
-    private static IReadOnlyDictionary<string, string> BuildToolContextMetadata(LlmRunRequested command) =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
-            [LLMRequestMetadataKeys.ResponseId] = command.ResponseId,
-            [LLMRequestMetadataKeys.ScopeId] = command.ScopeId,
-            [LLMRequestMetadataKeys.OwnerSubject] = command.OwnerSubject,
-            ["scope_id"] = command.ScopeId,
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = command.BearerToken,
-        };
+    // Refactor (issue1416-first):
+    //   Old pattern: actor helper rebuilt Responses tool context as string-key metadata from LlmRunRequested scalars.
+    //   New principle: actor helper builds AgentToolExecutionContext directly until the later proto slice can carry tool_context.
+    private static AgentToolExecutionContext BuildToolContext(LlmRunRequested command) =>
+        new(
+            new AgentToolRequestIdentity(command.ResponseId, null),
+            new AgentToolCredentials(command.BearerToken, null, null),
+            new AgentToolCallerContext(command.ScopeId, command.OwnerSubject, command.ResponseId),
+            AgentToolChannelContext.Empty,
+            AgentToolSenderBindingContext.Empty,
+            new LLMRequestRoutingContext(null, NormalizeOptional(command.RoutePreference), null, null),
+            AgentToolConnectedServicesContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
     private static IReadOnlyDictionary<string, string> BuildProviderMetadata(LlmRunRequested command) =>
         new Dictionary<string, string>(StringComparer.Ordinal)

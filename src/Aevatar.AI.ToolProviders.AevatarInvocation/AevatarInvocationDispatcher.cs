@@ -181,7 +181,7 @@ public sealed class AevatarInvocationDispatcher
                 scope.Value!.ScopeId,
                 request.TeamId.Trim(),
                 ct);
-            var invocation = BuildStaticInvocationRequest(resolution, request, scope.Value!);
+            var invocation = BuildStaticInvocationRequest(resolution, request);
             return wait == InvocationWaitMode.Complete
                 ? await InvokeTeamToCompletionAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct)
                 : await InvokeTeamToAcceptanceAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct);
@@ -572,8 +572,7 @@ public sealed class AevatarInvocationDispatcher
 
     private StaticGAgentStreamInvocationRequest BuildStaticInvocationRequest(
         TeamEntryMemberResolution resolution,
-        InvokeTeamToolRequest request,
-        InvocationCallerScope scope)
+        InvokeTeamToolRequest request)
     {
         // Refactor (iter1353/cluster-001): Old pattern: team dispatch stamped trusted caller/control facts into Headers.
         // New principle: Headers carries only filtered payload headers; typed ToolContext and LlmControl carry trusted facts.
@@ -975,6 +974,8 @@ public sealed class AevatarInvocationDispatcher
 
     private static LLMControlContext ToLlmControlContext(AgentToolExecutionContext? context)
     {
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         return new LLMControlContext(
             context.Credentials.NyxIdAccessToken,

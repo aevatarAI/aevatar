@@ -1298,7 +1298,12 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.Receipt.Should().Be(new NyxIdChatAcceptedReceipt(actor.Id, "session-1", "session-1", "session-1"));
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.ActorId.Should().Be(actor.Id);
+        result.Receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        result.Receipt.CommandId.Should().NotBe("session-1");
+        result.Receipt.CorrelationId.Should().Be(result.Receipt.CommandId);
+        result.Receipt.SessionId.Should().Be("session-1");
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.Completed.Should().BeTrue();
         result.FinalizeResult.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
@@ -1309,7 +1314,7 @@ public class NyxIdChatEndpointsCoverageTests
         dispatchPort.Dispatches.Should().ContainSingle();
         var envelope = dispatchPort.Dispatches.Single().Envelope;
         envelope.Route?.Direct?.TargetActorId.Should().Be(actor.Id);
-        envelope.Propagation?.CorrelationId.Should().Be("session-1");
+        envelope.Propagation?.CorrelationId.Should().Be(result.Receipt.CorrelationId);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-1");
@@ -1322,6 +1327,59 @@ public class NyxIdChatEndpointsCoverageTests
         emitted.Select(x => x.EventCase).Should().ContainInOrder(
             AGUIEvent.EventOneofCase.TextMessageContent,
             AGUIEvent.EventOneofCase.RunFinished);
+    }
+
+    [Fact]
+    public async Task NyxIdChatInteraction_ShouldPreserveExplicitCommandAndCorrelationIdentity()
+    {
+        var actor = new StubActor("actor-1");
+        var runtime = new StubActorRuntime();
+        runtime.Actors[actor.Id] = actor;
+        var projectionPort = new StubNyxIdChatSessionProjectionPort
+        {
+            Messages =
+            {
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
+            },
+        };
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
+
+        var result = await interaction.ExecuteAsync(
+            new NyxIdChatCommand(
+                actor.Id,
+                "scope-a",
+                "hello",
+                "session-1",
+                "access-token",
+                null,
+                null,
+                CommandId: "command-explicit",
+                CorrelationId: "correlation-explicit"),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be(new NyxIdChatAcceptedReceipt(
+            actor.Id,
+            "command-explicit",
+            "correlation-explicit",
+            "session-1"));
+        projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
+            x.ActorId == actor.Id &&
+            x.SessionId == "session-1");
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        envelope.Propagation?.CorrelationId.Should().Be("correlation-explicit");
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        request.SessionId.Should().Be("session-1");
     }
 
     [Fact]
@@ -1397,6 +1455,58 @@ public class NyxIdChatEndpointsCoverageTests
         decision.SessionId.Should().Be("session-1");
         decision.Approved.Should().BeFalse();
         decision.Reason.Should().Be("deny");
+    }
+
+    [Fact]
+    public async Task NyxIdApprovalInteraction_ShouldPreserveExplicitCommandAndCorrelationIdentity()
+    {
+        var actor = new StubActor("actor-1");
+        var runtime = new StubActorRuntime();
+        runtime.Actors[actor.Id] = actor;
+        var projectionPort = new StubNyxIdChatSessionProjectionPort
+        {
+            Messages =
+            {
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
+            },
+        };
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
+
+        var result = await interaction.ExecuteAsync(
+            new NyxIdApprovalCommand(
+                actor.Id,
+                "request-1",
+                true,
+                "approved",
+                "session-1",
+                CommandId: "approval-command-explicit",
+                CorrelationId: "approval-correlation-explicit"),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be(new NyxIdChatAcceptedReceipt(
+            actor.Id,
+            "approval-command-explicit",
+            "approval-correlation-explicit",
+            "session-1"));
+        projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
+            x.ActorId == actor.Id &&
+            x.SessionId == "session-1");
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        envelope.Propagation?.CorrelationId.Should().Be("approval-correlation-explicit");
+        var decision = envelope.Payload.Unpack<ToolApprovalDecisionEvent>();
+        decision.RequestId.Should().Be("request-1");
+        decision.SessionId.Should().Be("session-1");
     }
 
     [Fact]

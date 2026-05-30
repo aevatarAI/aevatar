@@ -17,10 +17,12 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
 public sealed class ChannelIdentityOrleansDispatchProjectionTests
 {
+    // Refactor (iter290/cluster517-first):
+    //   Old pattern: channel identity tests covered handler bodies and a commit-only Orleans projection path.
+    //   New principle: Orleans dispatch/projection tests cover commit, revoke delete, and duplicate commit without projection-only no-op events.
     [Fact]
     public async Task CommitBindingDispatch_ShouldReplayCommittedEventToChannelIdentityReadModel()
     {
-        // Refactor (iter290/cluster517-first): Old: channel identity tests covered handler bodies and in-process dispatch only. New: Orleans dispatch + replay covers committed-state projection.
         var observer = new ObservingExternalIdentityBindingWriter();
         using var host = await StartSiloHostAsync(observer);
         var subject = new ExternalSubjectRef
@@ -59,6 +61,117 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
         stored.Should().BeEquivalentTo(projected);
     }
 
+    [Fact]
+    public async Task RevokeBindingDispatch_ShouldDeleteProjectionAndResolveNull()
+    {
+        var observer = new ObservingExternalIdentityBindingWriter();
+        using var host = await StartSiloHostAsync(observer);
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "tenant-issue1355-revoke",
+            ExternalUserId = $"user-{Guid.NewGuid():N}",
+        };
+        var actorId = subject.ToActorId();
+
+        var commitDispatch = host.Services.GetRequiredService<
+            ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
+        var revokeDispatch = host.Services.GetRequiredService<
+            ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
+
+        var commit = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd-issue1355-revoke",
+        });
+        commit.Succeeded.Should().BeTrue();
+
+        var upserted = await observer.WaitForUpsertAsync(actorId, TestTimeout);
+        upserted.BindingId.Should().Be("bnd-issue1355-revoke");
+
+        var revoke = await revokeDispatch.DispatchAsync(new RevokeBindingCommand
+        {
+            ExternalSubject = subject,
+            Reason = "issue1355-test",
+        });
+        revoke.Succeeded.Should().BeTrue();
+
+        await observer.WaitForDeleteAsync(actorId, TestTimeout);
+
+        var queryPort = host.Services.GetRequiredService<IExternalIdentityBindingQueryPort>();
+        var resolved = await queryPort.ResolveAsync(subject);
+        resolved.Should().BeNull();
+
+        var reader = host.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>();
+        var stored = await reader.GetAsync(actorId);
+        stored.Should().BeNull();
+
+        observer.Snapshot(actorId)
+            .Should()
+            .Equal(
+                BindingWriteObservation.Upsert(actorId, "bnd-issue1355-revoke", 1),
+                BindingWriteObservation.Delete(actorId));
+    }
+
+    [Fact]
+    public async Task DuplicateCommitDispatch_ShouldNotOverwriteFirstBinding()
+    {
+        var observer = new ObservingExternalIdentityBindingWriter();
+        using var host = await StartSiloHostAsync(observer);
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "tenant-issue1355-duplicate",
+            ExternalUserId = $"user-{Guid.NewGuid():N}",
+        };
+        var actorId = subject.ToActorId();
+
+        var commitDispatch = host.Services.GetRequiredService<
+            ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
+        var revokeDispatch = host.Services.GetRequiredService<
+            ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
+
+        var firstCommit = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd-issue1355-first",
+        });
+        firstCommit.Succeeded.Should().BeTrue();
+
+        var firstProjected = await observer.WaitForUpsertAsync(actorId, TestTimeout);
+        firstProjected.BindingId.Should().Be("bnd-issue1355-first");
+        firstProjected.StateVersion.Should().Be(1);
+
+        var duplicateCommit = await commitDispatch.DispatchAsync(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd-issue1355-second",
+        });
+        duplicateCommit.Succeeded.Should().BeTrue();
+
+        var revoke = await revokeDispatch.DispatchAsync(new RevokeBindingCommand
+        {
+            ExternalSubject = subject,
+            Reason = "issue1355-duplicate-barrier",
+        });
+        revoke.Succeeded.Should().BeTrue();
+
+        await observer.WaitForDeleteAsync(actorId, TestTimeout);
+
+        observer.Snapshot(actorId)
+            .Should()
+            .Equal(
+            [
+                BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1),
+                BindingWriteObservation.Delete(actorId)
+            ],
+                "the revoke delete is an ordered barrier after the duplicate commit turn");
+
+        var queryPort = host.Services.GetRequiredService<IExternalIdentityBindingQueryPort>();
+        var resolved = await queryPort.ResolveAsync(subject);
+        resolved.Should().BeNull();
+    }
+
     private static TimeSpan TestTimeout => TimeSpan.FromSeconds(20);
 
     private static Task<IHost> StartSiloHostAsync(ObservingExternalIdentityBindingWriter observer) =>
@@ -87,22 +200,37 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
     internal sealed class ObservingExternalIdentityBindingWriter
     {
         private readonly object _gate = new();
-        private readonly Dictionary<string, TaskCompletionSource<ExternalIdentityBindingDocument>> _upsertsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<BindingWriteObservation>> _observationsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, ExternalIdentityBindingDocument> _latestUpsertsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TaskCompletionSource<ExternalIdentityBindingDocument>> _nextUpsertsById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TaskCompletionSource<string>> _nextDeletesById = new(StringComparer.Ordinal);
 
         public void ObserveUpsert(ExternalIdentityBindingDocument document)
         {
             TaskCompletionSource<ExternalIdentityBindingDocument> completion;
             lock (_gate)
             {
-                if (!_upsertsById.TryGetValue(document.Id, out completion!))
-                {
-                    completion = new TaskCompletionSource<ExternalIdentityBindingDocument>(
-                        TaskCreationOptions.RunContinuationsAsynchronously);
-                    _upsertsById[document.Id] = completion;
-                }
+                ObservationsFor(document.Id).Add(BindingWriteObservation.Upsert(
+                    document.Id,
+                    document.BindingId,
+                    document.StateVersion));
+                _latestUpsertsById[document.Id] = document.Clone();
+                completion = ConsumeNextUpsertCompletion(document.Id);
             }
 
             completion.TrySetResult(document.Clone());
+        }
+
+        public void ObserveDelete(string id)
+        {
+            TaskCompletionSource<string> completion;
+            lock (_gate)
+            {
+                ObservationsFor(id).Add(BindingWriteObservation.Delete(id));
+                completion = ConsumeNextDeleteCompletion(id);
+            }
+
+            completion.TrySetResult(id);
         }
 
         public Task<ExternalIdentityBindingDocument> WaitForUpsertAsync(string id, TimeSpan timeout)
@@ -110,16 +238,102 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             TaskCompletionSource<ExternalIdentityBindingDocument> completion;
             lock (_gate)
             {
-                if (!_upsertsById.TryGetValue(id, out completion!))
-                {
-                    completion = new TaskCompletionSource<ExternalIdentityBindingDocument>(
-                        TaskCreationOptions.RunContinuationsAsynchronously);
-                    _upsertsById[id] = completion;
-                }
+                if (_latestUpsertsById.TryGetValue(id, out var latest))
+                    return Task.FromResult(latest.Clone());
+                completion = GetOrCreateNextUpsertCompletion(id);
             }
 
             return completion.Task.WaitAsync(timeout);
         }
+
+        public Task<string> WaitForDeleteAsync(string id, TimeSpan timeout)
+        {
+            TaskCompletionSource<string> completion;
+            lock (_gate)
+            {
+                if (_observationsById.TryGetValue(id, out var observations) &&
+                    observations.Any(static observation => observation.Operation == nameof(BindingWriteObservation.Delete)))
+                {
+                    return Task.FromResult(id);
+                }
+
+                completion = GetOrCreateNextDeleteCompletion(id);
+            }
+
+            return completion.Task.WaitAsync(timeout);
+        }
+
+        public IReadOnlyList<BindingWriteObservation> Snapshot(string id)
+        {
+            lock (_gate)
+            {
+                return _observationsById.TryGetValue(id, out var observations)
+                    ? observations.ToArray()
+                    : [];
+            }
+        }
+
+        private List<BindingWriteObservation> ObservationsFor(string id)
+        {
+            if (!_observationsById.TryGetValue(id, out var observations))
+            {
+                observations = new List<BindingWriteObservation>();
+                _observationsById[id] = observations;
+            }
+
+            return observations;
+        }
+
+        private TaskCompletionSource<ExternalIdentityBindingDocument> GetOrCreateNextUpsertCompletion(string id)
+        {
+            if (!_nextUpsertsById.TryGetValue(id, out var completion))
+            {
+                completion = new TaskCompletionSource<ExternalIdentityBindingDocument>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _nextUpsertsById[id] = completion;
+            }
+
+            return completion;
+        }
+
+        private TaskCompletionSource<ExternalIdentityBindingDocument> ConsumeNextUpsertCompletion(string id)
+        {
+            var completion = GetOrCreateNextUpsertCompletion(id);
+            _nextUpsertsById.Remove(id);
+            return completion;
+        }
+
+        private TaskCompletionSource<string> GetOrCreateNextDeleteCompletion(string id)
+        {
+            if (!_nextDeletesById.TryGetValue(id, out var completion))
+            {
+                completion = new TaskCompletionSource<string>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _nextDeletesById[id] = completion;
+            }
+
+            return completion;
+        }
+
+        private TaskCompletionSource<string> ConsumeNextDeleteCompletion(string id)
+        {
+            var completion = GetOrCreateNextDeleteCompletion(id);
+            _nextDeletesById.Remove(id);
+            return completion;
+        }
+    }
+
+    internal sealed record BindingWriteObservation(
+        string Id,
+        string Operation,
+        string? BindingId,
+        long? StateVersion)
+    {
+        public static BindingWriteObservation Upsert(string id, string bindingId, long stateVersion) =>
+            new(id, nameof(Upsert), bindingId, stateVersion);
+
+        public static BindingWriteObservation Delete(string id) =>
+            new(id, nameof(Delete), null, null);
     }
 
     internal sealed class ObservingProjectionDocumentWriter(
@@ -137,8 +351,13 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             return result;
         }
 
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
-            inner.DeleteAsync(id, ct);
+        public async Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            var result = await inner.DeleteAsync(id, ct);
+            if (result.IsApplied)
+                observer.ObserveDelete(id);
+            return result;
+        }
     }
 }
 

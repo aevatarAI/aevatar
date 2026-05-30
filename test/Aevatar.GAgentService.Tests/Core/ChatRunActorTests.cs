@@ -80,7 +80,7 @@ public sealed class ChatRunActorTests
         var history = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
         history.ToolCallId.Should().Be("call_stream");
         history.RunId.Should().Be("run_stream");
-        history.ResultJson.Should().Contain("aevatar://actors/actor-1/runs/run_stream");
+        history.InternalResultJson.Should().Contain("aevatar://actors/actor-1/runs/run_stream");
         history.LlmRound.Should().Be(1);
     }
 
@@ -104,17 +104,155 @@ public sealed class ChatRunActorTests
         {
             RunId = "run_complete",
             Status = "RunFinished",
-            ResultJson = """{"run_id":"run_complete","status":"RunFinished","content":"done"}""",
+            InternalResultJson = """{"run_id":"run_complete","status":"RunFinished","content":"done"}""",
         });
 
         actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
         actor.State.ToolCallHistory.Should().ContainSingle()
-            .Which.ResultJson.Should().Contain("\"content\":\"done\"");
+            .Which.InternalResultJson.Should().Contain("\"content\":\"done\"");
         actor.State.Messages.Should().ContainSingle(message =>
             message.Role == "tool" &&
             message.ToolCallId == "call_complete" &&
             message.Content.Contains("\"content\":\"done\"", StringComparison.Ordinal));
         actor.State.CurrentLlmRound.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task SubmitWaitCompleteThenTerminal_WhenObservedResultIsBlank_ShouldBuildDefaultInternalResultJson()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actor = await StartedActorAsync("resp_default_result", eventStore);
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_default",
+            runId: "run_default",
+            waitMode: ChatRunSubRunWaitMode.Complete,
+            actorId: "actor-default"));
+
+        await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
+        {
+            RunId = "run_default",
+            Status = "RunFinished",
+            InternalResultJson = " ",
+        });
+
+        var history = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
+        history.InternalResultJson.Should().Contain("\"run_id\":\"run_default\"");
+        history.InternalResultJson.Should().Contain("\"actor_id\":\"actor-default\"");
+        actor.State.Messages.Should().ContainSingle(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "call_default" &&
+            message.Content == history.InternalResultJson);
+
+        var foldedEvent = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(ChatRunSubRunTerminalFoldedEvent.Descriptor))
+            .Select(static payload => payload.Unpack<ChatRunSubRunTerminalFoldedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        foldedEvent.InternalResultJson.Should().Be(history.InternalResultJson);
+    }
+
+    [Fact]
+    public async Task SubmitWaitComplete_WhenHistoryAlreadyHasInternalResultJson_ShouldNotReopenSubscription()
+    {
+        var actor = await StartedActorAsync("resp_folded_resubmit");
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_folded",
+            runId: "run_folded",
+            waitMode: ChatRunSubRunWaitMode.Complete));
+        await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
+        {
+            RunId = "run_folded",
+            Status = "RunFinished",
+            InternalResultJson = """{"content":"folded"}""",
+        });
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_folded",
+            runId: "run_folded",
+            waitMode: ChatRunSubRunWaitMode.Complete,
+            resultJson: """{"content":"resubmitted"}"""));
+
+        actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
+        actor.State.ToolCallHistory.Should().ContainSingle()
+            .Which.InternalResultJson.Should().Contain("folded");
+    }
+
+    [Fact]
+    public async Task PrepareObservation_WhenHistoryAlreadyHasInternalResultJson_ShouldKeepFoldedResult()
+    {
+        var actor = await StartedActorAsync("resp_folded_prepare");
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_folded_prepare",
+            runId: "run_folded_prepare",
+            waitMode: ChatRunSubRunWaitMode.Stream,
+            resultJson: """{"content":"already-folded"}"""));
+
+        await actor.HandlePrepareSubRunObservationAsync(BuildPrepareObservation(
+            toolCallId: "call_folded_prepare",
+            runId: "run_folded_prepare",
+            actorId: "actor-1"));
+
+        actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
+        actor.State.ToolCallHistory.Should().ContainSingle()
+            .Which.InternalResultJson.Should().Contain("already-folded");
+    }
+
+    [Fact]
+    public void ChatRunResultJsonFields_ShouldRoundTripAsInternalResultJsonOnExistingWireNumbers()
+    {
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunToolCallRecord { ToolCallId = "call-1", InternalResultJson = """{"value":"record"}""" },
+            static message => ChatRunToolCallRecord.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"record"}""");
+        AssertInternalResultJsonRoundTrips(
+            new SubmitChatRunToolCallRequested { ToolCallId = "call-1", InternalResultJson = """{"value":"submit"}""" },
+            static message => SubmitChatRunToolCallRequested.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"submit"}""");
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunToolCallSubmittedEvent { ToolCallId = "call-1", InternalResultJson = """{"value":"submitted"}""" },
+            static message => ChatRunToolCallSubmittedEvent.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"submitted"}""");
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunSubRunTerminalObserved { RunId = "run-1", InternalResultJson = """{"value":"observed"}""" },
+            static message => ChatRunSubRunTerminalObserved.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"observed"}""");
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunSubRunTerminalFoldedEvent { RunId = "run-1", InternalResultJson = """{"value":"folded"}""" },
+            static message => ChatRunSubRunTerminalFoldedEvent.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"folded"}""");
+        AssertInternalResultJsonRoundTrips(
+            new ChatRunToolResultReady { ResponseId = "resp-1", InternalResultJson = """{"value":"ready"}""" },
+            static message => ChatRunToolResultReady.Parser.ParseFrom(message.ToByteArray()).InternalResultJson,
+            """{"value":"ready"}""");
+    }
+
+    [Fact]
+    public void ChatRunInternalMessages_ShouldExposeInternalResultJsonFieldNameOnly()
+    {
+        var messageDescriptors = new[]
+        {
+            ChatRunToolCallRecord.Descriptor,
+            SubmitChatRunToolCallRequested.Descriptor,
+            ChatRunToolCallSubmittedEvent.Descriptor,
+            ChatRunSubRunTerminalObserved.Descriptor,
+            ChatRunSubRunTerminalFoldedEvent.Descriptor,
+            ChatRunToolResultReady.Descriptor,
+        };
+
+        foreach (var descriptor in messageDescriptors)
+        {
+            descriptor.Fields.InFieldNumberOrder()
+                .Should()
+                .ContainSingle(field => field.Name == "internal_result_json");
+            descriptor.Fields.InFieldNumberOrder()
+                .Should()
+                .NotContain(field => field.Name == "result_json");
+        }
     }
 
     [Fact]
@@ -160,7 +298,7 @@ public sealed class ChatRunActorTests
         await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
         {
             RunId = "run_second",
-            ResultJson = """{"run_id":"run_second","content":"second"}""",
+            InternalResultJson = """{"run_id":"run_second","content":"second"}""",
         });
 
         actor.State.ActiveSubRunSubscriptions.Should().ContainSingle()
@@ -173,7 +311,7 @@ public sealed class ChatRunActorTests
         await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
         {
             RunId = "run_first",
-            ResultJson = """{"run_id":"run_first","content":"first"}""",
+            InternalResultJson = """{"run_id":"run_first","content":"first"}""",
         });
 
         actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
@@ -183,9 +321,9 @@ public sealed class ChatRunActorTests
             .Should()
             .Equal("call_second", "call_first");
         actor.State.ToolCallHistory.Single(call => call.RunId == "run_first")
-            .ResultJson.Should().Contain("first");
+            .InternalResultJson.Should().Contain("first");
         actor.State.ToolCallHistory.Single(call => call.RunId == "run_second")
-            .ResultJson.Should().Contain("second");
+            .InternalResultJson.Should().Contain("second");
     }
 
     [Fact]
@@ -305,7 +443,7 @@ public sealed class ChatRunActorTests
         {
             RunId = "run_publish",
             Status = "RunFinished",
-            ResultJson = """{"run_id":"run_publish","content":"published"}""",
+            InternalResultJson = """{"run_id":"run_publish","content":"published"}""",
             ActorId = "actor-1",
             CompletionObserved = true,
         });
@@ -313,13 +451,49 @@ public sealed class ChatRunActorTests
         var published = await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
         published.RunId.Should().Be("run_publish");
         published.CallerToolCallId.Should().Be("call_publish");
-        published.ResultJson.Should().Contain("published");
+        published.InternalResultJson.Should().Contain("published");
         published.Status.Should().Be("RunFinished");
         published.ActorId.Should().Be("actor-1");
         published.CompletionObserved.Should().BeTrue();
 
         var actor = await runtime.GetAsync(actorId);
         ((ChatRunActor)actor!.Agent).State.ActiveSubRunSubscriptions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AdapterSubmitToolCall_ShouldMapBoundaryToolExecutionResultJsonToInternalResultJson()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var adapter = new ChatRunActorAdapter(new RecordingActorRuntime(), dispatchPort);
+        const string boundaryPayload = """{"opaque":"tool-output"}""";
+
+        await adapter.SubmitToolCallAsync(
+            "chat-run:resp_adapter",
+            new ChatRunToolCompletionRequest(
+                "resp_adapter",
+                "gpt-test",
+                [ChatMessage.User("hello")],
+                new ToolCall
+                {
+                    Id = "call_adapter",
+                    Name = "aevatar_invoke_gagent",
+                    ArgumentsJson = """{"actor_id":"actor-1","wait":"complete"}""",
+                },
+                """{"actor_id":"actor-1","wait":"complete"}""",
+                boundaryPayload,
+                1,
+                RunId: "run_adapter",
+                StreamTopic: "aevatar://actors/actor-1/runs/run_adapter",
+                ActorId: "actor-1",
+                WaitMode: ChatRunSubRunWaitMode.Complete));
+
+        var dispatched = dispatchPort.Calls.Should().ContainSingle().Subject;
+        dispatched.actorId.Should().Be("chat-run:resp_adapter");
+        var command = dispatched.envelope.Payload.Unpack<SubmitChatRunToolCallRequested>();
+
+        command.ToolCallId.Should().Be("call_adapter");
+        command.RunId.Should().Be("run_adapter");
+        command.InternalResultJson.Should().Be(boundaryPayload);
     }
 
     [Fact]
@@ -346,7 +520,7 @@ public sealed class ChatRunActorTests
         actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
         var folded = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
         folded.RunId.Should().Be("run_forwarded");
-        folded.ResultJson.Should().Contain("\"content\":\"forwarded done\"");
+        folded.InternalResultJson.Should().Contain("\"content\":\"forwarded done\"");
 
         var foldedEvent = (await eventStore.GetEventsAsync(actor.Id))
             .Select(static evt => evt.EventData)
@@ -434,7 +608,7 @@ public sealed class ChatRunActorTests
             ToolCallId = toolCallId,
             ToolName = "aevatar_invoke_gagent",
             Arguments = BuildArguments(waitMode),
-            ResultJson = resultJson,
+            InternalResultJson = resultJson,
             RunId = runId,
             TargetKind = ChatRunSubRunTargetKind.Gagent,
             TargetId = actorId,
@@ -481,6 +655,15 @@ public sealed class ChatRunActorTests
             ChatRunSubRunWaitMode.Complete => "complete",
             _ => "stream",
         };
+
+    private static void AssertInternalResultJsonRoundTrips<TMessage>(
+        TMessage message,
+        Func<TMessage, string> parse,
+        string expected)
+        where TMessage : IMessage<TMessage>
+    {
+        parse(message).Should().Be(expected);
+    }
 
     private static EventEnvelope BuildForwardedCommittedCompletionEnvelope(
         string sourceActorId,
@@ -593,6 +776,70 @@ public sealed class ChatRunActorTests
         {
             Entries.Add((logLevel, exception, formatter(state, exception)));
         }
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            Task.FromResult<IActor>(new RecordingActor(id ?? $"created:{typeof(TAgent).Name}"));
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            Task.FromResult<IActor>(new RecordingActor(id ?? $"created:{agentType.Name}"));
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(new RecordingActor(id));
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(true);
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingDispatchPort : IActorDispatchPort
+    {
+        public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Calls.Add((actorId, envelope.Clone()));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class RecordingActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+
+        public IAgent Agent { get; } = new RecordingAgent(id);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingAgent(string id) : IAgent
+    {
+        public string Id { get; } = id;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class NoopAsyncDisposable : IAsyncDisposable
