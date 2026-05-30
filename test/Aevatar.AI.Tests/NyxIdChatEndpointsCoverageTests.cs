@@ -1298,7 +1298,12 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.Receipt.Should().Be(new NyxIdChatAcceptedReceipt(actor.Id, "session-1", "session-1", "session-1"));
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.ActorId.Should().Be(actor.Id);
+        result.Receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        result.Receipt.CommandId.Should().NotBe("session-1");
+        result.Receipt.CorrelationId.Should().Be(result.Receipt.CommandId);
+        result.Receipt.SessionId.Should().Be("session-1");
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.Completed.Should().BeTrue();
         result.FinalizeResult.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
@@ -1309,7 +1314,7 @@ public class NyxIdChatEndpointsCoverageTests
         dispatchPort.Dispatches.Should().ContainSingle();
         var envelope = dispatchPort.Dispatches.Single().Envelope;
         envelope.Route?.Direct?.TargetActorId.Should().Be(actor.Id);
-        envelope.Propagation?.CorrelationId.Should().Be("session-1");
+        envelope.Propagation?.CorrelationId.Should().Be(result.Receipt.CorrelationId);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-1");

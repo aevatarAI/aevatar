@@ -806,7 +806,12 @@ public class StreamingProxyCoverageTests
             });
 
         result.Succeeded.Should().BeTrue();
-        result.Receipt.Should().Be(new StreamingProxyRoomChatAcceptedReceipt(actor.Id, "session-123", "session-123", "session-123"));
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.ActorId.Should().Be(actor.Id);
+        result.Receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        result.Receipt.CommandId.Should().NotBe("session-123");
+        result.Receipt.CorrelationId.Should().Be(result.Receipt.CommandId);
+        result.Receipt.SessionId.Should().Be("session-123");
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.Completed.Should().BeTrue();
         result.FinalizeResult.Completion.Should().Be(StreamingProxyProjectionCompletionStatus.Completed);
