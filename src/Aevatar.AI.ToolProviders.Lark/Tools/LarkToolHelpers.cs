@@ -8,6 +8,23 @@ internal static class LarkMessageIdResolver
     private const string ChannelMessageIdKey = "channel.message_id";
     private const string ChannelPlatformMessageIdKey = "channel.platform_message_id";
 
+    // Refactor (issue1378/first-slice): Old: ResolveOrCurrent bypass for reply/react silently
+    // resolved missing message_id to "current message", masking caller errors.
+    // New: explicit structured error on missing message_id; explicit external tools path
+    // remains for legitimate cross-message replies.
+    public static string? ResolveExplicit(string? messageId, out string? error)
+    {
+        error = null;
+
+        if (TryValidate(messageId, out var explicitMessageId, out var explicitError))
+            return explicitMessageId;
+
+        error = !string.IsNullOrWhiteSpace(explicitError)
+            ? explicitError
+            : "message_id is required";
+        return null;
+    }
+
     public static string? ResolveOrCurrent(string? messageId, out bool usedCurrentMessage, out string? error)
     {
         usedCurrentMessage = false;

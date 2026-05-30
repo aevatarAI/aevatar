@@ -17,20 +17,32 @@ public sealed class LarkMessagesReplyTool : AgentToolBase<LarkMessagesReplyTool.
 
     public override string Description =>
         "Reply to a specific Lark message through Nyx-backed transport. " +
-        "On a channel relay turn you can omit message_id to reply to the current inbound Lark message. " +
+        "Requires an explicit external message_id; current relay replies must be sent as the final answer. " +
         "Supports text replies and interactive cards.";
 
     public override ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
+    // Refactor (issue1378/first-slice): Old: ResolveOrCurrent bypass for reply/react silently
+    // resolved missing message_id to "current message", masking caller errors.
+    // New: explicit structured error on missing message_id; explicit external tools path
+    // remains for legitimate cross-message replies.
     protected override async Task<string> ExecuteAsync(Parameters parameters, CancellationToken ct)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return LarkProxyResponseParser.Serialize(new { success = false, error = "No NyxID access token available. User must be authenticated." });
 
-        var messageId = LarkMessageIdResolver.ResolveOrCurrent(parameters.MessageId, out var usedCurrentMessage, out var messageError);
+        var messageId = LarkMessageIdResolver.ResolveExplicit(parameters.MessageId, out var messageError);
         if (!string.IsNullOrWhiteSpace(messageError))
-            return LarkProxyResponseParser.Serialize(new { success = false, error = messageError });
+        {
+            return LarkProxyResponseParser.Serialize(new
+            {
+                success = false,
+                code = "missing_message_id",
+                error = messageError,
+                recommended_action = "final_answer",
+            });
+        }
 
         var normalizedMessageType = NormalizeMessageType(parameters.MessageType);
         if (normalizedMessageType is null)
@@ -97,7 +109,6 @@ public sealed class LarkMessagesReplyTool : AgentToolBase<LarkMessagesReplyTool.
             chat_id = result.ChatId,
             create_time = result.CreateTime,
             reply_in_thread = parameters.ReplyInThread ?? false,
-            used_current_message = usedCurrentMessage ? (bool?)true : null,
         });
     }
 
