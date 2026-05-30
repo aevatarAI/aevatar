@@ -214,6 +214,19 @@ message StudioMemberCreatedEvent {
   google.protobuf.Timestamp created_at_utc = 7;
 }
 
+// Refactor (iter1345/cluster-519-draft-member-authority):
+//   Old pattern: draft member authority could be implied by API/query-side
+//   orchestration instead of an explicit actor-owned command.
+//   New principle: projection fanout sends this typed command through the
+//   existing dispatch envelope so StudioMemberGAgent remains the authority.
+message EnsureStudioMember {
+  string member_id = 1;
+  string scope_id = 2;
+  string display_name = 3;
+  string description = 4;
+  google.protobuf.Timestamp requested_at_utc = 5;
+}
+
 message StudioMemberRenamedEvent {
   string display_name = 1;
   string description = 2;

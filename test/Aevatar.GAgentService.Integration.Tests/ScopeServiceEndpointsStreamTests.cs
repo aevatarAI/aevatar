@@ -287,7 +287,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
-    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishMappedAguiEvent_ToCommandSession()
+    public async Task GAgentDraftRunSessionEventProjector_ShouldIgnoreRawTextFrame_WithoutCommittedCompletion()
     {
         var sessionHub = new RecordingProjectionSessionEventHub();
         var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
@@ -310,6 +310,40 @@ public sealed class ScopeServiceEndpointsStreamTests
                 {
                     SessionId = "msg-1",
                     Delta = "hello",
+                }),
+            },
+            CancellationToken.None);
+
+        sessionHub.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishExplicitAguiObservation_ToCommandSession()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+        var context = new GAgentDraftRunProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "cmd-1",
+            ProjectionKind = "service-draft-run-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "cmd-1",
+                },
+                Payload = Any.Pack(new AGUIEvent
+                {
+                    TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    {
+                        MessageId = "msg-1",
+                        Delta = "hello",
+                    },
                 }),
             },
             CancellationToken.None);
@@ -509,7 +543,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
-    public async Task GAgentDraftRunSessionEventProjector_ShouldAppendRunFinished_ForLiveTextMessageEnd()
+    public async Task GAgentDraftRunSessionEventProjector_ShouldIgnoreRawTextMessageEnd_WithoutCommittedCompletion()
     {
         var sessionHub = new RecordingProjectionSessionEventHub();
         var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
@@ -535,12 +569,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             },
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(2);
-        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
-        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("msg-1");
-        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
-        sessionHub.Published[1].Event.RunFinished!.ThreadId.Should().Be("actor-1");
-        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("cmd-1");
+        sessionHub.Published.Should().BeEmpty();
     }
 
     [Fact]

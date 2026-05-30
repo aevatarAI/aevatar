@@ -14,6 +14,10 @@ namespace Aevatar.Workflow.Core.Modules;
 // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
 //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
 //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+// Refactor (issue1271/first-slice):
+//   Old pattern: TextMessageEndEvent / ChatResponseEvent live frames advanced reflection phases.
+//   New principle: only committed WorkflowRoleReplyRecordedEvent advances or completes pending phases.
+//   SessionId reconciliation stays inside the actor-owned pending_by_session_id protobuf state.
 public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "reflect";
@@ -30,10 +34,12 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames advanced reflect phases.
+        //   New principle: only committed WorkflowRoleReplyRecordedEvent advances pending reflect phases.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor));
+                payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -98,21 +104,12 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        string? content = null;
-        string? sessionId = null;
-        if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ChatResponseEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
+        if (!payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
+            return;
 
+        var roleReply = payload.Unpack<WorkflowRoleReplyRecordedEvent>();
+        var content = roleReply.Content;
+        var sessionId = roleReply.SessionId;
         if (string.IsNullOrWhiteSpace(sessionId))
             return;
 

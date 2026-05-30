@@ -113,6 +113,71 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task HttpConnector_ShouldUseTypedAuthorizationAndIgnoreLegacyMetadataAuth()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var connector = new HttpConnector(
+            "auth-http",
+            "https://example.com",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/invoke"],
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/invoke",
+            HttpAuthorization = " Bearer typed-token ",
+            Metadata = new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer legacy-token",
+            },
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        response.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.Authorization.Should().NotBeNull();
+        handler.LastRequest.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        handler.LastRequest.Headers.Authorization.Parameter.Should().Be("typed-token");
+    }
+
+    [Fact]
+    public async Task HttpConnector_ShouldNotUseLegacyMetadataAuthorization()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var connector = new HttpConnector(
+            "metadata-auth-http",
+            "https://example.com",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/invoke"],
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/invoke",
+            Metadata = new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer legacy-token",
+            },
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        response.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.Authorization.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HttpConnector_ShouldAppendResponseDescriptionToErrorMessage()
     {
         var handler = new StubHttpMessageHandler(_ =>

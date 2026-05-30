@@ -1,10 +1,24 @@
 ---
 title: Tool-First Chat Ingress — Collapse Forward Actions to Model + Tools
-status: Proposed
+status: Accepted
 owner: eanzhao
 ---
 
 # ADR-0026: Tool-First Chat Ingress — Collapse Forward Actions to Model + Tools
+
+## Implementation status
+
+Accepted for the current `ChatRouteAction` contract: the active oneof variants
+are `ForwardToModel` and `Reject`; legacy
+`ForwardToGAgent`/`ForwardToTeam`/`ForwardToWorkflow`/`Bypass` names are
+reserved only. The `ForwardToModel.tool_set_ref + tool_choice_hint` fields
+express tool availability and tool prefill only; they must not be interpreted
+as actor addressing.
+
+D5/D6 describe the later session-owned execution topology. `ChatRunActor` and
+`VoiceSessionActor` are not implemented by this ADR slice, and ordinary
+`/ws/voice` `ForwardToModel` execution remains fail-closed until that topology
+exists.
 
 ## Context
 
@@ -74,10 +88,9 @@ ADR-0024 D1 is preserved. Only the action set narrows.
   `"workspace.default"`, `"lark.self_notify"`, `"voice.realtime"`) maintained
   outside the policy proto so the action stays small.
 - `tool_choice_hint` — optional pinning of a particular tool plus
-  pre-filled named arguments. This is how a policy rule replaces the
-  semantics of "this caller's traffic should always reach GAgent X": it
-  ships `tool_set_ref=...; tool_choice_hint={name: "aevatar_invoke_gagent",
-  prefilled: {actor_id: "X"}}` instead of `ForwardToGAgent(X)`.
+  pre-filled named arguments. It configures the tool call input for ingress
+  paths that actually execute that tool loop; it is not actor addressing and
+  must not be used by `/ws/voice` to choose a WebSocket attach target.
 
 Per CLAUDE.md §"字段命名与 Metadata 决策树" step 1, both fields are typed
 sub-messages, not `map<string, string>` bags.
@@ -138,15 +151,12 @@ Per CLAUDE.md §"Actor 即业务实体", these are named for the business entity
 
 ### D6 — Voice converges on the same ingress shape
 
-`/ws/voice` no longer binds to an actor at WebSocket upgrade time.
-`ChatRouteResolver` runs once at session establishment, returns
-`ForwardToModel(tool_set_ref=..., tool_choice_hint=...)`, and the
-`VoiceSessionActor` issues `session.update` to the OpenAI Realtime provider
-declaring the resolved tool set. Function calls from the model
-(`response.function_call_arguments.done` events) feed the same
-`ToolCallLoop`. Tool results flow back via server-initiated
-`conversation.item.create` + `response.create`, which is the documented
-OpenAI Realtime backchannel for asynchronous tool output.
+`/ws/voice` no longer binds to an actor at WebSocket upgrade time. Until a
+route-scoped `VoiceSessionActor` exists, ordinary `/ws/voice` fails closed for
+`ForwardToModel` decisions before WebSocket accept. The later session actor can
+run `ChatRouteResolver` once at session establishment, declare the resolved
+tool set to the OpenAI Realtime provider, and feed function calls through the
+same `ToolCallLoop` without treating tool prefill as actor addressing.
 
 `/ws/voice/{actorId}` (dev/admin bypass from ADR-0024 D4) stays. It
 short-circuits the resolver, so its semantics are unaffected.

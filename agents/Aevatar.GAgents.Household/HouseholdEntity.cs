@@ -192,10 +192,10 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
         try
         {
-            // Refactor (iter162/cluster-001-first):
-            //   Old pattern: actor branched on EventType then parsed a raw JSON payload field.
-            //   New principle: actor switches on PayloadCase and reads typed proto fields directly;
-            //                  no JSON parsing inside business logic.
+            // Refactor (iter1281/cluster-001-device-inbound-typed-payload): Old pattern: actor parsed DeviceInbound.PayloadJson by event_type.
+            // New principle: Host/Adapter owns JSON parsing and allowlist admission.
+            // HouseholdEntity consumes only typed Protobuf payload cases and ignores missing payloads.
+            // This keeps actor control flow independent of external callback JSON shape.
             switch (evt.PayloadCase)
             {
                 case DeviceInbound.PayloadOneofCase.Sensor:
@@ -209,24 +209,24 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
                     });
                     break;
                 }
-                case DeviceInbound.PayloadOneofCase.CameraScene:
+                case DeviceInbound.PayloadOneofCase.Camera:
                 {
-                    await HandleCameraScene(new CameraSceneEvent { SceneDescription = evt.CameraScene.Description });
+                    await HandleCameraScene(new CameraSceneEvent { SceneDescription = evt.Camera.SceneDescription });
                     break;
                 }
                 case DeviceInbound.PayloadOneofCase.Motion:
                 {
-                    await HandleSensorData(new SensorDataEvent { MotionDetected = evt.Motion.Detected });
+                    var sensorEvt = new SensorDataEvent { MotionDetected = evt.Motion.Detected };
+                    await HandleSensorData(sensorEvt);
                     break;
                 }
                 case DeviceInbound.PayloadOneofCase.Speech:
                 {
-                    var text = evt.Speech.Text;
-                    if (!string.IsNullOrWhiteSpace(text))
+                    if (!string.IsNullOrWhiteSpace(evt.Speech.Text))
                     {
                         await HandleChat(new HouseholdChatEvent
                         {
-                            Prompt = text,
+                            Prompt = evt.Speech.Text,
                             SessionId = evt.EventId,
                         });
                     }
@@ -235,7 +235,7 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
                 case DeviceInbound.PayloadOneofCase.None:
                 default:
                     Logger.LogWarning(
-                        "[Household] Dropping device event without typed payload: type={EventType}, source={Source}",
+                        "[Household] Device event has no typed payload: type={EventType}, source={Source}",
                         evt.EventType, evt.Source);
                     break;
             }

@@ -14,11 +14,12 @@ Accepted (Phase 1 landed alongside ADR 0019). Co-issued with issues
 
 ## Context
 
-Issue #500 establishes the matrix of actor evolution patterns and identifies
-within-actor state migration as one cell of that matrix. The original
-sketch placed a `state_version` field directly on each business state proto
-("each agent's state proto carries its own schema version"). That coupling
-is wrong:
+The actor evolution matrix in
+`docs/canon/event-sourcing.md#22-actor-evolution-matrix` identifies
+within-actor state migration as one cell of a broader evolution decision.
+The original sketch placed a `state_version` field directly on each
+business state proto ("each agent's state proto carries its own schema
+version"). That coupling is wrong:
 
 - **Business state protos should be pure domain artifacts.** Adding a
   runtime concern (schema version) to every business state proto bleeds
@@ -56,9 +57,9 @@ follows the Protobuf-first mandate.
 Business state protos themselves stay pure domain artifacts and never
 carry a version field.
 
-### Consumer contract (issue #500's lazy migration)
+### Consumer contract (lazy migration)
 
-Issue #500 will land an `IActorStateMigration<TState>` interface for
+The canon matrix reserves an `IActorStateMigration<TState>` interface for
 within-actor schema upgrades. That mechanism reads
 `Identity.StateSchemaVersion` from the runtime envelope, applies registered
 migrations until the version reaches the agent's current schema, persists
@@ -87,7 +88,9 @@ interface lands):
   `IRandom`, or anything that performs I/O.
 
 These constraints are doctrine; the actual interface and CI guard land
-together with the first concrete migration case (deferred per #500).
+together with the first concrete migration case. Until then, the canon
+matrix owns the decision boundary and this ADR only fixes version
+placement.
 
 ### Phase 1 scope (this PR)
 
@@ -95,17 +98,17 @@ together with the first concrete migration case (deferred per #500).
 - Default value is `0`; no migrations are registered yet.
 - `RuntimeActorGrain` reads the field but does not yet route through any
   migration pipeline — that infrastructure lands with the first concrete
-  case per #500.
+  lazy migration case.
 
 This pre-records the field placement so #500's consumer contract reads
 from a known location and so the field is sized correctly in Phase 1
 state rows.
 
-### Out of scope (deferred to issue #500 + follow-up issues)
+### Out of scope (deferred to follow-up issues)
 
 - The migration interface + CI guard (zero-dependency constructor).
-- The strangler-fig (projection-driven) split / merge / re-key cookbook
-  and its `IActorBootstrapPort` prerequisite.
+- Defining actors, proto fields, envelope kinds, pipeline phases, or a
+  state-key protocol for projection-driven split / merge / re-key.
 - The event-immutability policy ADR (separate doctrine ADR).
 - A general-purpose data-transformation framework (explicit non-goal).
 
@@ -118,12 +121,15 @@ state rows.
   without deserializing the state body, decoupling activation safety from
   proto evolution.
 - Cross-actor state evolution (split / merge / re-key) is explicitly **not**
-  served by this version field — those go through projection-driven
-  bootstrap per #500's matrix.
+  served by this version field — those follow the projection-driven
+  bootstrap / retire cleanup / re-key redirect canon in
+  `docs/canon/event-sourcing.md` and `docs/canon/cqrs-projection.md`.
 
 ## References
 
 - Issue #498 — `AgentKind` identity (parent decision; runtime envelope
   introduced there).
-- Issue #500 — actor evolution pattern matrix (consumer of this field).
+- `docs/canon/event-sourcing.md` — actor evolution matrix and lazy state migration constraints.
+- `docs/canon/cqrs-projection.md` — projection-driven split / merge / re-key and query-time replay prohibition.
+- Issue #500 — parent actor evolution discussion.
 - ADR 0019 — companion identity ADR.

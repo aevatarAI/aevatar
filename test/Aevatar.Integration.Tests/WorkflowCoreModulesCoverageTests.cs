@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -897,8 +898,9 @@ public sealed class WorkflowCoreModulesCoverageTests
         var module = new LLMCallModule();
 
         module.CanHandle(Envelope(new StepRequestEvent { StepType = "llm_call", StepId = "s1" })).Should().BeTrue();
-        module.CanHandle(Envelope(new TextMessageEndEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
-        module.CanHandle(Envelope(new ChatResponseEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
+        module.CanHandle(Envelope(new WorkflowRoleReplyRecordedEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
+        module.CanHandle(Envelope(new TextMessageEndEvent { SessionId = "s1", Content = "done" })).Should().BeFalse();
+        module.CanHandle(Envelope(new ChatResponseEvent { SessionId = "s1", Content = "done" })).Should().BeFalse();
         module.CanHandle(Envelope(new WorkflowCompletedEvent { WorkflowName = "wf", Success = true })).Should().BeFalse();
         module.CanHandle(new EventEnvelope()).Should().BeFalse();
     }
@@ -1068,7 +1070,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_TextMessageEndAndChatResponse_ShouldCompleteMatchingPendingStep()
+    public async Task LLMCallModule_LiveFramesShouldNotCompleteAndRoleReplyShouldCompleteMatchingPendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1092,6 +1094,18 @@ public sealed class WorkflowCoreModulesCoverageTests
                 SessionId = textSessionId,
                 Content = "a1",
             }, publisherId: "role-worker-1"),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowRoleReplyRecordedEvent
+            {
+                SessionId = textSessionId,
+                Content = "a1",
+                RoleActorId = "role-worker-1",
+            }),
             ctx,
             CancellationToken.None);
 
@@ -1124,14 +1138,25 @@ public sealed class WorkflowCoreModulesCoverageTests
             ctx,
             CancellationToken.None);
 
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowRoleReplyRecordedEvent
+            {
+                SessionId = chatSessionId,
+                Content = "a2",
+            }),
+            ctx,
+            CancellationToken.None);
+
         var chatCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         chatCompleted.StepId.Should().Be("llm-chat");
-        chatCompleted.WorkerId.Should().Be(ctx.AgentId);
+        chatCompleted.WorkerId.Should().Be("test-publisher");
         chatCompleted.Output.Should().Be("a2");
     }
 
     [Fact]
-    public async Task LLMCallModule_WhenRolePublishesInternalFailureMarker_ShouldPublishFailedStepCompleted()
+    public async Task LLMCallModule_WhenCommittedRoleReplyHasInternalFailureMarker_ShouldPublishFailedStepCompleted()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1150,11 +1175,12 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed", attempt: 1);
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowRoleReplyRecordedEvent
             {
                 SessionId = sessionId,
                 Content = "[[AEVATAR_LLM_ERROR]] provider returned 429",
-            }, publisherId: "role-worker-failed"),
+                RoleActorId = "role-worker-failed",
+            }),
             ctx,
             CancellationToken.None);
 
@@ -1196,15 +1222,28 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_WhenSessionNotPendingOrEmpty_ShouldIgnoreCompletionEvents()
+    public async Task LLMCallModule_LiveFrames_ShouldNotCompletePendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
 
         await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-live-frame",
+                StepType = "llm_call",
+                RunId = "run-live-frame",
+                Input = "q-live",
+            }),
+            ctx,
+            CancellationToken.None);
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-live-frame", "llm-live-frame", attempt: 1);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
-                SessionId = "",
+                SessionId = sessionId,
                 Content = "x",
             }),
             ctx,
@@ -1213,13 +1252,15 @@ public sealed class WorkflowCoreModulesCoverageTests
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
             {
-                SessionId = "missing",
+                SessionId = sessionId,
                 Content = "y",
             }),
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+        ctx.LoadState<LLMCallModuleState>("llm_call")
+            .PendingBySessionId.Should().ContainKey(sessionId);
     }
 
     [Fact]

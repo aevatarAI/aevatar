@@ -33,9 +33,8 @@ public class DeviceEventEndpointsTests
     }
 
     [Fact]
-    public void ParseCallbackPayload_temperature_change_returns_sensor_payload()
+    public void ParseCallbackPayload_known_temperature_maps_to_sensor_payload()
     {
-        // NyxID's actual CallbackPayload format (sender.platform_id, nested conversation)
         var innerEvent = JsonSerializer.Serialize(new
         {
             event_id = "evt-001",
@@ -49,9 +48,7 @@ public class DeviceEventEndpointsTests
         });
 
         var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "device-42");
-
-        var bodyBytes = Encoding.UTF8.GetBytes(payload);
-        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
         inbound.Should().NotBeNull();
         inbound.EventId.Should().Be("evt-001");
@@ -59,7 +56,7 @@ public class DeviceEventEndpointsTests
         inbound.EventType.Should().Be("temperature_change");
         inbound.Timestamp.Should().Be("2026-04-09T10:00:00Z");
         inbound.DeviceId.Should().Be("device-42");
-        inbound.PayloadCase.Should().Be(Household.DeviceInbound.PayloadOneofCase.Sensor);
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Sensor);
         inbound.Sensor.Temperature.Should().Be(28.5);
         inbound.Sensor.Humidity.Should().Be(65.0);
         inbound.Sensor.LightLevel.Should().Be(70.0);
@@ -69,7 +66,6 @@ public class DeviceEventEndpointsTests
     [Fact]
     public void ParseCallbackPayload_legacy_sender_id_also_works()
     {
-        // Backward compat: if sender uses "id" instead of "platform_id"
         var innerEvent = JsonSerializer.Serialize(new
         {
             event_id = "evt-002",
@@ -78,12 +74,33 @@ public class DeviceEventEndpointsTests
         });
 
         var payload = EncodeCallbackPayload(innerEvent, legacySenderId: "legacy-device-1");
-
-        var bodyBytes = Encoding.UTF8.GetBytes(payload);
-        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
         inbound.DeviceId.Should().Be("legacy-device-1");
-        inbound.PayloadCase.Should().Be(Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.Motion.Detected.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_motion_detected_explicit_false_maps_to_false()
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-003",
+            event_type = "motion_detected",
+            motion = false,
+        });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = innerEvent },
+            sender = new { id = "device-3" },
+        });
+
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.Motion.Detected.Should().BeFalse();
     }
 
     [Fact]
@@ -124,7 +141,6 @@ public class DeviceEventEndpointsTests
 
         var act = () => DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
-        // Empty string is not valid JSON for inner parsing
         act.Should().Throw<JsonException>();
     }
 
@@ -132,7 +148,7 @@ public class DeviceEventEndpointsTests
     [InlineData("person_detected")]
     [InlineData("scene_summary")]
     [InlineData("camera_scene")]
-    public void ParseCallbackPayload_camera_aliases_return_camera_scene_payload(string eventType)
+    public void ParseCallbackPayload_known_camera_maps_to_camera_payload(string eventType)
     {
         var innerEvent = JsonSerializer.Serialize(new
         {
@@ -143,33 +159,68 @@ public class DeviceEventEndpointsTests
         });
 
         var payload = EncodeCallbackPayload(innerEvent, legacySenderId: "device-7");
-
-        var bodyBytes = Encoding.UTF8.GetBytes(payload);
-        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
         inbound.EventId.Should().Be($"evt-{eventType}");
         inbound.Source.Should().Be("camera-analyzer");
         inbound.EventType.Should().Be(eventType);
         inbound.DeviceId.Should().Be("device-7");
-        inbound.PayloadCase.Should().Be(Household.DeviceInbound.PayloadOneofCase.CameraScene);
-        inbound.CameraScene.Description.Should().Be("Two people sitting in the living room");
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera);
+        inbound.Camera.SceneDescription.Should().Be("Two people sitting in the living room");
     }
 
     [Fact]
-    public void ParseCallbackPayload_speech_detected_returns_speech_payload()
+    public void ParseCallbackPayload_unknown_event_type_throws_without_raw_payload()
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-unknown",
+            event_type = "unknown_type",
+            payload = new { foo = "bar" },
+        });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = innerEvent },
+            sender = new { id = "device-7" },
+        });
+
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        act.Should().Throw<JsonException>()
+            .WithMessage("*Unsupported device event_type*");
+        Aevatar.GAgents.Household.DeviceInbound.Descriptor.FindFieldByName("payload_json").Should().BeNull();
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_inner_json_array_throws_before_dispatch_mapping()
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = "[]" },
+            sender = new { id = "device-7" },
+        });
+
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_known_speech_maps_to_speech_payload()
     {
         var innerEvent = JsonSerializer.Serialize(new
         {
             event_id = "evt-speech",
+            source = "microphone",
             event_type = "speech_detected",
             text = "Turn on the lights",
         });
 
         var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "microphone-1");
-
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
-        inbound.PayloadCase.Should().Be(Household.DeviceInbound.PayloadOneofCase.Speech);
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Speech);
         inbound.Speech.Text.Should().Be("Turn on the lights");
     }
 
@@ -184,29 +235,10 @@ public class DeviceEventEndpointsTests
         });
 
         var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "motion-1");
-
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
-        inbound.PayloadCase.Should().Be(Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
         inbound.Motion.Detected.Should().BeFalse();
-    }
-
-    [Fact]
-    public void ParseCallbackPayload_unknown_event_type_throws_at_adapter_boundary()
-    {
-        var innerEvent = JsonSerializer.Serialize(new
-        {
-            event_id = "evt-unknown",
-            event_type = "unknown_type",
-            value = 42,
-        });
-
-        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "device-1");
-
-        var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
-
-        act.Should().Throw<JsonException>()
-            .WithMessage("*Unsupported device event_type*");
     }
 
     [Fact]

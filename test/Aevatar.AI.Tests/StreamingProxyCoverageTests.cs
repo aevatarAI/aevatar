@@ -806,7 +806,12 @@ public class StreamingProxyCoverageTests
             });
 
         result.Succeeded.Should().BeTrue();
-        result.Receipt.Should().Be(new StreamingProxyRoomChatAcceptedReceipt(actor.Id, "session-123", "session-123", "session-123"));
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.ActorId.Should().Be(actor.Id);
+        result.Receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        result.Receipt.CommandId.Should().NotBe("session-123");
+        result.Receipt.CorrelationId.Should().Be(result.Receipt.CommandId);
+        result.Receipt.SessionId.Should().Be("session-123");
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.Completed.Should().BeTrue();
         result.FinalizeResult.Completion.Should().Be(StreamingProxyProjectionCompletionStatus.Completed);
@@ -824,6 +829,58 @@ public class StreamingProxyCoverageTests
         emitted.Should().HaveCount(2);
         emitted.Last().Envelope.Payload.Unpack<StreamingProxyChatSessionTerminalStateChanged>().Status
             .Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
+    }
+
+    [Fact]
+    public async Task StreamingProxyRoomInteraction_ShouldPreserveExplicitCommandAndCorrelationIdentity()
+    {
+        var actor = new StubActor("room-a");
+        var runtime = new StubActorRuntime([actor]);
+        var projectionPort = new StubRoomSessionProjectionPort();
+        projectionPort.Messages.Add(new StreamingProxyRoomSessionEnvelope
+        {
+            Envelope = StreamingProxyRoomInteractionHelpers.CreateTerminalEnvelope(
+                actor.Id,
+                "session-123",
+                StreamingProxyChatSessionTerminalStatus.Completed,
+                null),
+        });
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<IStreamingProxyRoomSessionProjectionPort>(projectionPort)
+            .AddSingleton<IStreamingProxyChatSessionTerminalQueryPort>(new StubTerminalQueryPort())
+            .AddStreamingProxy()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>>();
+
+        var result = await interaction.ExecuteAsync(
+            new StreamingProxyRoomChatCommand(
+                actor.Id,
+                "scope-a",
+                "Discuss claims",
+                "session-123",
+                CommandId: "room-command-explicit",
+                CorrelationId: "room-correlation-explicit"),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be(new StreamingProxyRoomChatAcceptedReceipt(
+            actor.Id,
+            "room-command-explicit",
+            "room-correlation-explicit",
+            "session-123"));
+        projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
+            x.actorId == actor.Id &&
+            x.sessionId == "session-123");
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        envelope.Propagation?.CorrelationId.Should().Be("room-correlation-explicit");
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        request.SessionId.Should().Be("session-123");
     }
 
     [Fact]

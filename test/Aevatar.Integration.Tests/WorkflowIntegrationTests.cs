@@ -23,12 +23,16 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
 
 namespace Aevatar.Integration.Tests;
 
@@ -442,6 +446,187 @@ public class WorkflowIntegrationTests
 
         var r1Parent = await r1.GetParentIdAsync();
         r1Parent.Should().Be("root");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_CommittedRoleReplyThroughLocalRelay_ShouldCompletePendingLlmStep()
+    {
+        var eventStore = new InMemoryEventStore();
+        var services = new ServiceCollection();
+        services.AddAevatarRuntime();
+        services.AddSingleton<IEventStore>(eventStore);
+        services.AddSingleton<IEventStoreMaintenance>(eventStore);
+        services.AddAevatarWorkflow();
+        services.AddSingleton<IRoleAgentTypeResolver>(new StaticRoleAgentTypeResolver(typeof(ControlledRoleGAgent)));
+        await using var sp = services.BuildServiceProvider();
+        var runtime = sp.GetRequiredService<IActorRuntime>();
+        var streams = sp.GetRequiredService<IStreamProvider>();
+
+        var runActorId = $"relay-run-{Guid.NewGuid():N}";
+        var roleActorId = $"{runActorId}:writer";
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>(runActorId);
+        var workflowYaml = """
+            name: relay_workflow
+            roles:
+              - id: writer
+                name: Writer
+                system_prompt: "writer"
+                provider: mock
+            steps:
+              - id: draft
+                type: llm_call
+                target_role: writer
+            """;
+
+        await runActor.HandleEventAsync(Envelope(new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = "definition-relay",
+            WorkflowYaml = workflowYaml,
+            WorkflowName = "relay_workflow",
+            RunId = runActorId,
+        }));
+        await runActor.HandleEventAsync(Envelope(new ChatRequestEvent
+        {
+            Prompt = "write",
+            SessionId = "root-session",
+        }));
+
+        var roleActor = await runtime.GetAsync(roleActorId);
+        roleActor.Should().NotBeNull();
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(runActorId, runActorId, "draft", attempt: 1);
+        await runActor.HandleEventAsync(Envelope(new StepRequestEvent
+        {
+            StepId = "draft",
+            StepType = "llm_call",
+            RunId = runActorId,
+            Input = "write",
+            TargetRole = "writer",
+        }));
+
+        var pendingBefore = runActor.Agent.Should().BeOfType<WorkflowRunGAgent>().Subject
+            .GetExecutionState("llm_call")!
+            .Unpack<LLMCallModuleState>();
+        pendingBefore.PendingBySessionId.Should().ContainKey(sessionId);
+
+        await runActor.HandleEventAsync(Envelope(new TextMessageEndEvent
+        {
+            SessionId = sessionId,
+            Content = "live frame only",
+        }, publisherId: roleActorId));
+
+        var persistedAfterLiveFrame = await eventStore.GetEventsAsync(runActorId);
+        persistedAfterLiveFrame
+            .Where(x => x.EventData?.Is(StepCompletedEvent.Descriptor) == true)
+            .Should()
+            .BeEmpty();
+        runActor.Agent.Should().BeOfType<WorkflowRunGAgent>().Subject
+            .GetExecutionState("llm_call")!
+            .Unpack<LLMCallModuleState>()
+            .PendingBySessionId
+            .Should()
+            .ContainKey(sessionId);
+
+        var (completionObserved, completionSubscription) = await ObserveCommittedEventAsync(
+            streams.GetStream(runActorId),
+            StepCompletedEvent.Descriptor.FullName);
+        await using var completionObservation = completionSubscription;
+
+        var controlledRole = roleActor!.Agent.Should().BeOfType<ControlledRoleGAgent>().Subject;
+        controlledRole.CompleteNextRequest();
+        await completionObserved;
+
+        var persisted = await eventStore.GetEventsAsync(runActorId);
+        persisted
+            .Where(x => x.EventData?.Is(WorkflowRoleReplyRecordedEvent.Descriptor) == true)
+            .Should()
+            .ContainSingle();
+        var completed = persisted
+            .Where(x => x.EventData?.Is(StepCompletedEvent.Descriptor) == true)
+            .Select(x => x.EventData!.Unpack<StepCompletedEvent>())
+            .Should()
+            .ContainSingle(x => x.StepId == "draft")
+            .Subject;
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Contain("量子纠缠");
+        completed.WorkerId.Should().Be(roleActorId);
+
+        runActor.Agent.Should().BeOfType<WorkflowRunGAgent>().Subject
+            .GetExecutionState("llm_call")
+            .Should()
+            .BeNull();
+    }
+
+    private static EventEnvelope Envelope(
+        Google.Protobuf.IMessage message,
+        string publisherId = "test",
+        TopologyAudience direction = TopologyAudience.Self) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(message),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, direction),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        };
+
+    private static async Task<(Task Observed, IAsyncDisposable Subscription)> ObserveCommittedEventAsync(
+        IStream stream,
+        string eventFullName)
+    {
+        var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
+        {
+            if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) == true)
+            {
+                var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+                if (string.Equals(published.StateEvent?.EventData?.TypeUrl, $"type.googleapis.com/{eventFullName}", StringComparison.Ordinal))
+                    observed.TrySetResult();
+            }
+
+            await Task.CompletedTask;
+        });
+        return (observed.Task, subscription);
+    }
+
+    private sealed class StaticRoleAgentTypeResolver(System.Type roleAgentType) : IRoleAgentTypeResolver
+    {
+        public System.Type ResolveRoleAgentType() => roleAgentType;
+    }
+
+    private sealed class ControlledRoleGAgent : RoleGAgent
+    {
+        private TaskCompletionSource _allowCompletion = NewGate();
+
+        public void CompleteNextRequest() => _allowCompletion.TrySetResult();
+
+        public override async Task HandleChatRequest(ChatRequestEvent request)
+        {
+            if (!string.IsNullOrWhiteSpace(request.SessionId) && !State.Sessions.ContainsKey(request.SessionId))
+            {
+                await PersistDomainEventAsync(new RoleChatSessionStartedEvent
+                {
+                    SessionId = request.SessionId,
+                    Prompt = request.Prompt ?? string.Empty,
+                });
+            }
+
+            await _allowCompletion.Task;
+            _allowCompletion = NewGate();
+            await PersistDomainEventAsync(new RoleChatSessionCompletedEvent
+            {
+                RoleId = RoleId,
+                SessionId = request.SessionId ?? string.Empty,
+                Content = "经过调研，量子纠缠的最新进展包括：relay committed reply",
+                Prompt = request.Prompt ?? string.Empty,
+                ContentEmitted = true,
+            });
+        }
+
+        private static TaskCompletionSource NewGate() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     // ═══════════════════════════════════════════════════════════

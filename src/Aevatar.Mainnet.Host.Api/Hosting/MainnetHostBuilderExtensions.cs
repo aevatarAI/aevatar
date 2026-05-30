@@ -139,6 +139,9 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
+        builder.Services.TryAddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
+        builder.Services.TryAddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
+        builder.Services.TryAddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.Services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
@@ -253,11 +256,6 @@ public static class MainnetHostBuilderExtensions
                 [ToolSetNames.WorkspaceDefault],
                 [],
                 "Lark route tool composition with the default workspace tools.");
-            options.AddToolSet(
-                ToolSetNames.VoiceRealtime,
-                [ToolSetNames.WorkspaceDefault],
-                [],
-                "Placeholder realtime voice composition.");
         });
 
         return builder;

@@ -14,6 +14,7 @@ namespace Aevatar.Scripting.Core;
 public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
 {
     // Refactor (iter149/cluster-1133): Old pattern: script run completion was inferred from domain fact/readmodel side effects.  New principle: script run completion is an actor-owned committed outcome event observed through the projection session channel.
+    // Refactor (issue1289): persist only committed fact data; derived readmodel/native/graph payloads belong to projection materialization.
     // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
     //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
     //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root

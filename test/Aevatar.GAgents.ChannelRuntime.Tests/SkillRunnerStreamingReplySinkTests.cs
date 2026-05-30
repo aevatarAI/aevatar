@@ -308,13 +308,17 @@ public sealed class SkillRunnerStreamingReplySinkTests
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
 
         return new SkillRunnerStreamingReplySink(
-            client,
-            nyxApiKey: "nyx-api-key",
-            nyxProviderSlug: "api-lark-bot",
-            primaryTarget: primary,
-            fallbackTarget: fallback,
-            rejectionMessageBuilder: BuildRejectionMessage,
-            logger: NullLogger<SkillRunnerStreamingReplySink>.Instance);
+            new LarkOutboundDispatcher(client, NullLogger<LarkOutboundDispatcher>.Instance),
+            new LarkSendNewMessageRequest(
+                "nyx-api-key",
+                "api-lark-bot",
+                MessageType: "text",
+                ContentJson: string.Empty,
+                PrimaryTarget: primary,
+                FallbackTarget: fallback),
+            BuildRejectionMessage,
+            NullLogger<SkillRunnerStreamingReplySink>.Instance,
+            client);
     }
 
     /// <summary>
@@ -359,7 +363,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
                 : await request.Content.ReadAsStringAsync(cancellationToken));
             var (status, body) = _responses.Count > 0
                 ? _responses.Dequeue()
-                : (HttpStatusCode.OK, """{"code":0,"msg":"success"}""");
+                : (HttpStatusCode.OK, """{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
             return new HttpResponseMessage(status)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),

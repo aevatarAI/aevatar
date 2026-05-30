@@ -17,6 +17,9 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
 {
     private static readonly Duration DefaultIdleTtl = Duration.FromTimeSpan(TimeSpan.FromMinutes(30));
 
+    // Refactor (iter1334/cluster-1334-chatrun-result-json-boundary-quarantine):
+    // Old pattern: ChatRun persisted folded tool results used generic ResultJson naming.
+    // New principle: ChatRun actor state and events quarantine that JSON as internal_result_json while boundary payload names remain explicit.
     public ChatRunActor()
     {
         InitializeId();
@@ -101,7 +104,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             ToolCallId = NormalizeRequired(command.ToolCallId, nameof(command.ToolCallId)),
             ToolName = NormalizeRequired(command.ToolName, nameof(command.ToolName)),
             Arguments = command.Arguments?.Clone() ?? new Struct(),
-            ResultJson = command.ResultJson ?? string.Empty,
+            InternalResultJson = command.InternalResultJson ?? string.Empty,
             RunId = command.RunId ?? string.Empty,
             TargetKind = command.TargetKind,
             TargetId = command.TargetId ?? string.Empty,
@@ -127,27 +130,38 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         if (pending == null)
             return;
 
-        var resultJson = string.IsNullOrWhiteSpace(observed.ResultJson)
-            ? BuildDefaultResultJson(pending, observed)
-            : observed.ResultJson;
+        var internalResultJson = string.IsNullOrWhiteSpace(observed.InternalResultJson)
+            ? BuildDefaultInternalResultJson(pending, observed)
+            : observed.InternalResultJson;
         await PersistDomainEventAsync(new ChatRunSubRunTerminalFoldedEvent
         {
             RunId = runId,
             CallerToolCallId = pending.CallerToolCallId,
             ToolName = pending.ToolName,
-            ResultJson = resultJson,
+            InternalResultJson = internalResultJson,
             LlmRound = pending.LlmRound,
+            Status = observed.Status ?? string.Empty,
+            ActorId = FirstNonEmpty(observed.ActorId, pending.ActorId),
+            ServiceId = FirstNonEmpty(observed.ServiceId, pending.ServiceId),
+            EndpointId = FirstNonEmpty(observed.EndpointId, pending.EndpointId),
+            CompletionObserved = observed.CompletionObserved,
             ObservedAt = observed.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
         });
 
+        // Refactor (iter290/cluster001): Old pattern: ready notifications required consumers to parse ResultJson for completion facts. New principle: ready notifications publish typed completion facts with the result payload.
         await PublishAsync(new ChatRunToolResultReady
         {
             ResponseId = State.ResponseId,
             RunId = runId,
             CallerToolCallId = pending.CallerToolCallId,
             ToolName = pending.ToolName,
-            ResultJson = resultJson,
+            InternalResultJson = internalResultJson,
             LlmRound = pending.LlmRound,
+            Status = observed.Status ?? string.Empty,
+            ActorId = FirstNonEmpty(observed.ActorId, pending.ActorId),
+            ServiceId = FirstNonEmpty(observed.ServiceId, pending.ServiceId),
+            EndpointId = FirstNonEmpty(observed.EndpointId, pending.EndpointId),
+            CompletionObserved = observed.CompletionObserved,
         }, TopologyAudience.Self);
     }
 
@@ -184,10 +198,11 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         {
             RunId = pending.RunId,
             Status = ResolveGAgentTerminalStatus(completed),
-            ResultJson = BuildGAgentTerminalResultJson(pending, completed),
+            InternalResultJson = BuildGAgentTerminalInternalResultJson(pending, completed),
             ActorId = pending.ActorId,
             ServiceId = pending.ServiceId,
             EndpointId = pending.EndpointId,
+            CompletionObserved = true,
             ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
     }
@@ -255,7 +270,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         var next = current.Clone();
         var existingHistory = next.ToolCallHistory
             .LastOrDefault(call => string.Equals(call.ToolCallId, evt.ToolCallId, StringComparison.Ordinal));
-        var alreadyFolded = existingHistory != null && !string.IsNullOrWhiteSpace(existingHistory.ResultJson);
+        var alreadyFolded = existingHistory != null && !string.IsNullOrWhiteSpace(existingHistory.InternalResultJson);
         if (existingHistory == null)
         {
             next.ToolCallHistory.Add(new ChatRunToolCallRecord
@@ -263,7 +278,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
                 ToolCallId = evt.ToolCallId,
                 ToolName = evt.ToolName,
                 Arguments = evt.Arguments?.Clone() ?? new Struct(),
-                ResultJson = evt.ResultJson,
+                InternalResultJson = evt.InternalResultJson,
                 LlmRound = evt.LlmRound,
                 RunId = evt.RunId,
                 ObservedAt = evt.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
@@ -302,7 +317,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         var next = current.Clone();
         var existingHistory = next.ToolCallHistory
             .LastOrDefault(call => string.Equals(call.ToolCallId, evt.ToolCallId, StringComparison.Ordinal));
-        if (existingHistory != null && !string.IsNullOrWhiteSpace(existingHistory.ResultJson))
+        if (existingHistory != null && !string.IsNullOrWhiteSpace(existingHistory.InternalResultJson))
         {
             next.CurrentLlmRound = Math.Max(next.CurrentLlmRound, evt.LlmRound);
             next.LastActivityAt = evt.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
@@ -316,7 +331,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
                 ToolCallId = evt.ToolCallId,
                 ToolName = evt.ToolName,
                 Arguments = evt.Arguments?.Clone() ?? new Struct(),
-                ResultJson = string.Empty,
+                InternalResultJson = string.Empty,
                 LlmRound = evt.LlmRound,
                 RunId = evt.RunId,
                 ObservedAt = evt.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
@@ -354,13 +369,13 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         var history = next.ToolCallHistory
             .LastOrDefault(call => string.Equals(call.RunId, evt.RunId, StringComparison.Ordinal));
         if (history != null)
-            history.ResultJson = evt.ResultJson;
+            history.InternalResultJson = evt.InternalResultJson;
 
         next.Messages.Add(new ChatRunMessageRecord
         {
             Role = "tool",
             ToolCallId = evt.CallerToolCallId,
-            Content = evt.ResultJson,
+            Content = evt.InternalResultJson,
         });
         next.CurrentLlmRound = evt.LlmRound + 1;
         next.LastActivityAt = evt.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
@@ -482,7 +497,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             state.ActiveSubRunSubscriptions.Add(subscription);
     }
 
-    private static string BuildDefaultResultJson(
+    private static string BuildDefaultInternalResultJson(
         ChatRunSubRunSubscription pending,
         ChatRunSubRunTerminalObserved observed)
     {
@@ -504,7 +519,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         });
     }
 
-    private static string BuildGAgentTerminalResultJson(
+    private static string BuildGAgentTerminalInternalResultJson(
         ChatRunSubRunSubscription pending,
         RoleChatSessionCompletedEvent completed)
     {

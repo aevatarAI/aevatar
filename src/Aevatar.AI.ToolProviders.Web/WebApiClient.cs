@@ -28,7 +28,7 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
     }
 
     /// <summary>Perform a web search via NyxID proxy or direct API.</summary>
-    public async Task<string> SearchAsync(
+    public async Task<WebSearchResult> SearchAsync(
         string token, string query, int maxResults, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(_options.NyxIdSearchSlug) &&
@@ -36,27 +36,27 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         {
             var path = $"/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";
             var url = $"{_options.NyxIdBaseUrl.TrimEnd('/')}/api/v1/proxy/{Uri.EscapeDataString(_options.NyxIdSearchSlug)}{path}";
-            return await GetAsync(token, url, ct);
+            return WebToolResultBoundaryJson.ParseSearchPayload(await GetAsync(token, url, ct));
         }
 
         if (!string.IsNullOrWhiteSpace(_options.SearchApiBaseUrl))
         {
             var url = $"{_options.SearchApiBaseUrl.TrimEnd('/')}/search?q={Uri.EscapeDataString(query)}&limit={maxResults}";
-            return await GetAsync(token, url, ct);
+            return WebToolResultBoundaryJson.ParseSearchPayload(await GetAsync(token, url, ct));
         }
 
-        return """{"error":"No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions."}""";
+        return ErrorResult("search_backend_not_configured", "No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions.");
     }
 
     /// <summary>Fetch a URL and return the response body as text.</summary>
-    public async Task<FetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)
+    public async Task<WebFetchResult> FetchUrlAsync(string token, string url, CancellationToken ct)
     {
         try
         {
             var validation = await WebFetchUrlGuard.ValidateResolvedAsync(url, ct);
             if (!validation.IsAllowed)
             {
-                return new FetchResult(
+                return new WebFetchResult(
                     0,
                     "rejected",
                     validation.RejectionCode ?? "url_rejected",
@@ -86,7 +86,7 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
                         cts.Token);
                     if (!redirectValidation.IsAllowed)
                     {
-                        return new FetchResult(
+                        return new WebFetchResult(
                             statusCode,
                             contentType,
                             redirectValidation.RejectionCode ?? "url_rejected",
@@ -99,7 +99,7 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
                             redirectUri.Host,
                             StringComparison.OrdinalIgnoreCase))
                     {
-                        return new FetchResult(statusCode, contentType, null, redirectUri.ToString(), originalUrl);
+                        return new WebFetchResult(statusCode, contentType, null, redirectUri.ToString(), originalUrl);
                     }
 
                     currentUrl = redirectValidation.NormalizedUrl!;
@@ -109,23 +109,23 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
                 if (!response.IsSuccessStatusCode)
                 {
                     var errorBody = await ReadLimitedAsync(response, cts.Token);
-                    return new FetchResult(statusCode, contentType, errorBody, null, originalUrl);
+                    return new WebFetchResult(statusCode, contentType, errorBody, null, originalUrl);
                 }
 
                 var body = await ReadLimitedAsync(response, cts.Token);
-                return new FetchResult(statusCode, contentType, body, null, originalUrl);
+                return new WebFetchResult(statusCode, contentType, body, null, originalUrl);
             }
 
-            return new FetchResult(0, "redirect", "Too many redirects", null, originalUrl);
+            return new WebFetchResult(0, "redirect", "Too many redirects", null, originalUrl);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return new FetchResult(0, "timeout", $"Request timed out after {_options.FetchTimeoutSeconds}s", null, url);
+            return new WebFetchResult(0, "timeout", $"Request timed out after {_options.FetchTimeoutSeconds}s", null, url);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "WebFetch failed for {Url}", url);
-            return new FetchResult(0, "error", ex.Message, null, url);
+            return new WebFetchResult(0, "error", ex.Message, null, url);
         }
     }
 
@@ -187,9 +187,12 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Web API request failed: {Url}", url);
-            return System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
+            return System.Text.Json.JsonSerializer.Serialize(new { error = "request_failed", message = ex.Message });
         }
     }
+
+    private static WebSearchResult ErrorResult(string code, string message) =>
+        new(Array.Empty<WebSearchResultItem>(), new WebToolError(code, message));
 
     public void Dispose()
     {
@@ -197,11 +200,3 @@ public sealed class WebApiClient : IWebApiClient, IDisposable
             _http.Dispose();
     }
 }
-
-/// <summary>Result of a URL fetch operation.</summary>
-public sealed record FetchResult(
-    int StatusCode,
-    string ContentType,
-    string? Body,
-    string? RedirectUrl,
-    string OriginalUrl);

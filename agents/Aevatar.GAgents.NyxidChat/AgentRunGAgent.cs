@@ -48,7 +48,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     internal static readonly TimeSpan TerminalCleanupDelay = TimeSpan.FromMinutes(5);
     private const string TerminalCleanupCallbackPrefix = "agent-run-terminal-cleanup";
     private const string GenerationTimeoutCallbackPrefix = "agent-run-generation-timeout";
-    internal static readonly TimeSpan OutputDispatchTimeout = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
     internal static readonly TimeSpan DropNotificationRetryDelay = TimeSpan.FromSeconds(5);
@@ -1032,8 +1031,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         };
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(request.TargetActorId, ready, outputCts.Token);
+            await SendToAsync(request.TargetActorId, ready, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1082,8 +1080,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(targetActorId, dropped, outputCts.Token);
+            await SendToAsync(targetActorId, dropped, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1112,8 +1109,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(command.TargetActorId, dropped, outputCts.Token);
+            await SendToAsync(command.TargetActorId, dropped, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1482,10 +1478,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     ///
     /// Action semantics on the relay run-actor path:
     /// <list type="bullet">
-    ///   <item><c>ForwardToModel.tool_choice_hint(aevatar_invoke_gagent).actor_id</c> overrides
-    ///     <see cref="NeedsLlmReplyEvent.TargetActorId"/>. The reply is
-    ///     dispatched to the forwarded actor; <c>EnsureTargetActorAsync</c>
-    ///     creates it as a <c>ConversationGAgent</c> if missing.</item>
+    ///   <item><c>ForwardToModel.tool_choice_hint</c> is preserved as tool
+    ///     prefill only; it never overrides <see cref="NeedsLlmReplyEvent.TargetActorId"/>.</item>
     ///   <item><c>ForwardToModel.model_name</c> is mapped by the generation executor
     ///     this typed route decision into LLM metadata before invoking the
     ///     provider.</item>
@@ -1504,17 +1498,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         switch (targetRef.ActionCase)
         {
             case ChatRouteAction.ActionOneofCase.ForwardToModel:
-                if (ChatRouteActionTargets.TryGetGAgentActorTarget(targetRef, out var target) &&
-                    !string.Equals(target.ActorId, request.TargetActorId, StringComparison.Ordinal))
-                {
-                    _logger.LogInformation(
-                        "Chat-route override: redirecting run target actor {Original} -> {Override} (correlation={CorrelationId})",
-                        NormalizeOptional(request.TargetActorId) ?? "<empty>",
-                        target.ActorId,
-                        request.CorrelationId);
-                    request.TargetActorId = target.ActorId;
-                }
-
+                // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill,
+                // not actor addressing. The run target stays owned by the dispatch command.
                 var routedModel = NormalizeOptional(targetRef.ForwardToModel?.ModelName);
                 if (routedModel is not null)
                 {

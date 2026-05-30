@@ -87,9 +87,12 @@ def save_state(s: dict) -> None:
 
 
 def count_in_flight_codex() -> int:
+    # Unified with wakeup-check.sh per Auric 2026-05-29 "计算方法统一即可":
+    # grep 'codex exec' directly catches the codex exec subprocess regardless of
+    # timeout-wrapper layer. Previously this counted only timeout-wrapped lines
+    # which undercounted vs wakeup-check.sh.
     r = run(["ps", "-eo", "command="])
-    n = sum(1 for line in r.stdout.splitlines()
-            if "timeout 3600 codex" in line or "timeout 5400 codex" in line)
+    n = sum(1 for line in r.stdout.splitlines() if "codex exec" in line)
     return n
 
 

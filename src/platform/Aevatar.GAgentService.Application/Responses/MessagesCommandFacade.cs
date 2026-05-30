@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Application.Internal;
@@ -218,13 +219,21 @@ public sealed class MessagesCommandFacade(
             toolPlan.AdditionalToolProviders,
             ct: ct);
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
+        var toolContext = toolProviderContext.ToolContext with
+        {
+            Routing = toolProviderContext.ToolContext.Routing with
+            {
+                NyxIdRoutePreference = resolvedRouteValue,
+            },
+        };
         var llmRequest = BuildLlmRequest(
             normalized,
             callerScope,
             bearerToken,
             effectiveModel,
             resolvedRouteValue,
-            toolClassification);
+            toolClassification,
+            toolContext);
         if (normalized.DroppedImageContent)
         {
             logger.LogWarning(
@@ -236,7 +245,7 @@ public sealed class MessagesCommandFacade(
             normalized,
             session,
             llmRequest,
-            toolProviderContext.ToolContextMetadata,
+            toolContext,
             toolClassification,
             toolPlan.ToolChoiceHintPlan));
     }
@@ -321,7 +330,8 @@ public sealed class MessagesCommandFacade(
         string bearerToken,
         string effectiveModel,
         string? resolvedRouteValue,
-        ResponsesToolClassification toolClassification)
+        ResponsesToolClassification toolClassification,
+        AgentToolExecutionContext toolContext)
     {
         var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -339,6 +349,7 @@ public sealed class MessagesCommandFacade(
                 normalized.MessageId,
                 new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
+            ToolContext = toolContext,
             LlmControl = new LLMControlContext(
                 NyxIdAccessToken: null,
                 NyxIdOrgToken: null,
@@ -353,26 +364,34 @@ public sealed class MessagesCommandFacade(
         };
     }
 
+    // Refactor (issue1416-first):
+    //   Old pattern: Messages downgraded request identity, caller scope, and bearer credentials into ToolContextMetadata.
+    //   New principle: Messages reuses AgentToolExecutionContext as the typed tool execution authority.
     private static ResponsesToolProviderContext BuildToolProviderContext(
         ResponsesCallerScope callerScope,
         string responseId,
-        string bearerToken)
-    {
-        return new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
+        string bearerToken) =>
+        new(BuildToolContext(callerScope, responseId, bearerToken, routePreference: null));
+
+    private static AgentToolExecutionContext BuildToolContext(
+        ResponsesCallerScope callerScope,
+        string responseId,
+        string bearerToken,
+        string? routePreference) =>
+        new(
+            new AgentToolRequestIdentity(responseId, null),
+            new AgentToolCredentials(bearerToken, null, null),
+            new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+            new AgentToolChannelContext(
+                callerScope.OriginKind.ToString(),
+                null,
                 callerScope.ScopeId,
-                callerScope.OwnerSubject,
-                callerScope.OriginKind.ToString()),
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = responseId,
-                [LLMRequestMetadataKeys.ResponseId] = responseId,
-                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
-                [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
-            });
-    }
+                null,
+                null),
+            AgentToolSenderBindingContext.Empty,
+            new LLMRequestRoutingContext(null, routePreference, null, null),
+            AgentToolConnectedServicesContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
     private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         ResponsesCallerScope callerScope,

@@ -716,6 +716,7 @@ public sealed class LlmSessionGAgentTests
     public async Task HandleLlmRunRequestedAsync_ShouldExecuteSubstitutedToolAndContinueNextRound()
     {
         var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
         var provider = new ScriptedLlmProviderFactory([
             [
                 new LLMStreamChunk
@@ -742,8 +743,7 @@ public sealed class LlmSessionGAgentTests
             services =>
             {
                 services.AddSingleton<ILLMProviderFactory>(provider);
-                services.AddSingleton<IResponsesToolProvider>(
-                    new StaticResponsesToolProvider(substituteTools: [tool]));
+                services.AddSingleton<IResponsesToolProvider>(toolProvider);
             });
         await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
         {
@@ -762,6 +762,91 @@ public sealed class LlmSessionGAgentTests
         actor.State.ForwardedToolCalls.Should().BeEmpty();
         actor.State.ActiveRun!.Status.Should().Be(2);
         actor.State.Completion!.OutputText.Should().Be("local result accepted");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldPropagateTypedToolContextAcrossProviderAndToolScopes()
+    {
+        var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor(
+            "resp_1",
+            services =>
+            {
+                services.AddSingleton<ILLMProviderFactory>(provider);
+                services.AddSingleton<IResponsesToolProvider>(toolProvider);
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var selection = BuildForwardedSelection();
+        selection.SubstitutedToolNames.Add("get_weather");
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1", selection));
+
+        provider.Requests.Should().HaveCount(2);
+        foreach (var request in provider.Requests)
+        {
+            request.ToolContext.Should().NotBeNull();
+            request.ToolContext!.Request.RequestId.Should().Be("resp_1");
+            request.ToolContext.Request.CallId.Should().BeNull();
+            request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token-1");
+            request.ToolContext.Caller.ScopeId.Should().Be("user-1");
+            request.ToolContext.Caller.OwnerSubject.Should().Be("user-1");
+            request.ToolContext.Caller.ResponseId.Should().Be("resp_1");
+            request.ToolContext.Routing.NyxIdRoutePreference.Should().BeNull();
+        }
+
+        provider.StreamContexts.Should().HaveCount(2);
+        foreach (var context in provider.StreamContexts)
+        {
+            context.Should().NotBeNull();
+            context!.Request.RequestId.Should().Be("resp_1");
+            context.Request.CallId.Should().BeNull();
+            context.Credentials.NyxIdAccessToken.Should().Be("token-1");
+            context.Caller.ScopeId.Should().Be("user-1");
+            context.Caller.OwnerSubject.Should().Be("user-1");
+            context.Caller.ResponseId.Should().Be("resp_1");
+        }
+
+        toolProvider.SubstituteContexts.Should().ContainSingle();
+        var requestToolContext = provider.Requests[0].ToolContext;
+        requestToolContext.Should().NotBeNull();
+        toolProvider.SubstituteContexts[0].ToolContext.Should().BeEquivalentTo(
+            requestToolContext!,
+            options => options.Excluding(context => context.Channel.Platform));
+        toolProvider.SubstituteContexts[0].ToolContext.Channel.Platform.Should().Be("ApiKey");
+
+        tool.Executions.Should().ContainSingle().Which.Should().Be("""{"city":"Singapore"}""");
+        tool.ExecutionContexts.Should().ContainSingle();
+        tool.ExecutionContexts[0].Should().NotBeNull();
+        tool.ExecutionContexts[0].Should().BeEquivalentTo(
+            requestToolContext!,
+            options => options.Excluding(context => context.Request.CallId));
+        tool.ExecutionContexts[0]!.Request.CallId.Should().Be("call_1");
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]
@@ -904,6 +989,7 @@ public sealed class LlmSessionGAgentTests
         private int _nextResponseIndex;
 
         public List<LLMRequest> Requests { get; } = [];
+        public List<AgentToolExecutionContext?> StreamContexts { get; } = [];
 
         public string Name => "test";
 
@@ -918,6 +1004,7 @@ public sealed class LlmSessionGAgentTests
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             Requests.Add(request);
+            StreamContexts.Add(AgentToolRequestContext.Current);
             var response = responses[Math.Min(_nextResponseIndex, responses.Count - 1)];
             _nextResponseIndex++;
             foreach (var chunk in response)
@@ -958,20 +1045,30 @@ public sealed class LlmSessionGAgentTests
         IReadOnlyList<IAgentTool>? substituteTools = null,
         IReadOnlyList<IAgentTool>? additiveTools = null) : IResponsesToolProvider
     {
+        public List<ResponsesToolProviderContext> SubstituteContexts { get; } = [];
+        public List<ResponsesToolProviderContext> AdditiveContexts { get; } = [];
+
         public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
             ResponsesToolProviderContext context,
-            CancellationToken ct = default) =>
-            ValueTask.FromResult(substituteTools ?? []);
+            CancellationToken ct = default)
+        {
+            SubstituteContexts.Add(context);
+            return ValueTask.FromResult(substituteTools ?? []);
+        }
 
         public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
             ResponsesToolProviderContext context,
-            CancellationToken ct = default) =>
-            ValueTask.FromResult(additiveTools ?? []);
+            CancellationToken ct = default)
+        {
+            AdditiveContexts.Add(context);
+            return ValueTask.FromResult(additiveTools ?? []);
+        }
     }
 
     private sealed class RecordingAgentTool(string name, string resultJson) : IAgentTool
     {
         public List<string> Executions { get; } = [];
+        public List<AgentToolExecutionContext?> ExecutionContexts { get; } = [];
 
         public string Name { get; } = name;
 
@@ -982,6 +1079,7 @@ public sealed class LlmSessionGAgentTests
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             Executions.Add(argumentsJson);
+            ExecutionContexts.Add(AgentToolRequestContext.Current);
             return Task.FromResult(resultJson);
         }
     }

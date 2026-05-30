@@ -179,7 +179,7 @@ public static class DeviceEventEndpoints
         using var doc = JsonDocument.Parse(bodyBytes);
         var root = doc.RootElement;
 
-        // content.text contains the raw device event JSON (same in both old and new format)
+        // content.text contains the raw device event JSON at the adapter boundary.
         var contentText = root.GetProperty("content").GetProperty("text").GetString()
                           ?? throw new JsonException("content.text is required");
 
@@ -192,9 +192,14 @@ public static class DeviceEventEndpoints
                      : string.Empty;
         }
 
-        // Parse the inner device event JSON from content.text
+        // Refactor (iter1281/cluster-001-device-inbound-typed-payload): Old pattern: pass content.text through as DeviceInbound.PayloadJson.
+        // New principle: terminate NyxID callback JSON at the Host/Adapter boundary.
+        // Known device events are allowlisted and mapped to typed Protobuf payload cases.
+        // Unknown or malformed content is rejected before any EventEnvelope dispatch can happen.
         using var innerDoc = JsonDocument.Parse(contentText);
         var inner = innerDoc.RootElement;
+        if (inner.ValueKind != JsonValueKind.Object)
+            throw new JsonException("content.text must contain a device event object");
 
         var eventId = inner.TryGetProperty("event_id", out var eid) ? eid.GetString() ?? string.Empty : string.Empty;
         var source = inner.TryGetProperty("source", out var src) ? src.GetString() ?? string.Empty : string.Empty;
@@ -210,74 +215,69 @@ public static class DeviceEventEndpoints
             DeviceId = senderId,
         };
 
-        // Refactor (iter162/cluster-001-first):
-        //   Old pattern: adapter forwarded raw JSON via DeviceInbound.payload_json into actor.
-        //   New principle: adapter parses external JSON once and maps to typed DeviceInbound payload oneof;
-        //                  unknown event types are rejected at the adapter boundary.
-        switch (eventType)
+        ApplyKnownPayload(inbound, inner);
+        return inbound;
+    }
+
+    private static void ApplyKnownPayload(DeviceInbound inbound, JsonElement inner)
+    {
+        switch (inbound.EventType)
         {
             case "temperature_change":
-                inbound.Sensor = ParseSensorPayload(inner);
+                inbound.Sensor = new SensorDeviceInboundPayload
+                {
+                    Temperature = GetOptionalDouble(inner, "temperature"),
+                    Humidity = GetOptionalDouble(inner, "humidity"),
+                    LightLevel = GetOptionalDouble(inner, "light_level"),
+                    MotionDetected = GetOptionalBoolean(inner, "motion_detected",
+                        GetOptionalBoolean(inner, "motion")),
+                };
                 break;
             case "person_detected":
             case "scene_summary":
             case "camera_scene":
-                inbound.CameraScene = ParseCameraScenePayload(inner);
-                break;
-            case "speech_detected":
-                inbound.Speech = ParseSpeechPayload(inner);
+                inbound.Camera = new CameraDeviceInboundPayload
+                {
+                    SceneDescription = GetOptionalString(inner, "description"),
+                };
                 break;
             case "motion_detected":
-                inbound.Motion = ParseMotionPayload(inner);
+                inbound.Motion = new MotionDeviceInboundPayload
+                {
+                    Detected = GetOptionalBoolean(inner, "detected",
+                        GetOptionalBoolean(inner, "motion", defaultValue: true)),
+                };
+                break;
+            case "speech_detected":
+                inbound.Speech = new SpeechDeviceInboundPayload
+                {
+                    Text = GetOptionalString(inner, "text"),
+                };
                 break;
             default:
-                throw new JsonException($"Unsupported device event_type '{eventType}'");
+                throw new JsonException($"Unsupported device event_type '{inbound.EventType}'");
         }
-
-        return inbound;
     }
 
-    private static SensorPayload ParseSensorPayload(JsonElement inner)
+    private static string GetOptionalString(JsonElement root, string propertyName)
     {
-        var payload = new SensorPayload();
-        if (inner.TryGetProperty("temperature", out var temp)) payload.Temperature = temp.GetDouble();
-        if (inner.TryGetProperty("humidity", out var hum)) payload.Humidity = hum.GetDouble();
-        if (inner.TryGetProperty("light_level", out var light)) payload.LightLevel = light.GetDouble();
-        if (inner.TryGetProperty("motion", out var motion)) payload.MotionDetected = motion.GetBoolean();
-        if (inner.TryGetProperty("motion_detected", out var motionDetected))
-            payload.MotionDetected = motionDetected.GetBoolean();
-        return payload;
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
     }
 
-    private static CameraScenePayload ParseCameraScenePayload(JsonElement inner)
+    private static double GetOptionalDouble(JsonElement root, string propertyName)
     {
-        return new CameraScenePayload
-        {
-            Description = inner.TryGetProperty("description", out var description)
-                ? description.GetString() ?? string.Empty
-                : string.Empty,
-        };
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetDouble()
+            : 0;
     }
 
-    private static SpeechPayload ParseSpeechPayload(JsonElement inner)
+    private static bool GetOptionalBoolean(JsonElement root, string propertyName, bool defaultValue = false)
     {
-        return new SpeechPayload
-        {
-            Text = inner.TryGetProperty("text", out var text)
-                ? text.GetString() ?? string.Empty
-                : string.Empty,
-        };
-    }
-
-    private static MotionPayload ParseMotionPayload(JsonElement inner)
-    {
-        var detected = true;
-        if (inner.TryGetProperty("detected", out var detectedElement))
-            detected = detectedElement.GetBoolean();
-        else if (inner.TryGetProperty("motion", out var motionElement))
-            detected = motionElement.GetBoolean();
-
-        return new MotionPayload { Detected = detected };
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetBoolean()
+            : defaultValue;
     }
 
     // ─── Registration CRUD ───

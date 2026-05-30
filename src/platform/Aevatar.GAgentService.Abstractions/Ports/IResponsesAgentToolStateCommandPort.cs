@@ -1,5 +1,4 @@
 using Aevatar.GAgentService.Abstractions.Queries;
-
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
 public interface IResponsesAgentToolStateCommandPort
@@ -29,7 +28,7 @@ public sealed record ResponsesWebTraceResult(
     string TraceId,
     string CacheKey,
     bool CacheHit,
-    string ResultJson);
+    ResponsesWebToolResult Result);
 
 public sealed record ResponsesWebTraceInput(
     string TraceId,
@@ -38,4 +37,4 @@ public sealed record ResponsesWebTraceInput(
     string Url,
     string Query,
     bool CacheHit,
-    string ResultJson);
+    ResponsesWebToolResult Result);
