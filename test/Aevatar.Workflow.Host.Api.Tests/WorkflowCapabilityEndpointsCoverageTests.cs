@@ -469,7 +469,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     [InlineData("catalog", WorkflowChatSourceKind.CatalogWorkflow, "auto", null, null)]
     [InlineData("workflow", WorkflowChatSourceKind.CatalogWorkflow, "auto", null, null)]
     [InlineData("actor", WorkflowChatSourceKind.DefinitionActor, "auto", "actor-1", null)]
-    [InlineData("direct", WorkflowChatSourceKind.Direct, null, "actor-1", null)]
+    [InlineData("direct", WorkflowChatSourceKind.Direct, null, null, null)]
     public void ChatRunRequestNormalizer_ShouldNormalizeTypedSourceAliases(
         string kind,
         WorkflowChatSourceKind expectedKind,
@@ -495,6 +495,26 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request!.Source!.Kind.Should().Be(expectedKind);
         result.Request.Source.WorkflowName.Should().Be(workflowName);
         result.Request.Source.ActorId.Should().Be(actorId);
+    }
+
+    [Theory]
+    [InlineData(" actor-1 ")]
+    public void ChatRunRequestNormalizer_ShouldRejectDirectSourceActorId(string actorId)
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "direct",
+                ActorId = actorId,
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
     }
 
     [Theory]

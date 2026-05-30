@@ -76,7 +76,6 @@ public sealed record WorkflowChatSource
     {
         WorkflowChatSourceKind.DefinitionActor => DefinitionActorSource?.ActorId,
         WorkflowChatSourceKind.InlineYamlBundle => InlineBundle?.ActorId,
-        WorkflowChatSourceKind.Direct => DefinitionActorSource?.ActorId,
         _ => null,
     };
 
@@ -109,12 +108,11 @@ public sealed record WorkflowChatSource
                 yaml)).ToArray(),
             actorId);
 
-    public static WorkflowChatSource Direct(string? actorId = null) =>
-        new(
-            WorkflowChatSourceKind.Direct,
-            definitionActorSource: string.IsNullOrWhiteSpace(actorId)
-                ? null
-                : new WorkflowChatDefinitionActorSource(actorId));
+    // Refactor (phase9/cluster-349):
+    //   Old pattern: Direct reused DefinitionActorSource to smuggle an actor address.
+    //   New principle: Direct is address-free; actor-targeted execution uses DefinitionActor.
+    public static WorkflowChatSource Direct() =>
+        new(WorkflowChatSourceKind.Direct);
 }
 
 // Refactor (iter112/cluster-3): Old pattern: application commands carried typed source plus legacy mirror fields. New principle: Application owns one typed WorkflowChatSource representation.

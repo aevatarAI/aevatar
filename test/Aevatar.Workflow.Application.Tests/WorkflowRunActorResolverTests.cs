@@ -94,6 +94,26 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ShouldNotReadSourceActorBinding_WhenSourceIsDirect()
+    {
+        var bindingReader = new ThrowingWorkflowActorBindingReader();
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var registry = new InMemoryWorkflowDefinitionCatalog();
+        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, actorPort, registry);
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct()),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.WorkflowNameForRun.Should().Be("direct");
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("direct");
+        bindingReader.Calls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ShouldReturnWorkflowNotFound_WhenRegistryDoesNotContainWorkflow()
     {
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), new RecordingWorkflowRunActorPort(), new RecordingWorkflowRunActorPort(), new InMemoryWorkflowDefinitionCatalog());
@@ -692,6 +712,17 @@ public sealed class WorkflowRunActorResolverTests
             _ = actorId;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(_binding);
+        }
+    }
+
+    private sealed class ThrowingWorkflowActorBindingReader : IWorkflowActorBindingReader
+    {
+        public int Calls { get; private set; }
+
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            Calls++;
+            throw new InvalidOperationException($"Direct source must not read actor binding '{actorId}'.");
         }
     }
 
