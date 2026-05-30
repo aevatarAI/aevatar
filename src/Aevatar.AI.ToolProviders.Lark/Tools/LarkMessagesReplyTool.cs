@@ -22,9 +22,10 @@ public sealed class LarkMessagesReplyTool : AgentToolBase<LarkMessagesReplyTool.
 
     public override ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
-    // Refactor (issue1378/first-slice): Old: ResolveOrCurrent bypass for reply/react silently
-    // resolved missing message_id to "current message", masking caller errors.
-    // New: explicit structured error on missing message_id; explicit external tools path
+    // Refactor (issue1378/first-slice): Old pattern: ResolveOrCurrent fell back to current
+    // message when reply message_id was missing, masking caller errors silently.
+    // New principle: explicit structured error on missing message_id; explicit external
+    // tools path
     // remains for legitimate cross-message replies.
     protected override async Task<string> ExecuteAsync(Parameters parameters, CancellationToken ct)
     {
