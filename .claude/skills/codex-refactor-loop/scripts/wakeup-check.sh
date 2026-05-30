@@ -77,23 +77,30 @@ fi
 
 # ============================================================================
 echo ""
-echo "=== STEP A: STALE IMPLEMENTING (IMPLEMENT_DONE marker but no PR) ==="
+echo "=== STEP A: STALE IMPLEMENTING (IMPLEMENT_DONE marker but no PR, OR never dispatched) ==="
 A_COUNT=0
 while IFS= read -r n; do
     [ -z "$n" ] && continue
     log=$(ls -t "$LOGDIR"/implement-*"${n}"*.log 2>/dev/null | head -1)
     [ -z "$log" ] && log="$LOGDIR/implement-issue${n}.log"
-    [ -f "$log" ] || continue
-    marker=$(tail -10 "$log" | grep -E "^(IMPLEMENT_DONE|EXIT)" | tail -1)
-    age_min=$(( (NOW_EPOCH - $(stat -f %m "$log" 2>/dev/null || echo "$NOW_EPOCH")) / 60 ))
     # 检查关联 PR 是否存在
     pr=$(gh pr list --state open --search "#${n}" --json number --jq '.[0].number' 2>/dev/null)
+    if [ ! -f "$log" ]; then
+        # 从未派过 implement codex（log 不存在）— 若也无 PR,需 controller 派 implement
+        if [ -z "$pr" ]; then
+            echo "#${n}: NO implement log AND NO open PR — ACTION: dispatch implement codex (label suggests in-flight but never started)"
+            A_COUNT=$((A_COUNT+1))
+        fi
+        continue
+    fi
+    marker=$(tail -10 "$log" | grep -E "^(IMPLEMENT_DONE|EXIT)" | tail -1)
+    age_min=$(( (NOW_EPOCH - $(stat -f %m "$log" 2>/dev/null || echo "$NOW_EPOCH")) / 60 ))
     if [ -z "$pr" ] && echo "$marker" | grep -qE "(IMPLEMENT_DONE.*:ok|EXIT=0)"; then
         echo "#${n}: log=$(basename "$log") age=${age_min}min marker=\"$marker\" — ACTION: controller commit+push+open PR + Phase 8 reviewer × 3"
         A_COUNT=$((A_COUNT+1))
     fi
 done < <(gh issue list --state open --label "🛠️ phase:implementing" --json number --jq '.[].number' 2>/dev/null)
-[ "$A_COUNT" -eq 0 ] && echo "(none — implementing issues all have open PR or no IMPLEMENT_DONE marker)"
+[ "$A_COUNT" -eq 0 ] && echo "(none — implementing issues all have open PR or in-flight)"
 
 # ============================================================================
 echo ""
