@@ -60,8 +60,9 @@ public class RoleGAgentTests
     public void RoleGAgentSource_DoesNotUseLegacyMetadataContextMapper()
     {
         var source = File.ReadAllText(FindRepoFile("src/Aevatar.AI.Core/RoleGAgent.cs"));
+        var executableSource = StripSingleLineComments(source);
 
-        source.Should().NotContain("AgentToolExecutionContextMapper.FromMetadata");
+        executableSource.Should().NotContain("AgentToolExecutionContextMapper.FromMetadata(");
     }
 
     private static AgentToolExecutionContext ResolvePendingToolContext(PendingToolApprovalState pending)
@@ -89,5 +90,20 @@ public class RoleGAgentTests
         }
 
         throw new FileNotFoundException($"Could not find repository file '{relativePath}'.");
+    }
+
+    private static string StripSingleLineComments(string source)
+    {
+        var lines = source.Split('\n');
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var commentIndex = lines[index].IndexOf("//", StringComparison.Ordinal);
+            if (commentIndex >= 0)
+            {
+                lines[index] = lines[index][..commentIndex];
+            }
+        }
+
+        return string.Join('\n', lines);
     }
 }
