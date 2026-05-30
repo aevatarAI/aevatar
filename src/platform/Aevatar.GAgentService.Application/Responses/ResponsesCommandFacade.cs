@@ -856,8 +856,12 @@ public sealed class ResponsesCommandFacade(
             CallId = call.Id,
             ToolName = call.Name,
             ArgumentsJson = call.ArgumentsJson,
+            Arguments = ResponsesProtoPayloads.ParseStruct(call.ArgumentsJson),
         };
 
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: durable LlmSession tool declarations and choice hints wrote only *_json strings.
+    //   New principle: typed Struct fields are the write path; legacy strings stay populated for fallback reads.
     private static LlmSessionRuntimeToolSelection ToToolSelection(
         ResponsesToolClassification classification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan)
@@ -871,6 +875,7 @@ public sealed class ResponsesCommandFacade(
         {
             selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
             selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
+            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
         }
 
         selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
@@ -879,6 +884,7 @@ public sealed class ResponsesCommandFacade(
                 ToolName = tool.Name,
                 Description = tool.Description,
                 ParametersJson = tool.ParametersJson,
+                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
                 SchemaHash = tool.SchemaHash,
             }));
         return selection;

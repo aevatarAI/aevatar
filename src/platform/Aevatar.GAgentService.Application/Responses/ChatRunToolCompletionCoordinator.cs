@@ -35,9 +35,9 @@ public sealed class ChatRunToolCompletionCoordinator
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
 
-    // Refactor (iter1334/cluster-1334-chatrun-result-json-boundary-quarantine):
-    // Old pattern: ChatRun completion coordination named folded actor results as generic ResultJson.
-    // New principle: actor-internal terminal payloads use internal_result_json and only boundary dispatch JSON remains boundary-named.
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: ChatRun completion coordination handed durable actor events only JSON strings.
+    //   New principle: adapter/actor convert boundary JSON to typed Value; JSON remains boundary/fallback surface.
     public ChatRunToolCompletionCoordinator(
         IChatRunActorPort chatRunActorPort,
         IGAgentRunTerminalQueryPort gagentTerminalQueryPort,

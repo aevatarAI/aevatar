@@ -129,7 +129,58 @@ public sealed class ResponsesCommandFacadeTests
         result.Accepted.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
+        command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
         sessions.RecordedToolCalls.Should().BeEmpty("tool set tools execute locally and are not client-forwarded tools");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithForwardedClientTool_ShouldWriteTypedToolSchema()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            [
+                new ResponsesApplicationToolDeclaration(
+                    "get_weather",
+                    "Get weather",
+                    """{"type":"object","properties":{"city":{"type":"string"}}}""",
+                    "schema-1"),
+            ]), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        var declaration = command.ToolSelection.ForwardedTools.Should().ContainSingle().Subject;
+        declaration.Parameters.Fields["type"].StringValue.Should().Be("object");
+        declaration.Parameters.Fields["properties"].StructValue.Fields["city"].StructValue.Fields["type"]
+            .StringValue.Should().Be("string");
+    }
+
+    [Fact]
+    public void ToRuntimeToolCall_ShouldWriteTypedRuntimeToolArguments()
+    {
+        var method = typeof(ResponsesCommandFacade).GetMethod(
+            "ToRuntimeToolCall",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        var converted = (LlmSessionRuntimeToolCall)method!.Invoke(null,
+        [
+            new ToolCall
+            {
+                Id = "call_1",
+                Name = "get_weather",
+                ArgumentsJson = """{"city":"Singapore"}""",
+            },
+        ])!;
+
+        converted.Arguments.Fields["city"].StringValue.Should().Be("Singapore");
     }
 
     [Fact]
