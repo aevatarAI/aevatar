@@ -27,7 +27,7 @@ public sealed class WorkflowProjectionReadModelCoverageTests
 
         lease.RootEntityId.Should().Be("actor-1");
         lease.ActorId.Should().Be("actor-1");
-        lease.ScopeId.Should().Be("actor-1");
+        lease.Context.RootActorId.Should().Be("actor-1");
         lease.CommandId.Should().Be("session-1");
         lease.SessionId.Should().Be("session-1");
         lease.Context.ProjectionKind.Should().Be("workflow-execution");
