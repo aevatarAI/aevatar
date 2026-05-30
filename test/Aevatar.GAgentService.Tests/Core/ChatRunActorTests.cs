@@ -85,6 +85,32 @@ public sealed class ChatRunActorTests
     }
 
     [Fact]
+    public async Task SubmitToolCall_ShouldPreferTypedInternalResult_WhenLegacyJsonAlsoExists()
+    {
+        var actor = await StartedActorAsync("resp_typed_submit");
+        var command = BuildSubmit(
+            toolCallId: "call_typed_submit",
+            runId: "run_typed_submit",
+            waitMode: ChatRunSubRunWaitMode.Stream,
+            resultJson: """{"content":"legacy"}""");
+        command.InternalResult = Google.Protobuf.WellKnownTypes.Value.ForStruct(new Struct
+        {
+            Fields =
+            {
+                ["content"] = Google.Protobuf.WellKnownTypes.Value.ForString("typed"),
+                ["ok"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+            },
+        });
+
+        await actor.HandleSubmitToolCallAsync(command);
+
+        var history = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
+        history.InternalResult.StructValue.Fields["content"].StringValue.Should().Be("typed");
+        history.InternalResult.StructValue.Fields["ok"].BoolValue.Should().BeTrue();
+        history.InternalResultJson.Should().Be("""{"content":"legacy"}""");
+    }
+
+    [Fact]
     public async Task SubmitWaitCompleteThenTerminal_ShouldFoldToolResult_AndAdvanceRound()
     {
         var actor = await StartedActorAsync("resp_complete");
@@ -115,6 +141,53 @@ public sealed class ChatRunActorTests
             message.ToolCallId == "call_complete" &&
             message.Content.Contains("\"content\": \"done\"", StringComparison.Ordinal));
         actor.State.CurrentLlmRound.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task SubRunTerminal_ShouldFoldTypedInternalResult_AheadOfLegacyJsonFallback()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actor = await StartedActorAsync("resp_typed_terminal", eventStore);
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_typed_terminal",
+            runId: "run_typed_terminal",
+            waitMode: ChatRunSubRunWaitMode.Complete,
+            resultJson: """{"content":"initial"}"""));
+
+        await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
+        {
+            RunId = "run_typed_terminal",
+            Status = "RunFinished",
+            InternalResultJson = """{"content":"legacy-terminal"}""",
+            InternalResult = Google.Protobuf.WellKnownTypes.Value.ForStruct(new Struct
+            {
+                Fields =
+                {
+                    ["content"] = Google.Protobuf.WellKnownTypes.Value.ForString("typed-terminal"),
+                    ["status"] = Google.Protobuf.WellKnownTypes.Value.ForString("RunFinished"),
+                },
+            }),
+        });
+
+        var history = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
+        history.InternalResult.StructValue.Fields["content"].StringValue.Should().Be("typed-terminal");
+        history.InternalResultJson.Should().Contain("typed-terminal");
+        history.InternalResultJson.Should().NotContain("legacy-terminal");
+        actor.State.Messages.Should().ContainSingle(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "call_typed_terminal" &&
+            message.Content.Contains("typed-terminal", StringComparison.Ordinal));
+
+        var foldedEvent = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(ChatRunSubRunTerminalFoldedEvent.Descriptor))
+            .Select(static payload => payload.Unpack<ChatRunSubRunTerminalFoldedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        foldedEvent.InternalResult.StructValue.Fields["content"].StringValue.Should().Be("typed-terminal");
+        foldedEvent.InternalResultJson.Should().Be(history.InternalResultJson);
     }
 
     [Fact]
@@ -499,6 +572,37 @@ public sealed class ChatRunActorTests
         command.RunId.Should().Be("run_adapter");
         command.InternalResultJson.Should().Be(boundaryPayload);
         command.InternalResult.StructValue.Fields["opaque"].StringValue.Should().Be("tool-output");
+    }
+
+    [Fact]
+    public async Task AdapterSubmitToolCall_ShouldFallbackMalformedBoundaryPayloadToTypedStringValue()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var adapter = new ChatRunActorAdapter(new RecordingActorRuntime(), dispatchPort);
+        const string malformedPayload = "not json {";
+
+        await adapter.SubmitToolCallAsync(
+            "chat-run:resp_adapter_malformed",
+            new ChatRunToolCompletionRequest(
+                "resp_adapter_malformed",
+                "gpt-test",
+                [ChatMessage.User("hello")],
+                new ToolCall
+                {
+                    Id = "call_adapter_malformed",
+                    Name = "custom_tool",
+                    ArgumentsJson = "not json {",
+                },
+                "not json {",
+                malformedPayload,
+                1));
+
+        var command = dispatchPort.Calls.Should().ContainSingle().Subject
+            .envelope.Payload.Unpack<SubmitChatRunToolCallRequested>();
+        command.Arguments.Fields.Should().BeEmpty();
+        command.InternalResultJson.Should().Be(malformedPayload);
+        command.InternalResult.StringValue.Should().Be(malformedPayload);
+        command.TargetKind.Should().Be(ChatRunSubRunTargetKind.Unspecified);
     }
 
     [Fact]
