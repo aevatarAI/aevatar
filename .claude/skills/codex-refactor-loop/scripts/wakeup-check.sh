@@ -27,7 +27,13 @@ epoch_of() {
 # ============================================================================
 echo "=== DAEMON HEALTH ==="
 for d in concurrency_monitor.py comment-monitor.sh codex-progress-reporter.sh dev_sync_daemon.py triage-monitor.sh; do
-    c=$(ps -ef | grep "$d" | grep -v grep | wc -l | tr -d ' ')
+    # Narrow match: argv must invoke the daemon via bash or python (start of token)
+    # at path `.claude/skills/codex-refactor-loop/scripts/<d>` — either relative
+    # (daemons started from aevatar repo root) or absolute. Substring match catches
+    # unrelated codex processes whose prompt body mentions the daemon name; cross-repo
+    # wrappers (chrono-ai / newmath consensus-rnd-cli) embed the daemon name as an
+    # argv constant but never invoke the aevatar daemon script directly.
+    c=$(ps -eo args | grep -E "(bash|python[0-9.]*|Python) (\.|/.+)?\.claude/skills/codex-refactor-loop/scripts/$d( |$)" | grep -v grep | wc -l | tr -d ' ')
     if [ "$c" -ge 1 ]; then
         echo "$d: $c OK"
     else
