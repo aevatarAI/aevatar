@@ -10,10 +10,10 @@ namespace Aevatar.GAgentService.Projection.Orchestration;
 /// It exposes the session context and typed sink handle returned by the
 /// projection runtime for activation and release.
 /// </summary>
-// Refactor (issue-377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
-// Refactor (issue-377): Old pattern: ScopeId duplicated Context.RootActorId as an alias.
-// Refactor (issue-377): New principle: Context is the single session routing source.
-// Refactor (issue-377): New principle: attach uses RootActorId + SessionId from Context.
+// Refactor (iter367/cluster-issue377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: ScopeId duplicated Context.RootActorId as an alias.
+// Refactor (iter367/cluster-issue377): New principle: Context is the single session routing source.
+// Refactor (iter367/cluster-issue377): New principle: attach uses RootActorId + SessionId from Context.
 public sealed class ScriptServiceAguiRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<AGUIEvent>,
       IScriptServiceAguiProjectionLease,

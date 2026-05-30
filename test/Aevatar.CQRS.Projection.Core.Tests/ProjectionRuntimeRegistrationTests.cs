@@ -480,10 +480,10 @@ public sealed class ProjectionRuntimeRegistrationTests
         public string SessionId { get; init; } = string.Empty;
     }
 
-    // Refactor (issue-377): Old pattern: test lease implemented IProjectionPortSessionLease.
-    // Refactor (issue-377): Old pattern: ScopeId repeated Context.RootActorId.
-    // Refactor (issue-377): New principle: test registration only requires typed context lease.
-    // Refactor (issue-377): New principle: assertions read RootActorId from Context.
+    // Refactor (iter367/cluster-issue377): Old pattern: test lease implemented IProjectionPortSessionLease.
+    // Refactor (iter367/cluster-issue377): Old pattern: ScopeId repeated Context.RootActorId.
+    // Refactor (iter367/cluster-issue377): New principle: test registration only requires typed context lease.
+    // Refactor (iter367/cluster-issue377): New principle: assertions read RootActorId from Context.
     private sealed class TestSessionLease
         : EventSinkProjectionRuntimeLeaseBase<StringValue>,
           IProjectionContextRuntimeLease<TestSessionContext>

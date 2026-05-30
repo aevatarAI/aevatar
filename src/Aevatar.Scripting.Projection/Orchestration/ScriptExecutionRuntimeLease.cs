@@ -6,10 +6,10 @@ using Aevatar.Scripting.Abstractions.Queries;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
-// Refactor (issue-377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
-// Refactor (issue-377): Old pattern: ScopeId exposed the root actor id under an alias.
-// Refactor (issue-377): New principle: session identity is owned by ScriptExecutionProjectionContext.
-// Refactor (issue-377): New principle: lifecycle attach reads RootActorId + SessionId from Context.
+// Refactor (iter367/cluster-issue377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: ScopeId exposed the root actor id under an alias.
+// Refactor (iter367/cluster-issue377): New principle: session identity is owned by ScriptExecutionProjectionContext.
+// Refactor (iter367/cluster-issue377): New principle: lifecycle attach reads RootActorId + SessionId from Context.
 public sealed class ScriptExecutionRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
       IScriptExecutionProjectionLease,

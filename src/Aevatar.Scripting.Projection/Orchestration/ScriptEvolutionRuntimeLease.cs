@@ -5,10 +5,10 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
-// Refactor (issue-377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
-// Refactor (issue-377): Old pattern: ScopeId aliased the session root actor id.
-// Refactor (issue-377): New principle: typed evolution session context owns route identity.
-// Refactor (issue-377): New principle: leases expose domain contract fields without alias state.
+// Refactor (iter367/cluster-issue377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: ScopeId aliased the session root actor id.
+// Refactor (iter367/cluster-issue377): New principle: typed evolution session context owns route identity.
+// Refactor (iter367/cluster-issue377): New principle: leases expose domain contract fields without alias state.
 public sealed class ScriptEvolutionRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<ScriptEvolutionSessionCompletedEvent>,
       IScriptEvolutionProjectionLease,

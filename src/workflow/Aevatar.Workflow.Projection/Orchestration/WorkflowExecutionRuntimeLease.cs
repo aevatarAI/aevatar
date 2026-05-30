@@ -4,10 +4,10 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-// Refactor (issue-377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
-// Refactor (issue-377): Old pattern: ScopeId repeated Context.RootActorId for session routing.
-// Refactor (issue-377): New principle: workflow session context is the routing authority.
-// Refactor (issue-377): New principle: lifecycle attach uses Context.RootActorId and Context.SessionId.
+// Refactor (iter367/cluster-issue377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: ScopeId repeated Context.RootActorId for session routing.
+// Refactor (iter367/cluster-issue377): New principle: workflow session context is the routing authority.
+// Refactor (iter367/cluster-issue377): New principle: lifecycle attach uses Context.RootActorId and Context.SessionId.
 public sealed class WorkflowExecutionRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<WorkflowRunEventEnvelope>,
       IWorkflowExecutionProjectionLease,

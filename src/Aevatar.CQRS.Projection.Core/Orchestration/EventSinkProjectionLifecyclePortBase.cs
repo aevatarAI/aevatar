@@ -6,10 +6,10 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Event-sink specialized attach/release port base with runtime lease resolution hook.
 /// </summary>
-// Refactor (issue-377): Old pattern: session sink attach required IProjectionPortSessionLease.
-// Refactor (issue-377): Old pattern: the alias only forwarded RootActorId and SessionId.
-// Refactor (issue-377): New principle: typed projection session context owns routing identity.
-// Refactor (issue-377): New principle: lifecycle attach reads RootActorId and SessionId from Context.
+// Refactor (iter367/cluster-issue377): Old pattern: session sink attach required IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: the alias only forwarded RootActorId and SessionId.
+// Refactor (iter367/cluster-issue377): New principle: typed projection session context owns routing identity.
+// Refactor (iter367/cluster-issue377): New principle: lifecycle attach reads RootActorId and SessionId from Context.
 public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>
     : IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
     where TLeaseContract : class
@@ -44,10 +44,10 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         if (!ProjectionEnabled)
             return null;
 
-        // Refactor (issue-377): Old pattern: attach inspected IProjectionPortSessionLease alias properties.
-        // Refactor (issue-377): Old pattern: alias let leases duplicate RootActorId as ScopeId.
-        // Refactor (issue-377): New principle: RootActorId + SessionId come from the typed session context.
-        // Refactor (issue-377): New principle: the runtime lease only carries context, not a routing alias.
+        // Refactor (iter367/cluster-issue377): Old pattern: attach inspected IProjectionPortSessionLease alias properties.
+        // Refactor (iter367/cluster-issue377): Old pattern: alias let leases duplicate RootActorId as ScopeId.
+        // Refactor (iter367/cluster-issue377): New principle: RootActorId + SessionId come from the typed session context.
+        // Refactor (iter367/cluster-issue377): New principle: the runtime lease only carries context, not a routing alias.
         var runtimeLease = ResolveRuntimeLease(lease);
         var sessionContext = runtimeLease.Context;
 
@@ -82,10 +82,10 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         return _releaseService.ReleaseIfIdleAsync(ResolveRuntimeLease(lease), ct);
     }
 
-    // Refactor (issue-377): Old pattern: resolved leases needed a second alias interface check.
-    // Refactor (issue-377): Old pattern: unsupported leases failed after alias casting.
-    // Refactor (issue-377): New principle: generic constraints guarantee typed context availability.
-    // Refactor (issue-377): New principle: this method only validates the public lease contract shape.
+    // Refactor (iter367/cluster-issue377): Old pattern: resolved leases needed a second alias interface check.
+    // Refactor (iter367/cluster-issue377): Old pattern: unsupported leases failed after alias casting.
+    // Refactor (iter367/cluster-issue377): New principle: generic constraints guarantee typed context availability.
+    // Refactor (iter367/cluster-issue377): New principle: this method only validates the public lease contract shape.
     protected virtual TRuntimeLease ResolveRuntimeLease(TLeaseContract lease) =>
         lease as TRuntimeLease
         ?? throw new InvalidOperationException(

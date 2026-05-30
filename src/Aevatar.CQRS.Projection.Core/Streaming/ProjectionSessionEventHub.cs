@@ -7,10 +7,10 @@ namespace Aevatar.CQRS.Projection.Core.Streaming;
 /// <summary>
 /// Generic stream-backed session event hub keyed by root actor/session.
 /// </summary>
-// Refactor (issue-377): Old pattern: session hub called the first key scopeId.
-// Refactor (issue-377): Old pattern: transport tag 1 held RootActorId under a scope alias.
-// Refactor (issue-377): New principle: first key is RootActorId across hub, entry, and proto.
-// Refactor (issue-377): New principle: stream routing remains RootActorId + SessionId.
+// Refactor (iter367/cluster-issue377): Old pattern: session hub called the first key scopeId.
+// Refactor (iter367/cluster-issue377): Old pattern: transport tag 1 held RootActorId under a scope alias.
+// Refactor (iter367/cluster-issue377): New principle: first key is RootActorId across hub, entry, and proto.
+// Refactor (iter367/cluster-issue377): New principle: stream routing remains RootActorId + SessionId.
 // Refactor (iter34/cluster-003-projection-session-legacy-payload):
 //   Old pattern: Projection session event transport carries both protobuf bytes and legacy string payload compatibility (legacy_payload string field in proto + legacy codec interface + legacy payload write path).
 //   New principle: Projection session event transport carries protobuf payload only; obsolete legacy codec surface is deleted; tests/docs updated; protobuf legacy_payload field reserved per protobuf evolution rules; no concrete codec depended on the legacy interface.
@@ -31,10 +31,10 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
         _logger = logger ?? NullLogger<ProjectionSessionEventHub<TEvent>>.Instance;
     }
 
-    // Refactor (issue-377): Old pattern: PublishAsync accepted scopeId for root actor routing.
-    // Refactor (issue-377): Old pattern: message.ScopeId hid the true invariant in generated code.
-    // Refactor (issue-377): New principle: PublishAsync accepts rootActorId and writes root_actor_id.
-    // Refactor (issue-377): New principle: validation errors name rootActorId honestly.
+    // Refactor (iter367/cluster-issue377): Old pattern: PublishAsync accepted scopeId for root actor routing.
+    // Refactor (iter367/cluster-issue377): Old pattern: message.ScopeId hid the true invariant in generated code.
+    // Refactor (iter367/cluster-issue377): New principle: PublishAsync accepts rootActorId and writes root_actor_id.
+    // Refactor (iter367/cluster-issue377): New principle: validation errors name rootActorId honestly.
     public Task PublishAsync(
         string rootActorId,
         string sessionId,
@@ -60,10 +60,10 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
         return stream.ProduceAsync(message, ct);
     }
 
-    // Refactor (issue-377): Old pattern: SubscribeAsync accepted scopeId for root actor routing.
-    // Refactor (issue-377): Old pattern: subscription filters compared message.ScopeId.
-    // Refactor (issue-377): New principle: subscription filters compare message.RootActorId.
-    // Refactor (issue-377): New principle: route key names match the typed projection context.
+    // Refactor (iter367/cluster-issue377): Old pattern: SubscribeAsync accepted scopeId for root actor routing.
+    // Refactor (iter367/cluster-issue377): Old pattern: subscription filters compared message.ScopeId.
+    // Refactor (iter367/cluster-issue377): New principle: subscription filters compare message.RootActorId.
+    // Refactor (iter367/cluster-issue377): New principle: route key names match the typed projection context.
     public async Task<IAsyncDisposable> SubscribeAsync(
         string rootActorId,
         string sessionId,

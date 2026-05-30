@@ -40,7 +40,7 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
             "../../../../../src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortBase.cs"));
         var source = File.ReadAllText(sourcePath);
 
-        source.Should().Contain("Refactor (issue-377):");
+        source.Should().Contain("Refactor (iter367/cluster-issue377):");
         source.Should().NotContain("protected async Task<TLeaseContract?> EnsureProjectionAsync");
         source.Should().NotContain("_activationService");
         source.Should().NotContain("IProjectionScopeActivationService<TRuntimeLease>");
@@ -188,10 +188,10 @@ internal sealed class TestEventSinkProjectionLifecyclePort
     }
 }
 
-// Refactor (issue-377): Old pattern: test runtime lease implemented IProjectionPortSessionLease.
-// Refactor (issue-377): Old pattern: ScopeId aliased RootActorId for subscription routing.
-// Refactor (issue-377): New principle: test lease carries an IProjectionSessionContext.
-// Refactor (issue-377): New principle: lifecycle base reads RootActorId + SessionId from Context.
+// Refactor (iter367/cluster-issue377): Old pattern: test runtime lease implemented IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: ScopeId aliased RootActorId for subscription routing.
+// Refactor (iter367/cluster-issue377): New principle: test lease carries an IProjectionSessionContext.
+// Refactor (iter367/cluster-issue377): New principle: lifecycle base reads RootActorId + SessionId from Context.
 internal sealed class TestPortRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<string>,
       IProjectionContextRuntimeLease<TestPortSessionContext>

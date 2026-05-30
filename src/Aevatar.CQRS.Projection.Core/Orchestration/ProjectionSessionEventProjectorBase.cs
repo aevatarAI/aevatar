@@ -3,10 +3,10 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Shared projector template for mapping one envelope into zero-or-more session events.
 /// </summary>
-// Refactor (issue-377): Old pattern: session event entries used ScopeId for root actor routing.
-// Refactor (issue-377): Old pattern: projectors could preserve the alias into the hub call.
-// Refactor (issue-377): New principle: projector entries expose RootActorId explicitly.
-// Refactor (issue-377): New principle: hub fanout receives RootActorId + SessionId.
+// Refactor (iter367/cluster-issue377): Old pattern: session event entries used ScopeId for root actor routing.
+// Refactor (iter367/cluster-issue377): Old pattern: projectors could preserve the alias into the hub call.
+// Refactor (iter367/cluster-issue377): New principle: projector entries expose RootActorId explicitly.
+// Refactor (iter367/cluster-issue377): New principle: hub fanout receives RootActorId + SessionId.
 public abstract class ProjectionSessionEventProjectorBase<TContext, TEvent>
     : IProjectionProjector<TContext>
     where TContext : class, IProjectionSessionContext
@@ -56,10 +56,10 @@ public abstract class ProjectionSessionEventProjectorBase<TContext, TEvent>
     protected static IReadOnlyList<ProjectionSessionEventEntry<TEvent>> EmptyEntries { get; } = [];
 }
 
-// Refactor (issue-377): Old pattern: ProjectionSessionEventEntry.ScopeId meant root actor id.
-// Refactor (issue-377): Old pattern: the entry model carried a misleading first dimension.
-// Refactor (issue-377): New principle: RootActorId is the first routing invariant.
-// Refactor (issue-377): New principle: SessionId remains the second dimension for fanout.
+// Refactor (iter367/cluster-issue377): Old pattern: ProjectionSessionEventEntry.ScopeId meant root actor id.
+// Refactor (iter367/cluster-issue377): Old pattern: the entry model carried a misleading first dimension.
+// Refactor (iter367/cluster-issue377): New principle: RootActorId is the first routing invariant.
+// Refactor (iter367/cluster-issue377): New principle: SessionId remains the second dimension for fanout.
 public sealed record ProjectionSessionEventEntry<TEvent>(
     string RootActorId,
     string SessionId,
