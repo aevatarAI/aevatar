@@ -231,7 +231,7 @@ public sealed class AppScopedScriptService
         }
 
         // Refactor (iter348/cluster-002):
-        //   Old pattern: AppScopedScriptService fires fire-and-forget IScriptStoragePort.UploadAsync after ACK
+        //   Old pattern: AppScopedScriptService fires fire-and-forget storage upload after ACK
         //   New principle: actor projection save-observation is single source; no orphan chrono storage mirror
         return BuildAcceptedSaveResponse(sourceText, upsertResult);
     }
