@@ -60,11 +60,11 @@ fi
 # ============================================================================
 echo ""
 echo "=== STEP 0: MILESTONE ==="
+M_FOUND=0
 M_LABELS=$(gh label list --search "milestone:" --json name --jq '.[].name' 2>/dev/null | grep -E "^milestone:" | sort)
 if [ -z "$M_LABELS" ]; then
     echo "(no milestone labels defined)"
 else
-    M_FOUND=0
     for ml in $(echo "$M_LABELS" | grep "^milestone:p0:") $(echo "$M_LABELS" | grep -v "^milestone:p0:"); do
         ISSUES=$(gh issue list --state open --label "$ml" --json number --jq '.[].number' 2>/dev/null | tr '\n' ' ')
         if [ -n "$ISSUES" ]; then
