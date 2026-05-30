@@ -34,6 +34,50 @@ if [ -d "src/Aevatar.Host.Api" ] || [ -d "src/Aevatar.Host.Gateway" ]; then
   exit 1
 fi
 
+# Refactor (v1/issue1454-first):
+#   Old: 无中央 .NET 版本源,各项目自带或默认 1.0.0.0,无中央事实
+#   New: Directory.Build.props 中央 v0.1.0-beta + guard 防回归
+check_directory_build_version_guard() {
+  local props_file="Directory.Build.props"
+
+  if ! rg -q "<Version>0\.1\.0-beta</Version>" "${props_file}"; then
+    echo "Directory.Build.props must define <Version>0.1.0-beta</Version>."
+    exit 1
+  fi
+
+  if ! rg -q "<VersionPrefix>0\.1\.0</VersionPrefix>" "${props_file}"; then
+    echo "Directory.Build.props must define <VersionPrefix>0.1.0</VersionPrefix>."
+    exit 1
+  fi
+
+  if ! rg -q "<VersionSuffix>beta</VersionSuffix>" "${props_file}"; then
+    echo "Directory.Build.props must define <VersionSuffix>beta</VersionSuffix>."
+    exit 1
+  fi
+
+  if ! rg -q "<PackageVersion>0\.1\.0-beta</PackageVersion>" "${props_file}"; then
+    echo "Directory.Build.props must define <PackageVersion>0.1.0-beta</PackageVersion>."
+    exit 1
+  fi
+
+  if ! rg -q "<InformationalVersion>0\.1\.0-beta</InformationalVersion>" "${props_file}"; then
+    echo "Directory.Build.props must define <InformationalVersion>0.1.0-beta</InformationalVersion>."
+    exit 1
+  fi
+
+  if ! rg -q "<AssemblyVersion>0\.1\.0\.0</AssemblyVersion>" "${props_file}"; then
+    echo "Directory.Build.props must define <AssemblyVersion>0.1.0.0</AssemblyVersion>."
+    exit 1
+  fi
+
+  if ! rg -q "<FileVersion>0\.1\.0\.0</FileVersion>" "${props_file}"; then
+    echo "Directory.Build.props must define <FileVersion>0.1.0.0</FileVersion>."
+    exit 1
+  fi
+}
+
+check_directory_build_version_guard
+
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
 
