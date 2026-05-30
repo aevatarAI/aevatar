@@ -164,6 +164,26 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public void ToRuntimeToolCall_ShouldWriteTypedRuntimeToolArguments()
+    {
+        var method = typeof(ResponsesCommandFacade).GetMethod(
+            "ToRuntimeToolCall",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        var converted = (LlmSessionRuntimeToolCall)method!.Invoke(null,
+        [
+            new ToolCall
+            {
+                Id = "call_1",
+                Name = "get_weather",
+                ArgumentsJson = """{"city":"Singapore"}""",
+            },
+        ])!;
+
+        converted.Arguments.Fields["city"].StringValue.Should().Be("Singapore");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldReturnAuthenticationError_WhenCallerScopeCannotBeResolved()
     {
         var facade = CreateFacade(callerScopeResolver: new ThrowingCallerScopeResolver());

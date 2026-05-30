@@ -109,6 +109,26 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public void RuntimeToolArgumentsValue_WithLegacyJsonOnly_ShouldParseArguments()
+    {
+        var method = typeof(LlmSessionGAgent).GetMethod(
+            "RuntimeToolArgumentsValue",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        var result = (Google.Protobuf.WellKnownTypes.Value)method!.Invoke(null,
+        [
+            new LlmSessionRuntimeToolCall
+            {
+                CallId = "call_legacy",
+                ToolName = "get_weather",
+                ArgumentsJson = """{"city":"Paris"}""",
+            },
+        ])!;
+
+        result.StructValue.Fields["city"].StringValue.Should().Be("Paris");
+    }
+
+    [Fact]
     public async Task HandleReceiveForwardedToolResultAsync_ShouldPersistResult_AndIgnoreDuplicate()
     {
         var actor = CreateActor("resp_1");
@@ -766,6 +786,47 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseLegacyRuntimeMessageToolArguments_WhenTypedArgumentsAreEmpty()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_legacy_runtime_message", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_legacy_runtime_message"),
+        });
+        var request = BuildRunRequest("resp_legacy_runtime_message");
+        request.Messages.Clear();
+        request.Messages.Add(new LlmSessionRuntimeChatMessage
+        {
+            Role = "assistant",
+            ToolCalls =
+            {
+                new LlmSessionRuntimeToolCall
+                {
+                    CallId = "call_legacy_args",
+                    ToolName = "get_weather",
+                    ArgumentsJson = """{"city":"Paris"}""",
+                },
+            },
+        });
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var toolCall = provider.Requests.Should().ContainSingle().Subject.Messages
+            .Single(message => message.ToolCalls != null && message.ToolCalls.Count == 1)
+            .ToolCalls![0];
+        toolCall.ArgumentsJson.Should().Be("""{"city":"Paris"}""");
+    }
+
+    [Fact]
     public async Task HandleLlmRunRequestedAsync_ShouldUseTypedToolDeclarationParametersBeforeLegacyJson()
     {
         var provider = new ScriptedLlmProviderFactory([
@@ -799,6 +860,35 @@ public sealed class LlmSessionGAgentTests
             .Should()
             .ContainSingle(tool => tool.Name == "get_weather")
             .Which.ParametersSchema.Should().Contain("\"typed\": true");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseLegacyToolDeclarationParameters_WhenTypedParametersAreEmpty()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_legacy_parameters", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_legacy_parameters"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.ForwardedTools[0].Parameters.Fields.Clear();
+        selection.ForwardedTools[0].ParametersJson = """{"type":"object","legacy":true}""";
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_legacy_parameters", selection));
+
+        provider.Requests.Should().ContainSingle().Subject.Tools
+            .Should()
+            .ContainSingle(tool => tool.Name == "get_weather")
+            .Which.ParametersSchema.Should().Be("""{"type":"object","legacy":true}""");
     }
 
     [Fact]
@@ -839,6 +929,78 @@ public sealed class LlmSessionGAgentTests
         var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
         forwarded.Arguments.StructValue.Fields["actor_id"].StringValue.Should().Be("actor-from-typed-hint");
         forwarded.Arguments.StructValue.Fields["city"].StringValue.Should().Be("Singapore");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseLegacyToolChoiceHintArguments_WhenTypedArgumentsAreEmpty()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_legacy_hint", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_legacy_hint"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.ToolChoiceHintName = "get_weather";
+        selection.ToolChoiceHintArgumentsJson = """{"actor_id":"actor-from-legacy-hint"}""";
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_legacy_hint", selection));
+
+        var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
+        forwarded.Arguments.StructValue.Fields["actor_id"].StringValue.Should().Be("actor-from-legacy-hint");
+        forwarded.Arguments.StructValue.Fields["city"].StringValue.Should().Be("Singapore");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldMergeTypedToolCallDeltasForSameCall()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = "{\"city\":\"Singapore\",",
+                    },
+                },
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = "\"unit\":\"celsius\"}",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_merge_tool_deltas", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_merge_tool_deltas"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_merge_tool_deltas", BuildForwardedSelection()));
+
+        var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
+        forwarded.Arguments.StructValue.Fields["city"].StringValue.Should().Be("Singapore");
+        forwarded.Arguments.StructValue.Fields["unit"].StringValue.Should().Be("celsius");
     }
 
     [Fact]
