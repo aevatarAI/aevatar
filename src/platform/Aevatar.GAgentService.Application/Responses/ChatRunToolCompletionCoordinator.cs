@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -32,7 +31,6 @@ public sealed class ChatRunToolCompletionCoordinator
         CompleteInvocationToolNames.ToHashSet(StringComparer.Ordinal);
 
     private readonly IChatRunActorPort _chatRunActorPort;
-    private readonly IActorEventSubscriptionProvider _subscriptionProvider;
     private readonly IGAgentRunTerminalQueryPort _gagentTerminalQueryPort;
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
@@ -42,13 +40,11 @@ public sealed class ChatRunToolCompletionCoordinator
     // New principle: actor-internal terminal payloads use internal_result_json and only boundary dispatch JSON remains boundary-named.
     public ChatRunToolCompletionCoordinator(
         IChatRunActorPort chatRunActorPort,
-        IActorEventSubscriptionProvider subscriptionProvider,
         IGAgentRunTerminalQueryPort gagentTerminalQueryPort,
         IServiceRunQueryPort serviceRunQueryPort,
         IWorkflowExecutionQueryApplicationService workflowQueryService)
     {
         _chatRunActorPort = chatRunActorPort ?? throw new ArgumentNullException(nameof(chatRunActorPort));
-        _subscriptionProvider = subscriptionProvider ?? throw new ArgumentNullException(nameof(subscriptionProvider));
         _gagentTerminalQueryPort = gagentTerminalQueryPort ?? throw new ArgumentNullException(nameof(gagentTerminalQueryPort));
         _serviceRunQueryPort = serviceRunQueryPort ?? throw new ArgumentNullException(nameof(serviceRunQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
@@ -81,19 +77,7 @@ public sealed class ChatRunToolCompletionCoordinator
             new ChatRunStartRequest(
                 responseId,
                 request.Model,
-                request.Messages),
-            ct);
-
-        var readySource = new TaskCompletionSource<ChatRunToolResultReady>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var subscription = await _subscriptionProvider.SubscribeAsync<ChatRunToolResultReady>(
-            actorId,
-            ready =>
-            {
-                if (string.Equals(ready.CallerToolCallId, toolCall.Id, StringComparison.Ordinal))
-                    readySource.TrySetResult(ready.Clone());
-                return Task.CompletedTask;
-            },
+            request.Messages),
             ct);
 
         var isGAgentInvocation = string.Equals(toolCall.Name, "aevatar_invoke_gagent", StringComparison.Ordinal);
@@ -134,11 +118,6 @@ public sealed class ChatRunToolCompletionCoordinator
 
         var terminal = TryBuildTerminalFromDispatchResult(completionRequest) ??
                        await ResolveTerminalAsync(toolCall.Name, completionRequest, ct);
-        if (terminal == null && isGAgentInvocation)
-        {
-            var observed = await readySource.Task.WaitAsync(ct);
-            return observed.InternalResultJson;
-        }
 
         terminal ??= BuildTerminal(
             completionRequest,
@@ -148,9 +127,11 @@ public sealed class ChatRunToolCompletionCoordinator
         if (string.IsNullOrWhiteSpace(terminal.RunId))
             return terminal.InternalResultJson;
 
+        // Refactor (issue1418/cluster-005-chatrun-stream-reply-wait):
+        //   Old pattern: the application call subscribed to actor stream events and waited for ChatRunToolResultReady as a reply.
+        //   New principle: synchronous completion returns only an already-known terminal readmodel/dispatch receipt or an honest completion_not_observed receipt.
         await _chatRunActorPort.ObserveSubRunTerminalAsync(actorId, terminal, ct);
-
-        return (await readySource.Task.WaitAsync(ct)).InternalResultJson;
+        return terminal.InternalResultJson;
     }
 
     // Refactor (iter290/cluster001): Old pattern: observation targets were recovered from tool ResultJson after dispatch. New principle: observation target fields are normalized before entering actor observation.

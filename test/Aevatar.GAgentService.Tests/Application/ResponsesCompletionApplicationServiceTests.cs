@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -159,11 +158,9 @@ public sealed class ResponsesCompletionApplicationServiceTests
 
     private sealed class CompletionHarness
     {
-        private readonly RecordingSubscriptionProvider _subscriptionProvider = new();
-
         public CompletionHarness()
         {
-            ChatRunPort = new RecordingChatRunActorPort(_subscriptionProvider);
+            ChatRunPort = new RecordingChatRunActorPort();
         }
 
         public RecordingChatRunActorPort ChatRunPort { get; }
@@ -171,14 +168,12 @@ public sealed class ResponsesCompletionApplicationServiceTests
         public ChatRunToolCompletionCoordinator CreateCoordinator() =>
             new(
                 ChatRunPort,
-                _subscriptionProvider,
                 new EmptyTerminalQueryPort(),
                 new EmptyServiceRunQueryPort(),
                 new EmptyWorkflowQueryService());
     }
 
-    private sealed class RecordingChatRunActorPort(RecordingSubscriptionProvider subscriptionProvider)
-        : IChatRunActorPort
+    private sealed class RecordingChatRunActorPort : IChatRunActorPort
     {
         public ChatRunStartRequest? StartRequest { get; private set; }
 
@@ -209,57 +204,13 @@ public sealed class ResponsesCompletionApplicationServiceTests
             string chatRunActorId,
             ChatRunSubRunTerminalObserved observed,
             CancellationToken ct = default) =>
-            subscriptionProvider.PublishReadyAsync(
-                chatRunActorId,
-                new ChatRunToolResultReady
-                {
-                    ResponseId = StartRequest?.ResponseId ?? string.Empty,
-                    RunId = observed.RunId,
-                    CallerToolCallId = SubmittedToolCalls.Single().ToolCall.Id,
-                    ToolName = SubmittedToolCalls.Single().ToolCall.Name,
-                    InternalResultJson = observed.InternalResultJson,
-                    LlmRound = SubmittedToolCalls.Single().LlmRound,
-                    Status = observed.Status,
-                    ServiceId = observed.ServiceId,
-                    EndpointId = observed.EndpointId,
-                    CompletionObserved = observed.CompletionObserved,
-                });
+            Task.CompletedTask;
 
         public Task TerminateAsync(
             string chatRunActorId,
             string reason,
             CancellationToken ct = default) =>
             Task.CompletedTask;
-    }
-
-    private sealed class RecordingSubscriptionProvider : IActorEventSubscriptionProvider
-    {
-        private Func<ChatRunToolResultReady, Task>? _handler;
-
-        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
-            string actorId,
-            Func<TMessage, Task> handler,
-            CancellationToken ct = default)
-            where TMessage : class, IMessage, new()
-        {
-            if (typeof(TMessage) != typeof(ChatRunToolResultReady))
-                throw new NotSupportedException(typeof(TMessage).FullName);
-
-            _handler = ready => handler((TMessage)(object)ready);
-            return Task.FromResult<IAsyncDisposable>(new Subscription(this));
-        }
-
-        public Task PublishReadyAsync(string actorId, ChatRunToolResultReady ready) =>
-            _handler?.Invoke(ready) ?? Task.CompletedTask;
-
-        private sealed class Subscription(RecordingSubscriptionProvider owner) : IAsyncDisposable
-        {
-            public ValueTask DisposeAsync()
-            {
-                owner._handler = null;
-                return ValueTask.CompletedTask;
-            }
-        }
     }
 
     private sealed class EmptyServiceRunQueryPort : IServiceRunQueryPort
