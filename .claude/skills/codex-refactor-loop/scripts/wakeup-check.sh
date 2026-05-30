@@ -271,7 +271,7 @@ while IFS= read -r n; do
                 ;;
         esac
     fi
-done < <(gh issue list --state open --label "🔍 phase:design-solving" --json number --jq '.[].number' 2>/dev/null)
+done < <(gh issue list --state open --label "🔍 phase:design-solving" --json number,labels --jq '.[] | select([.labels[].name] | contains(["⏸️ phase:blocked"]) | not) | .number' 2>/dev/null)
 if [ "$F_COUNT" -eq 0 ] && [ "$F2_COUNT" -eq 0 ]; then
     echo "(none — no Phase 9 issue waiting for judge or r1 solver dispatch)"
 fi
