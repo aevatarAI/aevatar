@@ -126,14 +126,11 @@ else
 fi
 MARKER_DIR="$STATE_DIR/markers"
 BASE="$(basename "$LOG" .log)"
+# Default execution_id to log basename for backward compatibility with legacy
+# marker readers + tests that expect markers/<base>.{running,done}.json.
+# Callers may override with --execution-id for distinct lineage tracking.
 if [[ -z "$EXECUTION_ID" ]]; then
-  if command -v uuidgen >/dev/null 2>&1; then
-    EXECUTION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
-  elif python3 -c 'import ulid' >/dev/null 2>&1; then
-    EXECUTION_ID="$(python3 -c 'import ulid; print(ulid.new())')"
-  else
-    EXECUTION_ID="$(date -u +%s%N)"
-  fi
+  EXECUTION_ID="$BASE"
 fi
 RUNNING_MARKER="$MARKER_DIR/$EXECUTION_ID.running.json"
 DONE_MARKER="$MARKER_DIR/$EXECUTION_ID.done.json"
