@@ -203,6 +203,15 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
     {
         private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
 
+        public IReadOnlyList<StateEvent> SnapshotEvents()
+        {
+            return _events.Values
+                .SelectMany(x => x)
+                .OrderBy(x => x.Version)
+                .Select(x => x.Clone())
+                .ToList();
+        }
+
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,
             IEnumerable<StateEvent> events,

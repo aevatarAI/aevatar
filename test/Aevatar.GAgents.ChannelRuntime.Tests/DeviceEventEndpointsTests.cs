@@ -35,7 +35,6 @@ public class DeviceEventEndpointsTests
     [Fact]
     public void ParseCallbackPayload_known_temperature_maps_to_sensor_payload()
     {
-        // NyxID's actual CallbackPayload format (sender.platform_id, nested conversation)
         var innerEvent = JsonSerializer.Serialize(new
         {
             event_id = "evt-001",
@@ -48,19 +47,8 @@ public class DeviceEventEndpointsTests
             motion = true,
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            message_id = "nxmsg-55",
-            platform = "device",
-            agent = new { api_key_id = "key-1", name = "home-agent" },
-            conversation = new { id = "conv-99", platform_id = "conv-p-99", conversation_type = "direct" },
-            sender = new { platform_id = "device-42", display_name = "sensor-hub" },
-            content = new { content_type = "text", text = innerEvent, attachments = Array.Empty<object>() },
-            timestamp = "2026-04-09T10:00:00Z",
-        });
-
-        var bodyBytes = Encoding.UTF8.GetBytes(payload);
-        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "device-42");
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
         inbound.Should().NotBeNull();
         inbound.EventId.Should().Be("evt-001");
@@ -78,21 +66,15 @@ public class DeviceEventEndpointsTests
     [Fact]
     public void ParseCallbackPayload_legacy_sender_id_also_works()
     {
-        // Backward compat: if sender uses "id" instead of "platform_id"
         var innerEvent = JsonSerializer.Serialize(new
         {
             event_id = "evt-002",
             event_type = "motion_detected",
+            detected = true,
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { id = "legacy-device-1" },
-        });
-
-        var bodyBytes = Encoding.UTF8.GetBytes(payload);
-        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
+        var payload = EncodeCallbackPayload(innerEvent, legacySenderId: "legacy-device-1");
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
         inbound.DeviceId.Should().Be("legacy-device-1");
         inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
@@ -159,8 +141,32 @@ public class DeviceEventEndpointsTests
 
         var act = () => DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
-        // Empty string is not valid JSON for inner parsing
         act.Should().Throw<JsonException>();
+    }
+
+    [Theory]
+    [InlineData("person_detected")]
+    [InlineData("scene_summary")]
+    [InlineData("camera_scene")]
+    public void ParseCallbackPayload_known_camera_maps_to_camera_payload(string eventType)
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = $"evt-{eventType}",
+            source = "camera-analyzer",
+            event_type = eventType,
+            description = "Two people sitting in the living room",
+        });
+
+        var payload = EncodeCallbackPayload(innerEvent, legacySenderId: "device-7");
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.EventId.Should().Be($"evt-{eventType}");
+        inbound.Source.Should().Be("camera-analyzer");
+        inbound.EventType.Should().Be(eventType);
+        inbound.DeviceId.Should().Be("device-7");
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera);
+        inbound.Camera.SceneDescription.Should().Be("Two people sitting in the living room");
     }
 
     [Fact]
@@ -179,11 +185,10 @@ public class DeviceEventEndpointsTests
             sender = new { id = "device-7" },
         });
 
-        var bodyBytes = Encoding.UTF8.GetBytes(payload);
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
-        var act = () => DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
-
-        act.Should().Throw<JsonException>();
+        act.Should().Throw<JsonException>()
+            .WithMessage("*Unsupported device event_type*");
         Aevatar.GAgents.Household.DeviceInbound.Descriptor.FindFieldByName("payload_json").Should().BeNull();
     }
 
@@ -212,44 +217,45 @@ public class DeviceEventEndpointsTests
             text = "Turn on the lights",
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { id = "device-8" },
-        });
-
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "microphone-1");
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
         inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Speech);
         inbound.Speech.Text.Should().Be("Turn on the lights");
     }
 
-    [Theory]
-    [InlineData("person_detected")]
-    [InlineData("scene_summary")]
-    public void ParseCallbackPayload_known_camera_maps_to_camera_payload(string eventType)
+    [Fact]
+    public void ParseCallbackPayload_motion_detected_returns_motion_payload()
     {
         var innerEvent = JsonSerializer.Serialize(new
         {
-            event_id = $"evt-{eventType}",
-            source = "camera-analyzer",
-            event_type = eventType,
-            description = "Person standing near the front door",
+            event_id = "evt-motion",
+            event_type = "motion_detected",
+            detected = false,
         });
 
-        var payload = JsonSerializer.Serialize(new
-        {
-            content = new { text = innerEvent },
-            sender = new { platform_id = "camera-1" },
-        });
-
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "motion-1");
         var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
-        inbound.EventType.Should().Be(eventType);
-        inbound.Source.Should().Be("camera-analyzer");
-        inbound.DeviceId.Should().Be("camera-1");
-        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera);
-        inbound.Camera.SceneDescription.Should().Be("Person standing near the front door");
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion);
+        inbound.Motion.Detected.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_malformed_typed_payload_throws_at_adapter_boundary()
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-bad-sensor",
+            event_type = "temperature_change",
+            temperature = "hot",
+        });
+
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "device-1");
+
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        act.Should().Throw<Exception>();
     }
 
     // ─── HMAC Verification Tests ───
@@ -261,6 +267,27 @@ public class DeviceEventEndpointsTests
         HmacKey = hmacKey,
         CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
     };
+
+    private static string EncodeCallbackPayload(
+        string innerEvent,
+        string? senderPlatformId = null,
+        string? legacySenderId = null)
+    {
+        object sender = legacySenderId is not null
+            ? new { id = legacySenderId }
+            : new { platform_id = senderPlatformId ?? "device-1", display_name = "sensor-hub" };
+
+        return JsonSerializer.Serialize(new
+        {
+            message_id = "nxmsg-55",
+            platform = "device",
+            agent = new { api_key_id = "key-1", name = "home-agent" },
+            conversation = new { id = "conv-99", platform_id = "conv-p-99", conversation_type = "direct" },
+            sender,
+            content = new { content_type = "text", text = innerEvent, attachments = Array.Empty<object>() },
+            timestamp = "2026-04-09T10:00:00Z",
+        });
+    }
 
     private static (HttpContext context, byte[] bodyBytes) CreateContextWithSignature(
         string body, string hmacKey)

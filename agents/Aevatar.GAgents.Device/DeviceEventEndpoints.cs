@@ -229,11 +229,13 @@ public static class DeviceEventEndpoints
                     Temperature = GetOptionalDouble(inner, "temperature"),
                     Humidity = GetOptionalDouble(inner, "humidity"),
                     LightLevel = GetOptionalDouble(inner, "light_level"),
-                    MotionDetected = GetOptionalBoolean(inner, "motion"),
+                    MotionDetected = GetOptionalBoolean(inner, "motion_detected",
+                        GetOptionalBoolean(inner, "motion")),
                 };
                 break;
             case "person_detected":
             case "scene_summary":
+            case "camera_scene":
                 inbound.Camera = new CameraDeviceInboundPayload
                 {
                     SceneDescription = GetOptionalString(inner, "description"),
@@ -242,7 +244,8 @@ public static class DeviceEventEndpoints
             case "motion_detected":
                 inbound.Motion = new MotionDeviceInboundPayload
                 {
-                    Detected = GetOptionalBoolean(inner, "motion", defaultValue: true),
+                    Detected = GetOptionalBoolean(inner, "detected",
+                        GetOptionalBoolean(inner, "motion", defaultValue: true)),
                 };
                 break;
             case "speech_detected":
