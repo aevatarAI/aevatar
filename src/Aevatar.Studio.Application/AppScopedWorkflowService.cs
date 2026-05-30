@@ -15,17 +15,20 @@ public sealed class AppScopedWorkflowService
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
     private readonly IStudioWorkspaceQueryPort? _workspaceQueryPort;
     private readonly IStudioWorkspaceCommandPort? _workspaceCommandPort;
+    private readonly IStudioMemberCommandPort? _memberCommandPort;
     private readonly ILogger<AppScopedWorkflowService>? _logger;
 
     public AppScopedWorkflowService(
         IWorkflowYamlDocumentService yamlDocumentService,
         IStudioWorkspaceQueryPort? workspaceQueryPort = null,
         IStudioWorkspaceCommandPort? workspaceCommandPort = null,
+        IStudioMemberCommandPort? memberCommandPort = null,
         ILogger<AppScopedWorkflowService>? logger = null)
     {
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
         _workspaceQueryPort = workspaceQueryPort;
         _workspaceCommandPort = workspaceCommandPort;
+        _memberCommandPort = memberCommandPort;
         _logger = logger;
     }
 
@@ -136,6 +139,17 @@ public sealed class AppScopedWorkflowService
             stored,
             workspace.StateVersion,
             ct);
+
+        if (existingDraft == null)
+        {
+            // Refactor (iter290/cluster1316-first): Old pattern: scoped draft save without member authority. New principle: reuse existing StudioMember command port.
+            await CreateMemberAuthorityAsync(
+                normalizedScopeId,
+                normalizedWorkflowId,
+                workflowName,
+                parsed.Document?.Description,
+                ct);
+        }
 
         return ToDraftWorkflowResponse(
             normalizedScopeId,
@@ -280,6 +294,26 @@ public sealed class AppScopedWorkflowService
             parse.Document?.Steps.Count ?? 0,
             HasLayout: false,
             draft.UpdatedAtUtc);
+    }
+
+    private async Task CreateMemberAuthorityAsync(
+        string scopeId,
+        string memberId,
+        string displayName,
+        string? description,
+        CancellationToken ct)
+    {
+        var memberCommandPort = _memberCommandPort
+            ?? throw new InvalidOperationException("Studio member command port is not configured.");
+
+        await memberCommandPort.CreateAsync(
+            scopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: displayName,
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                Description: string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
+                MemberId: memberId),
+            ct);
     }
 
     private WorkflowDraftResponse ToDraftWorkflowResponse(
