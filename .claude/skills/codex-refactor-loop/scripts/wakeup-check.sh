@@ -230,6 +230,46 @@ while IFS= read -r n; do
     if [ "$solver_done" -eq 3 ] && [ ! -f "$judge_log" ]; then
         echo "#${n}: ${latest_round} 3 solvers done, no judge log — ACTION: spawn meta-judge for ${latest_round}"
         F_COUNT=$((F_COUNT+1))
+        continue
+    fi
+    # NEW (2026-05-31): judge log exists but marker requires controller action
+    # 之前 Step F 只检测 "judge log 缺失",漏判 split / converge / escalate / crashed / consensus 等
+    # 已发现 7 个 design-solving issue 静默积压(部分 3 天)— per Auric "一堆issues没完成"
+    if [ -f "$judge_log" ]; then
+        if ! grep -q "^META_JUDGE_DONE:" "$judge_log" 2>/dev/null; then
+            if grep -qE "^EXIT=" "$judge_log" 2>/dev/null; then
+                echo "#${n}: ${latest_round} judge has EXIT but NO META_JUDGE_DONE — ACTION: re-spawn judge (crashed)"
+                F_COUNT=$((F_COUNT+1))
+            fi
+            continue
+        fi
+        marker=$(grep "^META_JUDGE_DONE:" "$judge_log" | head -1)
+        case "$marker" in
+            META_JUDGE_DONE:split:*)
+                echo "#${n}: ${latest_round} judge=split — ACTION: controller close + open 2 sub-issues (first impl / later design)"
+                F_COUNT=$((F_COUNT+1))
+                ;;
+            META_JUDGE_DONE:converge:*)
+                next_round_num=$(echo "$latest_round" | tr -d 'r' | awk '{print $1+1}')
+                if [ ! -f "$LOGDIR/phase9-issue${n}-r${next_round_num}-minimal.log" ]; then
+                    echo "#${n}: ${latest_round} judge=converge — ACTION: spawn r${next_round_num} three solvers"
+                    F_COUNT=$((F_COUNT+1))
+                fi
+                ;;
+            META_JUDGE_DONE:escalate:stalled:*|META_JUDGE_DONE:escalate:philosophy:*|META_JUDGE_DONE:escalate:*)
+                refl_recent=$(find "$LOGDIR"/meta-reflect-issue${n}*.log -mmin -30 2>/dev/null | head -1)
+                if [ -z "$refl_recent" ]; then
+                    echo "#${n}: ${latest_round} judge=${marker#META_JUDGE_DONE:} — ACTION: spawn reflector codex"
+                    F_COUNT=$((F_COUNT+1))
+                fi
+                ;;
+            META_JUDGE_DONE:consensus:*)
+                if [ -z "$(ls "$LOGDIR"/implement-issue${n}*.log 2>/dev/null | head -1)" ]; then
+                    echo "#${n}: ${latest_round} judge=consensus but no implement log — ACTION: dispatch implement codex"
+                    F_COUNT=$((F_COUNT+1))
+                fi
+                ;;
+        esac
     fi
 done < <(gh issue list --state open --label "🔍 phase:design-solving" --json number --jq '.[].number' 2>/dev/null)
 if [ "$F_COUNT" -eq 0 ] && [ "$F2_COUNT" -eq 0 ]; then
