@@ -73,6 +73,10 @@ public static class PolicyAwareVoiceEndpoints
                 await http.Response.WriteAsync(action.Reject?.Reason ?? "Voice route rejected.", http.RequestAborted);
                 return;
             case ChatRouteAction.ActionOneofCase.ForwardToModel:
+                // Refactor (iter367/cluster-issue674): Old pattern: /ws/voice
+                // distinguished attach vs model forwarding by string keys inside
+                // PrefilledArguments. New principle: only typed ChatRouteVoiceAttachTarget
+                // may attach a voice transport; bare ForwardToModel still fails closed.
                 if (ChatRouteActionTargets.TryGetVoiceAttachTarget(action, out var voiceTarget))
                 {
                     await AttachVoiceTargetAsync(http, voiceSessionResolver, voiceTarget);

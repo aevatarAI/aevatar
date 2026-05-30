@@ -2,6 +2,10 @@ using Aevatar.ChatRouting.Abstractions;
 
 namespace Aevatar.ChatRouting.Core;
 
+// Refactor (iter367/cluster-issue674): Old pattern: voice attach routing encoded
+// actor_id and voice_module_name inside ForwardToModel.ToolChoiceHint.PrefilledArguments.
+// New principle: typed ChatRouteVoiceAttachTarget is the only voice attach target
+// contract; ForwardToModel without it remains ordinary model forwarding.
 public static class ChatRouteActionTargets
 {
     private const string DefaultToolSetName = "workspace.default";

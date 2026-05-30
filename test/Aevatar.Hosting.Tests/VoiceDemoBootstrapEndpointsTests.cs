@@ -47,7 +47,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
                     RuleId = "voice-demo",
                     Priority = 900,
                     Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
-                    Action = GAgentToolHint("old-agent", "voice_presence_openai"),
+                    Action = TypedVoiceAttachTarget("old-agent", "voice_presence_openai"),
                     Description = "remove stale voice demo rule",
                 },
             ]);
@@ -122,21 +122,8 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         body.Should().ContainKey("route_policy_command_id").WhoseValue.Should().BeNull();
     }
 
-    private static ChatRouteAction GAgentToolHint(string actorId, string voiceModuleName) => new()
-    {
-        ForwardToModel = new ForwardToModel
-        {
-            ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
-                ToolChoiceHint = new ChatRouteToolChoiceHint
-                {
-                    VoiceAttachTarget = new ChatRouteVoiceAttachTarget
-                    {
-                        ActorId = actorId,
-                        VoiceModuleName = voiceModuleName,
-                    },
-                },
-            },
-    };
+    private static ChatRouteAction TypedVoiceAttachTarget(string actorId, string voiceModuleName) =>
+        ChatRouteActionTargets.ForwardToVoiceAttachTarget(actorId, voiceModuleName);
 
     private static async Task<WebApplication> CreateAppAsync(
         RecordingVoiceDemoAgentCommandPort voiceDemoCommandPort,

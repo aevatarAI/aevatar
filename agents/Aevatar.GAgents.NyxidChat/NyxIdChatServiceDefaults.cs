@@ -16,6 +16,10 @@ public static class NyxIdChatServiceDefaults
     public static string GenerateActorId() =>
         $"{ActorIdPrefix}-{Guid.NewGuid():N}";
 
+    // Refactor (iter367/cluster-issue674): Old pattern: voice demo actor ids were
+    // derived ad hoc by bootstrap callers. New principle: the NyxID chat boundary
+    // owns deterministic voice demo actor identity, while typed ChatRouteVoiceAttachTarget
+    // carries that actor id to voice routing.
     public static string BuildVoiceDemoActorId(string scopeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
