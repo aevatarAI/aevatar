@@ -1,5 +1,8 @@
 namespace Aevatar.GAgents.NyxidChat;
 
+using System.Security.Cryptography;
+using System.Text;
+
 public static class NyxIdChatServiceDefaults
 {
     public const string ServiceId = "nyxid-chat";
@@ -12,4 +15,13 @@ public static class NyxIdChatServiceDefaults
 
     public static string GenerateActorId() =>
         $"{ActorIdPrefix}-{Guid.NewGuid():N}";
+
+    public static string BuildVoiceDemoActorId(string scopeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim()));
+        var hash = Convert.ToHexString(bytes)[..16].ToLowerInvariant();
+        return $"{ActorIdPrefix}-voice-demo-{hash}";
+    }
 }

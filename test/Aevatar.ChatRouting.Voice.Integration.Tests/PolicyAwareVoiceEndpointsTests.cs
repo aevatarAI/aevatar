@@ -9,7 +9,6 @@ using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -34,7 +33,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     public async Task PolicyAwareVoice_WhenForwardToModelHasGAgentToolHint_ShouldReturnNotImplementedBeforeUpgrade()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
-            GAgentToolHint("voice-agent-default", "voice_presence_openai"),
+            GAgentToolHint("voice-agent-default"),
             []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-default"]);
         var resolver = RecordingVoiceSessionResolver.Attached(CreateInitializedSession());
@@ -55,7 +54,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
-    public async Task PolicyAwareVoice_WhenVoiceRuleForwardToModelHasGAgentToolHint_ShouldFailClosedBeforeUpgrade()
+    public async Task PolicyAwareVoice_WhenVoiceRuleForwardToModelHasTypedAttachTarget_ShouldAttach()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
             ForwardToModel("fallback-model"),
@@ -69,11 +68,11 @@ public sealed class PolicyAwareVoiceEndpointsTests
                         SourceKind = ChatSourceKind.Voice,
                         Channel = "lark",
                     },
-                    Action = GAgentToolHint("voice-agent-lark"),
+                    Action = VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
                 },
             ]));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
-        var resolver = RecordingVoiceSessionResolver.Attached(CreateInitializedSession());
+        var resolver = RecordingVoiceSessionResolver.Attached(CreateSessionCompletingOnAttach());
         var socket = new FakeWebSocket(WebSocketState.Open);
         using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
         var context = CreateVoiceContext(app, "/ws/voice?channel=lark&registration_scope_id=bot-1&sender_id=sender-1");
@@ -82,10 +81,14 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
 
-        context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented);
-        wsFeature.AcceptCalls.Should().Be(0);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        wsFeature.AcceptCalls.Should().Be(1);
         catalog.Requests.Should().BeEmpty();
-        resolver.Requests.Should().BeEmpty();
+        resolver.Requests.Should().ContainSingle()
+            .Which.Should().Be(new VoicePresenceSessionRequest(
+                "voice-agent-lark",
+                "voice_presence_openai",
+                VoicePresenceSessionRequestPurpose.Attach));
     }
 
     [Fact]
@@ -141,14 +144,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         resolver.Requests.Should().BeEmpty();
     }
 
-    private static ChatRouteAction GAgentToolHint(string actorId, string voiceModuleName = "")
-    {
-        var arguments = new Struct();
-        arguments.Fields["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId);
-        if (!string.IsNullOrWhiteSpace(voiceModuleName))
-            arguments.Fields["voice_module_name"] = Google.Protobuf.WellKnownTypes.Value.ForString(voiceModuleName);
-
-        return new ChatRouteAction
+    private static ChatRouteAction GAgentToolHint(string actorId) =>
+        new()
         {
             ForwardToModel = new ForwardToModel
             {
@@ -156,11 +153,12 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 ToolChoiceHint = new ChatRouteToolChoiceHint
                 {
                     ToolName = "aevatar_invoke_gagent",
-                    PrefilledArguments = arguments,
                 },
             },
         };
-    }
+
+    private static ChatRouteAction VoiceAttachTarget(string actorId, string voiceModuleName) =>
+        ChatRouteActionTargets.ForwardToVoiceAttachTarget(actorId, voiceModuleName);
 
     private static ChatRouteAction ForwardToModel(string modelName) =>
         new()
@@ -256,14 +254,25 @@ public sealed class PolicyAwareVoiceEndpointsTests
             .OfType<RouteEndpoint>()
             .Single(endpoint => endpoint.RoutePattern.RawText == pattern);
 
-    private static Task InvokeEndpointWithTimeoutAsync(WebApplication app, DefaultHttpContext context) =>
-        GetEndpoint(app, "/ws/voice").RequestDelegate!(context).WaitAsync(TimeSpan.FromSeconds(5));
-
     private static VoicePresenceSession CreateInitializedSession() =>
         new(
             isInitialized: static () => true,
             isTransportAttached: static () => false,
             attachTransportAsync: static (_, _) => Task.CompletedTask,
+            detachTransportAsync: static (_, _) => Task.CompletedTask,
+            pcmSampleRateHz: 24000);
+
+    private static VoicePresenceSession CreateSessionCompletingOnAttach() =>
+        new(
+            isInitialized: static () => true,
+            isTransportAttached: static () => false,
+            attachTransportAsync: static (transport, _) =>
+            {
+                if (transport is IAsyncDisposable disposable)
+                    return disposable.DisposeAsync().AsTask();
+
+                return Task.CompletedTask;
+            },
             detachTransportAsync: static (_, _) => Task.CompletedTask,
             pcmSampleRateHz: 24000);
 

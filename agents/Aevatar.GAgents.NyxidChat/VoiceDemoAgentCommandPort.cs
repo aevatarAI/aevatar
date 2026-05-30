@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
@@ -39,7 +37,7 @@ internal sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
         if (string.IsNullOrWhiteSpace(voiceModuleName))
             throw new ArgumentException("voiceModuleName is required.", nameof(voiceModuleName));
 
-        var actorId = BuildDemoActorId(scopeId);
+        var actorId = NyxIdChatServiceDefaults.BuildVoiceDemoActorId(scopeId);
         var actor = await _actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
         var initialize = new InitializeRoleAgentEvent
         {
@@ -74,10 +72,4 @@ internal sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
         return new VoiceDemoAgentCommandAcceptedReceipt(actor.Id, commandId, commandId);
     }
 
-    private static string BuildDemoActorId(string scopeId)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim()));
-        var hash = Convert.ToHexString(bytes)[..16].ToLowerInvariant();
-        return $"{NyxIdChatServiceDefaults.ActorIdPrefix}-voice-demo-{hash}";
-    }
 }

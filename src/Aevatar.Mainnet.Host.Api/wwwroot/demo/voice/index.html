@@ -111,12 +111,12 @@
       <article class="panel">
         <h2>2. Agent 要有 voice module</h2>
         <p>点击“开始说话”时，demo 会自动创建或复用当前用户的 voice demo agent，并挂上 `voice_presence_openai` 模块。Mainnet Host 的上游 URL 已固定为 NyxID proxy；请求里的 NyxID bearer 只用于向 NyxID proxy 鉴权，不会作为 OpenAI key 暴露给浏览器。</p>
-        <p>普通 `/ws/voice` 不再从 `tool_choice_hint` 推导目标 agent；`/ws/voice/{actorId}` 是调试直连入口，需要登录用户具备 `voice:bypass` scope 或 admin/owner 角色。</p>
+        <p>普通 `/ws/voice` 只从 typed `voice_attach_target` 读取目标 agent；`/ws/voice/{actorId}` 是调试直连入口，需要登录用户具备 `voice:bypass` scope 或 admin/owner 角色。</p>
       </article>
 
       <article class="panel wide">
         <h2>3. 调试直连</h2>
-        <p>demo 会调用 `POST /api/demo/voice/bootstrap`，在当前 NyxID scope 下登记 demo agent，并返回可用于调试直连的 `actor_id` 与 `voice_module_name`。普通 `/ws/voice` 会对 `ForwardToModel` fail closed；临时换目标 agent 时使用显式 bypass 路径。</p>
+        <p>demo 会调用 `POST /api/demo/voice/bootstrap`，在当前 NyxID scope 下登记 demo agent，并把 voice route 写成 typed `voice_attach_target`。返回的 `actor_id` 与 `voice_module_name` 可用于调试直连；临时换目标 agent 时使用显式 bypass 路径。</p>
         <pre><code>wss://MAINNET_HOST/ws/voice/YOUR_AGENT_ACTOR_ID?voice_module_name=voice_presence_openai</code></pre>
       </article>
 
