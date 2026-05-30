@@ -708,8 +708,12 @@ public sealed class LlmSessionGAgentTests
         forwarded.SchemaHash.Should().Be("schema-1");
         forwarded.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
         ResponsesJsonValues.ToBoundaryJson(forwarded.Arguments).Should().Be("""{"city":"Singapore"}""");
+        actor.State.ActiveRun!.ObservedToolCalls.Should().ContainSingle()
+            .Which.Arguments.Fields["city"].StringValue.Should().Be("Singapore");
         actor.State.Completion!.ToolCalls.Should().ContainSingle()
             .Which.ToolName.Should().Be("get_weather");
+        ResponsesJsonValues.ToBoundaryJson(actor.State.Completion.ToolCalls[0].Result)
+            .Should().Be("""{"city":"Singapore"}""");
     }
 
     [Fact]
@@ -978,6 +982,13 @@ public sealed class LlmSessionGAgentTests
                     ToolName = "get_weather",
                     Description = "Get weather",
                     ParametersJson = """{"type":"object"}""",
+                    Parameters = new Struct
+                    {
+                        Fields =
+                        {
+                            ["type"] = Google.Protobuf.WellKnownTypes.Value.ForString("object"),
+                        },
+                    },
                     SchemaHash = "schema-1",
                 },
             },

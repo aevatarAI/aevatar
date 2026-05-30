@@ -526,10 +526,14 @@ public sealed class ChatCompletionsCommandFacade(
                 CallId = call.Id,
                 ToolName = call.Name,
                 ArgumentsJson = call.ArgumentsJson,
+                Arguments = ResponsesProtoPayloads.ParseStruct(call.ArgumentsJson),
             }));
         return result;
     }
 
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: Chat Completions LlmRunRequested persisted tool schemas and hints as JSON strings.
+    //   New principle: typed Struct fields carry new writes; JSON strings remain legacy fallback.
     private static LlmSessionRuntimeToolSelection ToToolSelection(
         ResponsesToolClassification classification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan)
@@ -543,6 +547,7 @@ public sealed class ChatCompletionsCommandFacade(
         {
             selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
             selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
+            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
         }
 
         selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
@@ -551,6 +556,7 @@ public sealed class ChatCompletionsCommandFacade(
                 ToolName = tool.Name,
                 Description = tool.Description,
                 ParametersJson = tool.ParametersJson,
+                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
                 SchemaHash = tool.SchemaHash,
             }));
         return selection;

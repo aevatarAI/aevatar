@@ -187,14 +187,22 @@ message LlmSessionRuntimeChatMessage {
 message LlmSessionRuntimeToolCall {
   string call_id = 1;
   string tool_name = 2;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: durable LlmSession runtime tool calls persisted arguments only as arguments_json.
+  //   New principle: arguments is the typed write path; arguments_json remains legacy read fallback.
   string arguments_json = 3;
+  google.protobuf.Struct arguments = 4;
 }
 
 message LlmSessionRuntimeToolDeclaration {
   string tool_name = 1;
   string description = 2;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: forwarded tool schemas entered actor commands as parameters_json.
+  //   New principle: parameters is the typed write path; parameters_json remains legacy read fallback.
   string parameters_json = 3;
   string schema_hash = 4;
+  google.protobuf.Struct parameters = 5;
 }
 
 message LlmSessionRuntimeToolSelection {
@@ -202,7 +210,11 @@ message LlmSessionRuntimeToolSelection {
   repeated string substituted_tool_names = 2;
   repeated string additive_tool_names = 3;
   string tool_choice_hint_name = 4;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: server-trusted tool choice hints persisted prefilled args as JSON string.
+  //   New principle: typed Struct carries new writes; JSON is only legacy read fallback.
   string tool_choice_hint_arguments_json = 5;
+  google.protobuf.Struct tool_choice_hint_arguments = 6;
 }
 
 message LlmRunRequested {
@@ -236,8 +248,12 @@ message LlmToolCallObserved {
   int32 round = 3;
   LlmSessionRuntimeToolCall tool_call = 4;
   bool forwarded = 5;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: local tool result facts persisted as local_result_json.
+  //   New principle: local_result is typed Value primary; local_result_json remains read fallback.
   string local_result_json = 6;
   google.protobuf.Timestamp observed_at = 7;
+  google.protobuf.Value local_result = 8;
 }
 
 message LlmRunCompleted {
@@ -298,10 +314,14 @@ message ChatRunToolCallRecord {
   string tool_call_id = 1;
   string tool_name = 2;
   google.protobuf.Struct arguments = 3;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: ChatRun tool results persisted only as internal_result_json strings.
+  //   New principle: internal_result is typed Value primary; internal_result_json remains fallback.
   string internal_result_json = 4;
   int32 llm_round = 5;
   string run_id = 6;
   google.protobuf.Timestamp observed_at = 7;
+  google.protobuf.Value internal_result = 8;
 }
 
 message ChatRunSubRunSubscription {
@@ -365,6 +385,9 @@ message SubmitChatRunToolCallRequested {
   string tool_call_id = 1;
   string tool_name = 2;
   google.protobuf.Struct arguments = 3;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: ChatRun submit command carried internal result as JSON string.
+  //   New principle: internal_result is typed Value primary; internal_result_json remains fallback.
   string internal_result_json = 4;
   string run_id = 5;
   ChatRunSubRunTargetKind target_kind = 6;
@@ -376,12 +399,16 @@ message SubmitChatRunToolCallRequested {
   string endpoint_id = 12;
   int32 llm_round = 13;
   google.protobuf.Timestamp observed_at = 14;
+  google.protobuf.Value internal_result = 15;
 }
 
 message ChatRunToolCallSubmittedEvent {
   string tool_call_id = 1;
   string tool_name = 2;
   google.protobuf.Struct arguments = 3;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: ChatRun submitted event persisted internal result as JSON string.
+  //   New principle: internal_result is typed Value primary; internal_result_json remains fallback.
   string internal_result_json = 4;
   string run_id = 5;
   ChatRunSubRunTargetKind target_kind = 6;
@@ -393,6 +420,7 @@ message ChatRunToolCallSubmittedEvent {
   string endpoint_id = 12;
   int32 llm_round = 13;
   google.protobuf.Timestamp observed_at = 14;
+  google.protobuf.Value internal_result = 15;
 }
 
 message PrepareChatRunSubRunObservationRequested {
@@ -430,18 +458,25 @@ message ChatRunSubRunObservationStartedEvent {
 message ChatRunSubRunTerminalObserved {
   string run_id = 1;
   string status = 2;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: ChatRun terminal observation carried folded payload as internal_result_json.
+  //   New principle: internal_result is typed Value primary; internal_result_json remains fallback.
   string internal_result_json = 3;
   string actor_id = 4;
   string service_id = 5;
   string endpoint_id = 6;
   google.protobuf.Timestamp observed_at = 7;
   bool completion_observed = 8;
+  google.protobuf.Value internal_result = 9;
 }
 
 message ChatRunSubRunTerminalFoldedEvent {
   string run_id = 1;
   string caller_tool_call_id = 2;
   string tool_name = 3;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: folded ChatRun result event stored only internal_result_json.
+  //   New principle: internal_result is typed Value primary; internal_result_json remains fallback.
   string internal_result_json = 4;
   int32 llm_round = 5;
   google.protobuf.Timestamp observed_at = 6;
@@ -450,6 +485,7 @@ message ChatRunSubRunTerminalFoldedEvent {
   string service_id = 9;
   string endpoint_id = 10;
   bool completion_observed = 11;
+  google.protobuf.Value internal_result = 12;
 }
 
 message ChatRunToolResultReady {
@@ -457,6 +493,9 @@ message ChatRunToolResultReady {
   string run_id = 2;
   string caller_tool_call_id = 3;
   string tool_name = 4;
+  // Refactor (iter355/issue1438-first):
+  //   Old pattern: ChatRun readiness payload exposed only internal_result_json.
+  //   New principle: internal_result is typed Value primary; internal_result_json remains fallback.
   string internal_result_json = 5;
   int32 llm_round = 6;
   string status = 7;
@@ -464,6 +503,7 @@ message ChatRunToolResultReady {
   string service_id = 9;
   string endpoint_id = 10;
   bool completion_observed = 11;
+  google.protobuf.Value internal_result = 12;
 }
 
 message TerminateChatRunRequested {

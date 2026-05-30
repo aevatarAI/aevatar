@@ -15,9 +15,9 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
 
-    // Refactor (iter1334/cluster-1334-chatrun-result-json-boundary-quarantine):
-    // Old pattern: boundary ToolExecutionResultJson was written into ChatRun commands as generic ResultJson.
-    // New principle: adapter quarantines it into internal_result_json before actor persistence.
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: ChatRun adapter persisted tool results only as internal_result_json.
+    //   New principle: adapter writes typed Value first and keeps internal_result_json as read fallback.
     public ChatRunActorAdapter(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort)
@@ -67,6 +67,7 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
             ToolName = NormalizeRequired(request.ToolCall.Name, nameof(request.ToolCall.Name)),
             Arguments = ParseStruct(request.ArgumentsJson),
             InternalResultJson = request.ToolExecutionResultJson ?? string.Empty,
+            InternalResult = ParseValue(request.ToolExecutionResultJson),
             RunId = target.RunId,
             TargetKind = ResolveTargetKind(request.ToolCall.Name),
             TargetId = ResolveTargetId(target),
@@ -233,6 +234,22 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
         catch
         {
             return new Struct();
+        }
+    }
+
+    // refactor helper, no behavior change
+    private static Value ParseValue(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new Value { StructValue = new Struct() };
+
+        try
+        {
+            return JsonParser.Default.Parse<Value>(json);
+        }
+        catch
+        {
+            return Value.ForString(json);
         }
     }
 

@@ -108,12 +108,12 @@ public sealed class ChatRunActorTests
         });
 
         actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
-        actor.State.ToolCallHistory.Should().ContainSingle()
-            .Which.InternalResultJson.Should().Contain("\"content\":\"done\"");
+        var history = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
+        history.InternalResult.StructValue.Fields["content"].StringValue.Should().Be("done");
         actor.State.Messages.Should().ContainSingle(message =>
             message.Role == "tool" &&
             message.ToolCallId == "call_complete" &&
-            message.Content.Contains("\"content\":\"done\"", StringComparison.Ordinal));
+            message.Content.Contains("\"content\": \"done\"", StringComparison.Ordinal));
         actor.State.CurrentLlmRound.Should().Be(3);
     }
 
@@ -137,8 +137,8 @@ public sealed class ChatRunActorTests
         });
 
         var history = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
-        history.InternalResultJson.Should().Contain("\"run_id\":\"run_default\"");
-        history.InternalResultJson.Should().Contain("\"actor_id\":\"actor-default\"");
+        history.InternalResult.StructValue.Fields["run_id"].StringValue.Should().Be("run_default");
+        history.InternalResult.StructValue.Fields["actor_id"].StringValue.Should().Be("actor-default");
         actor.State.Messages.Should().ContainSingle(message =>
             message.Role == "tool" &&
             message.ToolCallId == "call_default" &&
@@ -232,7 +232,7 @@ public sealed class ChatRunActorTests
     }
 
     [Fact]
-    public void ChatRunInternalMessages_ShouldExposeInternalResultJsonFieldNameOnly()
+    public void ChatRunInternalMessages_ShouldExposeTypedInternalResultAndLegacyJsonFallback()
     {
         var messageDescriptors = new[]
         {
@@ -249,6 +249,9 @@ public sealed class ChatRunActorTests
             descriptor.Fields.InFieldNumberOrder()
                 .Should()
                 .ContainSingle(field => field.Name == "internal_result_json");
+            descriptor.Fields.InFieldNumberOrder()
+                .Should()
+                .ContainSingle(field => field.Name == "internal_result");
             descriptor.Fields.InFieldNumberOrder()
                 .Should()
                 .NotContain(field => field.Name == "result_json");
@@ -494,6 +497,7 @@ public sealed class ChatRunActorTests
         command.ToolCallId.Should().Be("call_adapter");
         command.RunId.Should().Be("run_adapter");
         command.InternalResultJson.Should().Be(boundaryPayload);
+        command.InternalResult.StructValue.Fields["opaque"].StringValue.Should().Be("tool-output");
     }
 
     [Fact]
@@ -520,7 +524,7 @@ public sealed class ChatRunActorTests
         actor.State.ActiveSubRunSubscriptions.Should().BeEmpty();
         var folded = actor.State.ToolCallHistory.Should().ContainSingle().Subject;
         folded.RunId.Should().Be("run_forwarded");
-        folded.InternalResultJson.Should().Contain("\"content\":\"forwarded done\"");
+        folded.InternalResult.StructValue.Fields["content"].StringValue.Should().Be("forwarded done");
 
         var foldedEvent = (await eventStore.GetEventsAsync(actor.Id))
             .Select(static evt => evt.EventData)
