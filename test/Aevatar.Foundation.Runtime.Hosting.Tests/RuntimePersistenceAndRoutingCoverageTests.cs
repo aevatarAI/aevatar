@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Observability;
@@ -173,6 +174,27 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
             .Should().Be(typeof(CoverageTestAgent).AssemblyQualifiedName);
     }
 
+    [Fact]
+    public async Task LocalActorRuntime_DestroyAsync_WhenDeactivationHookDispatchFails_ShouldStillRemoveActor()
+    {
+        var registry = new InMemoryStreamForwardingRegistry();
+        var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
+        var hookDispatcher = new FaultedDeactivationHookDispatcher();
+        var services = new ServiceCollection()
+            .AddSingleton<IActorDeactivationHookDispatcher>(hookDispatcher)
+            .BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, services, streams);
+
+        await runtime.CreateAsync<CoverageTestAgent>("hook-failure-actor");
+
+        var act = async () => await runtime.DestroyAsync("hook-failure-actor");
+
+        await act.Should().NotThrowAsync();
+        hookDispatcher.ActorIds.Should().ContainSingle().Which.Should().Be("hook-failure-actor");
+        (await runtime.ExistsAsync("hook-failure-actor")).Should().BeFalse();
+        (await runtime.GetAsync("hook-failure-actor")).Should().BeNull();
+    }
+
     private sealed class TestState
     {
         public int Count { get; init; }
@@ -193,6 +215,17 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class FaultedDeactivationHookDispatcher : IActorDeactivationHookDispatcher
+    {
+        public ConcurrentQueue<string> ActorIds { get; } = new();
+
+        public Task DispatchAsync(string actorId, CancellationToken ct = default)
+        {
+            ActorIds.Enqueue(actorId);
+            return Task.FromException(new InvalidOperationException("hook-failed"));
+        }
     }
 }
 
