@@ -282,7 +282,7 @@ catch (Exception ex) {
 文件：`agents/Aevatar.GAgents.Channel.Runtime/protos/channel_bot_registration.proto`、`agents/Aevatar.GAgents.Scheduled/protos/skill_runner.proto`、`agents/Aevatar.GAgents.Scheduled/protos/user_agent_catalog.proto`
 
 ### `ChannelInboundEvent`（入站规范化消息）
-- `text`、`sender_id`、`sender_name`、`conversation_id`、`chat_type`、`platform`、`registration_token`、`nyx_provider_slug`、`registration_scope_id`
+- `text`、`sender_id`、`sender_name`、`conversation_id`、`chat_type`、`platform`、`nyx_provider_slug`、`registration_scope_id`
 - **重点**：`sender_id` 实质是 Lark `open_id`（`ou_*`），**只在单个 Lark App 内唯一**——同一个真人在不同 Lark app 下会有不同 `open_id`，跨 app 不能直接拿来对账（这是 PR #409 引入 `union_id`/`on_*` 入站和 `chat_id`-first delivery fallback 的原因，详见 [LarkConversationTargets.cs](../../agents/platforms/Aevatar.GAgents.Platform.Lark/LarkConversationTargets.cs)）。`registration_scope_id` 是 bot 维度。下面 issue #436/#437 的 cross-user leak bug 就源自只用 `registration_scope_id` 当 user-config key，丢了 `sender_id`。
 
 ### `SkillRunnerOutboundConfig`

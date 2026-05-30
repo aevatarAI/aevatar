@@ -147,7 +147,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
 
-        var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity, runtimeContext));
+        var inboundEvent = ToInboundEvent(activity, registration, inbound);
 
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
@@ -1479,9 +1479,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static ChannelInboundEvent ToInboundEvent(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
-        InboundMessage inbound,
-        string? userAccessToken)
+        InboundMessage inbound)
     {
+        // Refactor (v1/issue1466-first):
+        //   Old: ChannelInboundEvent copied userAccessToken into registration_token.
+        //   New: inbound durable facts carry only stable routing facts.
+        //   Principle: runtime credentials flow through transient context, not proto facts.
         var inboundEvent = new ChannelInboundEvent
         {
             Text = inbound.Text,
@@ -1492,7 +1495,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = userAccessToken ?? string.Empty,
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
