@@ -164,10 +164,9 @@ public class LarkToolsTests
     }
 
     [Fact]
-    // Refactor (issue1378/first-slice): Old: ResolveOrCurrent bypass for reply/react silently
-    // resolved missing message_id to "current message", masking caller errors.
-    // New: explicit structured error on missing message_id; explicit external tools path
-    // remains for legitimate cross-message replies.
+    // Refactor (issue1378/first-slice):
+    //   Old pattern: ResolveOrCurrent hid missing message_id by replying to the current message.
+    //   New principle: reply tests require structured error and explicit external message_id.
     public async Task LarkMessagesReplyTool_ShouldRejectMissingMessageId_AndKeepExplicitExternalReply()
     {
         var client = new StubLarkNyxClient
@@ -246,10 +245,9 @@ public class LarkToolsTests
     }
 
     [Fact]
-    // Refactor (issue1378/first-slice): Old: ResolveOrCurrent bypass for reply/react silently
-    // resolved missing message_id to "current message", masking caller errors.
-    // New: explicit structured error on missing message_id; explicit external tools path
-    // remains for legitimate cross-message replies.
+    // Refactor (issue1378/first-slice):
+    //   Old pattern: ResolveOrCurrent hid missing message_id by reacting to the current message.
+    //   New principle: reaction tests require structured error and explicit external message_id.
     public async Task LarkMessagesReactTool_ShouldRejectMissingMessageId_AndKeepExplicitExternalReaction()
     {
         var client = new StubLarkNyxClient

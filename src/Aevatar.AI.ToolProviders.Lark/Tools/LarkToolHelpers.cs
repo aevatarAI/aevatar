@@ -9,8 +9,8 @@ internal static class LarkMessageIdResolver
     private const string ChannelPlatformMessageIdKey = "channel.platform_message_id";
 
     // Refactor (issue1378/first-slice):
-    // Old: ResolveOrCurrent used current message when explicit message_id was missing.
-    // New: ResolveExplicit returns structured error; external tools path remains.
+    //   Old pattern: ResolveOrCurrent used current message when explicit message_id was missing.
+    //   New principle: ResolveExplicit returns structured error; external tools path remains.
     public static string? ResolveExplicit(string? messageId, out string? error)
     {
         error = null;
