@@ -44,11 +44,15 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
     public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         var context = new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
-                string.Empty,
-                string.Empty,
-                LlmSessionOriginKind.ApiKey.ToString()),
-            new Dictionary<string, string>(StringComparer.Ordinal));
+            AgentToolExecutionContext.Empty with
+            {
+                Channel = new AgentToolChannelContext(
+                    LlmSessionOriginKind.ApiKey.ToString(),
+                    null,
+                    null,
+                    null,
+                    null),
+            });
         var tools = new List<IAgentTool>();
         tools.AddRange(await GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
         tools.AddRange(await GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));

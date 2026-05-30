@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -227,7 +228,7 @@ public sealed record ResponsesCreateCommandPlan(
     LlmSessionRegistrationResult Session,
     LlmSessionSnapshot? PreviousSnapshot,
     LLMRequest LlmRequest,
-    IReadOnlyDictionary<string, string> ToolContextMetadata,
+    AgentToolExecutionContext ToolContext,
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
     DateTimeOffset CreatedAt);
@@ -315,7 +316,7 @@ public sealed record MessagesCreateCommandPlan(
     NormalizedMessagesRequest Normalized,
     LlmSessionRegistrationResult Session,
     LLMRequest LlmRequest,
-    IReadOnlyDictionary<string, string> ToolContextMetadata,
+    AgentToolExecutionContext ToolContext,
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan);
 

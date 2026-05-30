@@ -27,7 +27,7 @@ public sealed class ResponsesCompletionApplicationServiceTests
         var result = await service.CollectAsync(
             provider,
             BuildRequest(tool),
-            new Dictionary<string, string>(),
+            BuildToolContext(),
             BuildClassification(tool));
 
         result.Text.Should().Be("typed completion consumed");
@@ -50,7 +50,7 @@ public sealed class ResponsesCompletionApplicationServiceTests
         var result = await service.StreamAsync(
             provider,
             BuildRequest(tool),
-            new Dictionary<string, string>(),
+            BuildToolContext(),
             BuildClassification(tool),
             (delta, _) =>
             {
@@ -75,6 +75,14 @@ public sealed class ResponsesCompletionApplicationServiceTests
             CallerContext = new LLMRequestCallerContext("scope-1", "owner-1", "resp_1"),
             Model = "test-model",
             Tools = [tool],
+            ToolContext = BuildToolContext(),
+        };
+
+    private static AgentToolExecutionContext BuildToolContext() =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-1", null),
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", "resp_1"),
         };
 
     private static ResponsesToolClassification BuildClassification(IAgentTool tool) =>
