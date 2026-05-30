@@ -2107,9 +2107,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         connector.LastRequest.Should().NotBeNull();
-        connector.LastRequest!.Metadata.Should().Contain(
-            ConnectorRequest.HttpAuthorizationMetadataKey,
-            "Bearer token-123");
+        connector.LastRequest!.HttpAuthorization.Should().Be("Bearer token-123");
+        connector.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
