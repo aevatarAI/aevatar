@@ -129,12 +129,12 @@ public sealed class OrleansActorRuntime : IActorRuntime
         await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
-        // Refactor (issue1271/first-slice): Old pattern: parent-side observation depended on runtime-
-        // specific linkage details. New principle: Orleans registers the same committed-facts relay
-        // contract as local runtime, keeping reverse observation on the unified stream forwarding path
-        // instead of a separate projection or in-memory lookup path.
+        // Refactor (iter164/cluster-002-first):
+        // Old pattern: workflow code treated presentation completion frames as module triggers.
+        // New principle: committed observations are runtime-relayed actor facts.
+        // Orleans links install the child-to-parent relay so projection/observation stays unified.
         await _streams.GetStream(childId).UpsertRelayAsync(
-            StreamForwardingRules.CreateCommittedFactsObserverBinding(childId, parentId),
+            StreamForwardingRules.CreateCommittedObservationBinding(childId, parentId),
             ct);
         _logger.LogInformation("Link: {Parent} -> {Child}", parentId, childId);
     }

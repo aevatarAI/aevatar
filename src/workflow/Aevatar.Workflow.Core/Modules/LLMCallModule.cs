@@ -21,10 +21,11 @@ namespace Aevatar.Workflow.Core.Modules;
 // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
 //   Old pattern: Information log included raw value/prompt/input preview
 //   New principle: only stable id + length + status + redaction marker
-// Refactor (issue1271/first-slice):
-//   Old pattern: TextMessageEndEvent / ChatResponseEvent live frames completed workflow steps directly.
-//   New principle: only committed WorkflowRoleReplyRecordedEvent facts may close pending sessions.
-//   Pending protobuf state remains actor-owned and is reconciled by SessionId before StepCompletedEvent.
+// Refactor (iter164/cluster-002-first):
+//   Old pattern: module listened to TextMessageEndEvent / ChatResponseEvent (presentation frames)
+//                and converted them to StepCompletedEvent.
+//   New principle: module reads completion from WorkflowRoleReplyRecordedEvent
+//                  (actor-owned committed event), removing dependency on presentation stream.
 public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;

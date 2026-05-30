@@ -58,14 +58,17 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         grains["parent"].Children.Should().Contain("child");
         grains["child"].ParentId.Should().Be("parent");
-        var bindings = await registry.ListBySourceAsync("parent", CancellationToken.None);
-        var binding = bindings.Should().ContainSingle(x => x.TargetStreamId == "child").Subject;
-        binding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
-        binding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
+        var parentBindings = await registry.ListBySourceAsync("parent", CancellationToken.None);
+        var hierarchyBinding = parentBindings.Should().ContainSingle(x => x.TargetStreamId == "child").Subject;
+        hierarchyBinding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
+        hierarchyBinding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
 
-        var reverseBindings = await registry.ListBySourceAsync("child", CancellationToken.None);
-        var reverseBinding = reverseBindings.Should().ContainSingle(x => x.TargetStreamId == "parent").Subject;
-        reverseBinding.DirectionFilter.SetEquals([TopologyAudience.Unspecified]).Should().BeTrue();
+        var childBindings = await registry.ListBySourceAsync("child", CancellationToken.None);
+        var committedObservationBinding = childBindings.Should().ContainSingle(x => x.TargetStreamId == "parent").Subject;
+        committedObservationBinding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
+        committedObservationBinding.DirectionFilter.SetEquals([TopologyAudience.Unspecified]).Should().BeTrue();
+        committedObservationBinding.EventTypeFilter.Should().ContainSingle()
+            .Which.Should().Be($"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}");
     }
 
     [Fact]
