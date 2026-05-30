@@ -187,6 +187,17 @@ def dispatch_codex(wt: Path, pr_num: int, sync_branch: str, source: str, target:
     if action == "resolve-conflict":
         body = f"""# {label} sync — 解冲突 PR #{pr_num}
 
+## 🚨 SHARED HARD RULE EXCEPTION(本 role 例外,优先级 > shared hard rules)
+
+本 role 由 dev_sync_daemon 派出,**例外允许**以下命令(覆盖 shared hard rules 禁令):
+- `git fetch origin`
+- `git merge origin/{target}`(含 `--abort` 恢复)
+- `git add -A`(只 add resolved files,不 add 范围外文件)
+- `git commit -m "..."`
+- `git push origin HEAD:{sync_branch}`(必须 push,daemon 不会自己 push)
+
+仍**禁止**:`git checkout`、`git branch`、`gh pr create/merge`、force push、改 sync 范围外文件。
+
 worktree: `{wt}`(已 checkout `{sync_branch}` + reset to `origin/{sync_branch}`)
 sync 方向: `{source}` → `{target}`(PR base=`{target}`)
 
@@ -214,6 +225,15 @@ sync 方向: `{source}` → `{target}`(PR base=`{target}`)
 """
     else:  # fix-ci
         body = f"""# {label} sync — 修 CI fail PR #{pr_num}
+
+## 🚨 SHARED HARD RULE EXCEPTION(本 role 例外,优先级 > shared hard rules)
+
+本 role 由 dev_sync_daemon 派出,**例外允许**以下命令(覆盖 shared hard rules 禁令):
+- `git add -A`(只 add 修复 CI 必需文件)
+- `git commit -m "..."`
+- `git push origin HEAD:{sync_branch}`(必须 push,daemon 不会自己 push;不 push CI 不重跑 → PR 永远红)
+
+仍**禁止**:`git checkout`、`git branch`、`gh pr create/merge`、force push、改 sync 范围外文件、disable test、添加 `[Skip]`、`Task.Delay`。
 
 worktree: `{wt}`(已 checkout `{sync_branch}` + reset to `origin/{sync_branch}`)
 sync 方向: `{source}` → `{target}`(PR base=`{target}`)
