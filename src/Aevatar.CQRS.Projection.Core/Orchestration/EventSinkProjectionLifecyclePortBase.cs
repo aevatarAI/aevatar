@@ -6,10 +6,14 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Event-sink specialized attach/release port base with runtime lease resolution hook.
 /// </summary>
+// Refactor (issue-377): Old pattern: session sink attach required IProjectionPortSessionLease.
+// Refactor (issue-377): Old pattern: the alias only forwarded RootActorId and SessionId.
+// Refactor (issue-377): New principle: typed projection session context owns routing identity.
+// Refactor (issue-377): New principle: lifecycle attach reads RootActorId and SessionId from Context.
 public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>
     : IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
     where TLeaseContract : class
-    where TRuntimeLease : class, IProjectionRuntimeLease, TLeaseContract
+    where TRuntimeLease : class, IProjectionRuntimeLease, IProjectionContextRuntimeLease<IProjectionSessionContext>, TLeaseContract
     where TEvent : class
 {
     private readonly Func<bool> _projectionEnabledAccessor;
@@ -40,18 +44,17 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         if (!ProjectionEnabled)
             return null;
 
-        // Refactor (iter101/cluster-104): Old lifecycle base exposed EnsureProjectionAsync to derived request-facing ports; new ports only attach sinks to leases that projection-owned activation already created.
+        // Refactor (issue-377): Old pattern: attach inspected IProjectionPortSessionLease alias properties.
+        // Refactor (issue-377): Old pattern: alias let leases duplicate RootActorId as ScopeId.
+        // Refactor (issue-377): New principle: RootActorId + SessionId come from the typed session context.
+        // Refactor (issue-377): New principle: the runtime lease only carries context, not a routing alias.
         var runtimeLease = ResolveRuntimeLease(lease);
-        if (runtimeLease is not IProjectionPortSessionLease portLease)
-        {
-            throw new InvalidOperationException(
-                $"Runtime lease `{runtimeLease.GetType().FullName}` must implement `{typeof(IProjectionPortSessionLease).FullName}`.");
-        }
+        var sessionContext = runtimeLease.Context;
 
         // Refactor (iter17/cluster-035): Old: ConcurrentDictionary registry. New: explicit IAsyncDisposable lease per attach.
         return await _sessionEventHub.SubscribeAsync(
-            portLease.ScopeId,
-            portLease.SessionId,
+            sessionContext.RootActorId,
+            sessionContext.SessionId,
             evt => sink.PushAsync(evt, CancellationToken.None),
             ct).ConfigureAwait(false);
     }
@@ -79,6 +82,10 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         return _releaseService.ReleaseIfIdleAsync(ResolveRuntimeLease(lease), ct);
     }
 
+    // Refactor (issue-377): Old pattern: resolved leases needed a second alias interface check.
+    // Refactor (issue-377): Old pattern: unsupported leases failed after alias casting.
+    // Refactor (issue-377): New principle: generic constraints guarantee typed context availability.
+    // Refactor (issue-377): New principle: this method only validates the public lease contract shape.
     protected virtual TRuntimeLease ResolveRuntimeLease(TLeaseContract lease) =>
         lease as TRuntimeLease
         ?? throw new InvalidOperationException(

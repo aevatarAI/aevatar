@@ -52,10 +52,10 @@ public sealed class ScriptServiceAguiProjectionPortTests
         runtimeLease.RootEntityId.Should().Be("script-actor-1");
         runtimeLease.RunId.Should().Be("run-1");
         runtimeLease.SessionId.Should().Be("run-1");
-        runtimeLease.ScopeId.Should().Be("script-actor-1");
+        runtimeLease.Context.RootActorId.Should().Be("script-actor-1");
 
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("script-actor-1");
+        hub.LastRootActorId.Should().Be("script-actor-1");
         hub.LastSessionId.Should().Be("run-1");
         sink.Events.Should().ContainSingle().Which.RunFinished.RunId.Should().Be("run-1");
         hub.DisposedSubscriptions.Should().Be(1);
@@ -134,7 +134,7 @@ public sealed class ScriptServiceAguiProjectionPortTests
         lease.ActorId.Should().Be("script-actor-1");
         lease.RunId.Should().Be("run-1");
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("script-actor-1");
+        hub.LastRootActorId.Should().Be("script-actor-1");
         hub.LastSessionId.Should().Be("run-1");
 
         await hub.Handler!(new AGUIEvent
@@ -238,25 +238,25 @@ public sealed class ScriptServiceAguiProjectionPortTests
     {
         public int SubscribeCalls { get; private set; }
         public int DisposedSubscriptions { get; private set; }
-        public string? LastScopeId { get; private set; }
+        public string? LastRootActorId { get; private set; }
         public string? LastSessionId { get; private set; }
         public Func<AGUIEvent, ValueTask>? Handler { get; private set; }
 
-        public Task PublishAsync(string scopeId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
+        public Task PublishAsync(string rootActorId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<AGUIEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             SubscribeCalls++;
-            LastScopeId = scopeId;
+            LastRootActorId = rootActorId;
             LastSessionId = sessionId;
             Handler = handler;
             return Task.FromResult<IAsyncDisposable>(new DelegateAsyncDisposable(() => DisposedSubscriptions++));

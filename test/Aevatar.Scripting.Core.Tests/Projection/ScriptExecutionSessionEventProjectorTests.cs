@@ -28,7 +28,7 @@ public sealed class ScriptExecutionSessionEventProjectorTests
         await projector.ProjectAsync(context, envelope, CancellationToken.None);
 
         hub.Published.Should().ContainSingle();
-        hub.Published[0].ScopeId.Should().Be("script-runtime:scope-1:script-1");
+        hub.Published[0].RootActorId.Should().Be("script-runtime:scope-1:script-1");
         hub.Published[0].SessionId.Should().Be("correlation-1");
         hub.Published[0].Event.Id.Should().Be("evt-1");
     }
@@ -111,23 +111,23 @@ public sealed class ScriptExecutionSessionEventProjectorTests
         public List<PublishedMessage> Published { get; } = [];
 
         public Task PublishAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             EventEnvelope evt,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Published.Add(new PublishedMessage(scopeId, sessionId, evt.Clone()));
+            Published.Add(new PublishedMessage(rootActorId, sessionId, evt.Clone()));
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<EventEnvelope, ValueTask> handler,
             CancellationToken ct = default)
         {
-            _ = scopeId;
+            _ = rootActorId;
             _ = sessionId;
             _ = handler;
             _ = ct;
@@ -136,7 +136,7 @@ public sealed class ScriptExecutionSessionEventProjectorTests
     }
 
     private sealed record PublishedMessage(
-        string ScopeId,
+        string RootActorId,
         string SessionId,
         EventEnvelope Event);
 }

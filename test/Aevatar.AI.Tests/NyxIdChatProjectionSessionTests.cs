@@ -44,11 +44,11 @@ public sealed class NyxIdChatProjectionSessionTests
         var runtimeLease = attachment.ProjectionLease.Should().BeOfType<NyxIdChatSessionRuntimeLease>().Subject;
         runtimeLease.ActorId.Should().Be("chat-actor-1");
         runtimeLease.RootEntityId.Should().Be("chat-actor-1");
-        runtimeLease.ScopeId.Should().Be("chat-actor-1");
+        runtimeLease.Context.RootActorId.Should().Be("chat-actor-1");
         runtimeLease.SessionId.Should().Be("session-1");
 
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("chat-actor-1");
+        hub.LastRootActorId.Should().Be("chat-actor-1");
         hub.LastSessionId.Should().Be("session-1");
         sink.Events.Should().ContainSingle().Which.TextMessageContent.Delta.Should().Be("hello");
         hub.DisposedSubscriptions.Should().Be(1);
@@ -87,7 +87,7 @@ public sealed class NyxIdChatProjectionSessionTests
         attachment!.ProjectionLease.ActorId.Should().Be("chat-actor-1");
         attachment.ProjectionLease.SessionId.Should().Be("session-1");
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("chat-actor-1");
+        hub.LastRootActorId.Should().Be("chat-actor-1");
         hub.LastSessionId.Should().Be("session-1");
         runtime.ExistsCalls.Should().ContainSingle()
             .Which.Should().Be("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
@@ -175,7 +175,7 @@ public sealed class NyxIdChatProjectionSessionTests
             CancellationToken.None);
 
         hub.Published.Should().HaveCount(4);
-        hub.Published.Should().OnlyContain(p => p.ScopeId == "chat-actor-1" && p.SessionId == "session-1");
+        hub.Published.Should().OnlyContain(p => p.RootActorId == "chat-actor-1" && p.SessionId == "session-1");
         hub.Published[0].Event.TextMessageStart.MessageId.Should().Be("session-1");
         hub.Published[1].Event.TextMessageContent.MessageId.Should().Be("session-1");
         hub.Published[1].Event.TextMessageContent.Delta.Should().Be("delta");
@@ -278,29 +278,29 @@ public sealed class NyxIdChatProjectionSessionTests
 
     private sealed class RecordingSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
     {
-        public List<(string ScopeId, string SessionId, AGUIEvent Event)> Published { get; } = [];
+        public List<(string RootActorId, string SessionId, AGUIEvent Event)> Published { get; } = [];
         public int SubscribeCalls { get; private set; }
         public int DisposedSubscriptions { get; private set; }
-        public string? LastScopeId { get; private set; }
+        public string? LastRootActorId { get; private set; }
         public string? LastSessionId { get; private set; }
         public Func<AGUIEvent, ValueTask>? Handler { get; private set; }
 
-        public Task PublishAsync(string scopeId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
+        public Task PublishAsync(string rootActorId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Published.Add((scopeId, sessionId, evt));
+            Published.Add((rootActorId, sessionId, evt));
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<AGUIEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             SubscribeCalls++;
-            LastScopeId = scopeId;
+            LastRootActorId = rootActorId;
             LastSessionId = sessionId;
             Handler = handler;
             return Task.FromResult<IAsyncDisposable>(new DelegateAsyncDisposable(() => DisposedSubscriptions++));

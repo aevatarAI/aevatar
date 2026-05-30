@@ -518,7 +518,7 @@ public class StreamingProxyCoverageTests
         attachment!.ProjectionLease.ActorId.Should().Be("room-a");
         attachment.ProjectionLease.SessionId.Should().Be("session-123");
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("room-a");
+        hub.LastRootActorId.Should().Be("room-a");
         hub.LastSessionId.Should().Be("session-123");
     }
 
@@ -598,7 +598,7 @@ public class StreamingProxyCoverageTests
             CancellationToken.None);
 
         var published = sessionHub.Published.Should().ContainSingle().Subject;
-        published.ScopeId.Should().Be("room-a");
+        published.RootActorId.Should().Be("room-a");
         published.SessionId.Should().Be("sub-1");
         published.Event.Envelope.Should().NotBeNull();
     }
@@ -2584,30 +2584,30 @@ public class StreamingProxyCoverageTests
     private sealed class RecordingRoomSessionEventHub
         : IProjectionSessionEventHub<StreamingProxyRoomSessionEnvelope>
     {
-        public List<(string ScopeId, string SessionId, StreamingProxyRoomSessionEnvelope Event)> Published { get; } = [];
+        public List<(string RootActorId, string SessionId, StreamingProxyRoomSessionEnvelope Event)> Published { get; } = [];
         public int SubscribeCalls { get; private set; }
-        public string? LastScopeId { get; private set; }
+        public string? LastRootActorId { get; private set; }
         public string? LastSessionId { get; private set; }
 
         public Task PublishAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             StreamingProxyRoomSessionEnvelope evt,
             CancellationToken ct = default)
         {
             _ = ct;
-            Published.Add((scopeId, sessionId, evt));
+            Published.Add((rootActorId, sessionId, evt));
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<StreamingProxyRoomSessionEnvelope, ValueTask> handler,
             CancellationToken ct = default)
         {
             SubscribeCalls++;
-            LastScopeId = scopeId;
+            LastRootActorId = rootActorId;
             LastSessionId = sessionId;
             _ = handler;
             _ = ct;

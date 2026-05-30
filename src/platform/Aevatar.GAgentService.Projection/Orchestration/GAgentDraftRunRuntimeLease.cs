@@ -5,10 +5,13 @@ using Aevatar.Presentation.AGUI;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
 
+// Refactor (issue-377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
+// Refactor (issue-377): Old pattern: ScopeId was an alias for Context.RootActorId.
+// Refactor (issue-377): New principle: typed Context carries RootActorId and SessionId.
+// Refactor (issue-377): New principle: lifecycle routing reads Context directly.
 public sealed class GAgentDraftRunRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<AGUIEvent>,
       IGAgentDraftRunProjectionLease,
-      IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<GAgentDraftRunProjectionContext>
 {
     public GAgentDraftRunRuntimeLease(GAgentDraftRunProjectionContext context)
@@ -23,8 +26,6 @@ public sealed class GAgentDraftRunRuntimeLease
     public string CommandId { get; }
 
     public GAgentDraftRunProjectionContext Context { get; }
-
-    public string ScopeId => RootEntityId;
 
     public string SessionId => CommandId;
 }
