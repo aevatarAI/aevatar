@@ -23,17 +23,18 @@ namespace Aevatar.Studio.Projection.Projectors;
 internal sealed class StudioWorkflowDraftMemberEnsureMaterializer
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {
-    private const string PublisherId = "aevatar.studio.projection.workflow-draft-member-ensure";
-
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly StudioProjectionActorCommandDispatch _commandDispatch;
+    private readonly StudioWorkflowDraftMemberEnsureCommandFactory _commandFactory;
 
     public StudioWorkflowDraftMemberEnsureMaterializer(
         IStudioActorBootstrap bootstrap,
-        StudioProjectionActorCommandDispatch commandDispatch)
+        StudioProjectionActorCommandDispatch commandDispatch,
+        StudioWorkflowDraftMemberEnsureCommandFactory commandFactory)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
+        _commandFactory = commandFactory ?? throw new ArgumentNullException(nameof(commandFactory));
     }
 
     public async ValueTask ProjectAsync(
@@ -52,33 +53,20 @@ internal sealed class StudioWorkflowDraftMemberEnsureMaterializer
         }
 
         var evt = published.StateEvent.EventData.Unpack<StudioWorkflowDraftSaved>();
-        if (evt.Draft == null || string.IsNullOrWhiteSpace(evt.Draft.WorkflowId))
+        if (evt.Draft == null)
             return;
 
-        var scopeId = StudioMemberConventions.NormalizeScopeId(evt.ScopeId);
-        var memberId = StudioMemberConventions.NormalizeMemberId(evt.Draft.WorkflowId);
-        var actorId = StudioMemberConventions.BuildActorId(scopeId, memberId);
-        var actor = await _bootstrap.EnsureAsync<StudioMemberGAgent>(actorId, ct).ConfigureAwait(false);
-        var command = new EnsureStudioMember
-        {
-            MemberId = memberId,
-            ScopeId = scopeId,
-            DisplayName = string.IsNullOrWhiteSpace(evt.Draft.Name)
-                ? memberId
-                : evt.Draft.Name.Trim(),
-            Description = string.Empty,
-            RequestedAtUtc = evt.SavedAtUtc,
-        };
+        var plan = _commandFactory.TryCreate(evt.ScopeId, evt.Draft.WorkflowId, evt.Draft.Name, evt.SavedAtUtc);
+        if (plan == null)
+            return;
 
+        var actor = await _bootstrap.EnsureAsync<StudioMemberGAgent>(plan.ActorId, ct).ConfigureAwait(false);
         await _commandDispatch.DispatchAsync(
             actor,
-            command,
-            PublisherId,
-            commandId: BuildCommandId(scopeId, memberId),
-            deduplicationOperationId: BuildCommandId(scopeId, memberId),
+            plan.Command,
+            plan.PublisherId,
+            commandId: plan.CommandId,
+            deduplicationOperationId: plan.DeduplicationOperationId,
             ct: ct).ConfigureAwait(false);
     }
-
-    private static string BuildCommandId(string scopeId, string memberId) =>
-        $"{PublisherId}:{scopeId}:{memberId}";
 }

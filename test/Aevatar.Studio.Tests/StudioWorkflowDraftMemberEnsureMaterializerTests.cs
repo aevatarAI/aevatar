@@ -24,11 +24,12 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
     [Fact]
     public async Task ProjectAsync_ShouldDispatchEnsureMember_ForCommittedDraftSaved()
     {
-        var bootstrap = new RecordingBootstrap();
-        var dispatch = new RecordingDispatchPort();
+        var bootstrap = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap();
+        var dispatch = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
             bootstrap,
-            CreateCommandDispatch(dispatch));
+            StudioWorkflowDraftMemberCommandDispatchTestHarness.CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
 
         await materializer.ProjectAsync(
             NewContext(),
@@ -49,10 +50,11 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
     [Fact]
     public async Task ProjectAsync_ShouldUseMemberIdAsDisplayName_WhenDraftNameIsBlank()
     {
-        var dispatch = new RecordingDispatchPort();
+        var dispatch = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
-            new RecordingBootstrap(),
-            CreateCommandDispatch(dispatch));
+            new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap(),
+            StudioWorkflowDraftMemberCommandDispatchTestHarness.CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
 
         await materializer.ProjectAsync(
             NewContext(),
@@ -67,10 +69,11 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
     [Fact]
     public async Task ProjectAsync_ShouldUseStableCommandId_ForCommittedDraftReplay()
     {
-        var dispatch = new RecordingDispatchPort();
+        var dispatch = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
-            new RecordingBootstrap(),
-            CreateCommandDispatch(dispatch));
+            new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap(),
+            StudioWorkflowDraftMemberCommandDispatchTestHarness.CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
         var envelope = WrapCommitted(NewDraftSaved("workflow-1", "Workflow One"), version: 4, eventId: "evt-4");
 
         await materializer.ProjectAsync(NewContext(), envelope);
@@ -85,10 +88,11 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
     [Fact]
     public async Task ProjectAsync_ShouldNoOp_WhenCommittedEventIsNotDraftSaved()
     {
-        var dispatch = new RecordingDispatchPort();
+        var dispatch = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
-            new RecordingBootstrap(),
-            CreateCommandDispatch(dispatch));
+            new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap(),
+            StudioWorkflowDraftMemberCommandDispatchTestHarness.CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
 
         await materializer.ProjectAsync(
             NewContext(),
@@ -105,11 +109,12 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
     [Fact]
     public async Task ProjectAsync_ShouldNoOp_WhenDraftIsMissingOrWorkflowIdIsBlank()
     {
-        var bootstrap = new RecordingBootstrap();
-        var dispatch = new RecordingDispatchPort();
+        var bootstrap = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingBootstrap();
+        var dispatch = new StudioWorkflowDraftMemberCommandDispatchTestHarness.RecordingDispatchPort();
         var materializer = new StudioWorkflowDraftMemberEnsureMaterializer(
             bootstrap,
-            CreateCommandDispatch(dispatch));
+            StudioWorkflowDraftMemberCommandDispatchTestHarness.CreateCommandDispatch(dispatch),
+            new StudioWorkflowDraftMemberEnsureCommandFactory());
 
         await materializer.ProjectAsync(
             NewContext(),
@@ -176,64 +181,4 @@ public sealed class StudioWorkflowDraftMemberEnsureMaterializerTests
             }),
         };
 
-    private sealed class RecordingBootstrap : IStudioActorBootstrap
-    {
-        public List<string> EnsuredActorIds { get; } = [];
-
-        public Task<IActor> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
-            where TAgent : IAgent, IProjectedActor
-        {
-            EnsuredActorIds.Add(actorId);
-            return Task.FromResult<IActor>(new StubActor(actorId));
-        }
-    }
-
-    private sealed class StubActor(string id) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent => throw new NotSupportedException();
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
-            Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class RecordingDispatchPort : IActorDispatchPort
-    {
-        public List<DispatchedCommand> Dispatches { get; } = [];
-
-        public Task<DispatchAdmission> DispatchAsync(
-            string actorId,
-            EventEnvelope envelope,
-            CancellationToken ct = default)
-        {
-            Dispatches.Add(new DispatchedCommand(actorId, envelope));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
-        }
-
-        public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);
-    }
-
-    private static StudioProjectionActorCommandDispatch CreateCommandDispatch(IActorDispatchPort dispatchPort)
-    {
-        var service = new DefaultCommandDispatchService<
-            StudioProjectionActorCommand,
-            StudioProjectionActorCommandTarget,
-            StudioProjectionActorCommandReceipt,
-            StudioProjectionActorCommandStartError>(
-            new DefaultCommandDispatchPipeline<
-                StudioProjectionActorCommand,
-                StudioProjectionActorCommandTarget,
-                StudioProjectionActorCommandReceipt,
-                StudioProjectionActorCommandStartError>(
-                new StudioProjectionActorCommandTargetResolver(),
-                new DefaultCommandContextPolicy(),
-                new StudioProjectionActorCommandEnvelopeFactory(),
-                new ActorCommandTargetDispatcher<StudioProjectionActorCommandTarget>(dispatchPort),
-                new StudioProjectionActorCommandReceiptFactory()));
-        return new StudioProjectionActorCommandDispatch(service);
-    }
 }
