@@ -30,7 +30,8 @@ public sealed class ResponsesCompletionApplicationServiceTests
             BuildClassification(tool));
 
         result.Text.Should().Be("typed completion consumed");
-        provider.SecondRoundToolResult.Should().Contain("\"typed\":true");
+        provider.SecondRoundToolResult.Should().Contain("\"status\":2");
+        provider.SecondRoundToolResult.Should().Contain("\"service_id\":\"service-1\"");
         tool.TypedExecuteCount.Should().Be(1);
         tool.LegacyExecuteCount.Should().Be(0);
         harness.ChatRunPort.SubmittedToolCalls.Should().ContainSingle().Which.ToolExecutionResultJson
@@ -59,7 +60,8 @@ public sealed class ResponsesCompletionApplicationServiceTests
 
         result.Text.Should().Be("typed completion consumed");
         textDeltas.Should().Equal("typed completion consumed");
-        provider.SecondRoundToolResult.Should().Contain("\"typed\":true");
+        provider.SecondRoundToolResult.Should().Contain("\"status\":2");
+        provider.SecondRoundToolResult.Should().Contain("\"service_id\":\"service-1\"");
         tool.TypedExecuteCount.Should().Be(1);
         tool.LegacyExecuteCount.Should().Be(0);
         harness.ChatRunPort.SubmittedToolCalls.Should().ContainSingle().Which.ToolExecutionResultJson
@@ -153,13 +155,12 @@ public sealed class ResponsesCompletionApplicationServiceTests
             {
                 ToolExecutionResultJson = """{"dispatch":"typed"}""",
                 RunId = "team-command",
-                Status = "RunFinished",
-                CompletionResultJson = """{"typed":true,"status":"RunFinished"}""",
+                Status = "accepted",
                 ServiceId = "service-1",
                 EndpointId = "entry",
                 ScopeId = "scope-1",
                 WaitMode = ChatRunSubRunWaitMode.Complete,
-                CompletionObserved = true,
+                CompletionObserved = false,
             });
         }
     }
@@ -177,7 +178,7 @@ public sealed class ResponsesCompletionApplicationServiceTests
             new(
                 ChatRunPort,
                 new EmptyTerminalQueryPort(),
-                new EmptyServiceRunQueryPort(),
+                new StaticServiceRunQueryPort(),
                 new EmptyWorkflowQueryService());
     }
 
@@ -221,7 +222,7 @@ public sealed class ResponsesCompletionApplicationServiceTests
             Task.CompletedTask;
     }
 
-    private sealed class EmptyServiceRunQueryPort : IServiceRunQueryPort
+    private sealed class StaticServiceRunQueryPort : IServiceRunQueryPort
     {
         public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(
             ServiceRunQuery query,
@@ -232,8 +233,33 @@ public sealed class ResponsesCompletionApplicationServiceTests
             string scopeId,
             string serviceId,
             string runId,
-            CancellationToken ct = default) =>
-            Task.FromResult<ServiceRunSnapshot?>(null);
+            CancellationToken ct = default)
+        {
+            ServiceRunSnapshot? snapshot = scopeId == "scope-1" && serviceId == "service-1" && runId == "team-command"
+                ? new ServiceRunSnapshot(
+                    "scope-1",
+                    "service-1",
+                    "service-key",
+                    "team-command",
+                    "team-command",
+                    "team-correlation",
+                    "entry",
+                    ServiceImplementationKind.Static,
+                    "target-actor",
+                    "revision-1",
+                    "deployment-1",
+                    ServiceRunStatus.Completed,
+                    "actor-1",
+                    "tenant-1",
+                    "app-1",
+                    "namespace-1",
+                    7,
+                    "event-7",
+                    DateTimeOffset.Parse("2026-05-23T00:00:00+00:00"),
+                    DateTimeOffset.Parse("2026-05-23T00:01:00+00:00"))
+                : null;
+            return Task.FromResult(snapshot);
+        }
 
         public Task<ServiceRunSnapshot?> GetByCommandIdAsync(
             string scopeId,
