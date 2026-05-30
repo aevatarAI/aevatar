@@ -162,6 +162,63 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+# Refactor (v1/issue1468-first):
+#   Old pattern: query/read files could grow hidden event replay, state rebuild, or
+#   projection materialization calls in request paths.
+#   New principle: QueryPort/QueryService/ApplicationService files only read
+#   materialized read models; owner-change bootstrap is a v1 non-goal.
+check_no_query_time_replay() {
+  local query_read_files=()
+  while IFS= read -r -d '' query_read_file; do
+    query_read_files+=("${query_read_file}")
+  done < <(
+    find src agents \
+      -type f \
+      \( -name '*QueryPort.cs' -o -name '*QueryService.cs' -o -name '*ApplicationService.cs' \) \
+      -not -path '*/bin/*' \
+      -not -path '*/obj/*' \
+      -not -name '*.g.cs' \
+      -not -name '*.Designer.cs' \
+      -print0
+  )
+
+  if (( ${#query_read_files[@]} == 0 )); then
+    return
+  fi
+
+  set +e
+  local query_time_replay_report
+  query_time_replay_report="$(
+    rg -n "\b(ReadEventsAsync|GetEventsAsync|RebuildAsync|MaterializeAsync)\b" "${query_read_files[@]}" \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+
+  print $0;
+}'
+  )"
+  local query_time_replay_status=$?
+  set -e
+
+  if [[ ${query_time_replay_status} -ne 0 && ${query_time_replay_status} -ne 1 ]]; then
+    echo "Query-time replay guard execution failed."
+    exit "${query_time_replay_status}"
+  fi
+
+  if [ -n "${query_time_replay_report}" ]; then
+    echo "${query_time_replay_report}"
+    echo "Query/read paths must not replay events, rebuild state, or materialize projections in request paths. Use committed projection/readmodel materialization outside the query call stack."
+    exit 1
+  fi
+}
+
+check_no_query_time_replay
+
 # Refactor (iter56/cluster-920-workflow-catalog-async-query):
 #   Old pattern: production workflow query ports could hide async readmodel I/O behind sync .Result/.Wait calls.
 #   New principle: catalog/capabilities query seams are async end-to-end, and query ports await readmodel readers.
