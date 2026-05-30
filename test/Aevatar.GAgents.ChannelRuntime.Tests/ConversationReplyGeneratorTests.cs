@@ -403,6 +403,43 @@ public sealed class ConversationReplyGeneratorTests
         prefsStore.Lookups.Should().BeEmpty();
     }
 
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    [Fact]
+    public async Task GenerateReplyAsync_DisablesTools_WhenChannelTurnHasNoSenderBinding()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var toolSource = new CountingToolSource(new ApprovalRequiredTool());
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [toolSource],
+            localSkillCatalog: new LocalSkillCatalog());
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-unbound-channel-tools",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-unbound-channel-tools",
+            },
+            Control("owner-only-model", "owner-route", 4),
+            toolContext: null,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().BeNull();
+        toolSource.DiscoverCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task GenerateReplyAsync_FallsBackToOwnerPrefsWhenSenderStoreThrows()
     {
@@ -816,6 +853,17 @@ public sealed class ConversationReplyGeneratorTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class CountingToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public int DiscoverCount { get; private set; }
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            DiscoverCount++;
+            return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
     }
 
     private sealed class ApprovalRequiredTool : IAgentTool
