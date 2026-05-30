@@ -61,6 +61,8 @@ const mockedHistory = history as unknown as {
   push: jest.Mock;
 };
 
+const resolveObservationProbeTick = () => Promise.resolve();
+
 const appContext = {
   mode: 'proxy',
   scopeId: 'scope-1',
@@ -313,17 +315,23 @@ describe('ScriptsWorkbenchPage', () => {
   });
 
   it('keeps save observation pending when the read model is not visible yet', async () => {
-    mockedScriptsApi.observeSaveScript.mockRejectedValueOnce(
-      new Error('temporary timeout'),
-    );
+    mockedScriptsApi.observeSaveScript.mockResolvedValue({
+      scopeId: 'scope-1',
+      scriptId: 'script-1',
+      status: 'pending',
+      message:
+        'Save accepted for script-1; observation is not available yet.',
+      currentScript: null,
+      isTerminal: false,
+    });
 
-    renderPage();
+    renderPage({}, { waitForObservationProbeTick: resolveObservationProbeTick });
 
     await screen.findByLabelText('Script ID');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
-      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(1);
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(8);
     });
     expect(
       await screen.findByText(
@@ -414,7 +422,7 @@ describe('ScriptsWorkbenchPage', () => {
       );
       arrangeCatalogRead();
 
-      renderPage();
+      renderPage({}, { waitForObservationProbeTick: resolveObservationProbeTick });
 
       await screen.findByLabelText('Script ID');
       fireEvent.click(screen.getByRole('button', { name: 'More script actions' }));
@@ -431,15 +439,13 @@ describe('ScriptsWorkbenchPage', () => {
           }),
         );
       });
-      await waitFor(() => {
-        expect(mockedScriptsApi.getScriptCatalog).toHaveBeenCalledTimes(1);
-      });
-      expect(mockedScriptsApi.getScript).not.toHaveBeenCalled();
       expect(
         await screen.findByText(
           'Promotion accepted for script-1 rev-2. Refresh the workspace catalog if the read model is still pending.',
         ),
       ).toBeTruthy();
+      expect(mockedScriptsApi.getScriptCatalog.mock.calls.length).toBeGreaterThan(0);
+      expect(mockedScriptsApi.getScript).not.toHaveBeenCalled();
     },
   );
 
