@@ -72,7 +72,11 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 },
             ]));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
-        var resolver = RecordingVoiceSessionResolver.Attached(CreateSessionCompletingOnAttach());
+        var attachedTransports = new List<IVoiceTransport>();
+        var detachedTransports = new List<IVoiceTransport?>();
+        var resolver = RecordingVoiceSessionResolver.Attached(CreateSessionCompletingOnAttach(
+            attachedTransports,
+            detachedTransports));
         var socket = new FakeWebSocket(WebSocketState.Open);
         using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
         var context = CreateVoiceContext(app, "/ws/voice?channel=lark&registration_scope_id=bot-1&sender_id=sender-1");
@@ -89,6 +93,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 "voice-agent-lark",
                 "voice_presence_openai",
                 VoicePresenceSessionRequestPurpose.Attach));
+        attachedTransports.Should().ContainSingle();
+        detachedTransports.Should().ContainSingle()
+            .Which.Should().BeSameAs(attachedTransports.Single());
     }
 
     [Theory]
@@ -340,18 +347,25 @@ public sealed class PolicyAwareVoiceEndpointsTests
             detachTransportAsync: static (_, _) => Task.CompletedTask,
             pcmSampleRateHz: 24000);
 
-    private static VoicePresenceSession CreateSessionCompletingOnAttach() =>
+    private static VoicePresenceSession CreateSessionCompletingOnAttach(
+        List<IVoiceTransport>? attachedTransports = null,
+        List<IVoiceTransport?>? detachedTransports = null) =>
         new(
             isInitialized: static () => true,
             isTransportAttached: static () => false,
-            attachTransportAsync: static (transport, _) =>
+            attachTransportAsync: (transport, _) =>
             {
+                attachedTransports?.Add(transport);
                 if (transport is IAsyncDisposable disposable)
                     return disposable.DisposeAsync().AsTask();
 
                 return Task.CompletedTask;
             },
-            detachTransportAsync: static (_, _) => Task.CompletedTask,
+            detachTransportAsync: (transport, _) =>
+            {
+                detachedTransports?.Add(transport);
+                return Task.CompletedTask;
+            },
             pcmSampleRateHz: 24000);
 
     private static VoicePresenceSession CreateSessionThrowingOnAttach(Exception exception) =>
