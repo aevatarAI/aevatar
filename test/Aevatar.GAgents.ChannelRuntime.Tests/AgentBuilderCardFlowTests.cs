@@ -48,7 +48,7 @@ public sealed class AgentBuilderCardFlowTests
     public void FormatToolResult_ListAgents_ReturnsSingleCardWithoutPerAgentButtons()
     {
         // Refactor (iter9/cluster-1305-hybrid-minimal-delete):
-        // Old pattern: NyxRelayAgentBuilderFlow had separate list rendering semantics from AgentBuilderCardFlow.
+        // Old pattern: a retired relay builder flow had separate list rendering semantics.
         // New principle: unified AgentBuilderCardFlow keeps the consolidated `/agents` card contract.
         var decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
         var result = AgentBuilderCardFlow.FormatToolResult(

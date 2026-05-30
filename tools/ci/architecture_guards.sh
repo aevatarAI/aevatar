@@ -190,6 +190,27 @@ if [ -n "${workflow_telegram_bridge_report}" ]; then
   exit 1
 fi
 
+set +e
+nyx_relay_agent_builder_flow_report="$(
+  rg -n "NyxRelayAgentBuilderFlow" \
+    agents src test \
+    -g '!**/bin/**' \
+    -g '!**/obj/**'
+)"
+nyx_relay_agent_builder_flow_status=$?
+set -e
+
+if [[ ${nyx_relay_agent_builder_flow_status} -ne 0 && ${nyx_relay_agent_builder_flow_status} -ne 1 ]]; then
+  echo "Retired Nyx relay agent-builder flow guard execution failed."
+  exit "${nyx_relay_agent_builder_flow_status}"
+fi
+
+if [ -n "${nyx_relay_agent_builder_flow_report}" ]; then
+  echo "${nyx_relay_agent_builder_flow_report}"
+  echo "NyxRelayAgentBuilderFlow was deleted in #1306. Do not reintroduce it in production code or tests."
+  exit 1
+fi
+
 if rg -n "docs\\\\SOLUTION_AUDIT_REPORT_" aevatar.slnx; then
   echo "Working audit documents must not be added to solution."
   exit 1
@@ -336,6 +357,40 @@ if rg -n "EventEnvelope\.Metadata|StepCompletedEvent\.Metadata|CompletionMetadat
   -g '!docs/architecture/*blueprint*.md'
 then
   echo "Legacy documentation terminology is forbidden. Use typed envelope fields, Annotations, and current session sourcing."
+  exit 1
+fi
+
+set +e
+workflow_trusted_control_metadata_report="$(
+  rg -n "BuildLegacyMetadata|WorkflowChatRunRequest\.Metadata\[[^]]*(scope|nyx|model|tool|control|owner|response)|Metadata:\s*.*(LLMRequestMetadataKeys|scope_id)" \
+    src/Aevatar.AI.ToolProviders.AevatarInvocation \
+    src/workflow \
+    -g '*.cs' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+
+  print $0;
+}'
+)"
+workflow_trusted_control_metadata_status=$?
+set -e
+
+if [[ ${workflow_trusted_control_metadata_status} -ne 0 && ${workflow_trusted_control_metadata_status} -ne 1 ]]; then
+  echo "Workflow trusted-control metadata guard execution failed."
+  exit "${workflow_trusted_control_metadata_status}"
+fi
+
+if [ -n "${workflow_trusted_control_metadata_report}" ]; then
+  echo "${workflow_trusted_control_metadata_report}"
+  echo "Workflow/team trusted control must use typed ScopeId / ToolContext / LlmControl fields, not Metadata bag entries."
   exit 1
 fi
 

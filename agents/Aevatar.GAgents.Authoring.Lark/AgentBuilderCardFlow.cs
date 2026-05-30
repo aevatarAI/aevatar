@@ -175,7 +175,7 @@ public static class AgentBuilderCardFlow
             return false;
 
         // Refactor (iter9/cluster-1305-hybrid-minimal-delete):
-        // Old pattern: agent-builder routing split across NyxRelayAgentBuilderFlow + AgentBuilderCardFlow.
+        // Old pattern: agent-builder routing split across a retired relay flow and AgentBuilderCardFlow.
         // New principle: single AgentBuilderCardFlow routes all agent-builder slash commands via TryResolveSimpleAgentAction.
         if (!IsPrivateChat(evt.ChatType))
         {
