@@ -163,7 +163,8 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("当前工作空间")).toBeNull();
     expect(screen.getByText("AI Team 总数")).toBeTruthy();
     expect(screen.getByText("待处理 Team")).toBeTruthy();
-    expect(screen.getByText("运行稳定")).toBeTruthy();
+    expect(screen.getByText("最近完成 Team")).toBeTruthy();
+    expect(screen.queryByText("运行稳定")).toBeNull();
     expect(screen.getByText("团队列表")).toBeTruthy();
     expect(
       screen.getByText("按 Team 聚合成员与最近运行信号，优先处理异常或待关注项。"),
@@ -186,6 +187,24 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("进入 Studio")).toBeNull();
     expect(screen.queryByText("新增成员")).toBeNull();
     expect(screen.queryByText("查看默认成员运行")).toBeNull();
+  });
+
+  it("shows completed run status as completion, not stability", async () => {
+    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockResolvedValueOnce({
+      ...buildMemberRunCatalog("member-alpha"),
+      runs: [
+        {
+          ...buildMemberRunCatalog("member-alpha").runs[0],
+          completionStatus: "completed",
+          lastSuccess: true,
+        },
+      ],
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect(screen.queryByText("稳定")).toBeNull();
   });
 
   it("routes Create Team to the real create-team page", async () => {

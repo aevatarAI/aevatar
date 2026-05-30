@@ -113,7 +113,7 @@ function formatRunStatusLabel(status: string | null | undefined): string {
     case "error":
       return "异常";
     case "completed":
-      return "稳定";
+      return "已完成";
     default:
       return trimOptional(status) || "未知";
   }
@@ -1153,7 +1153,7 @@ const TeamsHomePage: React.FC = () => {
             >
               <SummaryStatCard accent label="AI Team 总数" value={visibleTeamCount} />
               <SummaryStatCard label="待处理 Team" value={actionableTeamCount} />
-              <SummaryStatCard label="运行稳定" value={healthyTeamCount} />
+              <SummaryStatCard label="最近完成 Team" value={healthyTeamCount} />
             </div>
 
             {teamsQuery.isLoading ? (
