@@ -4,6 +4,12 @@ using Aevatar.Studio.Application.Studio.Contracts;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
+/// <summary>
+/// Command target resolver for Studio team entry-member invocation. It reads
+/// the team and member read models only to admit a command and select the
+/// dispatch target; it does not expose stable team readiness/status for UI,
+/// reports, or other query consumers.
+/// </summary>
 public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
 {
     private readonly IStudioTeamQueryPort _teamQueryPort;
