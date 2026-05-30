@@ -11,15 +11,36 @@
 # 用法(controller 通过 Monitor tool 包):
 #   Monitor(persistent: true, command: ".claude/skills/codex-refactor-loop/scripts/comment-monitor.sh")
 #
-# state 文件:.refactor-loop/comment-monitor-state.json (JSON map: comment_id → "seen")
+# state 文件:.refactor-loop/comment-monitor-state.json
+# Schema(2026-05-30 重写,降 graphql 用量):
+#   {
+#     "targets": [123, 456],            # cached open issue/PR numbers
+#     "last_targets_refresh": 1780150000,
+#     "issue_last_check": {"123": "2026-05-30T15:00:00Z"},
+#     "comments_seen": {"<id>": "seen"}
+#   }
+# 优化:
+#   - INTERVAL 30s → 90s(每小时 tick 120 → 40)
+#   - targets list 用 REST(`gh api repos/.../issues?labels=...`)+ 缓存 5 min,不再每 tick graphql list
+#   - 每 issue/PR 用 REST `comments?since=<last_check>` 增量拉(走 REST 配额,免 graphql)
+#   - graphql /h: ~4800 → ~40(list 调用降到 12/h)
 
 set -u
 REPO="aevatarAI/aevatar"
 STATE_FILE="${STATE_FILE:-/Users/auric/aevatar/.refactor-loop/comment-monitor-state.json}"
-INTERVAL="${INTERVAL:-30}"
+INTERVAL="${INTERVAL:-90}"
+TARGETS_REFRESH_INTERVAL="${TARGETS_REFRESH_INTERVAL:-300}"
 
 mkdir -p "$(dirname "$STATE_FILE")"
-[ -f "$STATE_FILE" ] || echo '{}' > "$STATE_FILE"
+[ -f "$STATE_FILE" ] || echo '{"targets":[],"last_targets_refresh":0,"issue_last_check":{},"comments_seen":{}}' > "$STATE_FILE"
+
+# Migrate old schema (flat comment_id → "seen") to new schema
+if jq -e '.comments_seen' "$STATE_FILE" > /dev/null 2>&1; then
+  : # already new schema
+else
+  tmp=$(mktemp)
+  jq '{targets: [], last_targets_refresh: 0, issue_last_check: {}, comments_seen: .}' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+fi
 
 # Maintainer whitelist (handles + git author names) per SKILL.md
 is_team_member() {
@@ -56,27 +77,58 @@ is_controller_post() {
 }
 
 seen() {
-  jq -e --arg id "$1" 'has($id)' "$STATE_FILE" > /dev/null 2>&1
+  jq -e --arg id "$1" '.comments_seen | has($id)' "$STATE_FILE" > /dev/null 2>&1
 }
 
 mark_seen() {
   local id="$1" tmp
   tmp=$(mktemp)
-  jq --arg id "$id" '. + {($id): "seen"}' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+  jq --arg id "$id" '.comments_seen += {($id): "seen"}' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+}
+
+set_issue_last_check() {
+  local n="$1" iso="$2" tmp
+  tmp=$(mktemp)
+  jq --arg n "$n" --arg iso "$iso" '.issue_last_check[$n] = $iso' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+}
+
+get_issue_last_check() {
+  jq -r --arg n "$1" '.issue_last_check[$n] // ""' "$STATE_FILE"
+}
+
+refresh_targets() {
+  # 用 REST list issues+PRs(issue endpoint 同时返回 issue 与 pull request),按 label 过滤
+  # 不再用 `gh issue list / pr list`(graphql)
+  local design_issues auto_loop_items now
+  design_issues=$(gh api "repos/$REPO/issues?state=open&labels=refactor-design-needed&per_page=100" --jq '.[].number' 2>/dev/null)
+  auto_loop_items=$(gh api "repos/$REPO/issues?state=open&labels=auto-loop&per_page=100" --jq '.[].number' 2>/dev/null)
+  local merged=$(printf '%s\n%s\n' "$design_issues" "$auto_loop_items" | grep -v '^$' | sort -un)
+  local json_list=$(printf '%s\n' "$merged" | jq -R 'tonumber? // empty' | jq -s '.')
+  now=$(date -u +%s)
+  local tmp=$(mktemp)
+  jq --argjson list "$json_list" --argjson now "$now" '.targets = $list | .last_targets_refresh = $now' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 }
 
 while true; do
-  # Auto-discover targets: open issues with refactor-design-needed label + open PRs with auto-loop label
-  targets=$(
-    {
-      gh issue list --repo "$REPO" --state open --label "refactor-design-needed" --json number -q '.[].number' 2>/dev/null
-      gh pr list --repo "$REPO" --state open --label "auto-loop" --json number -q '.[].number' 2>/dev/null
-    } | sort -u
-  )
+  # 判断是否需要 refresh targets list
+  now=$(date -u +%s)
+  last_refresh=$(jq -r '.last_targets_refresh // 0' "$STATE_FILE")
+  if (( now - last_refresh >= TARGETS_REFRESH_INTERVAL )); then
+    refresh_targets
+  fi
+
+  # 读 cached targets
+  targets=$(jq -r '.targets[]?' "$STATE_FILE")
 
   for n in $targets; do
-    # Try issue then pr
-    comments=$(gh api "repos/$REPO/issues/$n/comments" --jq '.[] | {id, author: .user.login, body, created_at}' 2>/dev/null)
+    # REST since 增量拉(GitHub REST 默认 ISO8601;为空则全拉)
+    since=$(get_issue_last_check "$n")
+    [ -z "$since" ] && since=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "1 hour ago" +%Y-%m-%dT%H:%M:%SZ)
+    # 记录此 tick 开始时间作为下次 since(避免 race)
+    tick_start_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    comments=$(gh api "repos/$REPO/issues/$n/comments?since=$since&per_page=100" --jq '.[] | {id, author: .user.login, body, created_at}' 2>/dev/null)
+    set_issue_last_check "$n" "$tick_start_iso"
     [ -z "$comments" ] && continue
 
     while IFS= read -r raw; do
