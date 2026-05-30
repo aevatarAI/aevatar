@@ -88,6 +88,54 @@ public sealed class LarkOutboundDispatcherTests
         handler.Requests.Should().ContainSingle();
     }
 
+    [Theory]
+    [InlineData("", "empty_send_response")]
+    [InlineData("""{"code":0,"msg":"success"}""", "missing_data")]
+    [InlineData("""{"code":0,"msg":"success","data":{"message_id":"   "}}""", "empty_message_id")]
+    [InlineData("""{"code":0,"msg":"success","data":""", "invalid_send_response_json")]
+    public async Task SendNewMessageAsync_InvalidSuccessShape_ReturnsParserHint(
+        string response,
+        string expectedDetail)
+    {
+        var handler = new SequencedHandler(response);
+        var dispatcher = CreateDispatcher(handler);
+
+        var result = await dispatcher.SendNewMessageAsync(CreateRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.LarkCode.Should().BeNull();
+        result.Detail.Should().Be(expectedDetail);
+        handler.Requests.Should().ContainSingle();
+    }
+
+    public static TheoryData<LarkSendNewMessageRequest, string> InvalidRequests => new()
+    {
+        { CreateRequest(nyxApiKey: " "), "NyxID API key is required." },
+        { CreateRequest(nyxProviderSlug: " "), "NyxID provider slug is required." },
+        { CreateRequest(messageType: " "), "Lark message type is required." },
+        { CreateRequest(contentJson: " "), "Lark message content JSON is required." },
+        { CreateRequest(primaryTarget: new LarkReceiveTarget(" ", "chat_id", FellBackToPrefixInference: false)), "Lark primary receive_id is required." },
+        { CreateRequest(primaryTarget: new LarkReceiveTarget("oc_primary", " ", FellBackToPrefixInference: false)), "Lark primary receive_id_type is required." },
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidRequests))]
+    public async Task SendNewMessageAsync_InvalidRequest_ThrowsBeforeHttpDispatch(
+        LarkSendNewMessageRequest request,
+        string expectedMessage)
+    {
+        var handler = new SequencedHandler(OkResponse);
+        var dispatcher = CreateDispatcher(handler);
+
+        var act = () => dispatcher.SendNewMessageAsync(request, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithParameterName("request")
+            .WithMessage(expectedMessage + "*");
+        handler.Requests.Should().BeEmpty();
+        handler.Bodies.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task SendNewMessageAsync_CrossAppError_ReturnsHintCodeWithoutRetry()
     {
@@ -113,13 +161,19 @@ public sealed class LarkOutboundDispatcherTests
         return new LarkOutboundDispatcher(client, NullLogger<LarkOutboundDispatcher>.Instance);
     }
 
-    private static LarkSendNewMessageRequest CreateRequest(LarkReceiveTarget? fallback = null) =>
+    private static LarkSendNewMessageRequest CreateRequest(
+        LarkReceiveTarget? fallback = null,
+        string nyxApiKey = "nyx-api-key",
+        string nyxProviderSlug = "api-lark-bot",
+        string messageType = "text",
+        string contentJson = """{"text":"hello"}""",
+        LarkReceiveTarget? primaryTarget = null) =>
         new(
-            "nyx-api-key",
-            "api-lark-bot",
-            "text",
-            """{"text":"hello"}""",
-            new LarkReceiveTarget("oc_primary", "chat_id", FellBackToPrefixInference: false),
+            nyxApiKey,
+            nyxProviderSlug,
+            messageType,
+            contentJson,
+            primaryTarget ?? new LarkReceiveTarget("oc_primary", "chat_id", FellBackToPrefixInference: false),
             fallback);
 
     private sealed class SequencedHandler : HttpMessageHandler
