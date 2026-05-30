@@ -34,7 +34,6 @@ public sealed class AppScopedScriptService
     private readonly IScriptEvolutionDecisionReadPort? _scriptEvolutionDecisionReadPort;
     private readonly IScriptingActorAddressResolver? _scriptingActorAddressResolver;
     private readonly IScriptRuntimeActivityQueryPort? _runtimeActivityQueryPort;
-    private readonly IScriptStoragePort? _scriptStoragePort;
     private readonly IHttpClientFactory _httpClientFactory;
 
     public AppScopedScriptService(
@@ -47,8 +46,7 @@ public sealed class AppScopedScriptService
         IScriptCatalogQueryPort? scriptCatalogQueryPort = null,
         IScriptEvolutionDecisionReadPort? scriptEvolutionDecisionReadPort = null,
         IScriptingActorAddressResolver? scriptingActorAddressResolver = null,
-        IScriptRuntimeActivityQueryPort? runtimeActivityQueryPort = null,
-        IScriptStoragePort? scriptStoragePort = null)
+        IScriptRuntimeActivityQueryPort? runtimeActivityQueryPort = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _scriptQueryPort = scriptQueryPort;
@@ -60,7 +58,6 @@ public sealed class AppScopedScriptService
         _scriptEvolutionDecisionReadPort = scriptEvolutionDecisionReadPort;
         _scriptingActorAddressResolver = scriptingActorAddressResolver;
         _runtimeActivityQueryPort = runtimeActivityQueryPort;
-        _scriptStoragePort = scriptStoragePort;
     }
 
     public async Task<IReadOnlyList<ScopeScriptSummary>> ListAsync(
@@ -233,9 +230,10 @@ public sealed class AppScopedScriptService
                 ct) ?? throw new InvalidOperationException("Script save returned an empty response.");
         }
 
-        var accepted = BuildAcceptedSaveResponse(sourceText, upsertResult);
-        _ = UploadScriptBestEffortAsync(scriptId, sourceText);
-        return accepted;
+        // Refactor (iter348/cluster-002):
+        //   Old pattern: AppScopedScriptService fires fire-and-forget storage upload after ACK
+        //   New principle: actor projection save-observation is single source; no orphan chrono storage mirror
+        return BuildAcceptedSaveResponse(sourceText, upsertResult);
     }
 
     public async Task<ScopeScriptSaveObservationResult> ObserveSaveAsync(
@@ -488,21 +486,6 @@ public sealed class AppScopedScriptService
     {
         var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-    }
-
-    private async Task UploadScriptBestEffortAsync(string scriptId, string sourceText)
-    {
-        if (_scriptStoragePort == null)
-            return;
-
-        try
-        {
-            await _scriptStoragePort.UploadScriptAsync(scriptId, sourceText, CancellationToken.None);
-        }
-        catch
-        {
-            /* don't fail the accepted save if chrono-storage upload fails */
-        }
     }
 
     private static AppScriptCatalogSnapshot ToCatalogSnapshot(

@@ -65,8 +65,7 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptCatalogQueryPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptEvolutionDecisionReadPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptingActorAddressResolver>(),
-            sp.GetService<IScriptRuntimeActivityQueryPort>(),
-            sp.GetService<IScriptStoragePort>()));
+            sp.GetService<IScriptRuntimeActivityQueryPort>()));
         return services;
     }
 
