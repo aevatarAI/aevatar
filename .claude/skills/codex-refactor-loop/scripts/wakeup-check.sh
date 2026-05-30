@@ -198,6 +198,7 @@ done < <(gh issue list --state open --limit 50 --json number,author,updatedAt,la
     .[] | select(
         (.author.login | endswith("[bot]") | not)
         and ([.labels[].name] | (contains(["🎉 phase:merged"]) or contains(["auto-loop-triage"]) or contains(["🔍 phase:design-solving"]) or contains(["🛠️ phase:implementing"]) or contains(["🚀 phase:pr-open"]) or contains(["phase11-not-eligible"]) or contains(["🆘 human:卡死-需-rework"]) or contains(["👤 human:需-maintainer-决策"])) | not)
+        and ([.labels[].name] | map(startswith("milestone:")) | any | not)
     ) | "\(.number) \(.updatedAt)"' 2>/dev/null)
 [ "$E_COUNT" -eq 0 ] && echo "(none — no untouched issues older than 3h needing triage)"
 
