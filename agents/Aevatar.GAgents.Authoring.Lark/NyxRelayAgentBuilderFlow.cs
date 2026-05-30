@@ -25,6 +25,9 @@ public static class NyxRelayAgentBuilderFlow
         return resolution.IsMatchedKnownAgentBuilderCommand;
     }
 
+    // Refactor (iter166/cluster-1304): Old pattern: NyxRelayAgentBuilderFlow exposed only
+    // a boolean match, so callers inferred non-match fall-through themselves. New principle:
+    // the flow returns an explicit local routing outcome before any LLM handoff decision.
     public static NyxRelayAgentBuilderFlowResolution Resolve(ChannelInboundEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -335,6 +338,10 @@ public static class NyxRelayAgentBuilderFlow
     }
 }
 
+// Refactor (iter166/cluster-1304): Old pattern: agent-builder command resolution collapsed
+// handled commands, non-slash text, unknown slash commands, and chat-scope rejection into
+// a nullable decision. New principle: typed outcomes make local handling and LLM pass-through
+// predicates explicit at the boundary.
 public enum NyxRelayAgentBuilderFlowOutcome
 {
     KnownAgentBuilderCommand,

@@ -975,7 +975,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         Task typingReactionTask,
         CancellationToken ct)
     {
-        // Refactor (issue1304-first): Old: implicit fall-through. New: explicit predicate-based dispatch.
+        // Refactor (iter166/cluster-1304): Old pattern: agent-builder fall-through was inferred
+        // from a null decision in the runner. New principle: the runner asks the flow for typed
+        // predicates, so non-slash and unknown slash text can continue to the LLM explicitly.
         var relayResolution = NyxRelayAgentBuilderFlow.Resolve(inboundEvent);
         var relayDecisionMatched = relayResolution.IsMatchedKnownAgentBuilderCommand;
         var decision = relayResolution.Decision;
