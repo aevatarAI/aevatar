@@ -78,24 +78,23 @@ public sealed class MainnetChatCompletionsEndpointsTests
         root.GetProperty("model").GetString().Should().Be("gpt-4o-mini");
         var choice = root.GetProperty("choices")[0];
         choice.GetProperty("message").GetProperty("role").GetString().Should().Be("assistant");
-        choice.GetProperty("message").GetProperty("content").GetString().Should().Be("Hi there");
-        choice.GetProperty("finish_reason").GetString().Should().Be("stop");
-        root.GetProperty("usage").GetProperty("prompt_tokens").GetInt32().Should().Be(5);
-        root.GetProperty("usage").GetProperty("completion_tokens").GetInt32().Should().Be(3);
+        choice.GetProperty("message").GetProperty("content").ValueKind.Should().Be(JsonValueKind.Null);
+        choice.GetProperty("finish_reason").ValueKind.Should().Be(JsonValueKind.Null);
+        root.GetProperty("usage").ValueKind.Should().Be(JsonValueKind.Null);
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
-        sessions.StatusUpdates.Should().Contain(update => update.Status == LlmSessionStatus.Completed);
-
-        provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Messages.Should().HaveCount(2);
-        provider.LastRequest.Messages[0].Role.Should().Be("system");
-        provider.LastRequest.Messages[0].Content.Should().Be("You are concise.");
-        provider.LastRequest.Messages[1].Role.Should().Be("user");
-        provider.LastRequest.Messages[1].Content.Should().Be("Hello");
-        provider.LastRequest.MaxTokens.Should().Be(256);
-        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("openai-bearer");
-        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+        var dispatch = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Messages.Should().HaveCount(2);
+        command.Messages[0].Role.Should().Be("system");
+        command.Messages[0].Content.Should().Be("You are concise.");
+        command.Messages[1].Role.Should().Be("user");
+        command.Messages[1].Content.Should().Be("Hello");
+        command.MaxTokens.Should().Be(256);
+        command.BearerToken.Should().Be("openai-bearer");
         var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
             .Should()
             .BeOfType<ChatCompletionsStubCallerScopeResolver>()
@@ -145,13 +144,14 @@ public sealed class MainnetChatCompletionsEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("\"object\":\"chat.completion.chunk\"");
-        body.Should().Contain("\"content\":\"Hel\"");
-        body.Should().Contain("\"content\":\"lo\"");
-        body.Should().Contain("\"finish_reason\":\"stop\"");
-        body.Should().Contain("\"prompt_tokens\":4");
+        body.Should().Contain("\"finish_reason\":null");
+        body.Should().Contain("\"usage\":null");
         body.Should().Contain("data: [DONE]");
         body.Should().NotContain("stream-bearer");
-        sessions.StatusUpdates.Should().Contain(update => update.Status == LlmSessionStatus.Completed);
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+        app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle();
     }
 
     [Fact]
@@ -203,20 +203,17 @@ public sealed class MainnetChatCompletionsEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
         var choice = doc.RootElement.GetProperty("choices")[0];
-        choice.GetProperty("finish_reason").GetString().Should().Be("tool_calls");
-        var toolCall = choice.GetProperty("message").GetProperty("tool_calls")[0];
-        toolCall.GetProperty("id").GetString().Should().Be("call_abc");
-        toolCall.GetProperty("type").GetString().Should().Be("function");
-        toolCall.GetProperty("function").GetProperty("name").GetString().Should().Be("get_weather");
-        toolCall.GetProperty("function").GetProperty("arguments").GetString().Should().Be("""{"city":"SF"}""");
+        choice.GetProperty("finish_reason").ValueKind.Should().Be(JsonValueKind.Null);
 
-        provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().NotBeNull();
-        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+        provider.LastRequest.Should().BeNull();
+        var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ToolSelection.ForwardedTools.Select(static tool => tool.ToolName)
             .Should()
-            .Contain(["get_weather", "aevatar_invoke_team"]);
-        provider.LastRequest.Tools.Single(static tool => tool.Name == "get_weather")
-            .ParametersSchema.Should().Contain("\"city\"");
+            .Contain("get_weather");
+        command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_team");
+        command.ToolSelection.ForwardedTools.Single(static tool => tool.ToolName == "get_weather")
+            .ParametersJson.Should().Contain("\"city\"");
     }
 
     [Fact]
@@ -249,10 +246,11 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         routeResolver.ResolvedSlugs.Should().ContainSingle().Which.Should().Be("chrono-llm");
-        provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Model.Should().Be("gpt-5-chat");
-        provider.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("/api/v1/proxy/s/chrono-llm");
+        provider.LastRequest.Should().BeNull();
+        var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5-chat");
+        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
     }
 
     [Fact]
@@ -284,17 +282,17 @@ public sealed class MainnetChatCompletionsEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().NotBeNull();
-        provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should().Contain("aevatar_invoke_team");
+        provider.LastRequest.Should().BeNull();
+        var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_team");
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("choices")[0]
             .GetProperty("message")
             .GetProperty("content")
-            .GetString()
+            .ValueKind
             .Should()
-            .Be("tool-driven");
+            .Be(JsonValueKind.Null);
     }
 
     [Fact]
@@ -331,10 +329,13 @@ public sealed class MainnetChatCompletionsEndpointsTests
         builder.AddAevatarAuthentication();
 
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);
+        builder.Services.AddSingleton<ChatCompletionsRecordingActorDispatchPort>();
+        builder.Services.AddSingleton<IActorDispatchPort>(static sp => sp.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>());
+        builder.Services.AddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new ChatCompletionsStubCallerScopeResolver());
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(
@@ -416,9 +417,11 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
         var response = await client.SendAsync(request);
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
-        provider.LastRequest.Should().NotBeNull();
-        var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
-        toolNames.Should().Contain(["use_skill", "ornn_search_skills", "WebSearch"]);
+        provider.LastRequest.Should().BeNull();
+        var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ToolSelection.SubstitutedToolNames.Should().Contain("WebSearch");
+        command.ToolSelection.AdditiveToolNames.Should().Contain(["use_skill", "ornn_search_skills"]);
     }
 
     private static async Task<WebApplication> CreateAppAsync(
@@ -435,11 +438,14 @@ public sealed class MainnetChatCompletionsEndpointsTests
         });
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);
+        builder.Services.AddSingleton<ChatCompletionsRecordingActorDispatchPort>();
+        builder.Services.AddSingleton<IActorDispatchPort>(static sp => sp.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>());
+        builder.Services.AddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
         sessions ??= new ChatCompletionsRecordingSessionStore();
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new ChatCompletionsStubCallerScopeResolver());
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(
@@ -500,6 +506,17 @@ public sealed class MainnetChatCompletionsEndpointsTests
                 yield return chunk;
                 await Task.Yield();
             }
+        }
+    }
+
+    private sealed class ChatCompletionsRecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Calls.Add((actorId, envelope));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

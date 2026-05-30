@@ -97,6 +97,18 @@ public sealed record MessagesCommandRequest(
     bool ToolChoiceDisablesTools,
     string? ToolChoiceError);
 
+// Refactor (iter344/cluster-001):
+//   Old pattern: Host handler owns caller resolution, route resolution, session registration, tool planning, direct provider execution, status updates, and protocol rendering in one request stack.
+//   New principle: Host maps HTTP/OpenAI frames only; typed Application facade owns Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt/Observe via the same LlmSessionGAgent run path as Responses/Messages.
+public sealed record ChatCompletionsCommandRequest(
+    string? Model,
+    bool? Stream,
+    bool IncludeUsageInStream,
+    double? Temperature,
+    int? MaxTokens,
+    IReadOnlyList<ChatMessage> ChatMessages,
+    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools);
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Normalized Responses fields lived as endpoint locals across routing, continuation, session, and execution branches.
 //   New principle: Normalized command state is an immutable Application value passed through the facade lifecycle.
@@ -164,6 +176,33 @@ public readonly record struct MessagesRequestNormalizationResult(
         new(request, null, null);
 
     public static MessagesRequestNormalizationResult Failed(string code, string message) =>
+        new(null, code, message);
+}
+
+// Refactor (iter344/cluster-001):
+//   Old pattern: Chat Completions normalized state lived as Host locals across route/session/tool/provider branches.
+//   New principle: Application carries a typed normalized command state through route resolution, envelope construction, and dispatch.
+public sealed record NormalizedChatCompletionsCommand(
+    string CompletionId,
+    string Model,
+    bool Stream,
+    bool IncludeUsageInStream,
+    double? Temperature,
+    int? MaxTokens,
+    IReadOnlyList<ChatMessage> ChatMessages,
+    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools);
+
+public readonly record struct ChatCompletionsRequestNormalizationResult(
+    NormalizedChatCompletionsCommand? Request,
+    string? ErrorCode,
+    string? ErrorMessage)
+{
+    public bool Succeeded => Request != null && ErrorCode == null;
+
+    public static ChatCompletionsRequestNormalizationResult Success(NormalizedChatCompletionsCommand request) =>
+        new(request, null, null);
+
+    public static ChatCompletionsRequestNormalizationResult Failed(string code, string message) =>
         new(null, code, message);
 }
 
@@ -275,6 +314,18 @@ public sealed record MessagesCreateCommandPlan(
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan);
 
+// Refactor (iter344/cluster-001):
+//   Old pattern: Chat Completions streaming held prepared LLMRequest/session/tool state inside the Host SSE helper.
+//   New principle: Application returns a typed run plan; Host only renders OpenAI-compatible event frames around dispatch outcome.
+public sealed record ChatCompletionsCreateCommandPlan(
+    NormalizedChatCompletionsCommand Normalized,
+    LlmSessionRegistrationResult Session,
+    LLMRequest LlmRequest,
+    IReadOnlyDictionary<string, string> ToolContextMetadata,
+    ResponsesToolClassification ToolClassification,
+    ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
+    DateTimeOffset CreatedAt);
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Messages create execution directly selected HTTP JSON versus SSE in the Host orchestration body.
 //   New principle: Application returns a typed result that separates validation errors, stream plans, and completed content.
@@ -306,6 +357,27 @@ public sealed record MessagesCreateCompletedCommandResult(
 
 public sealed record MessagesCreateAcceptedCommandResult(
     NormalizedMessagesRequest Normalized,
+    LlmSessionRegistrationResult Session,
+    DispatchAdmission Admission);
+
+public sealed record ChatCompletionsCreateCommandResult(
+    ResponsesCommandError? Error,
+    ChatCompletionsCreateCommandPlan? StreamPlan,
+    ChatCompletionsCreateAcceptedCommandResult? Accepted)
+{
+    public static ChatCompletionsCreateCommandResult FromError(int statusCode, string code, string message) =>
+        new(new ResponsesCommandError(statusCode, code, message), null, null);
+
+    public static ChatCompletionsCreateCommandResult FromStreamPlan(ChatCompletionsCreateCommandPlan plan) =>
+        new(null, plan, null);
+
+    public static ChatCompletionsCreateCommandResult FromAccepted(ChatCompletionsCreateAcceptedCommandResult accepted) =>
+        new(null, null, accepted);
+}
+
+public sealed record ChatCompletionsCreateAcceptedCommandResult(
+    NormalizedChatCompletionsCommand Normalized,
+    long CreatedAt,
     LlmSessionRegistrationResult Session,
     DispatchAdmission Admission);
 
@@ -342,6 +414,22 @@ public interface IMessagesCommandFacade
 
     Task<ResponsesStreamCommandResult> StreamAsync(
         MessagesCreateCommandPlan plan,
+        Func<string, CancellationToken, ValueTask> onTextDelta,
+        CancellationToken ct = default);
+}
+
+// Refactor (iter344/cluster-001):
+//   Old pattern: /v1/chat/completions endpoint injected route/session/tool/provider collaborators and executed the LLM loop directly.
+//   New principle: Host depends on one Chat Completions Application facade that owns the command lifecycle and actor dispatch.
+public interface IChatCompletionsCommandFacade
+{
+    Task<ChatCompletionsCreateCommandResult> CreateAsync(
+        ChatCompletionsCommandRequest request,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
+        CancellationToken ct = default);
+
+    Task<ResponsesStreamCommandResult> StreamAsync(
+        ChatCompletionsCreateCommandPlan plan,
         Func<string, CancellationToken, ValueTask> onTextDelta,
         CancellationToken ct = default);
 }

@@ -44,90 +44,63 @@ internal sealed record ChatCompletionsCreateRequest
     public int? N { get; init; }
 }
 
-internal sealed record NormalizedChatCompletionsRequest(
-    string CompletionId,
-    string Model,
-    bool Stream,
-    bool IncludeUsageInStream,
-    double? Temperature,
-    int? MaxTokens,
-    IReadOnlyList<ChatMessage> ChatMessages,
-    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools,
-    LLMResponseFormat? ResponseFormat);
-
-internal readonly record struct ChatCompletionsNormalizationResult(
-    NormalizedChatCompletionsRequest? Request,
+internal readonly record struct ChatCompletionsProtocolMappingResult(
+    ChatCompletionsCommandRequest? Request,
     string? ErrorCode,
     string? ErrorMessage)
 {
     public bool Succeeded => Request != null && ErrorCode == null;
 
-    public static ChatCompletionsNormalizationResult Success(NormalizedChatCompletionsRequest request) =>
+    public static ChatCompletionsProtocolMappingResult Success(ChatCompletionsCommandRequest request) =>
         new(request, null, null);
 
-    public static ChatCompletionsNormalizationResult Failed(string code, string message) =>
+    public static ChatCompletionsProtocolMappingResult Failed(string code, string message) =>
         new(null, code, message);
 }
 
-internal static class ChatCompletionsRequestNormalizer
+internal static class ChatCompletionsProtocolMapper
 {
     private const int MaxToolDescriptionLength = 4_096;
 
-    public static ChatCompletionsNormalizationResult Normalize(ChatCompletionsCreateRequest request)
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host handler owns caller resolution, route resolution, session registration, tool planning, direct provider execution, status updates, and protocol rendering in one request stack.
+    //   New principle: Host maps HTTP/OpenAI frames only; typed Application facade owns Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt/Observe via the same LlmSessionGAgent run path as Responses/Messages.
+    public static ChatCompletionsProtocolMappingResult ToCommandRequest(ChatCompletionsCreateRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var model = request.Model?.Trim();
-        if (string.IsNullOrWhiteSpace(model))
-            return ChatCompletionsNormalizationResult.Failed("model_required", "model is required.");
-
         var maxTokens = request.MaxCompletionTokens ?? request.MaxTokens;
-        if (maxTokens is <= 0)
-        {
-            return ChatCompletionsNormalizationResult.Failed(
-                "invalid_max_tokens",
-                "max_tokens must be greater than zero when provided.");
-        }
-
-        if (request.Temperature is < 0 or > 2)
-        {
-            return ChatCompletionsNormalizationResult.Failed(
-                "invalid_temperature",
-                "temperature must be between 0 and 2.");
-        }
 
         if (request.N is not null and not 1)
         {
-            return ChatCompletionsNormalizationResult.Failed(
+            return ChatCompletionsProtocolMappingResult.Failed(
                 "unsupported_parameter",
                 "n must be 1 when provided.");
         }
 
         if (!TryNormalizeToolChoice(request.ToolChoice, out var toolChoiceDisablesTools, out var toolChoiceError))
-            return ChatCompletionsNormalizationResult.Failed("unsupported_parameter", toolChoiceError ?? "tool_choice is not supported.");
+            return ChatCompletionsProtocolMappingResult.Failed("unsupported_parameter", toolChoiceError ?? "tool_choice is not supported.");
 
         if (!TryExtractDeclaredTools(request.Tools, out var declaredTools, out var toolsError))
-            return ChatCompletionsNormalizationResult.Failed("invalid_tools", toolsError ?? "tools is invalid.");
+            return ChatCompletionsProtocolMappingResult.Failed("invalid_tools", toolsError ?? "tools is invalid.");
 
         if (toolChoiceDisablesTools)
             declaredTools = [];
 
         if (!TryExtractChatMessages(request.Messages, out var messages, out var messagesError))
-            return ChatCompletionsNormalizationResult.Failed("invalid_messages", messagesError ?? "messages is invalid.");
+            return ChatCompletionsProtocolMappingResult.Failed("invalid_messages", messagesError ?? "messages is invalid.");
 
         if (!TryExtractResponseFormat(request.ResponseFormat, out var responseFormat, out var responseFormatError))
-            return ChatCompletionsNormalizationResult.Failed("unsupported_parameter", responseFormatError ?? "response_format is invalid.");
+            return ChatCompletionsProtocolMappingResult.Failed("unsupported_parameter", responseFormatError ?? "response_format is invalid.");
 
-        return ChatCompletionsNormalizationResult.Success(new NormalizedChatCompletionsRequest(
-            CompletionId: "chatcmpl_" + NewOpaqueId(),
-            Model: model,
-            Stream: request.Stream == true,
-            IncludeUsageInStream: ExtractIncludeUsage(request.StreamOptions),
-            Temperature: request.Temperature,
-            MaxTokens: maxTokens,
-            ChatMessages: messages,
-            DeclaredTools: declaredTools,
-            ResponseFormat: responseFormat));
+        return ChatCompletionsProtocolMappingResult.Success(new ChatCompletionsCommandRequest(
+            request.Model,
+            request.Stream,
+            ExtractIncludeUsage(request.StreamOptions),
+            request.Temperature,
+            maxTokens,
+            messages,
+            declaredTools));
     }
 
     private static bool TryExtractChatMessages(
@@ -550,13 +523,4 @@ internal static class ChatCompletionsRequestNormalizer
         return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
     }
 
-    private static string NewOpaqueId()
-    {
-        Span<byte> bytes = stackalloc byte[16];
-        RandomNumberGenerator.Fill(bytes);
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
 }
