@@ -999,7 +999,9 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                ?? throw new JsonException("Root value must be an object.");
     }
 
-    // refactor helper, no behavior change
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: durable LlmSession tool arguments were reconstructed from *_json strings.
+    //   New principle: actor payload helpers prefer typed Struct writes and keep empty Struct as legacy fallback.
     private static Struct ParseStruct(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))

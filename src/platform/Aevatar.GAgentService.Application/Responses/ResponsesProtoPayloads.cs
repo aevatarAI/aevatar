@@ -5,7 +5,9 @@ namespace Aevatar.GAgentService.Application.Responses;
 
 internal static class ResponsesProtoPayloads
 {
-    // refactor helper, no behavior change
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: Responses command builders persisted tool payload objects only as JSON strings.
+    //   New principle: typed Struct fields carry new writes; empty Struct is the legacy/invalid JSON fallback.
     public static Struct ParseStruct(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))

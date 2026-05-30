@@ -237,7 +237,9 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
         }
     }
 
-    // refactor helper, no behavior change
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: ChatRun boundary adapter forwarded tool results only through internal_result_json.
+    //   New principle: typed Value carries new writes; legacy JSON falls back to parsed Value or string payload.
     private static Value ParseValue(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
