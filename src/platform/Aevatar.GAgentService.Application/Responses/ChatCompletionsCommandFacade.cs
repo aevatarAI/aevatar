@@ -252,7 +252,6 @@ public sealed class ChatCompletionsCommandFacade(
             normalized,
             session,
             llmRequest,
-            toolProviderContext.ToolContextMetadata,
             toolClassification,
             toolPlan.ToolChoiceHintPlan,
             createdAt));

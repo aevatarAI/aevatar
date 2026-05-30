@@ -266,6 +266,67 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
+    public async Task StreamAsync_WhenDispatchRequiresAuthentication_ShouldReturnAuthenticationError_AndMarkSessionFailed()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(_ => new NyxIdAuthenticationRequiredException("test-provider"));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), CancellationToken.None);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            401,
+            "authentication_required",
+            "NyxID authentication required for provider 'test-provider'. Please sign in."));
+        result.Accepted.Should().BeNull();
+        result.Completion.Should().BeNull();
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task StreamAsync_WhenDispatchReturnsUpstreamError_ShouldReturnMappedError_AndMarkSessionFailed()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(_ => new NyxIdUpstreamException(
+            NyxIdUpstreamFailureKind.RateLimited,
+            429,
+            "route-a",
+            "model-a",
+            "rate limited"));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), CancellationToken.None);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            429,
+            "ratelimited",
+            "rate limited"));
+        result.Accepted.Should().BeNull();
+        result.Completion.Should().BeNull();
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task StreamAsync_WhenDispatchIsCancelled_ShouldReturnClientClosedError_AndMarkSessionCancelled()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(ct => new OperationCanceledException(ct));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), cts.Token);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            499,
+            "client_closed_request",
+            "Client closed request."));
+        result.Accepted.Should().BeNull();
+        result.Completion.Should().BeNull();
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+    }
+
+    [Fact]
     public async Task CreateAsync_WithResponseFormat_ShouldCarryFormatIntoLlmRequest()
     {
         var facade = CreateFacade();
@@ -345,7 +406,6 @@ public sealed class ChatCompletionsCommandFacadeTests
                 Model = "gpt-4o-mini",
                 Messages = [ChatMessage.User("hello")],
             },
-            new Dictionary<string, string>(StringComparer.Ordinal),
             new ResponsesToolClassification([], [], [], []),
             ResponsesToolChoiceHintPlan.Empty,
             DateTimeOffset.UtcNow);

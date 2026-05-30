@@ -155,7 +155,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
     }
 
     [Fact]
-    public async Task PostChatCompletions_WithToolCall_ShouldReturnOpenAIToolCalls()
+    public async Task PostChatCompletions_WithToolCall_ShouldDispatchForwardedToolSelection()
     {
         var provider = new ChatCompletionsRecordingLLMProvider
         {
@@ -254,7 +254,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
     }
 
     [Fact]
-    public async Task PostChatCompletions_WhenRoutePinsTeamTool_ShouldExecuteThroughToolDrivenModelAction()
+    public async Task PostChatCompletions_WhenRoutePinsTeamTool_ShouldDispatchTeamToolSelection()
     {
         var provider = new ChatCompletionsRecordingLLMProvider
         {

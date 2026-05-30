@@ -326,7 +326,6 @@ public sealed record ChatCompletionsCreateCommandPlan(
     NormalizedChatCompletionsCommand Normalized,
     LlmSessionRegistrationResult Session,
     LLMRequest LlmRequest,
-    IReadOnlyDictionary<string, string> ToolContextMetadata,
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
     DateTimeOffset CreatedAt);
