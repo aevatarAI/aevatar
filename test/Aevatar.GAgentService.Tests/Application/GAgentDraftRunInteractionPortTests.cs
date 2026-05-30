@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -250,6 +252,29 @@ public sealed class GAgentDraftRunInteractionPortTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldPreserveTypedToolControlFields()
+    {
+        var interaction = new RecordingInteractionService();
+        var port = CreatePort(
+            new RecordingActorRuntime(_ => null),
+            new RecordingRegistryCommandPort(),
+            new RecordingAdmissionPort(),
+            interaction);
+
+        var toolContext = NewToolContext();
+        var llmControl = NewLlmControl();
+        var result = await port.ExecuteAsync(
+            Request(toolContext: toolContext, llmControl: llmControl),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        interaction.Commands.Should().ContainSingle();
+        interaction.Commands[0].ToolContext.Should().BeEquivalentTo(toolContext);
+        interaction.Commands[0].LlmControl.Should().BeEquivalentTo(llmControl);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldNotRollbackReusedActor_WhenInteractionFails()
     {
         var runtime = new RecordingActorRuntime(id => id == "existing-actor" ? new TestActor(id) : null);
@@ -285,7 +310,9 @@ public sealed class GAgentDraftRunInteractionPortTests
 
     private static GAgentDraftRunInteractionRequest Request(
         string? actorTypeName = null,
-        string? preferredActorId = "draft-actor") =>
+        string? preferredActorId = "draft-actor",
+        AgentToolExecutionContext? toolContext = null,
+        LLMControlContext? llmControl = null) =>
         new(
             "scope-a",
             actorTypeName ?? typeof(TestAgent).AssemblyQualifiedName!,
@@ -294,7 +321,26 @@ public sealed class GAgentDraftRunInteractionPortTests
             "session-1",
             " token ",
             " model ",
-            " route ");
+            " route ",
+            ToolContext: toolContext,
+            LlmControl: llmControl);
+
+    private static AgentToolExecutionContext NewToolContext() =>
+        new(
+            new AgentToolRequestIdentity("request-1", "call-1"),
+            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCallerContext("scope-a", "owner-a", "response-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolSenderBindingContext("binding-1"),
+            new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
+            new AgentToolConnectedServicesContext("connected"),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["external"] = "value",
+            });
+
+    private static LLMControlContext NewLlmControl() =>
+        new("access-token", "org-token", "sender-token", "model-1", "route-1", 3, "remember");
 
     private static CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus> Success(
         GAgentDraftRunCommand command) =>

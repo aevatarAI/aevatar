@@ -308,6 +308,9 @@ public sealed class AevatarInvocationToolSourceTests
         harness.TeamInvocation.Request.Input.Prompt.Should().Be("go");
         harness.TeamInvocation.Request.Input.Headers.Should().Contain("h", "v");
         ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request.Input.Headers);
+        ShouldCarryTypedToolControlValues(
+            harness.TeamInvocation.Request.Input.ToolContext,
+            harness.TeamInvocation.Request.Input.LlmControl);
         harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("scope-1");
 
         var result = Read(output);
@@ -380,7 +383,8 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.TeamResolver.LastScopeId.Should().Be("scope-1");
         harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("scope-1");
-        harness.TeamInvocation.Request.Input.Headers.Should().BeEmpty();
+        ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request.Input.Headers);
+        harness.TeamInvocation.Request.Input.ToolContext!.Caller.ScopeId.Should().Be("scope-1");
     }
 
     [Fact]
@@ -432,7 +436,9 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         ShouldNotCarryTrustedCallerValues(harness.TeamInvocation.Request!.Input.Headers);
-        harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("scope-1");
+        ShouldCarryTypedToolControlValues(
+            harness.TeamInvocation.Request.Input.ToolContext,
+            harness.TeamInvocation.Request.Input.LlmControl);
     }
 
     [Fact]
@@ -508,9 +514,11 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.Prompt.Should().Be("run workflow");
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
-        ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
-        harness.WorkflowDispatch.Command.ToolContext.Should().NotBeNull();
+        ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
+        ShouldCarryTypedToolControlValues(
+            harness.WorkflowDispatch.Command.ToolContext,
+            harness.WorkflowDispatch.Command.LlmControl);
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
 
         var result = Read(output);
@@ -708,6 +716,9 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
+        ShouldCarryTypedToolControlValues(
+            harness.WorkflowDispatch.Command.ToolContext,
+            harness.WorkflowDispatch.Command.LlmControl);
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
     }
 
@@ -930,9 +941,8 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static void ShouldCarryTypedTrustedCallerValues(WorkflowChatRunRequest command)
     {
-        // Refactor (iter348/cluster-003):
-        //   Old pattern: aevatar_start_workflow stamped trusted control into WorkflowChatRunRequest.Metadata via BuildLegacyMetadata
-        //   New principle: provider-only typed fields (ScopeId / ToolContext / LlmControl) carry trusted control
+        // Refactor (iter1353/cluster-001): Old pattern: workflow dispatch stamped trusted caller/control facts into Metadata.
+        // New principle: Metadata carries only filtered payload headers; ScopeId, ToolContext, and LlmControl carry trusted facts.
         command.ScopeId.Should().Be("scope-1");
         command.ToolContext.Should().NotBeNull();
         command.ToolContext!.Request.RequestId.Should().Be("request-1");
@@ -959,7 +969,8 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static void ShouldNotCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         metadata.Should().NotBeNull();
         var values = metadata!.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal);
         values.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
@@ -977,6 +988,25 @@ public sealed class AevatarInvocationToolSourceTests
         values.Should().NotContainKey(LLMRequestMetadataKeys.ConnectedServicesContext);
         values.Should().NotContainKey("scope_id");
         values.Should().NotContainKey("external");
+    }
+
+    private static void ShouldCarryTypedToolControlValues(
+        AgentToolExecutionContext? toolContext,
+        LLMControlContext? llmControl)
+    {
+        toolContext.Should().NotBeNull();
+        toolContext!.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        toolContext.Routing.ModelOverride.Should().Be("model-1");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-1");
+
+        llmControl.Should().NotBeNull();
+        llmControl!.NyxIdAccessToken.Should().Be("access-token");
+        llmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
+        llmControl.ModelOverride.Should().Be("model-1");
+        llmControl.NyxIdRoutePreference.Should().Be("route-1");
     }
 
     private static AgentToolContextScope PushContext(string callId, string? scopeId = "scope-1") =>

@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -78,7 +80,9 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
                             Kind = GAgentDraftRunInputPartKind.Text,
                             Text = "part-1",
                         },
-                    ])),
+                    ],
+                    ToolContext: NewToolContext(),
+                    LlmControl: NewLlmControl())),
             (_, _) => ValueTask.CompletedTask,
             (receipt, _) =>
             {
@@ -121,6 +125,8 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         command.Headers.Should().Contain("x-trace", "trace-1");
         command.InputParts.Should().ContainSingle()
             .Which.Text.Should().Be("part-1");
+        command.ToolContext.Should().BeEquivalentTo(NewToolContext());
+        command.LlmControl.Should().BeEquivalentTo(NewLlmControl());
     }
 
     [Fact]
@@ -312,6 +318,23 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             identity.Clone(),
             "chat",
             input ?? new StaticGAgentStreamInvocationInput("hello"));
+
+    private static AgentToolExecutionContext NewToolContext() =>
+        new(
+            new AgentToolRequestIdentity("request-1", "call-1"),
+            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCallerContext("scope-a", "owner-a", "response-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolSenderBindingContext("binding-1"),
+            new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
+            new AgentToolConnectedServicesContext("connected"),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["external"] = "value",
+            });
+
+    private static LLMControlContext NewLlmControl() =>
+        new("access-token", "org-token", "sender-token", "model-1", "route-1", 3, "remember");
 
     private static PreparedServiceRevisionArtifact CreateArtifact(
         ServiceIdentity identity,
