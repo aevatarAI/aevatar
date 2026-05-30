@@ -17,9 +17,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
 {
     private static readonly Duration DefaultIdleTtl = Duration.FromTimeSpan(TimeSpan.FromMinutes(30));
 
-    // Refactor (iter355/issue1438-first):
-    //   Old pattern: ChatRun tool contracts persisted internal results as internal_result_json strings.
-    //   New principle: typed Value fields are authoritative for new writes; legacy strings are read fallback only.
+    // Refactor (iter355/issue1438-first): Old pattern: ChatRun tool contracts persisted internal results as internal_result_json strings. New principle: typed Value fields are authoritative for new writes; legacy strings are read fallback only.
     public ChatRunActor()
     {
         InitializeId();
@@ -508,9 +506,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             state.ActiveSubRunSubscriptions.Add(subscription);
     }
 
-    // Refactor (iter355/issue1438-first):
-    //   Old pattern: ChatRun terminal tool results used internal_result_json as the durable authority.
-    //   New principle: typed Value is authoritative for new writes; internal_result_json remains read fallback.
+    // Refactor (iter355/issue1438-first): Old pattern: ChatRun terminal tool results used internal_result_json as the durable authority. New principle: typed Value is authoritative for new writes; internal_result_json remains read fallback.
     private static Value ResolveTerminalInternalResult(
         ChatRunSubRunSubscription pending,
         ChatRunSubRunTerminalObserved observed)

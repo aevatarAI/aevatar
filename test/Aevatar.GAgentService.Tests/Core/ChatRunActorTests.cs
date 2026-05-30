@@ -455,6 +455,7 @@ public sealed class ChatRunActorTests
         published.RunId.Should().Be("run_publish");
         published.CallerToolCallId.Should().Be("call_publish");
         published.InternalResultJson.Should().Contain("published");
+        published.InternalResult.StructValue.Fields["content"].StringValue.Should().Be("published");
         published.Status.Should().Be("RunFinished");
         published.ActorId.Should().Be("actor-1");
         published.CompletionObserved.Should().BeTrue();

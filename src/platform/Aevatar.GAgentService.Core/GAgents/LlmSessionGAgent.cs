@@ -16,9 +16,7 @@ namespace Aevatar.GAgentService.Core.GAgents;
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
-// Refactor (iter355/issue1438-first):
-//   Old pattern: durable LlmSession tool runtime contracts persisted arguments, schemas, hints, and results as *_json strings
-//   New principle: typed Struct/Value fields are authoritative for new writes; legacy *_json fields are read fallback only
+// Refactor (iter355/issue1438-first): Old pattern: durable LlmSession tool runtime contracts persisted arguments, schemas, hints, and results as *_json strings New principle: typed Struct/Value fields are authoritative for new writes; legacy *_json fields are read fallback only
 public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
@@ -999,9 +997,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                ?? throw new JsonException("Root value must be an object.");
     }
 
-    // Refactor (iter355/issue1438-first):
-    //   Old pattern: durable LlmSession tool arguments were reconstructed from *_json strings.
-    //   New principle: actor payload helpers prefer typed Struct writes and keep empty Struct as legacy fallback.
+    // Refactor (iter355/issue1438-first): Old pattern: durable LlmSession tool arguments were reconstructed from *_json strings. New principle: actor payload helpers prefer typed Struct writes and keep empty Struct as legacy fallback.
     private static Struct ParseStruct(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
