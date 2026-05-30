@@ -174,6 +174,9 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
             .Should().Be(typeof(CoverageTestAgent).AssemblyQualifiedName);
     }
 
+    // Refactor (v1/issue1463-first):
+    //   Old: non-blocking deactivation hook failure 无 regression test,行为可能被改成 blocking 而无人察觉
+    //   New: 锁定 hook 抛异常不阻塞 actor lifecycle 的当前行为
     [Fact]
     public async Task LocalActorRuntime_DestroyAsync_WhenDeactivationHookDispatchFails_ShouldStillRemoveActor()
     {

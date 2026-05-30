@@ -179,6 +179,9 @@ public sealed class SubWorkflowOrchestratorBranchCoverageTests
         next.PendingChildRunIdsByParentRunId.Should().NotContainKey("parent-2");
     }
 
+    // Refactor (v1/issue1463-first):
+    //   Old: workflow run/session topology persistence 无 regression test,行为可能被改而无人察觉
+    //   New: 锁定 existing workflow topology persistence 行为不变
     [Fact]
     public void ApplySubWorkflowEvents_ShouldPersistExistingRunSessionTopologyInWorkflowRunState()
     {
