@@ -6,7 +6,8 @@
 #
 # Usage:
 #   spawn-codex.sh --cd <dir> --prompt <prompt-file> --log <log-file> --timeout <seconds>
-#                  [--model <model>] [--add-dir <dir>] [--prompt-text "..."] [--dry-run]
+#                  [--model <model>] [--add-dir <dir>] [--execution-id <id>]
+#                  [--prompt-text "..."] [--dry-run]
 #
 # Required flags: --cd, --prompt OR --prompt-text, --log, --timeout.
 #
@@ -14,8 +15,9 @@
 # 输出也输出到一个临时文件, 方便debug"):
 #   - Prompt is read from --prompt <file>, OR --prompt-text "..." writes a /tmp temp file.
 #   - Output is written to --log <file>. Caller chooses path (typically .refactor-loop/logs/).
-#   - At start, this wrapper prints `SPAWN: prompt=<path> log=<path> cd=<dir> timeout=<s>` to stderr
-#     so callers / `tail` see exact paths immediately. At end, prints `DONE: log=<path> exit=<N>`.
+#   - At accepted start, this wrapper prints
+#     `ACCEPTED: execution_id=<id> ack_stage=accepted prompt=<path> log=<path> timeout=<seconds>` to stdout,
+#     and also keeps legacy SPAWN/DONE stderr banners for existing readers.
 #   - Debug recipe: `cat <prompt-path>` to see what codex got; `cat <log-path>` to see what it did.
 #
 # Forbidden:
@@ -31,6 +33,7 @@ PROMPT_TEXT=""
 LOG=""
 TIMEOUT=""
 MODEL=""
+EXECUTION_ID=""
 ADD_DIRS=()
 DRY_RUN=0
 
@@ -42,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --log)         LOG="$2"; shift 2;;
     --timeout)     TIMEOUT="$2"; shift 2;;
     --model)       MODEL="$2"; shift 2;;
+    --execution-id) EXECUTION_ID="$2"; shift 2;;
     --add-dir)     ADD_DIRS+=("$2"); shift 2;;
     --dry-run)     DRY_RUN=1; shift;;
     *)             echo "unknown flag: $1" >&2; exit 2;;
@@ -122,36 +126,54 @@ else
 fi
 MARKER_DIR="$STATE_DIR/markers"
 BASE="$(basename "$LOG" .log)"
-RUNNING_MARKER="$MARKER_DIR/$BASE.running.json"
-DONE_MARKER="$MARKER_DIR/$BASE.done.json"
+if [[ -z "$EXECUTION_ID" ]]; then
+  if command -v uuidgen >/dev/null 2>&1; then
+    EXECUTION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+  elif python3 -c 'import ulid' >/dev/null 2>&1; then
+    EXECUTION_ID="$(python3 -c 'import ulid; print(ulid.new())')"
+  else
+    EXECUTION_ID="$(date -u +%s%N)"
+  fi
+fi
+RUNNING_MARKER="$MARKER_DIR/$EXECUTION_ID.running.json"
+DONE_MARKER="$MARKER_DIR/$EXECUTION_ID.done.json"
 
 if (( DRY_RUN == 1 )); then
-  echo "SPAWN: prompt=$RENDERED_PROMPT log=$LOG cd=$CD timeout=${TIMEOUT}s${MODEL:+ model=$MODEL} dry-run=1" >&2
+  echo "ACCEPTED: execution_id=$EXECUTION_ID ack_stage=accepted prompt=$RENDERED_PROMPT log=$LOG timeout=$TIMEOUT"
+  echo "SPAWN: prompt=$RENDERED_PROMPT log=$LOG cd=$CD timeout=${TIMEOUT}s${MODEL:+ model=$MODEL} execution_id=$EXECUTION_ID dry-run=1" >&2
   head -5 "$RENDERED_PROMPT"
   exit 0
 fi
 
 mkdir -p "$MARKER_DIR"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-RUNNING_TMP="$MARKER_DIR/.$BASE.running.json.$$"
+RUNNING_TMP="$MARKER_DIR/.$EXECUTION_ID.running.json.$$"
 # Refactor (iter158/cluster-1172-markers-event-design):
 # Old: spawn-codex 只写 log,reporter 必须 tail log 末尾 grep EXIT marker 判断 finished;
 #      reporter 每 600s 扫 LOG_DIR/*.log 全部(~970 files),97% 浪费 CPU + IO。
-# New: spawn-codex 启动时写 .refactor-loop/markers/<base>.running.json,EXIT 后
-#      atomic rename → <base>.done.json(含 verdict from tail grep + exit_code + finished_at)。
+# New: spawn-codex 启动时写 .refactor-loop/markers/<execution_id>.running.json,EXIT 后
+#      atomic rename → <execution_id>.done.json(含 verdict from tail grep + exit_code + finished_at)。
 #      reporter 只扫 markers/(O(in-flight count)),不再 tail log。
+# Refactor (issue1369/first-slice):
+#   Old pattern: daemon detached codex via nohup/Popen, bypassing harness tracking.
+#   New principle: daemon writes pending event; controller dispatches via spawn-codex.sh; harness tracked + task-notification on exit.
 jq -n \
+  --arg execution_id "$EXECUTION_ID" \
+  --arg ack_stage "accepted" \
   --arg base "$BASE" \
+  --arg prompt "$RENDERED_PROMPT" \
   --arg log_path "$LOG" \
   --arg started_at "$STARTED_AT" \
-  '{base: $base, log_path: $log_path, started_at: $started_at, state: "running"}' \
+  --argjson timeout "$TIMEOUT" \
+  '{execution_id: $execution_id, ack_stage: $ack_stage, prompt: $prompt, log: $log_path, timeout: $timeout, started_at: $started_at, base: $base, log_path: $log_path, state: "running"}' \
   > "$RUNNING_TMP"
 mv "$RUNNING_TMP" "$RUNNING_MARKER"
 rm -f "$DONE_MARKER"
 
 # Debug banner — caller / `tail` sees exact paths immediately (per maintainer 2026-05-19).
 # Both prompt + log are real files on disk; debug by `cat <prompt-path>` and `cat <log-path>`.
-echo "SPAWN: prompt=$RENDERED_PROMPT source_prompt=$PROMPT log=$LOG cd=$CD timeout=${TIMEOUT}s${MODEL:+ model=$MODEL}" >&2
+echo "ACCEPTED: execution_id=$EXECUTION_ID ack_stage=accepted prompt=$RENDERED_PROMPT log=$LOG timeout=$TIMEOUT"
+echo "SPAWN: prompt=$RENDERED_PROMPT source_prompt=$PROMPT log=$LOG cd=$CD timeout=${TIMEOUT}s${MODEL:+ model=$MODEL} execution_id=$EXECUTION_ID" >&2
 
 # Standard args:
 # - --dangerously-bypass-approvals-and-sandbox: required for unattended mode (caller-supplied authorization).
@@ -189,19 +211,24 @@ set -e
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 VERDICT="$(tail -5 "$LOG" | grep -oE "^[A-Z_]+_DONE[:].*$|^REVIEW_DONE.*$|^META_JUDGE_DONE.*$|^META_RESOLVED.*$|^AUDIT_DONE.*$|^TRIAGE_DONE.*$|^FIX_DONE.*$" | tail -1 || true)"
-DONE_TMP="$MARKER_DIR/.$BASE.done.json.$$"
+DONE_TMP="$MARKER_DIR/.$EXECUTION_ID.done.json.$$"
 jq -n \
+  --arg execution_id "$EXECUTION_ID" \
+  --arg ack_stage "accepted" \
   --arg base "$BASE" \
+  --arg prompt "$RENDERED_PROMPT" \
   --arg log_path "$LOG" \
   --arg started_at "$STARTED_AT" \
+  --arg done_at "$FINISHED_AT" \
   --arg finished_at "$FINISHED_AT" \
+  --argjson timeout "$TIMEOUT" \
   --argjson exit_code "$EXIT" \
   --arg verdict "$VERDICT" \
-  '{base: $base, log_path: $log_path, started_at: $started_at, finished_at: $finished_at, exit_code: $exit_code, verdict: $verdict, state: "done"}' \
+  '{execution_id: $execution_id, ack_stage: $ack_stage, prompt: $prompt, log: $log_path, timeout: $timeout, started_at: $started_at, done_at: $done_at, exit_code: $exit_code, base: $base, log_path: $log_path, finished_at: $finished_at, verdict: $verdict, state: "done"}' \
   > "$DONE_TMP"
 mv "$DONE_TMP" "$RUNNING_MARKER"
 mv "$RUNNING_MARKER" "$DONE_MARKER"
 
-echo "DONE: log=$LOG exit=$EXIT prompt=$RENDERED_PROMPT source_prompt=$PROMPT" >&2
+echo "DONE: log=$LOG exit=$EXIT prompt=$RENDERED_PROMPT source_prompt=$PROMPT execution_id=$EXECUTION_ID" >&2
 
 exit "$EXIT"
