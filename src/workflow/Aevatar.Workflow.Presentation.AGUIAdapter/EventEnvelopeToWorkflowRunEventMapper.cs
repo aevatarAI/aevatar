@@ -689,10 +689,13 @@ public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkf
         }
 
         var evt = envelope.Payload.Unpack<WaitingForSignalEvent>();
+        if (string.IsNullOrWhiteSpace(evt.RunId))
+        {
+            events = [];
+            return true;
+        }
+
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
-        var runId = string.IsNullOrWhiteSpace(evt.RunId)
-            ? AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, string.Empty)
-            : evt.RunId;
 
         events =
         [
@@ -704,7 +707,7 @@ public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkf
                     Name = "aevatar.workflow.waiting_signal",
                     Payload = Any.Pack(new WorkflowWaitingSignalCustomPayload
                     {
-                        RunId = runId,
+                        RunId = evt.RunId,
                         StepId = evt.StepId,
                         SignalName = evt.SignalName,
                         Prompt = evt.Prompt,
