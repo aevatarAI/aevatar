@@ -14,7 +14,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ChatRunToolCompletionCoordinatorTests
 {
     [Fact]
-    public async Task ExecuteAsync_WaitCompleteTeam_ShouldFoldToolResultReturnedByDispatcher()
+    public async Task ExecuteAsync_WaitCompleteTeam_ShouldIgnoreFoldedDispatchResultAndUseReadModelObservation()
     {
         var harness = new Harness();
         var coordinator = harness.CreateCoordinator();
@@ -48,16 +48,17 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             }),
             llmRound: 1);
 
-        using var resultDocument = System.Text.Json.JsonDocument.Parse(result);
-        resultDocument.RootElement.GetProperty("completion_observed").GetBoolean().Should().BeTrue();
-        resultDocument.RootElement.GetProperty("completion_status").GetString().Should().Be("RunFinished");
-        result.Should().NotContain("completion_not_observed");
+        result.Should().Contain("completion_not_observed");
+        result.Should().Contain("\"run_id\":\"team-command\"");
+        result.Should().Contain("\"service_id\":\"service-1\"");
+        result.Should().NotContain("\"completion_observed\": true");
         harness.ChatRunPort.ObservedTerminals.Should().ContainSingle().Which.Should().Match<ChatRunSubRunTerminalObserved>(
             terminal => terminal.RunId == "team-command" &&
-                        terminal.Status == "RunFinished" &&
+                        terminal.Status == "completion_not_observed" &&
                         terminal.ServiceId == "service-1" &&
                         terminal.EndpointId == "entry" &&
-                        terminal.InternalResultJson.Contains("\"completion_observed\": true", StringComparison.Ordinal));
+                        !terminal.CompletionObserved &&
+                        terminal.InternalResultJson.Contains("completion_not_observed", StringComparison.Ordinal));
     }
 
     [Fact]

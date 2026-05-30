@@ -182,9 +182,9 @@ public sealed class AevatarInvocationDispatcher
                 request.TeamId.Trim(),
                 ct);
             var invocation = BuildStaticInvocationRequest(resolution, request);
-            return wait == InvocationWaitMode.Complete
-                ? await InvokeTeamToCompletionAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct)
-                : await InvokeTeamToAcceptanceAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct);
+            // Refactor (v1/issue1470-first): InvokeTeam wait=complete must return the dispatch receipt only;
+            // terminal completion is observed through the service-run readmodel instead of folding live AGUI frames.
+            return await InvokeTeamToAcceptanceAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct);
         }
         catch (TeamEntryMemberResolutionException ex)
         {
@@ -421,44 +421,6 @@ public sealed class AevatarInvocationDispatcher
             wait), resolution.ScopeId);
     }
 
-    private async Task<ChatRunToolCompletionRequest> InvokeTeamToCompletionAsync(
-        ChatRunToolCompletionRequest? chatRunRequest,
-        StaticGAgentStreamInvocationRequest invocation,
-        TeamEntryMemberResolution resolution,
-        string endpointId,
-        InvocationWaitMode wait,
-        CancellationToken ct)
-    {
-        var frames = new List<AGUIEvent>();
-        var result = await _teamInvocationPort.InvokeAsync(
-            invocation,
-            (frame, _) =>
-            {
-                frames.Add(frame.Clone());
-                return ValueTask.CompletedTask;
-            },
-            null,
-            ct);
-
-        if (!result.Succeeded || result.Accepted == null)
-        {
-            var startError = Error(
-                result.StartError.ToString(),
-                $"Team invocation was not accepted: {result.StartError}");
-            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(startError), startError);
-        }
-
-        var accepted = BuildTeamAcceptedResult(resolution, endpointId, result.Accepted, wait);
-        accepted.Status = result.CompletionObserved ? result.CompletionStatus.ToString() : "accepted";
-        accepted.ResultJson = AevatarInvocationJson.ToJson(new
-        {
-            completion_status = result.CompletionStatus.ToString(),
-            completion_observed = result.CompletionObserved,
-            events = frames.Select(static frame => AevatarInvocationToolSchemas.ParseObject(ProtoJsonFormatter.Format(frame))).ToArray(),
-        });
-        return ToChatRunRequest(chatRunRequest, accepted, resolution.ScopeId);
-    }
-
     private InvocationToolResult BuildTeamAcceptedResult(
         TeamEntryMemberResolution resolution,
         string endpointId,
@@ -469,7 +431,7 @@ public sealed class AevatarInvocationDispatcher
         return new InvocationToolResult
         {
             RunId = runId,
-            Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
+            Status = wait == InvocationWaitMode.Stream ? "streaming" : "accepted",
             StreamTopic = wait == InvocationWaitMode.Stream
                 ? AevatarInvocationStreamTopics.ForServiceRun(resolution.ScopeId, resolution.PublishedServiceId, runId)
                 : string.Empty,

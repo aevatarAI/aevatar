@@ -116,7 +116,7 @@ public sealed class ChatRunToolCompletionCoordinator
         if (!isGAgentInvocation || !hasInlineGAgentActorId)
             await _chatRunActorPort.BeginSubRunObservationAsync(actorId, completionRequest, ct);
 
-        var terminal = TryBuildTerminalFromDispatchResult(completionRequest) ??
+        var terminal = TryBuildTerminalFromDispatchResult(toolCall.Name, completionRequest) ??
                        await ResolveTerminalAsync(toolCall.Name, completionRequest, ct);
 
         terminal ??= BuildTerminal(
@@ -220,8 +220,15 @@ public sealed class ChatRunToolCompletionCoordinator
         return null;
     }
 
-    private static ChatRunSubRunTerminalObserved? TryBuildTerminalFromDispatchResult(ChatRunToolCompletionRequest dispatch)
+    private static ChatRunSubRunTerminalObserved? TryBuildTerminalFromDispatchResult(
+        string toolName,
+        ChatRunToolCompletionRequest dispatch)
     {
+        // Refactor (v1/issue1470-first): InvokeTeam wait=complete completion must come from the service-run
+        // readmodel, not from dispatcher-owned live AGUI frame folding.
+        if (string.Equals(toolName, "aevatar_invoke_team", StringComparison.Ordinal))
+            return null;
+
         if (string.IsNullOrWhiteSpace(dispatch.RunId) ||
             string.IsNullOrWhiteSpace(dispatch.CompletionResultJson) ||
             !IsTerminalDispatchStatus(dispatch.Status) ||

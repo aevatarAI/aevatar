@@ -317,7 +317,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task InvokeTeamForChatRun_ShouldMapTypedCompletionControlFields()
+    public async Task InvokeTeamForChatRun_WaitComplete_ShouldReturnAcceptedReceiptWithoutFoldedCompletion()
     {
         var harness = new Harness();
         var dispatcher = harness.CreateDispatcher();
@@ -344,13 +344,20 @@ public sealed class AevatarInvocationToolSourceTests
         result.RunId.Should().Be("team-command");
         result.ScopeId.Should().Be("scope-1");
         result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Complete);
-        result.Status.Should().Be(GAgentDraftRunCompletionStatus.RunFinished.ToString());
+        result.Status.Should().Be("accepted");
+        result.StreamTopic.Should().BeEmpty();
         result.ActorId.Should().Be("team-actor");
         result.ServiceId.Should().Be("service-1");
         result.EndpointId.Should().Be("entry");
-        result.CompletionObserved.Should().BeTrue();
-        result.CompletionResultJson.Should().Contain("\"completion_observed\":true");
+        result.CompletionObserved.Should().BeFalse();
+        result.CompletionResultJson.Should().BeEmpty();
         result.ErrorCode.Should().BeEmpty();
+
+        using var output = JsonDocument.Parse(result.ToolExecutionResultJson);
+        output.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        output.RootElement.GetProperty("wait").GetString().Should().Be("complete");
+        output.RootElement.TryGetProperty("result", out var foldedResult).Should().BeFalse();
+        foldedResult.ValueKind.Should().Be(JsonValueKind.Undefined);
     }
 
     [Fact]
