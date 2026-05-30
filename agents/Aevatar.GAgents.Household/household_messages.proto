@@ -149,14 +149,14 @@ message SpeechDeviceInboundPayload {
   string text = 1;
 }
 
-// Normalized device event from NyxID relay's CallbackPayload.
+// V1 normalized device event from NyxID relay's CallbackPayload.
 // Defined in Household domain because it's the inbound contract for
 // HouseholdEntity; DeviceEventEndpoints (boundary layer) references
 // this project, keeping dependency direction correct (Host → Domain).
 // Refactor (iter1281/cluster-001-device-inbound-typed-payload): Old pattern: DeviceInbound carried payload_json across the actor boundary.
-// New principle: the Host/Adapter parses NyxID callback JSON and admits only known typed payloads.
+// New principle: the Host/Adapter parses NyxID callback JSON and admits only known typed device event payloads.
 // The actor receives Protobuf fields, while the old payload_json tag and name stay reserved.
-// Unknown third-party events remain outside this first slice instead of becoming an untyped bag.
+// Unknown adapter event_type values are rejected before dispatch instead of becoming an untyped raw payload bag.
 message DeviceInbound {
   reserved 5;
   reserved "payload_json";
