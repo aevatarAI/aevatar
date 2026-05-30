@@ -34,6 +34,27 @@ if [ -d "src/Aevatar.Host.Api" ] || [ -d "src/Aevatar.Host.Gateway" ]; then
   exit 1
 fi
 
+check_directory_build_version_guard() {
+  local props_file="Directory.Build.props"
+
+  if ! rg -q "<Version>0\.1\.0-beta</Version>" "${props_file}"; then
+    echo "Directory.Build.props must define <Version>0.1.0-beta</Version>."
+    exit 1
+  fi
+
+  if ! rg -q "<VersionPrefix>0\.1\.0</VersionPrefix>" "${props_file}"; then
+    echo "Directory.Build.props must define <VersionPrefix>0.1.0</VersionPrefix>."
+    exit 1
+  fi
+
+  if ! rg -q "<VersionSuffix>beta</VersionSuffix>" "${props_file}"; then
+    echo "Directory.Build.props must define <VersionSuffix>beta</VersionSuffix>."
+    exit 1
+  fi
+}
+
+check_directory_build_version_guard
+
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
 
