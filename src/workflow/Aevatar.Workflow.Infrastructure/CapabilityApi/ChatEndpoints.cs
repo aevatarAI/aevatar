@@ -2,7 +2,6 @@ using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
@@ -49,11 +48,9 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
-            var capabilities = await TryResolveCapabilitiesAsync(serviceProvider, logger, ct);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
-                capabilities,
                 defaultMetadata);
             if (!normalizedRequest.Succeeded)
             {
@@ -545,7 +542,6 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            var capabilities = await TryResolveCapabilitiesAsync(http.RequestServices, logger, ct);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
             await ChatWebSocketRunCoordinator.ExecuteAsync(
                 socket,
@@ -553,7 +549,6 @@ public static class WorkflowCapabilityEndpoints
                 chatRunService,
                 scope,
                 ct,
-                capabilities,
                 defaultMetadata);
         }
         catch (OperationCanceledException)
@@ -580,29 +575,6 @@ public static class WorkflowCapabilityEndpoints
         finally
         {
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
-        }
-    }
-
-    private static async Task<WorkflowCapabilitiesDocument?> TryResolveCapabilitiesAsync(
-        IServiceProvider? serviceProvider,
-        ILogger? logger,
-        CancellationToken ct)
-    {
-        if (serviceProvider == null)
-            return null;
-
-        try
-        {
-            var queryService = serviceProvider.GetService(typeof(IWorkflowExecutionQueryApplicationService))
-                               as IWorkflowExecutionQueryApplicationService;
-            return queryService == null
-                ? null
-                : await queryService.GetCapabilitiesAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogDebug(ex, "Failed to resolve capabilities for workflow authoring prompt augmentation.");
-            return null;
         }
     }
 
