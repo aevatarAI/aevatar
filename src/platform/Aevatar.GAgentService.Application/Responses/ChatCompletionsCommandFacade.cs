@@ -88,11 +88,9 @@ public sealed class ChatCompletionsCommandFacade(
 
     public async Task<ResponsesStreamCommandResult> StreamAsync(
         ChatCompletionsCreateCommandPlan plan,
-        Func<string, CancellationToken, ValueTask> onTextDelta,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        ArgumentNullException.ThrowIfNull(onTextDelta);
 
         try
         {
@@ -145,7 +143,8 @@ public sealed class ChatCompletionsCommandFacade(
             request.Temperature,
             request.MaxTokens,
             request.ChatMessages,
-            request.DeclaredTools));
+            request.DeclaredTools,
+            request.ResponseFormat));
     }
 
     private async Task<CallerScopeResult> ResolveCallerScopeAsync(
@@ -350,6 +349,7 @@ public sealed class ChatCompletionsCommandFacade(
             Model = effectiveModel,
             Temperature = normalized.Temperature,
             MaxTokens = normalized.MaxTokens,
+            ResponseFormat = normalized.ResponseFormat,
         };
     }
 

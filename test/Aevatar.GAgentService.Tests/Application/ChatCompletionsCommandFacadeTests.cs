@@ -38,6 +38,179 @@ public sealed class ChatCompletionsCommandFacadeTests
         command.Messages.Should().ContainSingle().Which.Content.Should().Be("hello");
     }
 
+    [Theory]
+    [MemberData(nameof(InvalidRequests))]
+    public async Task CreateAsync_WhenRequestValidationFails_ShouldReturnBadRequest(
+        ChatCompletionsCommandRequest request,
+        string expectedCode)
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(request, CallerScopeContext("token"));
+
+        result.Error.Should().NotBeNull();
+        result.Error!.StatusCode.Should().Be(400);
+        result.Error.Code.Should().Be(expectedCode);
+        result.Accepted.Should().BeNull();
+        result.StreamPlan.Should().BeNull();
+        sessions.Registered.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCallerScopeUnavailable_ShouldReturnAuthenticationError()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            callerScopeResolver: new FailingCallerScopeResolver());
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            401,
+            "authentication_required",
+            "caller unavailable"));
+        sessions.Registered.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenChatRouteRejects_ShouldReturnRouteError()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(new ChatRouteAction
+            {
+                Reject = new Reject { Reason = "blocked by policy" },
+            }));
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            403,
+            "chat_route_rejected",
+            "blocked by policy"));
+        sessions.Registered.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenSessionRegistrationIsCancelled_ShouldReturnTimeout()
+    {
+        var sessions = new RecordingSessionPort
+        {
+            RegisterException = new OperationCanceledException(),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            408,
+            "request_timeout",
+            "Request timed out."));
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenSessionRegistrationFails_ShouldReturnApiError()
+    {
+        var sessions = new RecordingSessionPort
+        {
+            RegisterException = new InvalidOperationException("store unavailable"),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            500,
+            "api_error",
+            "Failed to register session."));
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDispatchRequiresAuthentication_ShouldMarkSessionFailed()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(_ => new NyxIdAuthenticationRequiredException("test-provider"));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            401,
+            "authentication_required",
+            "NyxID authentication required for provider 'test-provider'. Please sign in."));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDispatchReturnsUpstreamError_ShouldMarkSessionFailed()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(_ => new NyxIdUpstreamException(
+            NyxIdUpstreamFailureKind.RateLimited,
+            429,
+            "route-a",
+            "model-a",
+            "rate limited"));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            429,
+            "ratelimited",
+            "rate limited"));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDispatchIsCancelled_ShouldMarkSessionCancelled()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(ct => new OperationCanceledException(ct));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"), cts.Token);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            499,
+            "client_closed_request",
+            "Client closed request."));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDispatchFails_ShouldMarkSessionFailed()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(_ => new InvalidOperationException("dispatch failed"));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            500,
+            "api_error",
+            "Internal server error."));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
     [Fact]
     public async Task CreateAsync_ShouldReturnStreamPlan_WhenRequestIsStreaming()
     {
@@ -61,7 +234,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
+        var result = await facade.StreamAsync(BuildStreamPlan());
 
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
@@ -76,24 +249,71 @@ public sealed class ChatCompletionsCommandFacadeTests
         command.Model.Should().Be("gpt-4o-mini");
     }
 
-    private static ChatCompletionsCommandRequest BuildRequest(string model, bool stream = false) =>
+    [Fact]
+    public async Task StreamAsync_WhenDispatchFails_ShouldReturnError_AndMarkSessionFailed()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort(_ => new InvalidOperationException("dispatch failed"));
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), CancellationToken.None);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            500,
+            "api_error",
+            "Internal server error."));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithResponseFormat_ShouldCarryFormatIntoLlmRequest()
+    {
+        var facade = CreateFacade();
+
+        var result = await facade.CreateAsync(
+            BuildRequest("gpt-4o-mini", stream: true, responseFormat: LLMResponseFormat.JsonObject),
+            CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.StreamPlan.Should().NotBeNull();
+        result.StreamPlan!.Normalized.ResponseFormat.Should().BeSameAs(LLMResponseFormat.JsonObject);
+        result.StreamPlan.LlmRequest.ResponseFormat.Should().BeSameAs(LLMResponseFormat.JsonObject);
+    }
+
+    public static TheoryData<ChatCompletionsCommandRequest, string> InvalidRequests() => new()
+    {
+        { BuildRequest(" "), "model_required" },
+        { BuildRequest("gpt-4o-mini", maxTokens: 0), "invalid_max_tokens" },
+        { BuildRequest("gpt-4o-mini", temperature: 3), "invalid_temperature" },
+        { BuildRequest("gpt-4o-mini", chatMessages: []), "invalid_messages" },
+    };
+
+    private static ChatCompletionsCommandRequest BuildRequest(
+        string model,
+        bool stream = false,
+        double? temperature = null,
+        int? maxTokens = 100,
+        IReadOnlyList<ChatMessage>? chatMessages = null,
+        LLMResponseFormat? responseFormat = null) =>
         new(
             model,
             stream,
             false,
-            null,
-            100,
-            [ChatMessage.User("hello")],
-            []);
+            temperature,
+            maxTokens,
+            chatMessages ?? [ChatMessage.User("hello")],
+            [],
+            responseFormat);
 
     private static ChatCompletionsCommandFacade CreateFacade(
         ILlmSessionRegistrationPort? sessionPort = null,
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
-        RecordingActorDispatchPort? dispatchPort = null)
+        RecordingActorDispatchPort? dispatchPort = null,
+        IResponsesCallerScopeResolver? callerScopeResolver = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new ChatCompletionsCommandFacade(
-            new StaticCallerScopeResolver(),
+            callerScopeResolver ?? new StaticCallerScopeResolver(),
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             new StaticResponsesRouteResolver("route-value"),
             effectiveSessionPort,
@@ -116,7 +336,8 @@ public sealed class ChatCompletionsCommandFacadeTests
                 null,
                 100,
                 [ChatMessage.User("hello")],
-                []),
+                [],
+                null),
             new LlmSessionRegistrationResult("actor-chatcmpl_stream", "chatcmpl_stream"),
             new LLMRequest
             {
@@ -140,6 +361,14 @@ public sealed class ChatCompletionsCommandFacadeTests
             ResponsesCallerScopeResolutionContext context,
             CancellationToken ct = default) =>
             Task.FromResult(new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey));
+    }
+
+    private sealed class FailingCallerScopeResolver : IResponsesCallerScopeResolver
+    {
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default) =>
+            throw new ResponsesCallerScopeUnavailableException("caller unavailable");
     }
 
     private sealed class StaticResponsesRouteResolver(string? routeValue) : IResponsesRouteResolver
@@ -182,10 +411,25 @@ public sealed class ChatCompletionsCommandFacadeTests
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
+        private readonly Func<CancellationToken, Exception?> _exceptionFactory;
+
+        public RecordingActorDispatchPort()
+            : this(static _ => null)
+        {
+        }
+
+        public RecordingActorDispatchPort(Func<CancellationToken, Exception?> exceptionFactory)
+        {
+            _exceptionFactory = exceptionFactory;
+        }
+
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
+            if (_exceptionFactory(ct) is { } exception)
+                return Task.FromException<DispatchAdmission>(exception);
+
             Calls.Add((actorId, envelope));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
@@ -199,8 +443,13 @@ public sealed class ChatCompletionsCommandFacadeTests
 
         public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
 
+        public Exception? RegisterException { get; init; }
+
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
         {
+            if (RegisterException is not null)
+                return Task.FromException<LlmSessionRegistrationResult>(RegisterException);
+
             Registered.Add(record);
             return Task.FromResult(new LlmSessionRegistrationResult("actor-" + record.ResponseId, record.ResponseId));
         }

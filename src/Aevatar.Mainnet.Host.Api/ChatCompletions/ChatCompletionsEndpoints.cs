@@ -91,19 +91,7 @@ internal static class ChatCompletionsApiEndpoints
         response.Headers["X-Accel-Buffering"] = "no";
         await response.StartAsync(ct);
 
-        var completion = await commandFacade.StreamAsync(
-            plan,
-            async (delta, token) =>
-            {
-                if (string.IsNullOrEmpty(delta))
-                    return;
-
-                await WriteDataFrameAsync(
-                    response,
-                    BuildStreamingTextChunk(normalized, createdAt, delta),
-                    token);
-            },
-            ct);
+        var completion = await commandFacade.StreamAsync(plan, ct);
 
         if (completion.Error is not null)
         {
@@ -159,27 +147,6 @@ internal static class ChatCompletionsApiEndpoints
                 },
             },
             usage = (object?)null,
-        };
-
-    private static object BuildStreamingTextChunk(
-        NormalizedChatCompletionsCommand normalized,
-        long createdAt,
-        string delta) =>
-        new
-        {
-            id = normalized.CompletionId,
-            @object = "chat.completion.chunk",
-            created = createdAt,
-            model = normalized.Model,
-            choices = new[]
-            {
-                new
-                {
-                    index = 0,
-                    delta = new { content = delta },
-                    finish_reason = (string?)null,
-                },
-            },
         };
 
     private static object BuildStreamingStopChunk(

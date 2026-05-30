@@ -107,7 +107,8 @@ public sealed record ChatCompletionsCommandRequest(
     double? Temperature,
     int? MaxTokens,
     IReadOnlyList<ChatMessage> ChatMessages,
-    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools);
+    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools,
+    LLMResponseFormat? ResponseFormat);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Normalized Responses fields lived as endpoint locals across routing, continuation, session, and execution branches.
@@ -190,8 +191,12 @@ public sealed record NormalizedChatCompletionsCommand(
     double? Temperature,
     int? MaxTokens,
     IReadOnlyList<ChatMessage> ChatMessages,
-    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools);
+    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools,
+    LLMResponseFormat? ResponseFormat);
 
+// Refactor (iter344/cluster-001):
+//   Old pattern: Chat Completions validation failures returned HTTP results from endpoint branches.
+//   New principle: Application normalization returns typed success/failure data for Host protocol rendering.
 public readonly record struct ChatCompletionsRequestNormalizationResult(
     NormalizedChatCompletionsCommand? Request,
     string? ErrorCode,
@@ -360,6 +365,9 @@ public sealed record MessagesCreateAcceptedCommandResult(
     LlmSessionRegistrationResult Session,
     DispatchAdmission Admission);
 
+// Refactor (iter344/cluster-001):
+//   Old pattern: Chat Completions create branched directly in Host between request-local execution and SSE output.
+//   New principle: Application returns one typed union for protocol error, stream plan, or accepted dispatch receipt.
 public sealed record ChatCompletionsCreateCommandResult(
     ResponsesCommandError? Error,
     ChatCompletionsCreateCommandPlan? StreamPlan,
@@ -375,6 +383,9 @@ public sealed record ChatCompletionsCreateCommandResult(
         new(null, null, accepted);
 }
 
+// Refactor (iter344/cluster-001):
+//   Old pattern: The synchronous Chat Completions response implied request-local completion from direct provider execution.
+//   New principle: The create response exposes only the accepted actor dispatch receipt; terminal completion is observed asynchronously.
 public sealed record ChatCompletionsCreateAcceptedCommandResult(
     NormalizedChatCompletionsCommand Normalized,
     long CreatedAt,
@@ -430,6 +441,5 @@ public interface IChatCompletionsCommandFacade
 
     Task<ResponsesStreamCommandResult> StreamAsync(
         ChatCompletionsCreateCommandPlan plan,
-        Func<string, CancellationToken, ValueTask> onTextDelta,
         CancellationToken ct = default);
 }

@@ -44,6 +44,9 @@ internal sealed record ChatCompletionsCreateRequest
     public int? N { get; init; }
 }
 
+// Refactor (iter344/cluster-001):
+//   Old pattern: Host validation locals were mixed with caller resolution, route/session setup, and direct provider execution.
+//   New principle: Host protocol mapping returns a typed command request or protocol error; Application owns command lifecycle decisions.
 internal readonly record struct ChatCompletionsProtocolMappingResult(
     ChatCompletionsCommandRequest? Request,
     string? ErrorCode,
@@ -100,7 +103,8 @@ internal static class ChatCompletionsProtocolMapper
             request.Temperature,
             maxTokens,
             messages,
-            declaredTools));
+            declaredTools,
+            responseFormat));
     }
 
     private static bool TryExtractChatMessages(

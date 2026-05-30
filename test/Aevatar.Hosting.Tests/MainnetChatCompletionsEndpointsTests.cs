@@ -424,6 +424,21 @@ public sealed class MainnetChatCompletionsEndpointsTests
         command.ToolSelection.AdditiveToolNames.Should().Contain(["use_skill", "ornn_search_skills"]);
     }
 
+    [Fact]
+    public void ChatCompletionsEndpointSource_ShouldNotReintroduceDirectLlmLoop()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "ChatCompletions",
+            "ChatCompletionsEndpoints.cs"));
+
+        source.Should().NotContain("ILLMProviderFactory");
+        source.Should().NotContain("IResponsesCompletionApplicationService");
+        source.Should().NotContain("ChatStreamAsync");
+        source.Should().NotContain("CollectAsync");
+    }
+
     private static async Task<WebApplication> CreateAppAsync(
         ChatCompletionsRecordingLLMProvider provider,
         ChatCompletionsRecordingSessionStore? sessions = null,
@@ -471,6 +486,21 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static string FindRepositoryFile(params string[] segments)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine([directory.FullName, .. segments]);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate repository file.", Path.Combine(segments));
+    }
 
     private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
         Microsoft.Extensions.Options.Options.Create(new ChatRoutingOptions
