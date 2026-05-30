@@ -59,6 +59,30 @@ public sealed class LarkOutboundDispatcherTests
     }
 
     [Fact]
+    public async Task SendNewMessageAsync_NewMessagePost_MessageIdParser_And230002Fallback_AreCentralized()
+    {
+        var handler = new SequencedHandler(
+            (HttpStatusCode.BadRequest, """{"code":230002,"msg":"Bot is not in the chat"}"""),
+            (HttpStatusCode.OK, """{"code":0,"msg":"success","data":{"message_id":"om_dispatcher_owned"}}"""));
+        var dispatcher = CreateDispatcher(handler);
+
+        var result = await dispatcher.SendNewMessageAsync(
+            CreateRequest(fallback: new LarkReceiveTarget("on_fallback_user", "union_id", FellBackToPrefixInference: false)),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(result.Detail);
+        result.MessageId.Should().Be("om_dispatcher_owned");
+        result.UsedFallback.Should().BeTrue();
+        result.AttemptedTarget.ReceiveId.Should().Be("on_fallback_user");
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(request =>
+            request.Method == HttpMethod.Post &&
+            request.RequestUri!.AbsolutePath == "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages");
+        handler.Requests[0].RequestUri!.Query.Should().Contain("receive_id_type=chat_id");
+        handler.Requests[1].RequestUri!.Query.Should().Contain("receive_id_type=union_id");
+    }
+
+    [Fact]
     public async Task SendNewMessageAsync_NonRetryLarkError_DoesNotFallback()
     {
         var handler = new SequencedHandler("""{"code":99992364,"msg":"user id cross tenant"}""");
