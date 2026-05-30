@@ -42,6 +42,11 @@ public sealed class ChatRoutePolicyProtoTests
                 ToolChoiceHint = new ChatRouteToolChoiceHint
                 {
                     ToolName = "aevatar_invoke_gagent",
+                    VoiceAttachTarget = new ChatRouteVoiceAttachTarget
+                    {
+                        ActorId = "voice-agent-1",
+                        VoiceModuleName = "voice_presence_openai",
+                    },
                     PrefilledArguments = new Struct
                     {
                         Fields =
@@ -63,5 +68,7 @@ public sealed class ChatRoutePolicyProtoTests
         parsed.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"].StringValue
             .Should()
             .Be("actor-1");
+        parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be("voice-agent-1");
+        parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.VoiceModuleName.Should().Be("voice_presence_openai");
     }
 }

@@ -2,6 +2,8 @@ using System.Security.Claims;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Foundation.VoicePresence.Transport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -13,6 +15,7 @@ public static class PolicyAwareVoiceEndpoints
 {
     private const string DefaultPattern = "/ws/voice";
     private const string ScopeClaimType = "scope";
+    private const string RemoteAudioTransportUnavailableReason = "remote_audio_transport_unavailable";
     private static readonly string[] RoleClaimTypes =
     [
         "scope_role",
@@ -39,7 +42,8 @@ public static class PolicyAwareVoiceEndpoints
     private static async Task HandlePolicyAwareVoiceAsync(
         HttpContext http,
         [FromServices] IChatRoutePolicyQueryPort queryPort,
-        [FromServices] ChatRouteResolver resolver)
+        [FromServices] ChatRouteResolver resolver,
+        [FromServices] IVoicePresenceSessionResolver voiceSessionResolver)
     {
         // Refactor (issue1321-first): reject unsupported policy-aware voice routes
         // before accepting the WebSocket.
@@ -69,8 +73,18 @@ public static class PolicyAwareVoiceEndpoints
                 await http.Response.WriteAsync(action.Reject?.Reason ?? "Voice route rejected.", http.RequestAborted);
                 return;
             case ChatRouteAction.ActionOneofCase.ForwardToModel:
-                // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill only,
-                // not a voice actor address. Ordinary policy-aware voice fails closed before accept.
+                // Refactor (iter367/cluster-issue674): Old pattern: /ws/voice
+                // distinguished attach vs model forwarding by string keys inside
+                // PrefilledArguments. New principle: only typed ChatRouteVoiceAttachTarget
+                // may attach a voice transport; bare ForwardToModel still fails closed.
+                if (ChatRouteActionTargets.TryGetVoiceAttachTarget(action, out var voiceTarget))
+                {
+                    await AttachVoiceTargetAsync(http, voiceSessionResolver, voiceTarget);
+                    return;
+                }
+
+                // ForwardToModel without a typed voice target is ordinary model forwarding,
+                // not voice attachment. Keep it fail-closed before WebSocket accept.
                 http.Response.StatusCode = StatusCodes.Status501NotImplemented;
                 await http.Response.WriteAsync("Voice ForwardToModel is not supported in v1.", http.RequestAborted);
                 return;
@@ -78,6 +92,124 @@ public static class PolicyAwareVoiceEndpoints
                 http.Response.StatusCode = StatusCodes.Status403Forbidden;
                 await http.Response.WriteAsync("Voice route did not resolve to a GAgent target.", http.RequestAborted);
                 return;
+        }
+    }
+
+    private static async Task AttachVoiceTargetAsync(
+        HttpContext http,
+        IVoicePresenceSessionResolver voiceSessionResolver,
+        ChatRouteVoiceAttachTarget voiceTarget)
+    {
+        var resolution = await voiceSessionResolver.ResolveAsync(
+            new VoicePresenceSessionRequest(
+                voiceTarget.ActorId.Trim(),
+                NormalizeOptional(voiceTarget.VoiceModuleName),
+                VoicePresenceSessionRequestPurpose.Attach),
+            http.RequestAborted);
+
+        var session = await WriteNonAcceptedResolutionAsync(http, resolution);
+        if (session is null)
+            return;
+
+        var ws = await http.WebSockets.AcceptWebSocketAsync();
+        var transport = new WebSocketVoiceTransport(ws);
+        var attached = false;
+        try
+        {
+            await session.AttachTransportAsync(transport, http.RequestAborted);
+            attached = true;
+            await WaitUntilClosedAsync(transport, http.RequestAborted);
+        }
+        catch (NotSupportedException ex) when (string.Equals(
+                   ex.Message,
+                   RemoteAudioTransportUnavailableReason,
+                   StringComparison.Ordinal))
+        {
+            await TryCloseAsync(ws, RemoteAudioTransportUnavailableReason);
+        }
+        catch (InvalidOperationException) when (!attached)
+        {
+            await TryCloseAsync(ws, "Voice transport already attached.");
+        }
+        finally
+        {
+            if (attached)
+                await session.DetachTransportAsync(transport, http.RequestAborted);
+        }
+    }
+
+    private static async Task<VoicePresenceSession?> WriteNonAcceptedResolutionAsync(
+        HttpContext http,
+        VoicePresenceSessionResolution resolution)
+    {
+        switch (resolution.Kind)
+        {
+            case VoicePresenceSessionResolutionKind.LeaseAcceptedPendingAttach:
+            case VoicePresenceSessionResolutionKind.LeaseAcceptedAttached:
+                return resolution.Session ?? throw new InvalidOperationException("Accepted voice session resolution requires a session.");
+            case VoicePresenceSessionResolutionKind.Unsupported:
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await http.Response.WriteAsync(RemoteAudioTransportUnavailableReason, http.RequestAborted);
+                return null;
+            case VoicePresenceSessionResolutionKind.PreflightFailed:
+                await WritePreflightFailureAsync(http, resolution.PreflightFailure);
+                return null;
+            default:
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await http.Response.WriteAsync("Voice session resolution failed.", http.RequestAborted);
+                return null;
+        }
+    }
+
+    private static async Task WritePreflightFailureAsync(
+        HttpContext http,
+        VoicePresencePreflightFailureKind? failure)
+    {
+        switch (failure)
+        {
+            case VoicePresencePreflightFailureKind.NotFound:
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                await http.Response.WriteAsync("Voice session not found for this agent.", http.RequestAborted);
+                break;
+            case VoicePresencePreflightFailureKind.NotInitialized:
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await http.Response.WriteAsync("Voice module not initialized.", http.RequestAborted);
+                break;
+            case VoicePresencePreflightFailureKind.TransportAlreadyAttached:
+                http.Response.StatusCode = StatusCodes.Status409Conflict;
+                await http.Response.WriteAsync("Voice transport already attached.", http.RequestAborted);
+                break;
+            default:
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await http.Response.WriteAsync("Voice session preflight failed.", http.RequestAborted);
+                break;
+        }
+    }
+
+    private static async Task TryCloseAsync(System.Net.WebSockets.WebSocket ws, string reason)
+    {
+        if (ws.State is not System.Net.WebSockets.WebSocketState.Open and not System.Net.WebSockets.WebSocketState.CloseReceived)
+            return;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await ws.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.PolicyViolation, reason, cts.Token);
+        }
+        catch
+        {
+            // best effort close after websocket upgrade
+        }
+    }
+
+    private static async Task WaitUntilClosedAsync(WebSocketVoiceTransport transport, CancellationToken ct)
+    {
+        try
+        {
+            await transport.Completion.WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 

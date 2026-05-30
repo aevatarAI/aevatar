@@ -62,6 +62,7 @@ internal static class VoiceDemoBootstrapEndpoints
         var routePolicyReceipt = await EnsureVoiceRoutePolicyAsync(
             scopeId,
             ownerScope,
+            actorId,
             routePolicyCommandPort,
             routePolicyQueryPort,
             ct);
@@ -85,6 +86,7 @@ internal static class VoiceDemoBootstrapEndpoints
     private static async Task<ChatRoutePolicyCommandAcceptedReceipt?> EnsureVoiceRoutePolicyAsync(
         string scopeId,
         OwnerScope ownerScope,
+        string actorId,
         IChatRoutePolicyCommandPort routePolicyCommandPort,
         IChatRoutePolicyQueryPort routePolicyQueryPort,
         CancellationToken ct)
@@ -98,9 +100,6 @@ internal static class VoiceDemoBootstrapEndpoints
             .Select(static rule => rule.Clone())
             .ToArray();
 
-        if (keptRules.Length == existing.Rules.Count)
-            return null;
-
         var command = new UpsertChatRoutePolicyRequested
         {
             OwnerScope = new OwnerScope
@@ -111,9 +110,17 @@ internal static class VoiceDemoBootstrapEndpoints
             DefaultTarget = existing.DefaultTarget.Clone(),
         };
 
-        // Refactor (issue1365-first): only remove the stale voice-demo route.
-        // Bootstrap no longer creates a voice.realtime default target placeholder.
         command.Rules.AddRange(keptRules);
+        command.Rules.Add(new ChatRouteRule
+        {
+            RuleId = RouteRuleId,
+            Priority = 900,
+            Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
+            Action = ChatRouteActionTargets.ForwardToVoiceAttachTarget(
+                actorId,
+                VoiceModuleName),
+            Description = "Voice demo typed attach target.",
+        });
 
         return await routePolicyCommandPort.UpsertAsync(scopeId, command, ct);
     }
