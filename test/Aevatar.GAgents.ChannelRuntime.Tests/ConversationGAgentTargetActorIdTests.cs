@@ -20,7 +20,7 @@ public sealed class ConversationGAgentTargetActorIdTests
         var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
         var runner = new DeferredReplyTurnRunner();
         var dispatcher = new RecordingLlmReplyRunDispatcher();
-        var agent = CreateAgent(actorId, runner, dispatcher);
+        var agent = await CreateAgentAsync(actorId, runner, dispatcher);
 
         await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-target-1"));
 
@@ -31,7 +31,7 @@ public sealed class ConversationGAgentTargetActorIdTests
         agent.State.PendingLlmReplyRequests[0].TargetActorId.Should().Be(actorId);
     }
 
-    private static ConversationGAgent CreateAgent(
+    private static async Task<ConversationGAgent> CreateAgentAsync(
         string id,
         IConversationTurnRunner runner,
         IChannelLlmReplyRunDispatcher dispatcher)
@@ -54,7 +54,7 @@ public sealed class ConversationGAgentTargetActorIdTests
                 services.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
         SetId(agent, id);
-        agent.ActivateAsync().GetAwaiter().GetResult();
+        await agent.ActivateAsync();
         return agent;
     }
 
