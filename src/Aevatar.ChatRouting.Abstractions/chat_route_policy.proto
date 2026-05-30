@@ -93,8 +93,8 @@ message ChatRouteInput {
 
 // ─── Decision actions (oneof) ───
 message ChatRouteToolSetRef {
-  // Name of the registered tool set (e.g. "workspace.default",
-  // "lark.self_notify", "voice.realtime"). The registry resolves this to a
+  // Name of the registered tool set (e.g. "workspace.default" or
+  // "lark.self_notify"). The registry resolves this to a
   // concrete IAgentToolSource list at the boundary.
   string name = 1;
 }

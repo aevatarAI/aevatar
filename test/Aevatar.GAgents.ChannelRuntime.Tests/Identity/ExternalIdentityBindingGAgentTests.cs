@@ -16,17 +16,6 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// transitions, idempotent commit under concurrent /init, and revoke-driven
 /// projection repair when no binding exists. Pinned by ADR-0017 §Implementation
 /// Notes #2.
-///
-/// FOLLOW-UP (tracked at <see href="https://github.com/aevatarAI/aevatar/issues/517"/>):
-/// most tests instantiate the agent directly with a hand-rolled
-/// <c>IEventStore</c> + <c>IEventSourcingBehaviorFactory</c>. This pins the
-/// behaviour at the handler / state-transition level but skips the actor
-/// runtime's lifecycle (activation, rehydration, deactivation), silo
-/// dispatch wiring, and end-to-end projection materialization timing.
-/// <c>HandleEventAsync_DispatchesCommitBindingThroughEnvelope</c> covers
-/// the in-process dispatch path; the Orleans-test-cluster integration
-/// suite is tracked at issue #517 with a five-fact acceptance list
-/// (kimi-k2p6 L36 / mimo-v2.5-pro L37).
 /// </summary>
 public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
 {

@@ -35,6 +35,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames advanced reflect phases.
+        //   New principle: only committed WorkflowRoleReplyRecordedEvent advances pending reflect phases.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
                 payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor));

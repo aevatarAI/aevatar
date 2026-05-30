@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -1150,7 +1151,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chatCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         chatCompleted.StepId.Should().Be("llm-chat");
-        chatCompleted.WorkerId.Should().Be(ctx.AgentId);
+        chatCompleted.WorkerId.Should().Be("test-publisher");
         chatCompleted.Output.Should().Be("a2");
     }
 
@@ -1263,22 +1264,45 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_WhenSessionNotPendingOrEmpty_ShouldIgnoreCompletionEvents()
+    public async Task LLMCallModule_LiveFrames_ShouldNotCompletePendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
 
         await module.HandleAsync(
-            Envelope(RoleReply("", "x")),
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-live-frame",
+                StepType = "llm_call",
+                RunId = "run-live-frame",
+                Input = "q-live",
+            }),
+            ctx,
+            CancellationToken.None);
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-live-frame", "llm-live-frame", attempt: 1);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = sessionId,
+                Content = "x",
+            }),
             ctx,
             CancellationToken.None);
 
         await module.HandleAsync(
-            Envelope(RoleReply("missing", "y")),
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = sessionId,
+                Content = "y",
+            }),
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+        ctx.LoadState<LLMCallModuleState>("llm_call")
+            .PendingBySessionId.Should().ContainKey(sessionId);
     }
 
     [Fact]

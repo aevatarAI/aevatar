@@ -48,6 +48,7 @@ public sealed class ResponsesCommandFacadeTests
         command.Model.Should().Be("gpt-5");
         command.RoutePreference.Should().Be("route-value");
         command.ScopeId.Should().Be("scope-1");
+        command.BearerToken.Should().Be("token");
     }
 
     [Fact]
@@ -278,6 +279,32 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldCarryTypedToolContext_WhenRequestIsStreaming()
+    {
+        var facade = CreateFacade(
+            routeResolver: new StaticResponsesRouteResolver("route-value"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5")));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "hello",
+            [],
+            true,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.StreamPlan.Should().NotBeNull();
+        result.StreamPlan!.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.ResponseId);
+        result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        result.StreamPlan.LlmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
     public async Task StreamAsync_ShouldReturnUpstreamError_AndMarkSessionFailed()
     {
         var sessions = new RecordingSessionPort();
@@ -376,10 +403,17 @@ public sealed class ResponsesCommandFacadeTests
                 Model = "model",
                 Messages = [ChatMessage.User("hello")],
             },
-            new Dictionary<string, string>(StringComparer.Ordinal),
+            BuildToolContext("resp_stream"),
             new ResponsesToolClassification([], [], [], []),
             ResponsesToolChoiceHintPlan.Empty,
             DateTimeOffset.UtcNow);
+
+    private static AgentToolExecutionContext BuildToolContext(string responseId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(responseId, null),
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", responseId),
+        };
 
     private static LlmSessionSnapshot BuildSnapshot(
         string responseId,
@@ -551,7 +585,7 @@ public sealed class ResponsesCommandFacadeTests
         public Task<ResponsesCompletionResult> CollectAsync(
             ILLMProvider provider,
             LLMRequest request,
-            IReadOnlyDictionary<string, string> toolContextMetadata,
+            AgentToolExecutionContext toolContext,
             ResponsesToolClassification toolClassification,
             CancellationToken ct = default)
         {
@@ -565,7 +599,7 @@ public sealed class ResponsesCommandFacadeTests
         public Task<ResponsesCompletionResult> StreamAsync(
             ILLMProvider provider,
             LLMRequest request,
-            IReadOnlyDictionary<string, string> toolContextMetadata,
+            AgentToolExecutionContext toolContext,
             ResponsesToolClassification toolClassification,
             Func<string, CancellationToken, ValueTask> onTextDelta,
             CancellationToken ct = default)

@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal static class ChatCapabilityMessageTypes
@@ -54,6 +56,9 @@ public sealed record ChatInput
     public IDictionary<string, string>? Metadata { get; init; }
 
     public ChatLlmControlInput? LlmControl { get; init; }
+
+    // Refactor (issue1332): Old pattern: workflow chat control used metadata or LlmControl only. New principle: reuse AgentToolExecutionContext as typed ToolContext without adding a workflow-specific abstraction.
+    public AgentToolExecutionContext? ToolContext { get; init; }
 }
 
 public sealed record ChatLlmControlInput

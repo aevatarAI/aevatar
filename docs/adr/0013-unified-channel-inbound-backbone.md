@@ -43,7 +43,7 @@ Concretely:
 - relay traffic now shares dedup, workflow resume, slash routing, agent-builder routing, and conversation completion events with the rest of ChannelRuntime
 - `TransportExtras` and `OutboundDeliveryContext` carry relay reply facts as typed contracts instead of opaque bags or raw-payload side channels
 - `ChannelBotRegistration` gains Nyx identity lookup fields so relay-originated activities resolve registration state without depending on `activity.Bot`
-- `NyxRelayAgentBuilderFlow` short-circuits unknown slash commands so `/unknown_command` no longer falls through to LLM hallucination
+- `AgentBuilderCardFlow` handles the known agent-builder slash commands and leaves unknown slash commands to the Ornn/LLM shortcut path
 - direct `NyxIdChatGAgent` creation from relay/webhook code is forbidden by CI guard; relay-to-chat orchestration must flow through `ConversationGAgent`
 - solution filters are split into `aevatar.channels.slnf` and `aevatar.platforms.slnf` so transport and rendering code are no longer hidden inside the Foundation slice
 

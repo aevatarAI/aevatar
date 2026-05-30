@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -103,6 +104,64 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldNotRewritePrompt_WhenLegacyAuthoringMetadataAndEnvArePresent()
+    {
+        const string envName = "AEVATAR_WORKFLOW_AUTHORING_AUTO_INJECT";
+        var previous = Environment.GetEnvironmentVariable(envName);
+        Environment.SetEnvironmentVariable(envName, "true");
+        try
+        {
+            var input = new ChatInput
+            {
+                Prompt = "design the workflow",
+                Workflow = " auto ",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["workflow.authoring.enabled"] = "true",
+                    ["workflow.intent"] = "workflow_authoring",
+                },
+            };
+
+            var result = ChatRunRequestNormalizer.Normalize(input);
+
+            result.Succeeded.Should().BeTrue();
+            result.Request!.Prompt.Should().Be("design the workflow");
+            result.Request.Prompt.Should().NotContain("[skill:workflow_authoring]");
+            result.Request.Source.Should().BeEquivalentTo(WorkflowChatSource.CatalogWorkflow("auto"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envName, previous);
+        }
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldKeepDirectAndInlineYamlPromptsUnchanged()
+    {
+        var direct = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = " direct prompt ",
+        });
+        var inline = ChatRunRequestNormalizer.Normalize(new ChatInput
+        {
+            Prompt = " inline prompt ",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "inline-yaml-bundle",
+                WorkflowName = " auto ",
+                WorkflowYamls = ["name: auto"],
+            },
+        });
+
+        direct.Succeeded.Should().BeTrue();
+        inline.Succeeded.Should().BeTrue();
+        direct.Request!.Prompt.Should().Be("direct prompt");
+        direct.Request.Source.Should().BeEquivalentTo(WorkflowChatSource.Direct());
+        inline.Request!.Prompt.Should().Be("inline prompt");
+        inline.Request.Source.Should().BeEquivalentTo(WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto"));
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldNormalizeTypedSourceAndLlmControl()
     {
         var input = new ChatInput
@@ -137,6 +196,37 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             3,
             UserMemoryPrompt: null));
         result.Request.Metadata.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldPreserveTypedToolContext()
+    {
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(" req-1 ", " call-1 "),
+            Caller = new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
+            Routing = LLMRequestRoutingContext.Empty with
+            {
+                ModelOverride = " model-a ",
+                NyxIdRoutePreference = " route-a ",
+                MaxToolRoundsOverride = 2,
+            },
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["trace-id"] = "trace-1",
+            },
+        };
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            ToolContext = toolContext,
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ToolContext.Should().BeSameAs(toolContext);
+        result.Request.LlmControl.Should().BeNull();
     }
 
     [Fact]

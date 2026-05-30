@@ -54,6 +54,7 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
             sp.GetService<IStudioWorkspaceQueryPort>(),
             sp.GetService<IStudioWorkspaceCommandPort>(),
+            sp.GetService<IStudioMemberCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),
@@ -65,8 +66,7 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptCatalogQueryPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptEvolutionDecisionReadPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptingActorAddressResolver>(),
-            sp.GetService<IScriptRuntimeActivityQueryPort>(),
-            sp.GetService<IScriptStoragePort>()));
+            sp.GetService<IScriptRuntimeActivityQueryPort>()));
         return services;
     }
 

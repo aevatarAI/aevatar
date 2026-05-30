@@ -62,6 +62,11 @@ public sealed class MessagesCommandFacadeTests
         result.StreamPlan.Should().NotBeNull();
         result.Completed.Should().BeNull();
         result.StreamPlan!.LlmRequest.Model.Should().Be("claude");
+        result.StreamPlan.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.MessageId);
+        result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        result.StreamPlan.LlmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
         sessions.Registered.Should().ContainSingle();
     }
 
@@ -140,9 +145,16 @@ public sealed class MessagesCommandFacadeTests
                 Model = "claude-sonnet",
                 Messages = [ChatMessage.User("hello")],
             },
-            new Dictionary<string, string>(StringComparer.Ordinal),
+            BuildToolContext("msg_stream"),
             new ResponsesToolClassification([], [], [], []),
             ResponsesToolChoiceHintPlan.Empty);
+
+    private static AgentToolExecutionContext BuildToolContext(string responseId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(responseId, null),
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", responseId),
+        };
 
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {

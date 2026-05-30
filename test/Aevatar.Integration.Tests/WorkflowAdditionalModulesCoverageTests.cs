@@ -732,6 +732,81 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task HumanApprovalModule_ShouldIgnoreDeliveryAgentIdLegacyDeliveryTargetFallback()
+    {
+        var module = new HumanApprovalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-legacy",
+                StepType = "human_approval",
+                RunId = "run-legacy",
+                Input = "legacy input",
+                Parameters =
+                {
+                    ["delivery_agent_id"] = "legacy-agent-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        suspended.DeliveryTargetId.Should().BeEmpty();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-legacy",
+                StepId = "approval-legacy",
+                Approved = true,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Should().BeEmpty();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-camel-legacy",
+                StepType = "human_approval",
+                RunId = "run-camel-legacy",
+                Parameters =
+                {
+                    ["deliveryAgentId"] = "legacy-agent-camel",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var camelLegacySuspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        camelLegacySuspended.DeliveryTargetId.Should().BeEmpty();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-precedence",
+                StepType = "human_approval",
+                RunId = "run-precedence",
+                Parameters =
+                {
+                    ["delivery_target_id"] = "delivery-target-1",
+                    ["delivery_agent_id"] = "legacy-agent-2",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var precedenceSuspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        precedenceSuspended.DeliveryTargetId.Should().Be("delivery-target-1");
+    }
+
+    [Fact]
     public async Task HumanApprovalModule_ShouldUseRunScopedPendingForSameStepId()
     {
         var module = new HumanApprovalModule();
@@ -1081,7 +1156,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldRedactRoleReplyRecordedInInformationLogs()
+    public async Task LlmCallModule_ShouldRedactCommittedRoleReplyInInformationLogs()
     {
         const string sensitiveLlmPrompt = "customer secret llm non streaming prompt";
         const string sensitiveLlmOutput = "customer secret llm non streaming output";
@@ -2146,9 +2221,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         connector.LastRequest.Should().NotBeNull();
-        connector.LastRequest!.Metadata.Should().Contain(
-            ConnectorRequest.HttpAuthorizationMetadataKey,
-            "Bearer token-123");
+        connector.LastRequest!.HttpAuthorization.Should().Be("Bearer token-123");
+        connector.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
@@ -2346,7 +2420,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new ChatResponseEvent
             {
                 SessionId = improveSession,
                 Content = "draft-2-better",

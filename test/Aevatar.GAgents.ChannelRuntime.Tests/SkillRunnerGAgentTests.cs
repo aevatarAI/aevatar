@@ -3,21 +3,22 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
-using Aevatar.GAgents.Scheduled;
-using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -118,7 +119,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // hallucinated text live before the guard ran, then repost it on each retry.
         // TryCreateStreamingSink must short-circuit so chunked dispatch (which only fires
         // AFTER the guard) is the only path that reaches Lark for fanout-gated runs.
-        AttachNyxIdApiClient(_agent, new RecordingHandler("""{"code":0,"msg":"success"}"""));
+        AttachNyxIdApiClient(_agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}"""));
         var command = CreateInitializeCommand();
         command.RequiresNyxidProxySuccess = true;
         await _agent.HandleInitializeAsync(command);
@@ -418,7 +419,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         };
         await _agent.HandleInitializeAsync(initialize);
 
-        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeSendOutputAsync(_agent, "legacy report body");
@@ -542,7 +543,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // 230002. Second (fallback) attempt: clean success.
         var handler = new SequencedHandler(
             """{"error": true, "status": 400, "body": "{\"code\":230002,\"msg\":\"Bot is not in the chat\"}"}""",
-            """{"code":0,"msg":"success"}""");
+            """{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeSendOutputAsync(_agent, "report");
@@ -609,7 +610,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         var handler = new SequencedHandler(
             """{"code":230002,"msg":"Bot is not in the chat"}""",
-            """{"code":0,"msg":"success"}""");
+            """{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeSendOutputAsync(_agent, "report");
@@ -777,7 +778,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         };
         await _agent.HandleInitializeAsync(initialize);
 
-        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeTrySendFailureAsync(_agent, "primary failed");
@@ -808,7 +809,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         };
         await _agent.HandleInitializeAsync(initialize);
 
-        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeTrySendFailureAsync(_agent, "primary failed");
@@ -942,7 +943,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         await agent.HandleInitializeAsync(initialize);
         var handler = new SequencedHandler(
             """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
-            """{"code":0,"msg":"success"}""");
+            """{"code":0,"msg":"success","data":{}}""");
         AttachNyxIdApiClient(agent, handler);
 
         var output = await InvokeExecuteSkillAsync(agent);
@@ -960,7 +961,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         var handler = new SequencedHandler(
             """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
-            """{"code":0,"msg":"success"}""");
+            """{"code":0,"msg":"success","data":{}}""");
         var sink = CreateStreamingSink(handler);
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 19, 9, 0, 0, TimeSpan.Zero));
         var runState = CreateStreamingRunState(sink, TimeSpan.FromMilliseconds(300), time);
@@ -1035,13 +1036,16 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         return new SkillRunnerStreamingReplySink(
-            client,
-            "nyx-api-key",
-            "api-lark-bot",
-            new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false),
-            fallbackTarget: null,
+            new LarkOutboundDispatcher(client, NullLogger<LarkOutboundDispatcher>.Instance),
+            new LarkSendNewMessageRequest(
+                "nyx-api-key",
+                "api-lark-bot",
+                MessageType: "text",
+                ContentJson: string.Empty,
+                PrimaryTarget: new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false)),
             (_, detail) => detail,
-            logger: null);
+            logger: null,
+            editClient: client);
     }
 
     private static Task InvokeStreamingRunStateAsync(object runState, string methodName, string text)
@@ -1173,7 +1177,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         {
             Requests.Add(request);
             Bodies.Add(request.Content == null ? null : await request.Content.ReadAsStringAsync(cancellationToken));
-            var body = _responses.Count > 0 ? _responses.Dequeue() : """{"code":0,"msg":"success"}""";
+            var body = _responses.Count > 0 ? _responses.Dequeue() : """{"code":0,"msg":"success","data":{"message_id":"om_success"}}""";
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),

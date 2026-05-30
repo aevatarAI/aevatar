@@ -6,10 +6,9 @@ owner: eanzhao
 
 # ADR-0025: Voice Router Integration - Policy-Aware WebSocket Boundary
 
-> Superseded for target encoding by ADR-0026. Voice still resolves through
-> `/ws/voice`, but the policy target is now `ForwardToModel` with
-> `tool_set_ref = voice.realtime` and `tool_choice_hint =
-> aevatar_invoke_gagent`, not a `ForwardToGAgent` wire action.
+> Superseded for target encoding by ADR-0026 and narrowed by issue #1321.
+> Voice still resolves through `/ws/voice`, but ordinary policy-aware voice no
+> longer treats `ForwardToModel.tool_choice_hint` as actor addressing.
 
 ## Context
 
@@ -29,16 +28,14 @@ and provider state machines.
 - The Host boundary reads `ChatRoutePolicyCurrentStateDocument` through
   `IChatRoutePolicyQueryPort`, then calls the stateless `ChatRouteResolver`
   before WebSocket upgrade.
-- ADR-0026 supersedes the old voice wire action. Current voice policy accepts
-  `ForwardToModel` only when it carries
-  `tool_set_ref = voice.realtime` and
-  `tool_choice_hint.tool_name = aevatar_invoke_gagent`, with the actor target
-  provided as typed prefilled arguments. Plain model voice routing and the
-  `VoiceSessionActor` Stage 5 topology are not implemented in this milestone;
-  unsupported `ForwardToModel` voice routes still fail before upgrade.
-- Route policy and authorization remain separate. After policy resolves a
-  target actor, the caller must still pass `IUserAgentCatalogQueryPort` attach
-  permission.
+- ADR-0026 supersedes the old voice wire action, and issue #1321 removes the
+  temporary compatibility path that read `actor_id` or `voice_module_name` from
+  `ForwardToModel.tool_choice_hint`. For ordinary `/ws/voice`, every
+  `ForwardToModel` decision now fails closed before WebSocket accept until a
+  route-scoped voice session actor contract exists.
+- Route policy and authorization remain separate. Ordinary `/ws/voice` no
+  longer derives a target actor from tool prefill; explicit actor attach is
+  limited to the dev/admin bypass below.
 - Explicit actorId bypass stays at `GET /ws/voice/{actorId}`, but Mainnet Host
   gates it with the `voice-dev` authorization policy (`voice:bypass` scope or
   admin/owner role).
@@ -60,10 +57,9 @@ and provider state machines.
 
 ## Verification
 
-- `/ws/voice` default policy routes to a voice-enabled actor and attaches the
-  selected module.
-- A voice-specific rule such as `source=VOICE + channel=lark` overrides the
-  default target.
+- `/ws/voice` returns `501` before WebSocket accept for `ForwardToModel`
+  decisions, including decisions that carry `tool_choice_hint` prefilled
+  arguments.
 - `/ws/voice/{actorId}` rejects callers without `voice:bypass` or admin/owner.
 - Static checks show no ChatRouting dependency inside
   `Aevatar.Foundation.VoicePresence`.
