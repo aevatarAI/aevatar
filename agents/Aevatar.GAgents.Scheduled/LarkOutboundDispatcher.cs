@@ -6,6 +6,14 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.Scheduled;
 
+/// <summary>
+/// Sends new Lark messages through the NyxID proxy and returns typed delivery outcomes.
+/// </summary>
+/// <remarks>
+/// Refactor (iter166/cluster-415-lark-outbound-dispatcher):
+///   Old pattern: three callers duplicated Lark POST body construction, bot-not-in-chat fallback retry, and message_id parsing.
+///   New principle: this dispatcher centralizes new-message delivery so callers map business state into a request and handle the typed result.
+/// </remarks>
 public sealed class LarkOutboundDispatcher : ILarkOutboundDispatcher
 {
     private readonly NyxIdApiClient _client;

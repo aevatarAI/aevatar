@@ -2,6 +2,18 @@ using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.Scheduled;
 
+/// <summary>
+/// Narrow boundary for posting new outbound Lark messages from actor-owned execution paths.
+/// </summary>
+/// <remarks>
+/// Refactor (iter166/cluster-415-lark-outbound-dispatcher):
+///   Old pattern: SkillRunnerGAgent, SkillRunnerStreamingReplySink, and FeishuCardHumanInteractionPort each owned their own Lark POST parser/fallback branch.
+///   New principle: one dispatcher owns new-message POST, primary/fallback retry, and response parsing while callers keep only target/content mapping.
+///
+/// This interface is intentionally narrow even with one production implementation: actor and
+/// human-interaction callers depend on the send contract, while tests can substitute transport
+/// outcomes without reaching into NyxID proxy HTTP details.
+/// </remarks>
 public interface ILarkOutboundDispatcher
 {
     Task<LarkSendNewMessageResult> SendNewMessageAsync(
