@@ -420,11 +420,11 @@ describe('ScriptsWorkbenchPage', () => {
           },
         ]),
       );
-      arrangeCatalogRead();
-
       renderPage({}, { waitForObservationProbeTick: resolveObservationProbeTick });
 
       await screen.findByLabelText('Script ID');
+      mockedScriptsApi.getScriptCatalog.mockClear();
+      arrangeCatalogRead();
       fireEvent.click(screen.getByRole('button', { name: 'More script actions' }));
       fireEvent.click(await screen.findByText('Promote'));
       fireEvent.click(screen.getByRole('button', { name: 'Promote' }));
@@ -444,7 +444,7 @@ describe('ScriptsWorkbenchPage', () => {
           'Promotion accepted for script-1 rev-2. Refresh the workspace catalog if the read model is still pending.',
         ),
       ).toBeTruthy();
-      expect(mockedScriptsApi.getScriptCatalog.mock.calls.length).toBeGreaterThan(0);
+      expect(mockedScriptsApi.getScriptCatalog).toHaveBeenCalledTimes(8);
       expect(mockedScriptsApi.getScript).not.toHaveBeenCalled();
     },
   );
