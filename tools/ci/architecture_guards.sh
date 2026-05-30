@@ -78,6 +78,49 @@ check_directory_build_version_guard() {
 
 check_directory_build_version_guard
 
+# Refactor (v1/issue1466-first):
+#   Old: ChannelInboundEvent.registration_token looked like a durable runtime credential carrier.
+#   New: proto field 9/name are reserved and mappers/docs stay credential-free.
+#   Principle: channel inbound durable facts must not contain runtime tokens.
+check_channel_inbound_no_runtime_credential() {
+  local proto_file="agents/Aevatar.GAgents.Channel.Runtime/protos/channel_bot_registration.proto"
+  local runner_file="agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs"
+  local canon_doc="docs/canon/daily-command-pipeline.md"
+
+  if ! awk '
+    /message ChannelInboundEvent[[:space:]]*\{/ { in_msg = 1 }
+    in_msg && /reserved[[:space:]]+9[[:space:]]*;/ { has_reserved_number = 1 }
+    in_msg && /reserved[[:space:]]+"registration_token"[[:space:]]*;/ { has_reserved_name = 1 }
+    in_msg && /^[[:space:]]*\}/ { in_msg = 0 }
+    END { exit(has_reserved_number && has_reserved_name ? 0 : 1) }
+  ' "${proto_file}"; then
+    echo "ChannelInboundEvent must reserve field 9 and name registration_token."
+    exit 1
+  fi
+
+  if awk '
+    /message ChannelInboundEvent[[:space:]]*\{/ { in_msg = 1; next }
+    in_msg && /^[[:space:]]*\}/ { in_msg = 0 }
+    in_msg && /^[[:space:]]*string[[:space:]]+registration_token[[:space:]]*=/ { print FILENAME ":" FNR ":" $0; found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "${proto_file}"; then
+    echo "ChannelInboundEvent.registration_token is forbidden; keep runtime credentials out of durable inbound facts."
+    exit 1
+  fi
+
+  if rg -n "RegistrationToken[[:space:]]*=" "${runner_file}"; then
+    echo "ToInboundEvent must not write RegistrationToken. Runtime tokens belong in transient context only."
+    exit 1
+  fi
+
+  if rg -n "registration_token" "${canon_doc}"; then
+    echo "Canonical channel inbound durable facts docs must not list registration_token."
+    exit 1
+  fi
+}
+
+check_channel_inbound_no_runtime_credential
+
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
 
