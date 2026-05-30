@@ -120,6 +120,9 @@ public sealed class ChatCompletionsCommandFacade(
         }
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: /v1/chat/completions validated model and generation controls inside the Host request stack.
+    //   New principle: Application owns command normalization before caller, routing, session, and dispatch work starts.
     private static ChatCompletionsRequestNormalizationResult Normalize(ChatCompletionsCommandRequest request)
     {
         var model = request.Model?.Trim();
@@ -147,6 +150,9 @@ public sealed class ChatCompletionsCommandFacade(
             request.ResponseFormat));
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host converted inbound bearer evidence into caller scope while also preparing LLM execution.
+    //   New principle: Caller-scope resolution is an Application command step with a typed protocol error boundary.
     private async Task<CallerScopeResult> ResolveCallerScopeAsync(
         ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct)
@@ -162,6 +168,9 @@ public sealed class ChatCompletionsCommandFacade(
         }
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host queried route policy and rewrote the model inline before opening a session.
+    //   New principle: Application resolves the command target and returns either a routed model/action or a typed rejection.
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
@@ -195,6 +204,9 @@ public sealed class ChatCompletionsCommandFacade(
         return RouteTargetResult.FromModel(routedModel, action);
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host registered Chat Completions sessions as part of direct request-local provider execution.
+    //   New principle: Application registers the actor-owned session before dispatch and reports only the reached command stage.
     private async Task<SessionRegistrationResult> RegisterSessionAsync(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
@@ -219,6 +231,9 @@ public sealed class ChatCompletionsCommandFacade(
         }
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host assembled tool provider context, route preference, and LLM request just before direct provider calls.
+    //   New principle: Application builds one dispatch plan that carries typed run input into LlmSessionGAgent.
     private async Task<ExecutionPlanResult> BuildExecutionPlanAsync(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
@@ -257,6 +272,9 @@ public sealed class ChatCompletionsCommandFacade(
             createdAt));
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Non-streaming Chat Completions synchronously collected provider output in the HTTP request handler.
+    //   New principle: Non-streaming compatibility returns an honest accepted dispatch receipt for the actor run.
     private async Task<ChatCompletionsCreateCommandResult> ExecuteNonStreamingAsync(
         ChatCompletionsCreateCommandPlan plan,
         CancellationToken ct)
@@ -293,6 +311,9 @@ public sealed class ChatCompletionsCommandFacade(
         }
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host parsed catalog route slugs while constructing provider metadata.
+    //   New principle: Application resolves model-route command context behind the route resolver port.
     private async Task<(string EffectiveModel, string? ResolvedRouteValue)> ResolveModelRouteAsync(
         string routedModel,
         string bearerToken,
@@ -313,6 +334,9 @@ public sealed class ChatCompletionsCommandFacade(
         return (effectiveModel, resolvedRouteValue);
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host produced provider request objects as the final step before local LLM execution.
+    //   New principle: Application produces typed actor-run input while Host remains an external protocol mapper.
     private static LLMRequest BuildLlmRequest(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
@@ -352,6 +376,9 @@ public sealed class ChatCompletionsCommandFacade(
         };
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host mixed NyxID bearer passthrough and tool-context metadata with endpoint control flow.
+    //   New principle: Application builds tool-provider context as part of command context construction.
     private static ResponsesToolProviderContext BuildToolProviderContext(
         ResponsesCallerScope callerScope,
         string responseId,
@@ -378,6 +405,9 @@ public sealed class ChatCompletionsCommandFacade(
         ?? normalized.ChatMessages.LastOrDefault()?.Content
         ?? string.Empty;
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host populated session records from endpoint locals.
+    //   New principle: Application derives the authoritative session record from normalized command state and caller scope.
     private static LlmSessionRecord BuildSessionRecord(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
@@ -395,6 +425,9 @@ public sealed class ChatCompletionsCommandFacade(
             Ttl = Duration.FromTimeSpan(TimeSpan.FromHours(24)),
         };
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host updated session failure status around direct provider exceptions.
+    //   New principle: Application owns command failure accounting after dispatch attempts.
     private async Task TryUpdateSessionStatusAsync(
         LlmSessionRegistrationResult session,
         LlmSessionStatus status,
@@ -410,6 +443,9 @@ public sealed class ChatCompletionsCommandFacade(
         }
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host executed the LLM loop directly and returned completed output from request-local state.
+    //   New principle: Application dispatches a typed run command through IActorDispatchPort and returns the admission.
     private Task<DispatchAdmission> DispatchRunAsync(
         ChatCompletionsCreateCommandPlan plan,
         CancellationToken ct)
@@ -427,6 +463,9 @@ public sealed class ChatCompletionsCommandFacade(
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
     }
 
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Chat Completions had no typed actor command payload for its direct LLM loop.
+    //   New principle: The facade maps the compatibility request into the shared LlmRunRequested contract.
     private static LlmRunRequested BuildRunRequested(
         string responseId,
         LLMRequest request,

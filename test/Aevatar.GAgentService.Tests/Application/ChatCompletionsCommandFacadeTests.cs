@@ -141,6 +141,36 @@ public sealed class ChatCompletionsCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenDirectToolPlanFails_ShouldReturnPlanError_AndNotDispatch()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var tools = new RecordingResponsesToolClassificationService();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            toolClassificationService: tools,
+            directToolPlanService: new StaticResponsesDirectToolPlanService(
+                ResponsesDirectToolPlan.FromError(new ResponsesCommandError(
+                    500,
+                    "tool_set_unavailable",
+                    "tool set is unavailable"))));
+
+        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            500,
+            "tool_set_unavailable",
+            "tool set is unavailable"));
+        result.Accepted.Should().BeNull();
+        result.StreamPlan.Should().BeNull();
+        sessions.Registered.Should().ContainSingle();
+        sessions.UpdatedStatuses.Should().BeEmpty();
+        tools.Calls.Should().Be(0);
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenDispatchRequiresAuthentication_ShouldMarkSessionFailed()
     {
         var sessions = new RecordingSessionPort();
@@ -370,7 +400,9 @@ public sealed class ChatCompletionsCommandFacadeTests
         ILlmSessionRegistrationPort? sessionPort = null,
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
         RecordingActorDispatchPort? dispatchPort = null,
-        IResponsesCallerScopeResolver? callerScopeResolver = null)
+        IResponsesCallerScopeResolver? callerScopeResolver = null,
+        IResponsesToolClassificationService? toolClassificationService = null,
+        IResponsesDirectToolPlanService? directToolPlanService = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new ChatCompletionsCommandFacade(
@@ -379,8 +411,8 @@ public sealed class ChatCompletionsCommandFacadeTests
             new StaticResponsesRouteResolver("route-value"),
             effectiveSessionPort,
             dispatchPort ?? new RecordingActorDispatchPort(),
-            new StaticResponsesToolClassificationService(),
-            new StaticResponsesDirectToolPlanService(),
+            toolClassificationService ?? new StaticResponsesToolClassificationService(),
+            directToolPlanService ?? new StaticResponsesDirectToolPlanService(),
             NullLogger<ChatCompletionsCommandFacade>.Instance);
     }
 
@@ -463,10 +495,26 @@ public sealed class ChatCompletionsCommandFacadeTests
             ValueTask.FromResult(new ResponsesToolClassification([], [], [], []));
     }
 
-    private sealed class StaticResponsesDirectToolPlanService : IResponsesDirectToolPlanService
+    private sealed class RecordingResponsesToolClassificationService : IResponsesToolClassificationService
+    {
+        public int Calls { get; private set; }
+
+        public ValueTask<ResponsesToolClassification> ClassifyAsync(
+            IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+            ResponsesToolProviderContext context,
+            IEnumerable<IResponsesToolProvider>? additionalProviders = null,
+            CancellationToken ct = default)
+        {
+            Calls++;
+            return ValueTask.FromResult(new ResponsesToolClassification([], [], [], []));
+        }
+    }
+
+    private sealed class StaticResponsesDirectToolPlanService(
+        ResponsesDirectToolPlan? plan = null) : IResponsesDirectToolPlanService
     {
         public ResponsesDirectToolPlan Build(ChatRouteAction? routeAction) =>
-            ResponsesDirectToolPlan.Empty;
+            plan ?? ResponsesDirectToolPlan.Empty;
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
