@@ -732,7 +732,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task HumanApprovalModule_ShouldUseDeliveryAgentIdAsLegacyDeliveryTargetFallback()
+    public async Task HumanApprovalModule_ShouldIgnoreDeliveryAgentIdLegacyDeliveryTargetFallback()
     {
         var module = new HumanApprovalModule();
         var ctx = CreateContext();
@@ -753,7 +753,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
-        suspended.DeliveryTargetId.Should().Be("legacy-agent-1");
+        suspended.DeliveryTargetId.Should().BeEmpty();
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -766,8 +766,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var resolved = ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Single();
-        resolved.DeliveryTargetId.Should().Be("legacy-agent-1");
+        ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Should().BeEmpty();
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -785,7 +784,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var camelLegacySuspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
-        camelLegacySuspended.DeliveryTargetId.Should().Be("legacy-agent-camel");
+        camelLegacySuspended.DeliveryTargetId.Should().BeEmpty();
         ctx.Published.Clear();
 
         await module.HandleAsync(

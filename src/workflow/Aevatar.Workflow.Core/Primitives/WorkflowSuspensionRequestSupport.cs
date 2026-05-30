@@ -4,8 +4,6 @@ namespace Aevatar.Workflow.Core.Primitives;
 
 internal static class WorkflowSuspensionRequestSupport
 {
-    // Refactor (issue1372): Old pattern: suspension delivery lookup only accepted delivery_target_id.
-    // New principle: preserve delivery_target_id precedence while treating delivery_agent_id as a legacy fallback.
     public static string? ResolveDeliveryTargetId(StepRequestEvent request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -13,9 +11,7 @@ internal static class WorkflowSuspensionRequestSupport
         var deliveryTargetId = WorkflowParameterValueParser.GetOptionalString(
             request.Parameters,
             "delivery_target_id",
-            "deliveryTargetId",
-            "delivery_agent_id",
-            "deliveryAgentId");
+            "deliveryTargetId");
         return string.IsNullOrWhiteSpace(deliveryTargetId)
             ? null
             : deliveryTargetId.Trim();
