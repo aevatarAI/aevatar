@@ -8,16 +8,12 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class ResponsesToolClassificationTests
 {
-    private static readonly IReadOnlyDictionary<string, string> ToolContext =
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["scope_id"] = "scope-1",
-            ["owner_subject"] = "owner-1",
-        };
-
     private static readonly ResponsesToolProviderContext ToolProviderContext = new(
-        new ResponsesToolProviderCallerScope("scope-1", "owner-1", "ApiKey"),
-        ToolContext);
+        AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", "response-1"),
+            Channel = new AgentToolChannelContext("ApiKey", null, "scope-1", null, null),
+        });
 
     [Fact]
     public async Task ClassifyAsync_ShouldSubstituteForwardAndDeduplicateAdditiveTools()

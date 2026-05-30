@@ -2561,7 +2561,7 @@ public sealed class MainnetResponsesEndpointsTests
                 var completion = await completionService.CollectAsync(
                     providerFactory.GetDefault(),
                     plan.LlmRequest,
-                    plan.ToolContextMetadata,
+                    plan.ToolContext,
                     plan.ToolClassification,
                     ct);
                 var snapshot = BuildCompletionSnapshot(completion);
@@ -2593,7 +2593,7 @@ public sealed class MainnetResponsesEndpointsTests
                 var completion = await completionService.StreamAsync(
                     providerFactory.GetDefault(),
                     plan.LlmRequest,
-                    plan.ToolContextMetadata,
+                    plan.ToolContext,
                     plan.ToolClassification,
                     onTextDelta,
                     ct);
@@ -2981,18 +2981,17 @@ public sealed class MainnetResponsesEndpointsTests
         string bearerToken)
     {
         return new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
-                callerScope.ScopeId,
-                callerScope.OwnerSubject,
-                callerScope.OriginKind.ToString()),
-            new Dictionary<string, string>(StringComparer.Ordinal)
+            AgentToolExecutionContext.Empty with
             {
-                [LLMRequestMetadataKeys.RequestId] = responseId,
-                [LLMRequestMetadataKeys.ResponseId] = responseId,
-                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
-                ["scope_id"] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
+                Request = new AgentToolRequestIdentity(responseId, null),
+                Credentials = new AgentToolCredentials(bearerToken, null, null),
+                Caller = new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+                Channel = new AgentToolChannelContext(
+                    callerScope.OriginKind.ToString(),
+                    null,
+                    callerScope.ScopeId,
+                    null,
+                    null),
             });
     }
 
