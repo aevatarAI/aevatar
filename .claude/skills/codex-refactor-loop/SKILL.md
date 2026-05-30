@@ -2648,6 +2648,15 @@ Bash(
 2. **No external repo changes** — NyxID / chrono-* are out of scope.
 3. **Code self-documents the refactor** — every refactored type/method gets a 3-5 line comment of the form `// Refactor (iterN/cluster-XXX): Old pattern: …  New principle: …`.
 4. **No `commit`/`push`/`checkout`/`gh pr create`/`git branch` inside codex prompts** — the controller owns git topology(branch 创建、commit、push、PR 开均由 controller 做)。事故记录:#952 codex 自开 PR 默认 `base=dev`(而非 `auto-refact-dev`)→ 与 dev CONFLICTING + 误对外发布。如不显式禁止,`gh pr create` 默认 base = repo default branch 错误。**Implement/fix/test-add prompt template 必须 verbatim 含此禁令**(不只在 SKILL hint,要在 prompt 里写明)。
+
+   **例外:`conflict-resolve` role codex** — 解 textual conflict 必须能跑 `git fetch` / `git merge` / `git add`(否则 git 不知 conflict 已解)。允许:
+   - `git fetch origin`
+   - `git merge origin/<base-branch>`(包括 `--abort` 恢复)
+   - `git add <resolved-file>`(只 add resolved files,不 add 其他)
+   
+   仍禁止:`git commit`、`git push`、`git checkout`、新 file 创建、对 conflict file 外的文件改动。这些由 controller 主控。
+   
+   事故记录:2026-05-30 conflict-resolve v1 prompt 没说允许 git add → codex 保守按 hard rule 4 全拒,输出 `CONFLICT_BLOCKED:git_commit_forbidden_by_shared_hard_rules`。本次例外补齐;`prompts/conflict-resolve-*.md` 模板用此例外措辞即可,不用每个 PR override。
 5. **No `Task.Delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
