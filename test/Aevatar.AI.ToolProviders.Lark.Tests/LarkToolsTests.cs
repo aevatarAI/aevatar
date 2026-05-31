@@ -20,10 +20,7 @@ public class LarkToolsTests
             SendResponse = """{"code":0,"data":{"message_id":"om_123","chat_id":"oc_456","create_time":"1730000000"}}""",
         };
         var tool = new LarkMessagesSendTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        });
+        AgentToolRequestContext.Current = BuildTokenContext("token-123");
 
         try
         {
@@ -692,10 +689,7 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkChatsLookupTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        });
+        AgentToolRequestContext.Current = BuildTokenContext("token-123");
 
         try
         {
@@ -786,10 +780,7 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkSheetsAppendRowsTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        });
+        AgentToolRequestContext.Current = BuildTokenContext("token-123");
 
         try
         {
@@ -891,10 +882,7 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkApprovalsListTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        });
+        AgentToolRequestContext.Current = BuildTokenContext("token-123");
 
         try
         {
@@ -996,10 +984,7 @@ public class LarkToolsTests
     public async Task LarkApprovalsActTool_ValidatesTransferTarget()
     {
         var tool = new LarkApprovalsActTool(new StubLarkNyxClient());
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        });
+        AgentToolRequestContext.Current = BuildTokenContext("token-123");
 
         try
         {
@@ -1020,10 +1005,7 @@ public class LarkToolsTests
             ApprovalActionResponse = """{"code":0,"data":{}}""",
         };
         var tool = new LarkApprovalsActTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        });
+        AgentToolRequestContext.Current = BuildTokenContext("token-123");
 
         try
         {
@@ -1566,7 +1548,7 @@ public class LarkToolsTests
                     metadata[entry.Key] = entry.Value;
             }
 
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+            AgentToolRequestContext.Current = BuildTokenContext(accessToken, metadata);
         }
 
         public void Dispose()
@@ -1574,4 +1556,27 @@ public class LarkToolsTests
             AgentToolRequestContext.Current = _previous;
         }
     }
+
+    private static AgentToolExecutionContext BuildTokenContext(
+        string? accessToken,
+        IReadOnlyDictionary<string, string>? externalMetadata = null)
+    {
+        return AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = string.IsNullOrWhiteSpace(accessToken) ? null : accessToken.Trim(),
+            },
+            Channel = AgentToolChannelContext.Empty with
+            {
+                PlatformMessageId = Resolve(externalMetadata, "channel.platform_message_id"),
+            },
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(externalMetadata),
+        };
+    }
+
+    private static string? Resolve(IReadOnlyDictionary<string, string>? metadata, string key) =>
+        metadata != null && metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value.Trim()
+            : null;
 }

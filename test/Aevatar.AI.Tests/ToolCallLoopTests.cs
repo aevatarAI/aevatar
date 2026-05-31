@@ -106,7 +106,7 @@ public class ToolCallLoopTests
     }
 
     [Fact]
-    public void AgentToolExecutionContextMapper_ShouldPromoteOwnedKeysAndKeepExternalMetadataOnly()
+    public void AgentToolExecutionContextMapper_ShouldIgnoreOwnedMetadataControlKeys()
     {
         var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -122,15 +122,11 @@ public class ToolCallLoopTests
             ["trace-id"] = "trace-1",
         });
 
-        context.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        context.Credentials.NyxIdOrgToken.Should().Be("org-token");
-        context.Caller.ScopeId.Should().Be("scope-a");
-        context.Channel.Platform.Should().Be("lark");
-        context.Channel.SenderId.Should().Be("ou_1");
-        context.Routing.ModelOverride.Should().Be("model-a");
-        context.Routing.NyxIdRoutePreference.Should().Be("/preferred");
-        context.Routing.MaxToolRoundsOverride.Should().Be(7);
-        context.ConnectedServices.ContextJson.Should().Be("{\"services\":[]}");
+        context.Credentials.Should().Be(AgentToolCredentials.Empty);
+        context.Caller.Should().Be(AgentToolCallerContext.Empty);
+        context.Channel.Should().Be(AgentToolChannelContext.Empty);
+        context.Routing.Should().Be(LLMRequestRoutingContext.Empty);
+        context.ConnectedServices.Should().Be(AgentToolConnectedServicesContext.Empty);
         context.ExternalMetadata.Should().ContainSingle();
         context.ExternalMetadata["trace-id"].Should().Be("trace-1");
     }

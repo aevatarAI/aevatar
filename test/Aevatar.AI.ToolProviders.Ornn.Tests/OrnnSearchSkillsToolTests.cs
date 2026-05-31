@@ -46,10 +46,7 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            });
+            AgentToolRequestContext.Current = BuildTokenContext("access-token");
             var tool = CreateTool(handler);
 
             var result = await tool.ExecuteAsync("""{ "query": "translate", "scope": "private" }""");
@@ -76,10 +73,7 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            });
+            AgentToolRequestContext.Current = BuildTokenContext("access-token");
             var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson(
                 """{ "error": "bad" }""",
                 System.Net.HttpStatusCode.BadGateway));
@@ -101,10 +95,7 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            });
+            AgentToolRequestContext.Current = BuildTokenContext("access-token");
             var tool = CreateTool(handler);
 
             var result = await tool.ExecuteAsync("not-json");
@@ -128,4 +119,10 @@ public sealed class OrnnSearchSkillsToolTests
 
         return new OrnnSearchSkillsTool(client);
     }
+
+    private static AgentToolExecutionContext BuildTokenContext(string token) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = token },
+        };
 }

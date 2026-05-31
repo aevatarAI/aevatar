@@ -315,14 +315,11 @@ public sealed class ChannelRegistrationToolTests
     private static IDisposable PushNyxToken(string? scopeId = "scope-1")
     {
         var previous = AgentToolRequestContext.Current;
-        var next = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
+            Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "test-token" },
+            Caller = AgentToolCallerContext.Empty with { ScopeId = scopeId },
         };
-        if (!string.IsNullOrWhiteSpace(scopeId))
-            next["scope_id"] = scopeId;
-
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(next);
 
         return new ResetMetadataScope(previous);
     }

@@ -387,10 +387,10 @@ public sealed class NyxIdApiClientCoverageTests
                 new HttpClient(handler),
                 NullLogger<NyxIdApiClient>.Instance);
             var tool = new NyxIdLlmStatusTool(client);
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
             {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-1",
-            });
+                Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "token-1" },
+            };
 
             var response = await tool.ExecuteAsync("{}", CancellationToken.None);
 

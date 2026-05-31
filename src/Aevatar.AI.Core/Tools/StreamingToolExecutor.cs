@@ -44,9 +44,30 @@ public sealed class StreamingToolExecutor
         _tools = tools;
         _hooks = hooks;
         _toolMiddlewares = toolMiddlewares ?? [];
-        _toolContext = toolContext
-            ?? AgentToolRequestContext.Current
-            ?? AgentToolExecutionContextMapper.FromMetadata(requestMetadata);
+        _toolContext = AttachExternalMetadata(
+            toolContext ?? AgentToolRequestContext.Current,
+            requestMetadata);
+    }
+
+    private static AgentToolExecutionContext AttachExternalMetadata(
+        AgentToolExecutionContext? context,
+        IReadOnlyDictionary<string, string>? requestMetadata)
+    {
+        var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(requestMetadata);
+        if (context is null)
+            return AgentToolExecutionContext.Empty with
+            {
+                ExternalMetadata = externalMetadata,
+            };
+
+        if (externalMetadata.Count == 0)
+            return context;
+
+        var merged = new Dictionary<string, string>(externalMetadata, StringComparer.Ordinal);
+        foreach (var pair in context.ExternalMetadata)
+            merged[pair.Key] = pair.Value;
+
+        return context with { ExternalMetadata = merged };
     }
 
     public ExecutionState CreateExecutionState() => new();

@@ -10,7 +10,7 @@ namespace Aevatar.AI.Tests;
 public sealed class AgentToolExecutionContextMapperTests
 {
     [Fact]
-    public void FromRequest_WhenTypedFieldsAndLegacyMetadataOverlap_ShouldPreferTypedRequestCallerAndRouting()
+    public void FromRequest_WhenTypedFieldsAndMetadataOverlap_ShouldUseOnlyTypedRequestCallerAndRouting()
     {
         var request = new LLMRequest
         {
@@ -46,12 +46,12 @@ public sealed class AgentToolExecutionContextMapperTests
         var context = AgentToolExecutionContextMapper.FromRequest(request);
 
         context.Request.RequestId.Should().Be("typed-request");
-        context.Request.CallId.Should().Be("legacy-call");
+        context.Request.CallId.Should().BeNull();
         context.Caller.ScopeId.Should().Be("typed-scope");
         context.Caller.OwnerSubject.Should().Be("typed-owner");
         context.Caller.ResponseId.Should().Be("typed-response");
         context.Credentials.NyxIdAccessToken.Should().Be("typed-access");
-        context.Credentials.NyxIdOrgToken.Should().Be("legacy-org");
+        context.Credentials.NyxIdOrgToken.Should().BeNull();
         context.Routing.ModelOverride.Should().Be("typed-model");
         context.Routing.NyxIdRoutePreference.Should().Be("typed-route");
         context.Routing.MaxToolRoundsOverride.Should().Be(9);
@@ -61,35 +61,65 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
-    public void FromMetadata_WhenChannelCanonicalKeysAreAbsent_ShouldMapLegacyAliases()
+    public void FromMetadata_ShouldNotPopulateOwnedControlFacts()
     {
         var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["platform"] = "lark",
-            ["sender_id"] = "ou-legacy",
-            ["registration_scope_id"] = "scope-legacy",
-            ["message_id"] = "msg-legacy",
-            ["platform_message_id"] = "platform-msg-legacy",
+            [LLMRequestMetadataKeys.RequestId] = "legacy-request",
+            [LLMRequestMetadataKeys.CallId] = "legacy-call",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
+            [LLMRequestMetadataKeys.NyxIdOrgToken] = "org-token",
+            [LLMRequestMetadataKeys.ModelOverride] = "model-a",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/preferred",
+            [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
+            [LLMRequestMetadataKeys.ConnectedServicesContext] = "{\"services\":[]}",
+            ["scope_id"] = "scope-a",
+            ["channel.platform"] = "lark",
+            ["channel.sender_id"] = "ou_1",
+            ["trace-id"] = "trace-1",
         });
 
-        context.Channel.Platform.Should().Be("lark");
-        context.Channel.SenderId.Should().Be("ou-legacy");
-        context.Channel.RegistrationScopeId.Should().Be("scope-legacy");
-        context.Channel.MessageId.Should().Be("msg-legacy");
-        context.Channel.PlatformMessageId.Should().Be("platform-msg-legacy");
+        context.Request.Should().Be(AgentToolRequestIdentity.Empty);
+        context.Credentials.Should().Be(AgentToolCredentials.Empty);
+        context.Caller.Should().Be(AgentToolCallerContext.Empty);
+        context.Channel.Should().Be(AgentToolChannelContext.Empty);
+        context.SenderBinding.Should().Be(AgentToolSenderBindingContext.Empty);
+        context.Routing.Should().Be(LLMRequestRoutingContext.Empty);
+        context.ConnectedServices.Should().Be(AgentToolConnectedServicesContext.Empty);
+        context.ExternalMetadata.Should().ContainSingle();
+        context.ExternalMetadata["trace-id"].Should().Be("trace-1");
     }
 
     [Fact]
-    public void FromMetadata_WhenLarkAliasesArePresent_ShouldMapSenderAndMessageFallbacks()
+    public void FromRequest_ShouldNotBackfillMissingTypedFactsFromMetadata()
     {
-        var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+        var request = new LLMRequest
         {
-            ["lark.open_id"] = "ou-lark",
-            ["lark.message_id"] = "msg-lark",
-        });
+            Messages = [],
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = "legacy-request",
+                [LLMRequestMetadataKeys.CallId] = "legacy-call",
+                [LLMRequestMetadataKeys.ScopeId] = "legacy-scope",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "legacy-access",
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = "legacy-org",
+                [LLMRequestMetadataKeys.ModelOverride] = "legacy-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "4",
+                ["lark.open_id"] = "ou-lark",
+                ["trace-id"] = "trace-1",
+            },
+        };
 
-        context.Channel.SenderId.Should().Be("ou-lark");
-        context.Channel.MessageId.Should().Be("msg-lark");
+        var context = AgentToolExecutionContextMapper.FromRequest(request);
+
+        context.Request.Should().Be(AgentToolRequestIdentity.Empty);
+        context.Credentials.Should().Be(AgentToolCredentials.Empty);
+        context.Caller.Should().Be(AgentToolCallerContext.Empty);
+        context.Channel.Should().Be(AgentToolChannelContext.Empty);
+        context.Routing.Should().Be(LLMRequestRoutingContext.Empty);
+        context.ExternalMetadata.Should().ContainSingle();
+        context.ExternalMetadata["trace-id"].Should().Be("trace-1");
     }
 
     [Fact]
@@ -142,20 +172,6 @@ public sealed class AgentToolExecutionContextMapperTests
         AgentToolExecutionContextMapper.FromPayload(null).Should().Be(AgentToolExecutionContext.Empty);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("not-a-number")]
-    public void FromMetadata_WhenMaxToolRoundsOverrideIsInvalid_ShouldLeaveTypedOverrideUnset(string maxRounds)
-    {
-        var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.MaxToolRoundsOverride] = maxRounds,
-        });
-
-        context.Routing.MaxToolRoundsOverride.Should().BeNull();
-    }
-
     [Fact]
     public void ScopeDispose_WhenNestedScopesAreUsed_ShouldRestoreOuterContext()
     {
@@ -206,6 +222,7 @@ public sealed class AgentToolExecutionContextMapperTests
         source.Should().NotContain("AgentToolRequestContext.CurrentMetadata");
         source.Should().NotContain("AgentToolRequestContext.TryGet(");
         source.Should().NotContain(".ToLegacyMetadata(");
+        source.Should().NotContain("AgentToolExecutionContextMapper.FromMetadata(");
     }
 
     private static string FindRepositoryRoot()

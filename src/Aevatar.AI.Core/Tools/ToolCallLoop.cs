@@ -275,7 +275,10 @@ public sealed class ToolCallLoop
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct)
     {
-        using var _ = AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(metadata));
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        });
         await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
     }
 

@@ -353,7 +353,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task TypedContextPropagation_ShouldSetAsyncLocalDuringExecutionAndRestore()
+    public async Task TypedContextPropagation_ShouldUseTypedContextAndIgnoreMetadataControlKeys()
     {
         string? capturedToken = null;
         string? capturedExternal = null;
@@ -369,12 +369,18 @@ public class StreamingToolExecutorTests
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "typed-secret",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-secret",
             ["auth_token"] = "secret-123",
+        };
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "typed-secret" },
         };
 
         var executor = new StreamingToolExecutor(
-            tools, requestMetadata: metadata);
+            tools,
+            requestMetadata: metadata,
+            toolContext: toolContext);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "meta-check", ArgumentsJson = "{}" });

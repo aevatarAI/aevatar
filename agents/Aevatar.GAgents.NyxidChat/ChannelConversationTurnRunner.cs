@@ -1001,12 +1001,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
-                       await BuildAgentBuilderMetadataAsync(
-                    activity,
-                    inboundEvent,
-                    ResolveUserAccessToken(activity, runtimeContext),
-                    ct))))
+            var metadata = await BuildAgentBuilderMetadataAsync(
+                activity,
+                inboundEvent,
+                ResolveUserAccessToken(activity, runtimeContext),
+                ct);
+            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(metadata)))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
@@ -1442,6 +1442,37 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
         return metadata;
     }
+
+    private static AgentToolExecutionContext BuildAgentBuilderToolContext(
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        var userAccessToken = Resolve(metadata, LLMRequestMetadataKeys.NyxIdAccessToken);
+        return AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = userAccessToken,
+                NyxIdOrgToken = Resolve(metadata, LLMRequestMetadataKeys.NyxIdOrgToken) ?? userAccessToken,
+            },
+            Caller = AgentToolCallerContext.Empty with
+            {
+                ScopeId = Resolve(metadata, "scope_id"),
+            },
+            Channel = AgentToolChannelContext.Empty with
+            {
+                Platform = Resolve(metadata, ChannelMetadataKeys.Platform),
+                SenderId = Resolve(metadata, ChannelMetadataKeys.SenderId),
+                MessageId = Resolve(metadata, ChannelMetadataKeys.MessageId),
+                PlatformMessageId = Resolve(metadata, ChannelMetadataKeys.PlatformMessageId),
+            },
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
+    }
+
+    private static string? Resolve(IReadOnlyDictionary<string, string> metadata, string key) =>
+        metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value.Trim()
+            : null;
 
     internal static InboundMessage ToInboundMessage(ChatActivity activity)
     {

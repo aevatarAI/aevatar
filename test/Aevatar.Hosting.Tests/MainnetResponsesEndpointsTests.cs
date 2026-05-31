@@ -344,12 +344,6 @@ public sealed class MainnetResponsesEndpointsTests
         var commandPort = new RecordingResponsesAgentToolStatePort();
         var provider = CreateResponsesAevatarToolProvider(commandPort);
 
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.ScopeId] = "scope-1",
-            [LLMRequestMetadataKeys.OwnerSubject] = "owner-1",
-            [LLMRequestMetadataKeys.ResponseId] = "resp_1",
-        };
         var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
@@ -357,7 +351,7 @@ public sealed class MainnetResponsesEndpointsTests
             "token");
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+            AgentToolRequestContext.Current = BuildResponsesToolContext();
             var substituteTools = await provider.GetSubstituteToolsAsync(context);
             var todoTool = substituteTools.Single(x => x.Name == "TodoWrite");
             var todoResult = await todoTool.ExecuteAsync(
@@ -390,13 +384,6 @@ public sealed class MainnetResponsesEndpointsTests
             """{"url":"https://example.com/docs","content":"cached"}""");
         var provider = CreateResponsesAevatarToolProvider(commandPort);
 
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.ScopeId] = "scope-1",
-            [LLMRequestMetadataKeys.OwnerSubject] = "owner-1",
-            [LLMRequestMetadataKeys.ResponseId] = "resp_1",
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
-        };
         var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
@@ -404,7 +391,7 @@ public sealed class MainnetResponsesEndpointsTests
             "token");
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+            AgentToolRequestContext.Current = BuildResponsesToolContext("token");
             var fetchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebFetch");
             var result = await fetchTool.ExecuteAsync("""{"url":"https://example.com/docs"}""");
 
@@ -430,13 +417,6 @@ public sealed class MainnetResponsesEndpointsTests
             """{"results":[{"title":"cached docs"}]}""");
         var provider = CreateResponsesAevatarToolProvider(commandPort);
 
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.ScopeId] = "scope-1",
-            [LLMRequestMetadataKeys.OwnerSubject] = "owner-1",
-            [LLMRequestMetadataKeys.ResponseId] = "resp_1",
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
-        };
         var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
@@ -444,7 +424,7 @@ public sealed class MainnetResponsesEndpointsTests
             "token");
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+            AgentToolRequestContext.Current = BuildResponsesToolContext("token");
             var searchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebSearch");
             var result = await searchTool.ExecuteAsync("""{"query":"aevatar docs","max_results":3}""");
 
@@ -460,6 +440,13 @@ public sealed class MainnetResponsesEndpointsTests
         commandPort.WebTraces[0].Trace.Query.Should().Be("aevatar docs");
         commandPort.WebTraces[0].Trace.CacheHit.Should().BeTrue();
     }
+
+    private static AgentToolExecutionContext BuildResponsesToolContext(string? token = null) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = token },
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", "resp_1"),
+        };
 
     [Fact]
     public async Task ResponsesUserSkillsToolProvider_ShouldBridgeOnlySkillMainlineTools()

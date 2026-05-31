@@ -165,7 +165,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var disableTools = forceDisableTools || replyPlan.DisableTools;
         var tools = await BuildTurnToolsAsync(disableTools, ct);
         var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
-            replyPlan.PrimaryToolContext ?? AgentToolExecutionContextMapper.FromMetadata(replyPlan.Primary));
+            replyPlan.PrimaryToolContext ?? BuildToolContextFromReplyMetadata(replyPlan.Primary));
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
         var runtime = BuildRuntime(
             activity,
@@ -256,7 +256,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
-        var toolContext = llmControl.ToToolContext(baseToolContext ?? AgentToolExecutionContextMapper.FromMetadata(effectiveMetadata));
+        var toolContext = llmControl.ToToolContext(baseToolContext ?? BuildToolContextFromReplyMetadata(effectiveMetadata));
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(effectiveMetadata);
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
@@ -536,6 +536,31 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         metadata.ContainsKey(ChannelMetadataKeys.Platform) &&
         metadata.ContainsKey(ChannelMetadataKeys.SenderId) &&
         metadata.ContainsKey(ChannelMetadataKeys.MessageId);
+
+    private static AgentToolExecutionContext BuildToolContextFromReplyMetadata(
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        return AgentToolExecutionContext.Empty with
+        {
+            Caller = AgentToolCallerContext.Empty with
+            {
+                ScopeId = Resolve(metadata, "scope_id"),
+            },
+            Channel = AgentToolChannelContext.Empty with
+            {
+                Platform = Resolve(metadata, ChannelMetadataKeys.Platform),
+                SenderId = Resolve(metadata, ChannelMetadataKeys.SenderId),
+                MessageId = Resolve(metadata, ChannelMetadataKeys.MessageId),
+                PlatformMessageId = Resolve(metadata, ChannelMetadataKeys.PlatformMessageId),
+            },
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
+    }
+
+    private static string? Resolve(IReadOnlyDictionary<string, string> metadata, string key) =>
+        metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value.Trim()
+            : null;
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)
     {

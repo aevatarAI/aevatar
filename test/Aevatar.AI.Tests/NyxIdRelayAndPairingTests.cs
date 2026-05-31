@@ -214,10 +214,14 @@ public class NyxIdChannelBotsToolTests
 
     private static void SetFakeToken()
     {
-        var key = Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdAccessToken;
         Aevatar.AI.Abstractions.ToolProviders.AgentToolRequestContext.Current =
-            Aevatar.AI.Abstractions.ToolProviders.AgentToolExecutionContextMapper.FromMetadata(
-                new Dictionary<string, string> { [key] = "fake-token" });
+            Aevatar.AI.Abstractions.ToolProviders.AgentToolExecutionContext.Empty with
+            {
+                Credentials = Aevatar.AI.Abstractions.ToolProviders.AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "fake-token",
+                },
+            };
     }
 
     private static void ClearToken() =>
