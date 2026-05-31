@@ -1623,7 +1623,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return false;
         }
 
-        // Refactor (issue1553): Old pattern: hardcoded /daily skill name. New principle: generic skill discovery, no skill-name in routing logic.
+        // Refactor (iter1/cluster-issue1553): Old pattern: hardcoded /daily skill name. New principle: generic skill discovery, no skill-name in routing logic.
         return TryBuildSlashSkillDiscoveryPrompt(text, commandName, argumentText, out prompt);
     }
 

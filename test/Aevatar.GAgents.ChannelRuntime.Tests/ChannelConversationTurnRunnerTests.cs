@@ -1251,7 +1251,7 @@ public sealed class ChannelConversationTurnRunnerTests
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
     // non-slash text path unchanged (owner-LLM chat fallback).
     [Fact]
-    public async Task RunInboundAsync_ShouldGateInvoiceSlashCommandToInit_WhenSenderUnbound()
+    public async Task RunInboundAsync_ShouldGateUnknownSlashCommandToInit_WhenSenderUnbound()
     {
         var broker = new InMemoryCapabilityBroker();
         var services = new ServiceCollection()
@@ -1278,7 +1278,7 @@ public sealed class ChannelConversationTurnRunnerTests
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
     // non-slash text path unchanged (owner-LLM chat fallback).
     [Fact]
-    public async Task RunInboundAsync_ShouldGateUnknownSlashCommandToInit_WhenSenderUnbound()
+    public async Task RunInboundAsync_ShouldGateInvoiceSlashCommandToInit_WhenSenderUnbound()
     {
         var broker = new InMemoryCapabilityBroker();
         var services = new ServiceCollection()

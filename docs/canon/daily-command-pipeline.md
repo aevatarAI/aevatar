@@ -28,8 +28,8 @@ owner: eanzhao
 
 当前可观察结果：
 1. aevatar 会 best-effort 对原消息加 ✓ emoji 反应；该调用是 fire-and-forget，不等待成功，缺权限或 Lark 拒绝时只记录日志。
-2. `/daily` slash shortcut 不走本地 agent-builder 创建逻辑；`ChannelConversationTurnRunner` 把它改写为一次 LLM turn，要求模型先调用 `use_skill(skill="chrono-ai-daily", args="<slash args>")`。
-3. `use_skill` 通过 `IRemoteSkillFetcher` / `OrnnSkillClient` 从 Ornn 拉取 skill 指令；Ornn API 访问经 NyxID proxy（默认 slug 可由 `Aevatar:Ornn:NyxIdSlug` 覆盖）。
+2. `/daily` slash shortcut 不走本地 agent-builder 创建逻辑；`ChannelConversationTurnRunner` 把它改写为一次 LLM turn，要求模型先通过 `ornn_search_skills` 按命令名搜索，再对最匹配的结果调用 `use_skill`。
+3. `use_skill` 通过 `IRemoteSkillFetcher` / `OrnnSkillClient` 从 Ornn 拉取被 discovery 选中的 skill 指令；Ornn API 访问经 NyxID proxy（默认 slug 可由 `Aevatar:Ornn:NyxIdSlug` 覆盖）。
 4. daily 报告由当前 conversation reply 链路返回到原 Lark 私聊。`202 Accepted`、✓ reaction、`use_skill` 成功、报告投递成功是不同观察点。
 5. `/agents`、`/agent-status <id>`、`/run-agent`、`/disable-agent`、`/enable-agent`、`/delete-agent` 管理的是 catalog 中已有的 scheduled agents；这些命令走 accepted-only command ports，状态通过后续 query/readmodel 观察。
 
@@ -45,8 +45,8 @@ owner: eanzhao
        ▲                                                                            │
        │                                                                            ▼
        │                                      ┌──────────────────────────┐    ┌──────────────┐
-       │                                      │ use_skill / Ornn skill   │◀──▶│ NyxID Proxy  │
-       │                                      │ chrono-ai-daily          │    │ s/ornn       │
+       │                                      │ Ornn discovery +         │◀──▶│ NyxID Proxy  │
+       │                                      │ selected skill           │    │ s/ornn       │
        │                                      └─────────────┬────────────┘    └──────────────┘
        │                                                    ▼
        │                                      ┌──────────────────────────┐    ┌──────────────┐
@@ -60,8 +60,8 @@ owner: eanzhao
 |----|------|------|
 | ① Lark → NyxID | 入站 | Lark 把 `im.message.receive_v1` 推到 NyxID 的 channel bot relay webhook |
 | ② NyxID → aevatar | 入站 | NyxID 把规范化后的 payload + 签名 JWT 转发到 aevatar `/api/webhooks/nyxid-relay` |
-| ③ aevatar 内部 | 处理 | 鉴权 → 解析 `/daily` → 改写为 `use_skill("chrono-ai-daily")` LLM turn |
-| ④ aevatar → NyxID → Ornn | 技能加载 | `OrnnSkillClient` 经 NyxID proxy 拉取 `chrono-ai-daily` skill JSON |
+| ③ aevatar 内部 | 处理 | 鉴权 → 解析 `/daily` → 改写为 `ornn_search_skills` + generic `use_skill` LLM turn |
+| ④ aevatar → NyxID → Ornn | 技能加载 | `OrnnSkillClient` 经 NyxID proxy 拉取 discovery 选中的 skill JSON |
 | ⑤ aevatar → NyxID → GitHub | LLM / skill 工具调用 | skill 指令驱动工具调用；GitHub 访问仍经 NyxID proxy 注入用户凭据 |
 | ⑥ GitHub → aevatar | 工具响应 | JSON 结果回到 LLM；LLM 总结成 daily 文本 |
 | ⑦ aevatar → NyxID → Lark | 出站回执 | conversation reply 链路把文本投递到原私聊 |
@@ -81,9 +81,12 @@ Lark User      Lark App     NyxID Relay     aevatar(webhook)    Ornn/use_skill  
    │              │              │                │── ✓ react ──────────────────────────▶ Lark             │          │
    │              │              │                │                      │                  │              │          │
    │              │              │                │── parse /daily       │                  │              │          │
-   │              │              │                │── build LLM prompt: use_skill("chrono-ai-daily") ───────▶│
+   │              │              │                │── build LLM prompt: ornn_search_skills + use_skill ──────▶│
    │              │              │                │                      │                  │              │          │
-   │              │              │                │                      │◀── use_skill ──────────────────────────────│
+   │              │              │                │                      │◀── ornn_search_skills ─────────────────────│
+   │              │              │                │                      │── search skills ─▶ NyxID ───▶ Ornn         │
+   │              │              │                │                      │◀─ skill list ───── NyxID ◀── Ornn         │
+   │              │              │                │                      │◀── use_skill(selected) ───────────────────│
    │              │              │                │                      │── get skill ───▶ NyxID ───────▶ Ornn       │
    │              │              │                │                      │◀─ SKILL.md ───── NyxID ◀────── Ornn       │
    │              │              │                │                      │                  │              │          │
@@ -166,15 +169,15 @@ QA 关注点：
    - 文件：`agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderCardFlow.cs`
    - 校验：`evt.Text` 必须以 `/` 开头；`chat_type == "p2p"`（私聊）；命令必须在已知列表里
    - 已知命令：`/agents /agent-status /run-agent /disable-agent /enable-agent /delete-agent`
-   - `/daily` 与其他未知 slash（如 `/goal`）是 Ornn skill shortcut：本路由放行给 LLM reply path，不走 `agent_builder`
-   - 不在白名单 → fall through；由 `BuildLlmRequestActivity(...)` 强制走 Ornn skill 搜索/加载，而不是本地 Unknown command 回复
+   - `/daily` 与其他未知 slash（如 `/goal`）是 Ornn skill-backed command：本路由放行给 LLM reply path，不走 `agent_builder`
+   - 不在白名单 → fall through；由 `BuildLlmRequestActivity(...)` 强制走 Ornn skill discovery + 加载，而不是本地 Unknown command 回复
    - 非私聊 → 回 `BuildPrivateChatRestrictionReply()`，不创建 agent、不执行 tool
 
 3. `ChannelConversationTurnRunner.BuildLlmRequestActivity(...)`
    - 文件：`agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs`
-   - `TryBuildSkillInvocationPrompt()` 识别 `/daily` 或 `/daily ...`
-   - 输出 LLM prompt：要求先调用 `use_skill`，`skill="chrono-ai-daily"`，`args` 为 `/daily` 后面的原始参数文本
-   - 其他非本地 slash（如 `/goal`）输出 LLM prompt：要求先调用 `ornn_search_skills(query="<command>")`，再 `use_skill` 最匹配的 skill，并把 slash 后面的原始参数作为 `args`
+   - `TryBuildSkillInvocationPrompt()` 识别所有非本地 slash command
+   - 输出 LLM prompt：要求先调用 `ornn_search_skills(query="<command>")`，再 `use_skill` 最匹配的 skill，并把 slash 后面的原始参数作为 `args`
+   - `/daily` 与其他非本地 slash（如 `/goal`）走同一 discovery 链路；aevatar 不感知具体 skill 名
    - 原始命令文本保留在 prompt 中，便于 skill 按自己的契约解析参数
 
 4. `NyxIdConversationReplyGenerator.GenerateReplyAsync(...)`
@@ -202,8 +205,8 @@ QA 关注点：
 ### 阶段 ④ aevatar → NyxID → Ornn（skill 加载）
 
 **Skill 加载**：
-- `UseSkillTool` 参数：`skill="chrono-ai-daily"`，`args` 为 `/daily` 后面的原始参数文本。
-- 本地 `LocalSkillCatalog` 未命中时，`UseSkillTool` 每次按当前 NyxID token 调用 `OrnnRemoteSkillFetcher.FetchSkillAsync()`，再由 `OrnnSkillClient.GetSkillJsonAsync(token, "chrono-ai-daily")` 经 NyxID proxy 拉取远程 skill；远程 skill 不写入进程级缓存。
+- `use_skill` 参数：`skill` 来自 `ornn_search_skills` 的最匹配结果，`args` 为 slash command 后面的原始参数文本。
+- 本地 `LocalSkillCatalog` 未命中时，`UseSkillTool` 每次按当前 NyxID token 调用 `OrnnRemoteSkillFetcher.FetchSkillAsync()`，再由 `OrnnSkillClient.GetSkillJsonAsync(token, selectedSkillName)` 经 NyxID proxy 拉取远程 skill；远程 skill 不写入进程级缓存。
 - `OrnnSkillClient` 使用当前 NyxID access token，经 `NyxIdApiClient.ProxyRequestAsync` 访问 Ornn API；默认 NyxID service slug 来自 Ornn options，可由 `Aevatar:Ornn:NyxIdSlug` 覆盖。
 - 单次 Ornn 拉取有 30s per-call timeout；timeout 或 proxy error 会返回 skill not found / loading failure，让 LLM 走错误说明路径。外层 reply generation 不再用固定 120s 之类的硬超时截断长 skill workflow。
 - `../chrono-ornn` 不在本 worktree 同级目录时，本文只描述 aevatar 可验证的 skill bridge 契约，不复制 Ornn skill 内部实现。
@@ -428,11 +431,11 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 ## 10. 命令参数与文案矩阵
 
-`/daily` 参数解析属于 Ornn `chrono-ai-daily` skill 的契约；aevatar 本地只把 `/daily` 后面的原始文本作为 `use_skill.args` 透传。下表用于 QA 描述用户意图，不表示本仓库有本地 daily 创建 parser。
+`/daily` 参数解析属于 Ornn discovery 选中的 skill 契约；aevatar 本地只把 `/daily` 后面的原始文本作为 `use_skill.args` 透传。下表用于 QA 描述用户意图，不表示本仓库有本地 daily 创建 parser。
 
 | 输入 | aevatar 本地处理 | 下游语义 |
 |------|----------------------|----------|
-| `/daily` | `use_skill.args=""` | 已存偏好 / GitHub fallback 由 `chrono-ai-daily` skill 解释 |
+| `/daily` | `use_skill.args=""` | 已存偏好 / GitHub fallback 由选中的 skill 解释 |
 | `/daily alice` | `use_skill.args="alice"` | username、是否保存偏好由 skill 契约解释 |
 | `/daily github_username=alice` | 原样透传 args | 命名参数由 skill 契约解释 |
 | `/daily alice schedule_time=14:30` | 原样透传 args | cron / timezone 由 skill 契约解释 |
@@ -468,13 +471,13 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 文件：`test/Aevatar.GAgents.ChannelRuntime.Tests/AgentBuilderCardFlowTests.cs`
 
 应覆盖：
-- ✅ `/daily` 不带任何参数 → agent-builder router fall through，由 LLM reply path 处理 Ornn skill shortcut
+- ✅ `/daily` 不带任何参数 → agent-builder router fall through，由 LLM reply path 处理 Ornn skill-backed command
 - ✅ `/daily alice` / `/DAILY alice schedule_time=09:00` → agent-builder router fall through
-- ✅ `ChannelConversationTurnRunner` 把 `/daily alice` 改写成包含 `use_skill`、`chrono-ai-daily`、`alice`、原始命令文本的 LLM request
+- ✅ `ChannelConversationTurnRunner` 把 `/daily alice` 改写成包含 `ornn_search_skills`、`use_skill`、`daily`、`alice`、原始命令文本的 LLM request，且不包含具体 skill 名
 - ✅ 未知 slash 命令 `/goal ...` → agent-builder router fall through；`ChannelConversationTurnRunner` 改写成先 `ornn_search_skills` 再 `use_skill`
 - ✅ 非私聊（`chat_type != "p2p"`）→ `BuildPrivateChatRestrictionReply`，**不**产生 ToolCall
 - ❌ 边界：Ornn skill load 失败 → 用户看到 skill loading / unavailable 说明，不创建本地 runner
-- ❌ 边界：`/daily` 参数非法 → 由 `chrono-ai-daily` skill 返回参数错误文案
+- ❌ 边界：`/daily` 参数非法 → 由选中的 skill 返回参数错误文案
 
 ### 12.2 单元测试 — Agent management 层
 
@@ -534,9 +537,9 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 - Orleans / actor runtime：单元测试用 in-proc `IActorRuntime`
 
 用例：
-1. 黄金路径：`/daily alice` → 期望 ✓ emoji best-effort；conversation LLM request 包含 `use_skill` / `chrono-ai-daily` / `alice`；最终报告经 reply 链路投递到原 Lark 私聊
+1. 黄金路径：`/daily alice` → 期望 ✓ emoji best-effort；conversation LLM request 包含 `ornn_search_skills` / `use_skill` / `daily` / `alice`，且不包含具体 skill 名；最终报告经 reply 链路投递到原 Lark 私聊
 2. Ornn skill load 失败：mock `OrnnSkillClient.GetSkillJsonAsync` 返回 null / timeout → 期望错误说明投递给用户，不创建本地 runner
-3. GitHub 未绑：由 `chrono-ai-daily` skill / NyxID proxy 返回授权提示；aevatar 本地不创建 API key 或 runner
+3. GitHub 未绑：由 discovery 选中的 skill / NyxID proxy 返回授权提示；aevatar 本地不创建 API key 或 runner
 4. GitHub proxy 全失败（#439）：mock GitHub search 返回 error JSON → 期望报告显式暴露工具失败，不伪装成“无活动”
 5. GitHub proxy 部分失败（#439）：1 成功 + 2 失败 → 期望最终输出含失败 endpoint 列表（修复后才能过）
 6. 投递主失败 fallback 成功：mock 主 Lark reply 返回 230002 → 验证用 fallback receive_id 重试 → 成功
@@ -658,7 +661,7 @@ Lark 开发者后台：
 
 1. **加 emoji 反应**和**daily 报告**不是同一个 HTTP 请求；emoji 是 fire-and-forget 的 best-effort 反应，当前 `/daily` 报告走 conversation reply / Ornn skill 链路。两者可以独立失败。
 2. **首次 `/daily` 当前是 Ornn skill turn**：用户看到的是 skill 生成的 daily 报告或错误说明，不应期待本地 agent id 回执。
-3. **`run_immediately` 是 skill 参数语义**，不是本地 command ACK 语义；本仓库只透传 `/daily` 后面的原始参数给 `chrono-ai-daily`。
+3. **`run_immediately` 是 skill 参数语义**，不是本地 command ACK 语义；本仓库只透传 `/daily` 后面的原始参数给 discovery 选中的 skill。
 4. 已存在 scheduled agent 的 `OutboundConfig` / 报告 prompt 不会因 NyxID 上的 GitHub username 绑定变化自动回流。需要 `/delete-agent <id>` 后重建该 agent。
 5. `MaxRetryAttempts=1` 意味着失败最多自动再试**一次**（30 秒后）；不是无限重试。两次都失败才会进 `Failed` 状态。
 6. cron 默认时区是 UTC，不是用户所在时区。scheduled agent 若使用 `0 9 * * *`，中国用户视角是每天 17:00；要写 `schedule_timezone=Asia/Shanghai` 才会按本地语义换算。

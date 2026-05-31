@@ -73,12 +73,46 @@ public sealed class ChannelRuntimeSourceRegressionTests
                 !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
                 !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
                 !file.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: File.ReadAllText(file, Encoding.UTF8)))
+            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: ReadPolicySurface(file)))
             .Where(item => item.Source.Contains(token, StringComparison.Ordinal))
             .Select(static item => item.File)
             .ToArray();
 
         hits.Should().BeEmpty("the retired relay builder flow was deleted in #1306 and must not re-enter production code or tests");
+    }
+
+    [Fact]
+    public void Production_skill_routing_must_not_reintroduce_concrete_daily_skill_hardcoding()
+    {
+        // Refactor (iter1/cluster-issue1553): Old pattern: production code and prompts knew
+        // concrete `/daily` -> `chrono-ai-daily` routing. New principle: skill commands use
+        // generic discovery; specific skill names may appear only in tests/docs fixtures.
+        var repositoryRoot = GetRepositoryRoot();
+        var forbiddenTokens = new[]
+        {
+            "/daily",
+            "chrono-ai-daily",
+            "DailySkillName",
+            "TryBuildDailySkillInvocationPrompt",
+        };
+        var hits = Directory.EnumerateFiles(repositoryRoot, "*.*", SearchOption.AllDirectories)
+            .Where(static file =>
+                (file.EndsWith(".cs", StringComparison.Ordinal) ||
+                 file.EndsWith(".proto", StringComparison.Ordinal) ||
+                 file.EndsWith(".md", StringComparison.Ordinal)) &&
+                (file.Contains($"{Path.DirectorySeparatorChar}agents{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+                 file.Contains($"{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}", StringComparison.Ordinal)) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: ReadPolicySurface(file)))
+            .SelectMany(item => forbiddenTokens
+                .Where(token => item.Source.Contains(token, StringComparison.OrdinalIgnoreCase))
+                .Select(token => $"{item.File}: {token}"))
+            .ToArray();
+
+        hits.Should().BeEmpty(
+            "production code, prompts, route contracts, type names, and field names must not hardcode concrete skill names; use generic skill discovery");
     }
 
     private static string ReadRepositorySources(params string[] relativeDirectories)
@@ -110,6 +144,14 @@ public sealed class ChannelRuntimeSourceRegressionTests
     {
         var withoutBlockComments = Regex.Replace(source, @"/\*.*?\*/", " ", RegexOptions.Singleline);
         return Regex.Replace(withoutBlockComments, @"//.*?$", string.Empty, RegexOptions.Multiline);
+    }
+
+    private static string ReadPolicySurface(string file)
+    {
+        var source = File.ReadAllText(file, Encoding.UTF8);
+        return file.EndsWith(".md", StringComparison.Ordinal)
+            ? source
+            : StripComments(source);
     }
 
     private static string GetRepositoryRoot()
