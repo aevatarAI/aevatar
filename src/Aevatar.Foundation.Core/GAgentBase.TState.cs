@@ -59,9 +59,25 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     {
         var eventSourcing = EnsureEventSourcingConfigured();
         await OnDeactivateAsync(ct);
-        await eventSourcing.ConfirmEventsAsync(ct);
-        await eventSourcing.PersistSnapshotAsync(_state, ct);
-        await base.DeactivateAsync(ct);
+        try
+        {
+            try
+            {
+                await eventSourcing.ConfirmEventsAsync(ct);
+            }
+            catch (EventStoreOptimisticConcurrencyException)
+            {
+                // Refactor (issue1489/first-slice): Old pattern: deactivation OCC escaped with stale pending events and could block base lifecycle. New principle: deactivation-only OCC containment drains stale pending events, skips snapshot, and still runs base shutdown.
+                eventSourcing.DiscardPendingEvents();
+                return;
+            }
+
+            await eventSourcing.PersistSnapshotAsync(_state, ct);
+        }
+        finally
+        {
+            await base.DeactivateAsync(ct);
+        }
     }
 
     /// <summary>Hook invoked after state changes, useful for CQRS projection.</summary>
