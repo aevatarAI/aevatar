@@ -326,7 +326,7 @@ public sealed class AgentBuilderCardFlowTests
     [InlineData("hello there")]
     [InlineData("现在就是私聊")]
     [InlineData("   ")]
-    public async Task TryResolveAsync_NonSlashTextWithoutListIntent_FallsThrough(string text)
+    public async Task TryResolveAsync_NonSlashText_FallsThrough(string text)
     {
         var inbound = new ChannelInboundEvent
         {

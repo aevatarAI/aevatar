@@ -25,13 +25,6 @@ public static class AgentBuilderCardFlow
     private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
 
-    private static readonly HashSet<string> ListIntents = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "/agents",
-        "list agents",
-        "我的助手",
-    };
-
     public static bool TryResolve(ChannelInboundEvent evt, out AgentBuilderFlowDecision? decision) =>
         TryResolve(evt, preferredGithubUsername: null, out decision);
 
@@ -59,19 +52,6 @@ public static class AgentBuilderCardFlow
 
         if (TryResolveTextCommand(evt, out decision))
             return true;
-
-        if (IsPrivateChatText(evt))
-        {
-            var normalized = NormalizeText(evt.Text);
-
-            if (ListIntents.Contains(normalized))
-            {
-                decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
-                return true;
-            }
-
-            return false;
-        }
 
         if (!string.Equals(evt.ChatType, CardActionChatType, StringComparison.Ordinal))
             return false;
@@ -366,14 +346,8 @@ public static class AgentBuilderCardFlow
         return value.Length > 0;
     }
 
-    private static bool IsPrivateChatText(ChannelInboundEvent evt) =>
-        IsPrivateChat(evt.ChatType) &&
-        !string.IsNullOrWhiteSpace(evt.Text);
-
     private static bool IsPrivateChat(string? chatType) =>
         string.Equals(chatType, PrivateChatType, StringComparison.OrdinalIgnoreCase);
-
-    private static string NormalizeText(string? text) => (text ?? string.Empty).Trim();
 
     private static string BuildPrivateChatRestrictionReply(string command) =>
         $"`{command}` only works in a private chat with this bot. Please DM me and run `{command}` again.";

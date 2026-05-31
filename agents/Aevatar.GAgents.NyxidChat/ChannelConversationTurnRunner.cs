@@ -989,11 +989,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ct);
         if (decision is null)
         {
-            // No slash-command/card flow matched.
-        }
-
-        if (decision is null)
+            // No slash-command/card flow matched. AgentBuilderCardFlow explicitly leaves
+            // non-slash text and unknown slash shortcuts for the LLM fallback path.
             return null;
+        }
 
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
