@@ -58,10 +58,22 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     public override async Task DeactivateAsync(CancellationToken ct = default)
     {
         var eventSourcing = EnsureEventSourcingConfigured();
-        await OnDeactivateAsync(ct);
-        await eventSourcing.ConfirmEventsAsync(ct);
-        await eventSourcing.PersistSnapshotAsync(_state, ct);
-        await base.DeactivateAsync(ct);
+        try
+        {
+            await OnDeactivateAsync(ct);
+            await eventSourcing.ConfirmEventsAsync(ct);
+            await eventSourcing.PersistSnapshotAsync(_state, ct);
+        }
+        finally
+        {
+            // Refactor (iter290/cluster-gagentbase-deactivation-base-cleanup-finally):
+            // Old pattern: event-sourcing flush or snapshot failure skipped base lifecycle cleanup.
+            // New principle: base cleanup always runs. When cleanup succeeds, the original
+            // hook/confirm/snapshot failure propagates. When cleanup itself fails, callers
+            // observe the base cleanup exception semantics (for example, AggregateException
+            // pinned by AgentLifecycleBddTests:167).
+            await base.DeactivateAsync(ct);
+        }
     }
 
     /// <summary>Hook invoked after state changes, useful for CQRS projection.</summary>
