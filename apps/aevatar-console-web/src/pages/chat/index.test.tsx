@@ -91,9 +91,9 @@ jest.mock("@/shared/studio/api", () => ({
       })),
       getUserLlmSettings: jest.fn(async () => ({
         savedRoute: "",
-        savedRouteLabel: "NyxID Gateway",
+        savedRouteLabel: "Company LLM Gateway",
         effectiveRoute: "",
-        effectiveRouteLabel: "NyxID Gateway",
+        effectiveRouteLabel: "Company LLM Gateway",
         routeFallbackActive: false,
         fallbackReason: null,
         catalogStatus: "ready",
@@ -107,7 +107,7 @@ jest.mock("@/shared/studio/api", () => ({
         routeOptions: [
           {
             routeValue: "",
-            label: "NyxID Gateway",
+            label: "Company LLM Gateway",
             source: "gateway_provider",
             status: "ready",
             allowed: true,
@@ -887,7 +887,7 @@ describe("ChatPage", () => {
     expect(
       await screen.findByRole("button", { name: "Conversation model settings" })
     ).toHaveTextContent("Provider default");
-    expect(screen.getAllByText("NyxID Gateway").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Company LLM Gateway")).length).toBeGreaterThan(0);
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Conversation model settings" })

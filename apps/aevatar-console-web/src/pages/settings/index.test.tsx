@@ -30,9 +30,9 @@ const { studioApi: mockStudioApi } = jest.requireMock(
 function createLlmSettings(overrides: Record<string, unknown> = {}) {
   return {
     savedRoute: "",
-    savedRouteLabel: "NyxID Gateway",
+    savedRouteLabel: "Company LLM Gateway",
     effectiveRoute: "",
-    effectiveRouteLabel: "NyxID Gateway",
+    effectiveRouteLabel: "Company LLM Gateway",
     routeFallbackActive: false,
     fallbackReason: null,
     catalogStatus: "ready",
@@ -46,7 +46,7 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
     routeOptions: [
       {
         routeValue: "",
-        label: "NyxID Gateway",
+        label: "Company LLM Gateway",
         source: "gateway_provider",
         status: "ready",
         allowed: true,
@@ -158,6 +158,7 @@ describe("SettingsPage", () => {
     expect(screen.getByText("How defaults work")).toBeTruthy();
     expect(screen.getByText("Technical preview")).toBeTruthy();
     expect(screen.getAllByText("Effective route").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Company LLM Gateway").length).toBeGreaterThan(0);
     expect(screen.getByText("Connected providers")).toBeTruthy();
     expect(screen.getAllByText("OpenAI Team Service").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Default model").length).toBeGreaterThan(0);

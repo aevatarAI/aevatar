@@ -767,9 +767,9 @@ jest.mock("@/shared/studio/api", () => ({
     })),
     getUserLlmSettings: jest.fn(async () => ({
       savedRoute: "",
-      savedRouteLabel: "NyxID Gateway",
+      savedRouteLabel: "Company LLM Gateway",
       effectiveRoute: "",
-      effectiveRouteLabel: "NyxID Gateway",
+      effectiveRouteLabel: "Company LLM Gateway",
       routeFallbackActive: false,
       fallbackReason: null,
       catalogStatus: "ready",
@@ -783,7 +783,7 @@ jest.mock("@/shared/studio/api", () => ({
       routeOptions: [
         {
           routeValue: "",
-          label: "NyxID Gateway",
+          label: "Company LLM Gateway",
           source: "gateway_provider",
           status: "ready",
           allowed: true,
@@ -3454,7 +3454,7 @@ describe("StudioPage", () => {
       savedRoute: "/api/v1/proxy/s/stale-openai",
       savedRouteLabel: "/api/v1/proxy/s/stale-openai",
       effectiveRoute: "",
-      effectiveRouteLabel: "NyxID Gateway",
+      effectiveRouteLabel: "Company LLM Gateway",
       routeFallbackActive: true,
       fallbackReason: "saved_route_unavailable",
       catalogStatus: "ready",
@@ -3468,7 +3468,7 @@ describe("StudioPage", () => {
       routeOptions: [
         {
           routeValue: "",
-          label: "NyxID Gateway",
+          label: "Company LLM Gateway",
           source: "gateway_provider",
           status: "ready",
           allowed: true,
@@ -3503,7 +3503,7 @@ describe("StudioPage", () => {
 
     const routeLabel = await screen.findByTestId("workflow-dry-run-route");
     await waitFor(() => {
-      expect(routeLabel).toHaveTextContent("NyxID Gateway");
+      expect(routeLabel).toHaveTextContent("Company LLM Gateway");
     });
   });
 

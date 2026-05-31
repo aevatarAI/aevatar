@@ -6,9 +6,9 @@ import {
 
 const llmSettings = {
   savedRoute: USER_LLM_ROUTE_GATEWAY,
-  savedRouteLabel: "NyxID Gateway",
+  savedRouteLabel: "Company LLM Gateway",
   effectiveRoute: USER_LLM_ROUTE_GATEWAY,
-  effectiveRouteLabel: "NyxID Gateway",
+  effectiveRouteLabel: "Company LLM Gateway",
   routeFallbackActive: false,
   fallbackReason: null,
   catalogStatus: "ready",
@@ -22,7 +22,7 @@ const llmSettings = {
   routeOptions: [
     {
       routeValue: USER_LLM_ROUTE_GATEWAY,
-      label: "NyxID Gateway",
+      label: "Company LLM Gateway",
       source: "gateway_provider",
       status: "ready",
       allowed: true,
@@ -68,9 +68,23 @@ const llmSettings = {
 describe("buildConversationRouteOptions", () => {
   it("uses backend route options without deriving routes from provider slugs", () => {
     expect(buildConversationRouteOptions(llmSettings).map((option) => option.label)).toEqual([
-      "NyxID Gateway",
+      "Company LLM Gateway",
       "Anthropic Team Service",
     ]);
+  });
+
+  it("uses a generic gateway label when backend sends a blank gateway label", () => {
+    expect(
+      buildConversationRouteOptions({
+        ...llmSettings,
+        routeOptions: [
+          {
+            ...llmSettings.routeOptions[0],
+            label: " ",
+          },
+        ],
+      }).map((option) => option.label)
+    ).toEqual(["Gateway"]);
   });
 });
 
