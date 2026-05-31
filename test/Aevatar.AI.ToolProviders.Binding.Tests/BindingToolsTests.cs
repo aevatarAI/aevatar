@@ -201,8 +201,14 @@ public class BindingToolsTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-            doc.RootElement.GetProperty("workflow").GetProperty("workflow_id").GetString().Should().Be("daily-digest");
+            doc.RootElement.GetProperty("accepted").GetBoolean().Should().BeTrue();
+            doc.RootElement.GetProperty("workflow_id").GetString().Should().Be("daily-digest");
             doc.RootElement.GetProperty("revision_id").GetString().Should().Be("rev-result");
+            doc.RootElement.GetProperty("read_model_url").GetString().Should().Be("/api/scopes/scope-workflows/workflows/daily-digest");
+            doc.RootElement.GetProperty("acceptance_stage").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("propagation_stage").GetString().Should().Be("readmodel_propagating");
+            doc.RootElement.GetProperty("command_handles").GetArrayLength().Should().Be(1);
+            doc.RootElement.TryGetProperty("workflow", out _).Should().BeFalse();
 
             captured.Should().NotBeNull();
             captured!.ScopeId.Should().Be("scope-workflows");
@@ -604,12 +610,19 @@ public class BindingToolsTests
                 throw _exception;
 
             _captureRequest?.Invoke(request);
-            var workflow = BuildWorkflowSummary(request.ScopeId, request.WorkflowId);
             return Task.FromResult(new ScopeWorkflowUpsertResult(
-                workflow,
+                request.ScopeId,
+                request.WorkflowId,
+                $"service-key-{request.WorkflowId}",
                 "rev-result",
                 "definition-prefix",
-                "expected-actor"));
+                "expected-actor",
+                "expected-deployment",
+                DateTimeOffset.UtcNow,
+                [new ScopeWorkflowCommandAcceptedHandle("create_revision", "target-actor", "cmd-1", "corr-1")],
+                $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}",
+                DisplayName: $"Display {request.WorkflowId}",
+                WorkflowName: $"workflow-name-{request.WorkflowId}"));
         }
     }
 

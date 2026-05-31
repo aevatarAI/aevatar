@@ -577,7 +577,7 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
-    public async Task HandleUpsertWorkflowAsync_ShouldReturnOk_WhenCommandSucceeds()
+    public async Task HandleUpsertWorkflowAsync_ShouldReturnAccepted_WithLocation_WhenCommandSucceeds()
     {
         var http = CreateHttpContext();
         var snapshot = new ServiceCatalogSnapshot(
@@ -610,8 +610,15 @@ public sealed class ScopeWorkflowEndpointsTests
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/scopes/user-1/workflows/approval");
+        body.Should().Contain("\"acceptanceStage\":\"accepted\"");
+        body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
+        body.Should().Contain("\"readModelUrl\":\"/api/scopes/user-1/workflows/approval\"");
+        body.Should().Contain("\"commandHandles\"");
+        body.Should().NotContain("\"workflow\"");
     }
 
     private static IScopeWorkflowCommandPort BuildCommandPort(
@@ -620,13 +627,11 @@ public sealed class ScopeWorkflowEndpointsTests
         FakeWorkflowActorBindingReader? bindingReader = null)
     {
         var resolvedQueryPort = queryPort ?? new FakeServiceLifecycleQueryPort();
-        var queryService = BuildQueryApplicationService(resolvedQueryPort, bindingReader);
         return new ScopeWorkflowCommandApplicationService(
             commandPort ?? new FakeServiceCommandPort(),
             resolvedQueryPort,
             new NoOpServiceGovernanceCommandPort(),
             new NoOpServiceGovernanceQueryPort(),
-            queryService,
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
                 ServiceAppId = "default",

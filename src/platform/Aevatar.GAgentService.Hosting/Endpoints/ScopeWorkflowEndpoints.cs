@@ -26,7 +26,7 @@ public static class ScopeWorkflowEndpoints
     {
         var group = ScopeEndpointRouteGroups.MapScopeGroup(app).WithTags("ScopeWorkflows");
         group.MapPut("/{scopeId}/workflows/{workflowId}", HandleUpsertWorkflowAsync)
-            .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status200OK)
+            .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
@@ -109,7 +109,7 @@ public static class ScopeWorkflowEndpoints
                 request.DisplayName,
                 request.InlineWorkflowYamls,
                 request.RevisionId), ct);
-            return Results.Ok(result);
+            return Results.Accepted(result.ReadModelUrl, result);
         }
         catch (InvalidOperationException ex)
         {
