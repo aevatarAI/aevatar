@@ -46,7 +46,12 @@ public static class AgentToolExecutionContextMapper
         if (request.ToolContext is { } typedContext)
             return request.LlmControl?.ToToolContext(typedContext) ?? typedContext;
 
-        var mapped = FromMetadata(request.Metadata);
+        // Refactor (issue1574): Old pattern: core request mapping promoted owned control keys from Metadata.
+        // New principle: core LLMRequest control is typed; Metadata contributes only scrubbed annotations.
+        var mapped = AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = StripOwnedControlKeys(request.Metadata),
+        };
         mapped = request.LlmControl?.ToToolContext(mapped) ?? mapped;
         var caller = request.CallerContext;
         return mapped with

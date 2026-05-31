@@ -10,7 +10,7 @@ namespace Aevatar.AI.Tests;
 public sealed class AgentToolExecutionContextMapperTests
 {
     [Fact]
-    public void FromRequest_WhenTypedFieldsAndLegacyMetadataOverlap_ShouldPreferTypedRequestCallerAndRouting()
+    public void FromRequest_WhenTypedFieldsAndLegacyMetadataOverlap_ShouldUseOnlyTypedControlAndScrubMetadata()
     {
         var request = new LLMRequest
         {
@@ -46,18 +46,87 @@ public sealed class AgentToolExecutionContextMapperTests
         var context = AgentToolExecutionContextMapper.FromRequest(request);
 
         context.Request.RequestId.Should().Be("typed-request");
-        context.Request.CallId.Should().Be("legacy-call");
+        context.Request.CallId.Should().BeNull();
         context.Caller.ScopeId.Should().Be("typed-scope");
         context.Caller.OwnerSubject.Should().Be("typed-owner");
         context.Caller.ResponseId.Should().Be("typed-response");
         context.Credentials.NyxIdAccessToken.Should().Be("typed-access");
-        context.Credentials.NyxIdOrgToken.Should().Be("legacy-org");
+        context.Credentials.NyxIdOrgToken.Should().BeNull();
         context.Routing.ModelOverride.Should().Be("typed-model");
         context.Routing.NyxIdRoutePreference.Should().Be("typed-route");
         context.Routing.MaxToolRoundsOverride.Should().Be(9);
         context.Routing.UserMemoryPrompt.Should().Be("typed-memory");
         context.ExternalMetadata.Should().ContainSingle();
         context.ExternalMetadata["external-trace"].Should().Be("trace-1");
+    }
+
+    [Fact]
+    public void FromRequest_WhenOnlyMetadataContainsOwnedControlKeys_ShouldNotPromoteThemToControlContext()
+    {
+        var request = new LLMRequest
+        {
+            Messages = [],
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = "legacy-request",
+                [LLMRequestMetadataKeys.CallId] = "legacy-call",
+                [LLMRequestMetadataKeys.ScopeId] = "legacy-scope",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "legacy-access",
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = "legacy-org",
+                [LLMRequestMetadataKeys.ModelOverride] = "legacy-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "4",
+                ["external-trace"] = "trace-1",
+            },
+        };
+
+        var context = AgentToolExecutionContextMapper.FromRequest(request);
+
+        context.Request.RequestId.Should().BeNull();
+        context.Request.CallId.Should().BeNull();
+        context.Caller.ScopeId.Should().BeNull();
+        context.Credentials.NyxIdAccessToken.Should().BeNull();
+        context.Credentials.NyxIdOrgToken.Should().BeNull();
+        context.Routing.ModelOverride.Should().BeNull();
+        context.Routing.NyxIdRoutePreference.Should().BeNull();
+        context.Routing.MaxToolRoundsOverride.Should().BeNull();
+        context.ExternalMetadata.Should().ContainSingle();
+        context.ExternalMetadata["external-trace"].Should().Be("trace-1");
+    }
+
+    [Fact]
+    public void FromRequest_WhenToolContextIsProvided_ShouldReturnTypedContextAndIgnoreMetadataFallback()
+    {
+        var typedContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("typed-request", "typed-call"),
+            Credentials = new AgentToolCredentials("typed-token", null, null),
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["typed-note"] = "kept",
+            },
+        };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            ToolContext = typedContext,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = "metadata-request",
+                [LLMRequestMetadataKeys.CallId] = "metadata-call",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+                ["external-trace"] = "trace-1",
+            },
+        };
+
+        var context = AgentToolExecutionContextMapper.FromRequest(request);
+
+        context.Should().BeSameAs(typedContext);
+        context.Request.RequestId.Should().Be("typed-request");
+        context.Request.CallId.Should().Be("typed-call");
+        context.Credentials.NyxIdAccessToken.Should().Be("typed-token");
+        context.ExternalMetadata.Should().ContainSingle("typed-note", "kept");
+        context.ExternalMetadata.Should().NotContainKey("external-trace");
     }
 
     [Fact]
