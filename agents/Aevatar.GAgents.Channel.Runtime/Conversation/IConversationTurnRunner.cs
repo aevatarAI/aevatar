@@ -68,16 +68,46 @@ public sealed record ConversationStreamChunkResult(
     string? PlatformMessageId,
     bool EditUnsupported,
     string ErrorCode,
-    string ErrorSummary)
+    string ErrorSummary,
+    FailureKind FailureKind,
+    TimeSpan? RetryAfter,
+    int HttpStatus,
+    string RawErrorKey,
+    int RawErrorCode)
 {
     public static ConversationStreamChunkResult Succeeded(string? platformMessageId) =>
-        new(true, platformMessageId, false, string.Empty, string.Empty);
+        new(
+            true,
+            platformMessageId,
+            false,
+            string.Empty,
+            string.Empty,
+            FailureKind.Unspecified,
+            null,
+            0,
+            string.Empty,
+            0);
 
     public static ConversationStreamChunkResult Failed(
         string errorCode,
         string errorSummary,
-        bool editUnsupported = false) =>
-        new(false, null, editUnsupported, errorCode, errorSummary);
+        bool editUnsupported = false,
+        FailureKind failureKind = FailureKind.Unspecified,
+        TimeSpan? retryAfter = null,
+        int httpStatus = 0,
+        string? rawErrorKey = null,
+        int rawErrorCode = 0) =>
+        new(
+            false,
+            null,
+            editUnsupported,
+            errorCode,
+            errorSummary,
+            failureKind,
+            retryAfter,
+            httpStatus,
+            string.IsNullOrWhiteSpace(rawErrorKey) ? string.Empty : rawErrorKey.Trim(),
+            rawErrorCode);
 }
 
 // Refactor (iter17/cluster-038):

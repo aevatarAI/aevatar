@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -19,7 +20,27 @@ public sealed record NyxIdChannelRelayReplyResult(
     string? MessageId = null,
     string? PlatformMessageId = null,
     string? Detail = null,
-    bool EditUnsupported = false);
+    bool EditUnsupported = false,
+    FailureKind FailureKind = FailureKind.Unspecified,
+    TimeSpan? RetryAfter = null,
+    int HttpStatus = 0,
+    string? RawErrorKey = null,
+    int RawErrorCode = 0)
+{
+    public static NyxIdChannelRelayReplyResult FailedUpdateValidation(string detail) =>
+        new(
+            false,
+            Detail: detail,
+            FailureKind: FailureKind.PermanentAdapterError,
+            RawErrorKey: detail);
+}
+
+internal sealed record NyxIdApiErrorEnvelope(
+    string Detail,
+    int? HttpStatus,
+    string? RawErrorKey,
+    int? RawErrorCode,
+    TimeSpan? RetryAfter);
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient : IDisposable
@@ -600,8 +621,9 @@ public sealed class NyxIdApiClient : IDisposable
     /// by a prior send call.
     /// </param>
     /// <remarks>
-    /// Callers must treat <see cref="NyxIdChannelRelayReplyResult.EditUnsupported"/> as a terminal
-    /// signal and stop issuing edits against this message for the remainder of the turn.
+    /// Callers must treat <see cref="NyxIdChannelRelayReplyResult.FailureKind"/> as the authoritative
+    /// control-flow classification. <see cref="NyxIdChannelRelayReplyResult.EditUnsupported"/> is a
+    /// compatibility signal for platforms that explicitly reject message edits.
     /// </remarks>
     public async Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayReplyAsync(
         string token,
@@ -612,11 +634,11 @@ public sealed class NyxIdApiClient : IDisposable
         ArgumentNullException.ThrowIfNull(body);
 
         if (string.IsNullOrWhiteSpace(token))
-            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token");
+            return NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_access_token");
         if (string.IsNullOrWhiteSpace(platformMessageId))
-            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_platform_message_id");
+            return NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_platform_message_id");
         if (string.IsNullOrWhiteSpace(body.Text) && body.Metadata?.Card is null)
-            return new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload");
+            return NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_reply_payload");
 
         var response = await PostAsync(
             token,
@@ -628,15 +650,18 @@ public sealed class NyxIdApiClient : IDisposable
             }),
             ct);
 
-        if (TryParseErrorEnvelope(response, out var errorDetail))
+        if (TryParseStructuredErrorEnvelope(response, out var error))
         {
-            var editUnsupported =
-                errorDetail.Contains("edit_unsupported", StringComparison.Ordinal) ||
-                errorDetail.Contains("nyx_status=501", StringComparison.Ordinal);
+            var editUnsupported = IsEditUnsupported(error);
             return new NyxIdChannelRelayReplyResult(
                 false,
-                Detail: errorDetail,
-                EditUnsupported: editUnsupported);
+                Detail: error.Detail,
+                EditUnsupported: editUnsupported,
+                FailureKind: ClassifyUpdateFailure(error),
+                RetryAfter: error.RetryAfter,
+                HttpStatus: error.HttpStatus ?? 0,
+                RawErrorKey: error.RawErrorKey,
+                RawErrorCode: error.RawErrorCode ?? 0);
         }
 
         try
@@ -655,7 +680,10 @@ public sealed class NyxIdApiClient : IDisposable
         catch (JsonException ex)
         {
             _logger.LogWarning(ex, "Nyx channel relay reply update returned invalid JSON");
-            return new NyxIdChannelRelayReplyResult(false, Detail: "invalid_channel_relay_reply_update_response");
+            return new NyxIdChannelRelayReplyResult(
+                false,
+                Detail: "invalid_channel_relay_reply_update_response",
+                FailureKind: FailureKind.PermanentAdapterError);
         }
     }
 
@@ -670,7 +698,7 @@ public sealed class NyxIdApiClient : IDisposable
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return Task.FromResult(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+            return Task.FromResult(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_reply_text"));
 
         return UpdateChannelRelayReplyAsync(token, platformMessageId, new ChannelRelayReplyBody(text), ct);
     }
@@ -759,7 +787,11 @@ public sealed class NyxIdApiClient : IDisposable
                 _logger.LogWarning(
                     "NyxID API request failed: {Method} {Url} -> {Status}",
                     request.Method, request.RequestUri, (int)response.StatusCode);
-                return $"{{\"error\": true, \"status\": {(int)response.StatusCode}, \"body\": {EscapeJsonString(content)}}}";
+                var retryAfter = response.Headers.RetryAfter?.Delta;
+                var retryAfterJson = retryAfter.HasValue
+                    ? $", \"retry_after_seconds\": {(int)Math.Ceiling(retryAfter.Value.TotalSeconds)}"
+                    : string.Empty;
+                return $"{{\"error\": true, \"status\": {(int)response.StatusCode}, \"body\": {EscapeJsonString(content)}{retryAfterJson}}}";
             }
 
             return content;
@@ -785,10 +817,22 @@ public sealed class NyxIdApiClient : IDisposable
 
     private static bool TryParseErrorEnvelope(string response, out string detail)
     {
+        if (TryParseStructuredErrorEnvelope(response, out var error))
+        {
+            detail = error.Detail;
+            return true;
+        }
+
         detail = string.Empty;
+        return false;
+    }
+
+    private static bool TryParseStructuredErrorEnvelope(string response, out NyxIdApiErrorEnvelope error)
+    {
+        error = new NyxIdApiErrorEnvelope(string.Empty, null, null, null, null);
         if (string.IsNullOrWhiteSpace(response))
         {
-            detail = "empty_response";
+            error = new NyxIdApiErrorEnvelope("empty_response", null, null, null, null);
             return true;
         }
 
@@ -802,10 +846,7 @@ public sealed class NyxIdApiClient : IDisposable
                 return false;
             }
 
-            var status = root.TryGetProperty("status", out var statusProp) &&
-                         statusProp.ValueKind == JsonValueKind.Number
-                ? statusProp.GetInt32()
-                : (int?)null;
+            var status = TryGetInt(root, "status");
             var body = root.TryGetProperty("body", out var bodyProp) &&
                        bodyProp.ValueKind == JsonValueKind.String
                 ? bodyProp.GetString()
@@ -815,16 +856,107 @@ public sealed class NyxIdApiClient : IDisposable
                 ? messageProp.GetString()
                 : null;
 
-            detail = $"nyx_status={status?.ToString() ?? "unknown"}" +
+            var rawErrorKey = TryGetString(root, "error_key") ?? TryGetString(root, "error");
+            var rawErrorCode = TryGetInt(root, "error_code");
+            var retryAfter = TryGetRetryAfter(root);
+            TryMergeBodyError(body, ref rawErrorKey, ref rawErrorCode, ref retryAfter);
+
+            var detail = $"nyx_status={status?.ToString() ?? "unknown"}" +
                      (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
                      (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+            error = new NyxIdApiErrorEnvelope(detail, status, rawErrorKey, rawErrorCode, retryAfter);
             return true;
         }
         catch (JsonException)
         {
-            detail = $"invalid_error_envelope response_length={response.Length}";
+            error = new NyxIdApiErrorEnvelope(
+                $"invalid_error_envelope response_length={response.Length}",
+                null,
+                "invalid_error_envelope",
+                null,
+                null);
             return true;
         }
+    }
+
+    private static void TryMergeBodyError(
+        string? body,
+        ref string? rawErrorKey,
+        ref int? rawErrorCode,
+        ref TimeSpan? retryAfter)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return;
+
+        try
+        {
+            using var bodyDocument = JsonDocument.Parse(body);
+            var bodyRoot = bodyDocument.RootElement;
+            rawErrorKey ??= TryGetString(bodyRoot, "error") ?? TryGetString(bodyRoot, "code");
+            rawErrorCode ??= TryGetInt(bodyRoot, "error_code");
+            retryAfter ??= TryGetRetryAfter(bodyRoot);
+        }
+        catch (JsonException)
+        {
+            rawErrorKey ??= "malformed_error_body";
+        }
+    }
+
+    private static string? TryGetString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()
+            : null;
+
+    private static int? TryGetInt(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.Number &&
+        prop.TryGetInt32(out var value)
+            ? value
+            : null;
+
+    private static TimeSpan? TryGetRetryAfter(JsonElement root)
+    {
+        var seconds = TryGetInt(root, "retry_after_seconds") ?? TryGetInt(root, "retry_after");
+        if (seconds is > 0)
+            return TimeSpan.FromSeconds(seconds.Value);
+
+        var milliseconds = TryGetInt(root, "retry_after_ms");
+        return milliseconds is > 0 ? TimeSpan.FromMilliseconds(milliseconds.Value) : null;
+    }
+
+    private static bool IsEditUnsupported(NyxIdApiErrorEnvelope error) =>
+        string.Equals(error.RawErrorKey, "edit_unsupported", StringComparison.OrdinalIgnoreCase) ||
+        error.HttpStatus == 501;
+
+    private static FailureKind ClassifyUpdateFailure(NyxIdApiErrorEnvelope error)
+    {
+        if (IsEditUnsupported(error))
+            return FailureKind.PermanentAdapterError;
+
+        if (error.HttpStatus is 429 or >= 500)
+            return FailureKind.TransientAdapterError;
+
+        if (string.Equals(error.RawErrorKey, "rate_limited", StringComparison.OrdinalIgnoreCase))
+            return FailureKind.TransientAdapterError;
+
+        if (string.Equals(error.RawErrorKey, "platform_unavailable", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "channel_platform_unavailable", StringComparison.OrdinalIgnoreCase))
+        {
+            return FailureKind.PlatformUnavailable;
+        }
+
+        if (string.Equals(error.RawErrorKey, "validation_error", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "authentication_failed", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "forbidden", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "missing_access_token", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "missing_platform_message_id", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error.RawErrorKey, "missing_reply_payload", StringComparison.OrdinalIgnoreCase) ||
+            error.HttpStatus is 400 or 401 or 403 or 404 or 422)
+        {
+            return FailureKind.PermanentAdapterError;
+        }
+
+        return FailureKind.PermanentAdapterError;
     }
 
     private static bool TryParseErrorStatus(string response, out int status)

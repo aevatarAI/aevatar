@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -106,13 +107,13 @@ public sealed class NyxIdApiClientCoverageTests
 
         (await client.UpdateChannelRelayReplyAsync(" ", "om_upstream", new ChannelRelayReplyBody("hi"), CancellationToken.None))
             .Should()
-            .BeEquivalentTo(new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token"));
+            .BeEquivalentTo(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_access_token"));
         (await client.UpdateChannelRelayReplyAsync("token", " ", new ChannelRelayReplyBody("hi"), CancellationToken.None))
             .Should()
-            .BeEquivalentTo(new NyxIdChannelRelayReplyResult(false, Detail: "missing_platform_message_id"));
+            .BeEquivalentTo(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_platform_message_id"));
         (await client.UpdateChannelRelayReplyAsync("token", "om_upstream", new ChannelRelayReplyBody(null), CancellationToken.None))
             .Should()
-            .BeEquivalentTo(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload"));
+            .BeEquivalentTo(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_reply_payload"));
     }
 
     [Fact]
@@ -153,6 +154,9 @@ public sealed class NyxIdApiClientCoverageTests
 
         result.Succeeded.Should().BeFalse();
         result.EditUnsupported.Should().BeTrue();
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.HttpStatus.Should().Be(501);
+        result.RawErrorKey.Should().Be("edit_unsupported");
         result.Detail.Should().Contain("nyx_status=501");
     }
 
@@ -165,7 +169,61 @@ public sealed class NyxIdApiClientCoverageTests
 
         result.Succeeded.Should().BeFalse();
         result.EditUnsupported.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.HttpStatus.Should().Be(500);
         result.Detail.Should().Contain("nyx_status=500");
+    }
+
+    [Fact]
+    public async Task UpdateChannelRelayReplyAsync_ShouldClassifyRateLimitedWithRetryAfter()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Content = new StringContent(
+                """{"error":"rate_limited","error_code":1005,"message":"too many requests"}""",
+                Encoding.UTF8,
+                "application/json"),
+            Headers = { RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(7)) },
+        });
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "hi", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.RetryAfter.Should().Be(TimeSpan.FromSeconds(7));
+        result.HttpStatus.Should().Be(429);
+        result.RawErrorKey.Should().Be("rate_limited");
+        result.RawErrorCode.Should().Be(1005);
+    }
+
+    [Fact]
+    public async Task UpdateChannelRelayReplyAsync_ShouldClassifyValidationErrorAsPermanent()
+    {
+        var client = CreateClient(
+            """{"error":true,"status":400,"body":"{\"error\":\"validation_error\",\"error_code\":1008,\"message\":\"invalid\"}"}""");
+
+        var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "hi", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.RawErrorKey.Should().Be("validation_error");
+        result.RawErrorCode.Should().Be(1008);
+    }
+
+    [Fact]
+    public async Task UpdateChannelRelayReplyAsync_ShouldClassifyMalformedEnvelopeAsPermanentDiagnostic()
+    {
+        var client = CreateClient("not-json");
+
+        var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "hi", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.RawErrorKey.Should().Be("invalid_error_envelope");
     }
 
     [Fact]
@@ -175,7 +233,7 @@ public sealed class NyxIdApiClientCoverageTests
 
         var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "   ", CancellationToken.None);
 
-        result.Should().BeEquivalentTo(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+        result.Should().BeEquivalentTo(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_reply_text"));
     }
 
     [Fact]
