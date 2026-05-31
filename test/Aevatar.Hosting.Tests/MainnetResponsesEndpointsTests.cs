@@ -350,14 +350,14 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.OwnerSubject] = "owner-1",
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
         };
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
         try
         {
-            AgentToolRequestContext.CurrentMetadata = metadata;
+            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
             var substituteTools = await provider.GetSubstituteToolsAsync(context);
             var todoTool = substituteTools.Single(x => x.Name == "TodoWrite");
             var todoResult = await todoTool.ExecuteAsync(
@@ -371,7 +371,7 @@ public sealed class MainnetResponsesEndpointsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
 
         commandPort.TodoWrites.Should().ContainSingle();
@@ -397,14 +397,14 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
         try
         {
-            AgentToolRequestContext.CurrentMetadata = metadata;
+            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
             var fetchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebFetch");
             var result = await fetchTool.ExecuteAsync("""{"url":"https://example.com/docs"}""");
 
@@ -412,7 +412,7 @@ public sealed class MainnetResponsesEndpointsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
 
         commandPort.WebTraces.Should().ContainSingle();
@@ -437,14 +437,14 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
         try
         {
-            AgentToolRequestContext.CurrentMetadata = metadata;
+            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
             var searchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebSearch");
             var result = await searchTool.ExecuteAsync("""{"query":"aevatar docs","max_results":3}""");
 
@@ -452,7 +452,7 @@ public sealed class MainnetResponsesEndpointsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
 
         commandPort.WebTraces.Should().ContainSingle();

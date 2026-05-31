@@ -353,7 +353,7 @@ public sealed class RoleGAgentStateCoverageTests
         });
 
         agent.State.PendingApproval.Should().BeNull();
-        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
         observedToolContext.Should().NotBeNull();
         observedToolContext!.Caller.ScopeId.Should().Be("scope-a");
         observedToolContext.Caller.OwnerSubject.Should().Be("owner-a");
@@ -558,7 +558,7 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_continuation_failed: dispatch failed");
-        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]

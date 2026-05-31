@@ -68,7 +68,7 @@ public class NyxIdSshExecToolTests
     public async Task ExecuteAsync_NoToken_ReturnsError()
     {
         var tool = new NyxIdSshExecTool(CreateDummyClient());
-        AgentToolRequestContext.CurrentMetadata = null;
+        AgentToolRequestContext.Current = null;
 
         var result = await tool.ExecuteAsync(
             """{"service":"sg-office","command":"uname -a","principal":"ubuntu"}""");
@@ -542,13 +542,13 @@ public class NyxIdSshExecToolTests
 
     private static void SetMetadata(string token)
     {
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
-        };
+        });
     }
 
-    private static void ClearMetadata() => AgentToolRequestContext.CurrentMetadata = null;
+    private static void ClearMetadata() => AgentToolRequestContext.Current = null;
 
     private sealed record RecordedRequest(HttpMethod Method, string Path, string? Body, string? Authorization);
 

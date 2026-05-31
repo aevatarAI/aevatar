@@ -27,10 +27,10 @@ public class BindingToolsTests
         var tool = new BindingListTool(queryAdapter, options);
 
         // Set scope_id in request context
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "test-scope"
-        };
+        });
 
         try
         {
@@ -49,7 +49,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -60,7 +60,7 @@ public class BindingToolsTests
         var tool = new BindingBindTool(commandPort);
 
         // Ensure no scope_id in context
-        AgentToolRequestContext.CurrentMetadata = null;
+        AgentToolRequestContext.Current = null;
 
         var result = await tool.ExecuteAsync("""{"kind":"workflow","workflow_yamls":["name: wf1"]}""");
 
@@ -79,10 +79,10 @@ public class BindingToolsTests
             "svc-1", "Service One", "workflow", "healthy", "actor-1", "actor-1", null, DateTimeOffset.UtcNow));
         var tool = new BindingStatusTool(queryAdapter);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "test-scope"
-        };
+        });
 
         try
         {
@@ -95,7 +95,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -110,10 +110,10 @@ public class BindingToolsTests
         var commandPort = new StubCommandPort(captureRequest: r => captured = r);
         var tool = new BindingBindTool(commandPort);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-1"
-        };
+        });
 
         try
         {
@@ -132,7 +132,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -143,10 +143,10 @@ public class BindingToolsTests
         var commandPort = new StubCommandPort(captureRequest: r => captured = r);
         var tool = new BindingBindTool(commandPort);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-2"
-        };
+        });
 
         try
         {
@@ -165,7 +165,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -180,10 +180,10 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort(
             captureRequest: r => captured = r));
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -221,7 +221,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -230,10 +230,10 @@ public class BindingToolsTests
     {
         var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort());
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -249,7 +249,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -259,10 +259,10 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort(
             exception: new InvalidOperationException("bad request")));
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -273,7 +273,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -289,10 +289,10 @@ public class BindingToolsTests
             new StubScopeWorkflowQueryPort(listResult: workflows),
             new BindingToolOptions { MaxListResults = 1 });
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -306,7 +306,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -317,7 +317,7 @@ public class BindingToolsTests
             new StubScopeWorkflowQueryPort(),
             new BindingToolOptions());
 
-        AgentToolRequestContext.CurrentMetadata = null;
+        AgentToolRequestContext.Current = null;
 
         var result = await tool.ExecuteAsync("{}");
 
@@ -331,10 +331,10 @@ public class BindingToolsTests
             new StubScopeWorkflowQueryPort(exception: new InvalidOperationException("query failed")),
             new BindingToolOptions());
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -345,7 +345,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -355,10 +355,10 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(
             getResult: BuildWorkflowSummary("scope-workflows", "wf-1")));
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -371,7 +371,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -380,10 +380,10 @@ public class BindingToolsTests
     {
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort());
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -393,7 +393,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -402,10 +402,10 @@ public class BindingToolsTests
     {
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(getResult: null));
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -417,7 +417,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -427,10 +427,10 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(
             exception: new InvalidOperationException("query failed")));
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-workflows"
-        };
+        });
 
         try
         {
@@ -441,7 +441,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -473,10 +473,10 @@ public class BindingToolsTests
 
         var tool = new BindingUnbindTool(unbindAdapter);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             ["scope_id"] = "scope-unbind"
-        };
+        });
 
         try
         {
@@ -489,7 +489,7 @@ public class BindingToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
