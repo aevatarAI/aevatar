@@ -193,10 +193,17 @@ describe('buildStudioRoute', () => {
     expect(
       buildStudioScriptsWorkspaceRoute({
         scopeId: 'scope-1',
+        memberId: 'script-member',
+        scriptId: 'script-1',
+      }),
+    ).toBe('/studio?scopeId=scope-1&member=member%3Ascript-member&focus=script%3Ascript-1&tab=scripts');
+    expect(
+      buildStudioScriptsWorkspaceRoute({
+        scopeId: 'scope-1',
         memberKey: 'script:script-1',
         scriptId: 'script-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=script%3Ascript-1&tab=scripts');
+    ).toBe('/studio?scopeId=scope-1&focus=script%3Ascript-1&tab=scripts');
   });
 
   it('infers the workflow editor when only a workflow id is provided', () => {
@@ -254,7 +261,7 @@ describe('resolveStudioMemberRouteKey', () => {
     ).toBe('member:member-alpha');
   });
 
-  it('keeps an existing member key before falling back to workflow or script assets', () => {
+  it('keeps an existing member key before falling back to workflow assets', () => {
     expect(
       resolveStudioMemberRouteKey({
         memberKey: 'workflow:workflow-1',
@@ -264,9 +271,7 @@ describe('resolveStudioMemberRouteKey', () => {
     expect(resolveStudioMemberRouteKey({ workflowId: 'workflow-2' })).toBe(
       'workflow:workflow-2',
     );
-    expect(resolveStudioMemberRouteKey({ scriptId: 'script-1' })).toBe(
-      'script:script-1',
-    );
+    expect(resolveStudioMemberRouteKey({ scriptId: 'script-1' })).toBeUndefined();
   });
 
   it('returns undefined when no stable route identity is available', () => {
