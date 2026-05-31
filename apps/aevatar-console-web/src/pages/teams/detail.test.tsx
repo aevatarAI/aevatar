@@ -12,6 +12,10 @@ import {
 } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
 
+// Refactor (iter2/cluster-issue1593): Old pattern: Team detail tests kept stale
+// actor-graph mocks and legacy event-tab deep links after the Team surface narrowed
+// to overview/members. New principle: keep coverage on observable unknown-tab
+// fallback behavior without preserving removed topology/event dependencies.
 async function openTeamTestDialog() {
   fireEvent.click(await screen.findByRole("button", { name: "测试团队" }));
   await screen.findByLabelText("测试问题");
