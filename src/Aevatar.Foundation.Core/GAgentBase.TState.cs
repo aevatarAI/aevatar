@@ -66,7 +66,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         }
         finally
         {
-            // Refactor (issue1493/first-slice):
+            // Refactor (iter290/cluster-gagentbase-deactivation-base-cleanup-finally):
             // Old pattern: event-sourcing flush or snapshot failure skipped base lifecycle cleanup.
             // New principle: stateful deactivation propagates the original failure while always releasing base-owned resources.
             await base.DeactivateAsync(ct);

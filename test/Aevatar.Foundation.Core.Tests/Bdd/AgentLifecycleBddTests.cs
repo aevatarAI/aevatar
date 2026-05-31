@@ -113,6 +113,32 @@ public class AgentLifecycleBddTests
         await act.ShouldThrowAsync<InvalidOperationException>();
     }
 
+    [Fact(DisplayName = "Given OnDeactivate fails, when deactivated, should still run base lifecycle cleanup and propagate failure")]
+    public async Task Given_OnDeactivateFails_When_Deactivated_Then_BaseCleanupRunsAndFailurePropagates()
+    {
+        // Given
+        var failure = new InvalidOperationException("deactivate hook failed");
+        var behavior = new FailingLifecycleBehavior();
+        var module = new LifecycleTrackingModule();
+        var agent = new FailingDeactivateCounterAgent(failure)
+        {
+            EventSourcing = behavior,
+        };
+        agent.SetId("lifecycle-hook-failure");
+        agent.Services = TestRuntimeServices.BuildProvider();
+        agent.RegisterModule(module);
+        await agent.ActivateAsync();
+
+        // When
+        var thrown = await Should.ThrowAsync<InvalidOperationException>(agent.DeactivateAsync());
+
+        // Then
+        thrown.ShouldBeSameAs(failure);
+        behavior.ConfirmCalls.ShouldBe(0);
+        behavior.SnapshotCalls.ShouldBe(0);
+        module.DisposeCount.ShouldBe(1);
+    }
+
     [Fact(DisplayName = "Given ConfirmEvents fails, when deactivated, should still run base lifecycle cleanup and propagate failure")]
     public async Task Given_ConfirmEventsFails_When_Deactivated_Then_BaseCleanupRunsAndFailurePropagates()
     {
@@ -178,6 +204,22 @@ public class AgentLifecycleBddTests
                     Name = state.Name,
                 })
                 .OrCurrent();
+    }
+
+    private sealed class FailingDeactivateCounterAgent : CounterAgent
+    {
+        private readonly Exception _failure;
+
+        public FailingDeactivateCounterAgent(Exception failure)
+        {
+            _failure = failure;
+        }
+
+        protected override Task OnDeactivateAsync(CancellationToken ct)
+        {
+            _ = ct;
+            return Task.FromException(_failure);
+        }
     }
 
     private sealed class FailingLifecycleBehavior : IEventSourcingBehavior<CounterState>
