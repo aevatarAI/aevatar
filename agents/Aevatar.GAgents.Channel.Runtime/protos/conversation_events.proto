@@ -339,6 +339,9 @@ enum NyxRelayTextOperationResultState {
   NYX_RELAY_TEXT_OPERATION_RESULT_STATE_FAULTED = 3;
 }
 
+// Refactor (iter1535/cluster-issue-1535): Old pattern: Nyx relay continuations inferred retry
+// behavior from raw strings and edit_unsupported flags. New principle: actor-owned continuation
+// events carry typed failure classification plus sanitized adapter diagnostics.
 message NyxRelayTextOperationRawResult {
   string platform_message_id = 1;
   bool edit_unsupported = 2;

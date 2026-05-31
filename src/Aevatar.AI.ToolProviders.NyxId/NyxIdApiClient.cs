@@ -15,6 +15,9 @@ public sealed record NyxIdSessionRefreshResult(
     int? ExpiresIn = null,
     string? Detail = null);
 
+// Refactor (iter1535/cluster-issue-1535):
+//   Old pattern: NyxID relay update failures collapsed to Detail/EditUnsupported strings.
+//   New principle: the external adapter boundary normalizes failure kind and raw diagnostics once.
 public sealed record NyxIdChannelRelayReplyResult(
     bool Succeeded,
     string? MessageId = null,
@@ -35,6 +38,9 @@ public sealed record NyxIdChannelRelayReplyResult(
             RawErrorKey: detail);
 }
 
+// Refactor (iter1535/cluster-issue-1535):
+//   Old pattern: each caller parsed NyxID error JSON enough to build its own string.
+//   New principle: one adapter-boundary envelope feeds typed classification and retry diagnostics.
 internal sealed record NyxIdApiErrorEnvelope(
     string Detail,
     int? HttpStatus,
@@ -625,6 +631,9 @@ public sealed class NyxIdApiClient : IDisposable
     /// control-flow classification. <see cref="NyxIdChannelRelayReplyResult.EditUnsupported"/> is a
     /// compatibility signal for platforms that explicitly reject message edits.
     /// </remarks>
+    // Refactor (iter1535/cluster-issue-1535):
+    //   Old pattern: update callers treated all failed edits as strings or generic retry cases.
+    //   New principle: update response parsing emits one typed result for continuation policy.
     public async Task<NyxIdChannelRelayReplyResult> UpdateChannelRelayReplyAsync(
         string token,
         string platformMessageId,
@@ -927,22 +936,25 @@ public sealed class NyxIdApiClient : IDisposable
         string.Equals(error.RawErrorKey, "edit_unsupported", StringComparison.OrdinalIgnoreCase) ||
         error.HttpStatus == 501;
 
+    // Refactor (iter1535/cluster-issue-1535):
+    //   Old pattern: actor continuation policy searched raw error summaries.
+    //   New principle: the NyxID adapter maps known external error keys to channel FailureKind.
     private static FailureKind ClassifyUpdateFailure(NyxIdApiErrorEnvelope error)
     {
         if (IsEditUnsupported(error))
             return FailureKind.PermanentAdapterError;
-
-        if (error.HttpStatus is 429 or >= 500)
-            return FailureKind.TransientAdapterError;
-
-        if (string.Equals(error.RawErrorKey, "rate_limited", StringComparison.OrdinalIgnoreCase))
-            return FailureKind.TransientAdapterError;
 
         if (string.Equals(error.RawErrorKey, "platform_unavailable", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(error.RawErrorKey, "channel_platform_unavailable", StringComparison.OrdinalIgnoreCase))
         {
             return FailureKind.PlatformUnavailable;
         }
+
+        if (error.HttpStatus is 429 or >= 500)
+            return FailureKind.TransientAdapterError;
+
+        if (string.Equals(error.RawErrorKey, "rate_limited", StringComparison.OrdinalIgnoreCase))
+            return FailureKind.TransientAdapterError;
 
         if (string.Equals(error.RawErrorKey, "validation_error", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(error.RawErrorKey, "authentication_failed", StringComparison.OrdinalIgnoreCase) ||

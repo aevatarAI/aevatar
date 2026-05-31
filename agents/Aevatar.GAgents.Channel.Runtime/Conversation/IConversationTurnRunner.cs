@@ -63,6 +63,9 @@ public interface IConversationTurnRunner
 /// <summary>
 /// Outcome of one progressive streaming chunk dispatch.
 /// </summary>
+// Refactor (iter1535/cluster-issue-1535):
+//   Old pattern: streaming chunk failures exposed only string summaries plus edit_unsupported.
+//   New principle: turn runners return typed failure classification and sanitized adapter diagnostics.
 public sealed record ConversationStreamChunkResult(
     bool Success,
     string? PlatformMessageId,
@@ -133,6 +136,9 @@ public sealed record ConversationTurnRuntimeContext(
 /// <summary>
 /// Describes the outcome of one bot turn (either inbound-activity-driven or proactive-command-driven).
 /// </summary>
+// Refactor (iter1535/cluster-issue-1535):
+//   Old pattern: turn failures forced downstream actors to infer retry intent from error strings.
+//   New principle: bot turn outcomes carry the typed failure kind used by continuation policy.
 public sealed record ConversationTurnResult(
     bool Success,
     string SentActivityId,

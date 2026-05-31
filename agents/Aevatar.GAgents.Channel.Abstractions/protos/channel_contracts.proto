@@ -41,6 +41,9 @@ enum PrincipalKind {
   PRINCIPAL_KIND_ON_BEHALF_OF_USER = 2;
 }
 
+// Refactor (iter1535/cluster-issue-1535): Old pattern: relay update failures were string
+// summaries plus edit_unsupported booleans. New principle: retry and terminal control flow
+// use a shared typed channel contract.
 // Classifies adapter failures that affect retry and terminal control flow.
 enum FailureKind {
   FAILURE_KIND_UNSPECIFIED = 0;
@@ -50,6 +53,9 @@ enum FailureKind {
   FAILURE_KIND_PLATFORM_UNAVAILABLE = 4;
 }
 
+// Refactor (iter1535/cluster-issue-1535): Old pattern: outbound results dropped upstream
+// diagnostics after formatting an error summary. New principle: adapter boundaries preserve
+// sanitized typed diagnostics for actor continuation and projection consumers.
 // Records the outcome of one outbound send or update operation.
 message EmitResult {
   // Whether the adapter operation succeeded.

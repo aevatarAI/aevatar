@@ -215,6 +215,21 @@ public sealed class NyxIdApiClientCoverageTests
     }
 
     [Fact]
+    public async Task UpdateChannelRelayReplyAsync_ShouldClassifyPlatformUnavailable()
+    {
+        var client = CreateClient(
+            """{"error":true,"status":503,"body":"{\"error\":\"platform_unavailable\",\"error_code\":1012,\"message\":\"platform offline\"}"}""");
+
+        var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "hi", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.PlatformUnavailable);
+        result.HttpStatus.Should().Be(503);
+        result.RawErrorKey.Should().Be("platform_unavailable");
+        result.RawErrorCode.Should().Be(1012);
+    }
+
+    [Fact]
     public async Task UpdateChannelRelayReplyAsync_ShouldClassifyMalformedEnvelopeAsPermanentDiagnostic()
     {
         var client = CreateClient("not-json");
