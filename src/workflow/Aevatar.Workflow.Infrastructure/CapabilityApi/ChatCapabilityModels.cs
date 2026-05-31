@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -7,6 +8,7 @@ internal static class ChatCapabilityMessageTypes
     public const string ChatCommand = "chat.command";
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChatInput
 {
     /// <summary>User prompt for this chat run.</summary>
@@ -20,9 +22,7 @@ public sealed record ChatInput
     /// <summary>Legacy workflow identifier lookup. Prefer <see cref="Source"/>.</summary>
     public string? Workflow { get; init; }
 
-    /// <summary>Legacy workflow definition source actor id. Prefer <see cref="Source"/>.</summary>
-    public string? AgentId { get; init; }
-
+    /// <summary>
     /// Optional client-controlled session identifier for downstream chat correlation.
     /// When omitted, the server correlation id becomes the chat session id.
     /// </summary>
@@ -72,6 +72,7 @@ public sealed record ChatLlmControlInput
     public string? UserMemoryPrompt { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkflowChatSourceInput
 {
     public string? Kind { get; init; }
@@ -81,9 +82,6 @@ public sealed record WorkflowChatSourceInput
 
     /// <summary>Legacy source workflow name alias. Prefer the typed source variant submessages.</summary>
     public string? WorkflowName { get; init; }
-
-    /// <summary>Legacy source actor id alias. Prefer the typed source variant submessages.</summary>
-    public string? ActorId { get; init; }
 
     /// <summary>Legacy inline YAML bundle alias. Prefer <see cref="InlineBundle"/>.</summary>
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
