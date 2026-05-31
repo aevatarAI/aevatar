@@ -143,7 +143,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     [EventHandler(EndpointName = "resolveChatParticipants")]
     public async Task HandleChatParticipantsResolvedRequested(StreamingProxyChatParticipantsResolvedRequested request)
     {
-        // Refactor (issue1549): Old pattern: runner/coordinator owned active participants and round count in local collections. New principle: resolved participant progression is committed by the room actor.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: runner/coordinator owned active participants and round count in local collections.
+        //   New principle: resolved participant progression is committed by the room actor.
         ArgumentNullException.ThrowIfNull(request);
         if (!State.ChatLifecycles.TryGetValue(request.SessionId, out var lifecycle))
             return;
@@ -169,7 +171,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     [EventHandler(EndpointName = "observeParticipantReply")]
     public async Task HandleParticipantReplyObservedRequested(StreamingProxyChatParticipantReplyObservedRequested request)
     {
-        // Refactor (issue1549): Old pattern: coordinator posted committed messages and counted successes. New principle: actor validates round/index and records reply progression before deciding next step.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: coordinator posted committed messages and counted successes.
+        //   New principle: actor validates round/index and records reply progression before deciding next step.
         ArgumentNullException.ThrowIfNull(request);
         if (!State.ChatLifecycles.TryGetValue(request.SessionId, out var lifecycle) ||
             !IsCurrentParticipant(lifecycle, request.ParticipantId, request.Round, request.ParticipantIndex, out var participant) ||
@@ -205,7 +209,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     [EventHandler(EndpointName = "observeParticipantReplyFailed")]
     public async Task HandleParticipantReplyFailedRequested(StreamingProxyChatParticipantReplyFailedRequested request)
     {
-        // Refactor (issue1549): Old pattern: coordinator pruned failed participants and inferred terminal state from local counters. New principle: failure outcome is a typed actor event and terminal remains single-sourced in terminal_sessions.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: coordinator pruned failed participants and inferred terminal state from local counters.
+        //   New principle: failure outcome is a typed actor event and terminal remains single-sourced in terminal_sessions.
         ArgumentNullException.ThrowIfNull(request);
         if (!State.ChatLifecycles.TryGetValue(request.SessionId, out var lifecycle) ||
             !IsCurrentParticipant(lifecycle, request.ParticipantId, request.Round, request.ParticipantIndex, out _))
@@ -481,6 +487,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 
     private async Task ContinueOrCompleteLifecycleAsync(string sessionId)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: continuation runner decided terminal state from local reply counters after external I/O.
+        //   New principle: room actor state decides whether to request the next participant or commit terminal state.
         if (!State.ChatLifecycles.TryGetValue(sessionId, out var lifecycle))
             return;
 
@@ -495,6 +504,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 
     private async Task CommitParticipantTerminalAsync(string sessionId, int successfulReplyCount)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: terminal status was derived outside the room actor from coordinator-owned counters.
+        //   New principle: terminal fact is committed by the actor from its own successful reply count.
         var terminalStatus = successfulReplyCount > 0
             ? StreamingProxyChatSessionTerminalStatus.Completed
             : StreamingProxyChatSessionTerminalStatus.Failed;
@@ -513,6 +525,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 
     private Task SendNextParticipantReplyRequestAsync(StreamingProxyChatLifecycleRecord lifecycle)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: coordinator held transcript and participant cursor while looping inside one host-side flow.
+        //   New principle: actor-owned cursor emits one typed participant work item per continuation step.
         if (!TryGetCurrentActiveParticipant(lifecycle, out var participant))
             return Task.CompletedTask;
 
@@ -558,6 +573,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         int participantIndex,
         out StreamingProxyChatLifecycleParticipant participant)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: stale participant replies could be reconciled against host-side in-memory loop position.
+        //   New principle: actor-owned round/index is the only accepted continuation cursor.
         participant = new StreamingProxyChatLifecycleParticipant();
         if (round != lifecycle.CurrentRound ||
             participantIndex != lifecycle.NextParticipantIndex ||
@@ -582,6 +600,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         StreamingProxyChatLifecycleRecord lifecycle,
         out StreamingProxyChatLifecycleParticipant participant)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: active participant selection was hidden inside coordinator collections.
+        //   New principle: actor lifecycle state selects the next active participant deterministically.
         participant = new StreamingProxyChatLifecycleParticipant();
         if (lifecycle.MaxRounds == 0 ||
             lifecycle.CurrentRound > lifecycle.MaxRounds ||
@@ -605,6 +626,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     private static IReadOnlyList<StreamingProxyChatLifecycleParticipant> NormalizeLifecycleParticipants(
         IEnumerable<StreamingProxyChatLifecycleParticipant> participants)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: resolved participant identity cleanup lived in runner/coordinator local state.
+        //   New principle: the actor normalizes participant facts before committing lifecycle state.
         var result = new List<StreamingProxyChatLifecycleParticipant>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var participant in participants)
@@ -635,6 +659,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         StreamingProxyGAgentState current,
         StreamingProxyChatLifecycleParticipantsResolvedEvent evt)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: resolved participants and max rounds were transient coordinator state.
+        //   New principle: resolved participant set and cursor become actor-owned committed lifecycle state.
         var next = current.Clone();
         if (!next.ChatLifecycles.TryGetValue(evt.SessionId, out var lifecycle))
             return next;
@@ -645,7 +672,6 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         lifecycle.CurrentRound = evt.Participants.Count == 0 ? 0 : 1;
         lifecycle.NextParticipantIndex = 0;
         lifecycle.SuccessfulReplyCount = 0;
-        lifecycle.TranscriptWatermark = 0;
         return next;
     }
 
@@ -658,7 +684,6 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             return next;
 
         lifecycle.SuccessfulReplyCount++;
-        lifecycle.TranscriptWatermark = evt.MessageSequence;
         AdvanceLifecycleCursor(lifecycle);
         return next;
     }
@@ -667,6 +692,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         StreamingProxyGAgentState current,
         StreamingProxyChatParticipantReplyFailedEvent evt)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: failed participants were pruned from coordinator-local active lists.
+        //   New principle: failure status is actor-owned lifecycle state and cursor advancement is replayable.
         var next = current.Clone();
         if (!next.ChatLifecycles.TryGetValue(evt.SessionId, out var lifecycle))
             return next;
@@ -686,6 +714,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 
     private static void AdvanceLifecycleCursor(StreamingProxyChatLifecycleRecord lifecycle)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: round and participant index moved inside a host loop that could not be replayed.
+        //   New principle: cursor advancement is pure actor-state transition over committed lifecycle facts.
         if (lifecycle.Participants.Count == 0)
             return;
 

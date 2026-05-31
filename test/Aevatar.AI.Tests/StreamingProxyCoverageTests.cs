@@ -1740,6 +1740,253 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public async Task GAgent_HandleChatParticipantsResolvedRequested_ShouldCommitParticipantsAndRequestFirstParticipant()
+    {
+        using var provider = AgentCoverageTestSupport.BuildServiceProvider();
+        var agent = CreateAgent(provider, "room-1");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "Discuss the roadmap.",
+            SessionId = "session-1",
+            ScopeId = "scope-1",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "access-token",
+                },
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    NyxIdRoutePreference = "route-default",
+                    ModelOverride = "model-default",
+                },
+            }).ToPayload(),
+        });
+        publisher.Sent.Clear();
+
+        await agent.HandleChatParticipantsResolvedRequested(new StreamingProxyChatParticipantsResolvedRequested
+        {
+            SessionId = "session-1",
+            Participants =
+            {
+                new StreamingProxyChatLifecycleParticipant
+                {
+                    ParticipantId = " participant-1 ",
+                    DisplayName = " Participant 1 ",
+                    RoutePreference = " route-a ",
+                    Model = " model-a ",
+                },
+                new StreamingProxyChatLifecycleParticipant
+                {
+                    ParticipantId = "participant-2",
+                    DisplayName = "Participant 2",
+                    RoutePreference = "route-b",
+                    Model = "model-b",
+                },
+            },
+        });
+
+        var lifecycle = agent.State.ChatLifecycles["session-1"];
+        lifecycle.MaxRounds.Should().Be(StreamingProxyDefaults.MaxDiscussionRounds);
+        lifecycle.CurrentRound.Should().Be(1);
+        lifecycle.NextParticipantIndex.Should().Be(0);
+        lifecycle.Participants.Should().HaveCount(2);
+        lifecycle.Participants[0].ParticipantId.Should().Be("participant-1");
+        lifecycle.Participants[0].Status.Should().Be(StreamingProxyChatLifecycleParticipantStatus.Active);
+
+        var sent = publisher.Sent.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be(StreamingProxyGAgent.ChatLifecycleContinuationRunnerStreamId);
+        var request = sent.Event.Should().BeOfType<StreamingProxyChatParticipantReplyRequested>().Subject;
+        request.RoomId.Should().Be("room-1");
+        request.SessionId.Should().Be("session-1");
+        request.ParticipantId.Should().Be("participant-1");
+        request.Round.Should().Be(1);
+        request.ParticipantIndex.Should().Be(0);
+        request.ActiveParticipants.Select(participant => participant.ParticipantId)
+            .Should()
+            .Equal("participant-1", "participant-2");
+    }
+
+    [Fact]
+    public async Task GAgent_HandleParticipantReplyObservedRequested_ShouldRecordReplyAndRequestNextParticipant()
+    {
+        using var provider = AgentCoverageTestSupport.BuildServiceProvider();
+        var agent = CreateAgent(provider, "room-1");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await SeedTwoParticipantLifecycleAsync(agent);
+        publisher.Sent.Clear();
+        publisher.Published.Clear();
+
+        await agent.HandleParticipantReplyObservedRequested(new StreamingProxyChatParticipantReplyObservedRequested
+        {
+            SessionId = "session-1",
+            ParticipantId = "participant-1",
+            Round = 1,
+            ParticipantIndex = 0,
+            Content = " first reply ",
+        });
+
+        var lifecycle = agent.State.ChatLifecycles["session-1"];
+        lifecycle.SuccessfulReplyCount.Should().Be(1);
+        lifecycle.CurrentRound.Should().Be(1);
+        lifecycle.NextParticipantIndex.Should().Be(1);
+        agent.State.Messages.Should().Contain(message =>
+            message.SenderAgentId == "participant-1" &&
+            message.Content == "first reply");
+        publisher.Published.OfType<GroupChatMessageEvent>()
+            .Should()
+            .ContainSingle(message => message.AgentId == "participant-1" && message.Content == "first reply");
+
+        var sent = publisher.Sent.Should().ContainSingle().Subject;
+        var next = sent.Event.Should().BeOfType<StreamingProxyChatParticipantReplyRequested>().Subject;
+        next.ParticipantId.Should().Be("participant-2");
+        next.Round.Should().Be(1);
+        next.ParticipantIndex.Should().Be(1);
+        next.Transcript.Should().ContainSingle(entry =>
+            entry.Speaker == "Participant 1" &&
+            entry.Content == "first reply");
+    }
+
+    [Fact]
+    public async Task GAgent_HandleParticipantReplyObservedRequested_ShouldIgnoreStaleCursorObservation()
+    {
+        using var provider = AgentCoverageTestSupport.BuildServiceProvider();
+        var agent = CreateAgent(provider, "room-1");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await SeedTwoParticipantLifecycleAsync(agent);
+        publisher.Sent.Clear();
+        publisher.Published.Clear();
+
+        await agent.HandleParticipantReplyObservedRequested(new StreamingProxyChatParticipantReplyObservedRequested
+        {
+            SessionId = "session-1",
+            ParticipantId = "participant-2",
+            Round = 1,
+            ParticipantIndex = 1,
+            Content = "out of order",
+        });
+
+        var lifecycle = agent.State.ChatLifecycles["session-1"];
+        lifecycle.SuccessfulReplyCount.Should().Be(0);
+        lifecycle.NextParticipantIndex.Should().Be(0);
+        agent.State.Messages.Should().ContainSingle(message => message.IsTopic);
+        publisher.Sent.Should().BeEmpty();
+        publisher.Published.OfType<GroupChatMessageEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgent_HandleParticipantReplyFailedRequested_ShouldPruneFailedParticipantAndRequestNextActive()
+    {
+        using var provider = AgentCoverageTestSupport.BuildServiceProvider();
+        var agent = CreateAgent(provider, "room-1");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await SeedTwoParticipantLifecycleAsync(agent);
+        await agent.HandleGroupChatParticipantJoined(new GroupChatParticipantJoinedEvent
+        {
+            AgentId = "participant-1",
+            DisplayName = "Participant 1",
+        });
+        publisher.Sent.Clear();
+        publisher.Published.Clear();
+
+        await agent.HandleParticipantReplyFailedRequested(new StreamingProxyChatParticipantReplyFailedRequested
+        {
+            SessionId = "session-1",
+            ParticipantId = "participant-1",
+            Round = 1,
+            ParticipantIndex = 0,
+            FailureKind = StreamingProxyChatParticipantReplyFailureKind.Error,
+            ErrorMessage = "provider failed",
+        });
+
+        var lifecycle = agent.State.ChatLifecycles["session-1"];
+        lifecycle.Participants[0].Status.Should().Be(StreamingProxyChatLifecycleParticipantStatus.Failed);
+        lifecycle.Participants[0].FailedRound.Should().Be(1);
+        lifecycle.Participants[0].FailureReason.Should().Be("provider failed");
+        lifecycle.NextParticipantIndex.Should().Be(1);
+        publisher.Published.OfType<GroupChatParticipantLeftEvent>()
+            .Should()
+            .ContainSingle(evt => evt.AgentId == "participant-1");
+
+        var sent = publisher.Sent.Should().ContainSingle().Subject;
+        var next = sent.Event.Should().BeOfType<StreamingProxyChatParticipantReplyRequested>().Subject;
+        next.ParticipantId.Should().Be("participant-2");
+        next.ParticipantIndex.Should().Be(1);
+        next.ActiveParticipants.Select(participant => participant.ParticipantId)
+            .Should()
+            .Equal("participant-2");
+    }
+
+    [Fact]
+    public async Task GAgent_HandleParticipantReplyFailedRequested_ShouldCommitFailedTerminal_WhenAllParticipantsFail()
+    {
+        using var provider = AgentCoverageTestSupport.BuildServiceProvider();
+        var agent = CreateAgent(provider, "room-1");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "Discuss the roadmap.",
+            SessionId = "session-1",
+            ScopeId = "scope-1",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "access-token",
+                },
+            }).ToPayload(),
+        });
+        await agent.HandleGroupChatParticipantJoined(new GroupChatParticipantJoinedEvent
+        {
+            AgentId = "participant-1",
+            DisplayName = "Participant 1",
+        });
+        await agent.HandleChatParticipantsResolvedRequested(new StreamingProxyChatParticipantsResolvedRequested
+        {
+            SessionId = "session-1",
+            Participants =
+            {
+                new StreamingProxyChatLifecycleParticipant
+                {
+                    ParticipantId = "participant-1",
+                    DisplayName = "Participant 1",
+                },
+            },
+        });
+        publisher.Sent.Clear();
+
+        await agent.HandleParticipantReplyFailedRequested(new StreamingProxyChatParticipantReplyFailedRequested
+        {
+            SessionId = "session-1",
+            ParticipantId = "participant-1",
+            Round = 1,
+            ParticipantIndex = 0,
+            FailureKind = StreamingProxyChatParticipantReplyFailureKind.EmptyReply,
+            ErrorMessage = "empty reply",
+        });
+
+        agent.State.ChatLifecycles.Should().NotContainKey("session-1");
+        agent.State.TerminalSessions["session-1"].Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Failed);
+        agent.State.TerminalSessions["session-1"].ErrorMessage
+            .Should()
+            .Be("StreamingProxy chat completed without any participant replies.");
+        publisher.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ChatLifecycleContinuationRunner_ShouldResolveParticipantsWithoutCommittingTerminalState()
     {
         var roomCommands = new StubRoomCommandService();
@@ -1956,6 +2203,45 @@ public class StreamingProxyCoverageTests
 
         AgentCoverageTestSupport.AssignActorId(agent, actorId);
         return agent;
+    }
+
+    private static async Task SeedTwoParticipantLifecycleAsync(StreamingProxyGAgent agent)
+    {
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "Discuss the roadmap.",
+            SessionId = "session-1",
+            ScopeId = "scope-1",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "access-token",
+                },
+            }).ToPayload(),
+        });
+        await agent.HandleChatParticipantsResolvedRequested(new StreamingProxyChatParticipantsResolvedRequested
+        {
+            SessionId = "session-1",
+            Participants =
+            {
+                new StreamingProxyChatLifecycleParticipant
+                {
+                    ParticipantId = "participant-1",
+                    DisplayName = "Participant 1",
+                    RoutePreference = "route-a",
+                    Model = "model-a",
+                },
+                new StreamingProxyChatLifecycleParticipant
+                {
+                    ParticipantId = "participant-2",
+                    DisplayName = "Participant 2",
+                    RoutePreference = "route-b",
+                    Model = "model-b",
+                },
+            },
+        });
     }
 
     private static EventEnvelope CreateTopologyEnvelope(IMessage payload) =>

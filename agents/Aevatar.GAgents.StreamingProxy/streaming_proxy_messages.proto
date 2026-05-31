@@ -49,8 +49,7 @@ message StreamingProxyChatLifecycleRecord {
   int32 current_round = 8;
   int32 next_participant_index = 9;
   int32 successful_reply_count = 10;
-  int64 transcript_watermark = 11;
-  repeated StreamingProxyChatLifecycleParticipant participants = 12;
+  repeated StreamingProxyChatLifecycleParticipant participants = 11;
 }
 
 message StreamingProxyChatLifecycleParticipant {

@@ -50,7 +50,9 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     {
         _ = scopeId;
         _ = roomId;
-        // Refactor (issue1549): Old pattern: coordinator resolved and joined participants as one write-side facade. New principle: this adapter only resolves Nyx definitions; room commands/actor own facts.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: coordinator resolved and joined participants as one write-side facade.
+        //   New principle: this adapter only resolves Nyx definitions; room commands/actor own facts.
         return ResolveParticipantsAsync(accessToken, preferredRoute, defaultModel, ct);
     }
 
@@ -58,7 +60,9 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         StreamingProxyChatParticipantReplyRequested request,
         CancellationToken ct)
     {
-        // Refactor (issue1549): Old pattern: coordinator owned multi-round transcript, pruning, success count, and terminal decision. New principle: one adapter call returns one typed outcome to actor-owned progression.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: coordinator owned multi-round transcript, pruning, success count, and terminal decision.
+        //   New principle: one adapter call returns one typed outcome to actor-owned progression.
         ArgumentNullException.ThrowIfNull(request);
         if (!_llmProviderFactory.GetAvailableProviders().Contains(NyxIdProviderName, StringComparer.OrdinalIgnoreCase))
         {

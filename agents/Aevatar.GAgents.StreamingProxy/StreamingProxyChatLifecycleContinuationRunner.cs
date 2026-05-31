@@ -87,6 +87,9 @@ internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedSer
         StreamingProxyChatLifecycleContinuationRequested request,
         CancellationToken ct = default)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: runner/coordinator resolved participants and immediately drove the full multi-round terminal flow.
+        //   New principle: runner reports resolved participants through typed room commands and lets the actor own progression.
         ArgumentNullException.ThrowIfNull(request);
 
         if (string.IsNullOrWhiteSpace(request.AccessToken))
@@ -138,7 +141,9 @@ internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedSer
         StreamingProxyChatParticipantReplyRequested request,
         CancellationToken ct = default)
     {
-        // Refactor (issue1549): Old pattern: runner counted successful replies and committed terminal state. New principle: runner reports one participant I/O outcome back to the room actor.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: runner counted successful replies and committed terminal state.
+        //   New principle: runner reports one participant I/O outcome back to the room actor.
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.RoomId) ||
             string.IsNullOrWhiteSpace(request.SessionId) ||

@@ -196,7 +196,9 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         StreamingProxyRoomParticipantsResolvedCommand command,
         CancellationToken cancellationToken = default)
     {
-        // Refactor (issue1549): Old pattern: participant service/coordinator owned resolved participant sets as method state. New principle: resolved participants enter the room actor as typed progression input.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: participant service/coordinator owned resolved participant sets as method state.
+        //   New principle: resolved participants enter the room actor as typed progression input.
         ArgumentNullException.ThrowIfNull(command);
 
         var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
@@ -215,7 +217,9 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         StreamingProxyRoomParticipantReplyObservedCommand command,
         CancellationToken cancellationToken = default)
     {
-        // Refactor (issue1549): Old pattern: coordinator posted messages and incremented success counters itself. New principle: successful reply observation is reconciled by the room actor.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: coordinator posted messages and incremented success counters itself.
+        //   New principle: successful reply observation is reconciled by the room actor.
         ArgumentNullException.ThrowIfNull(command);
 
         var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
@@ -237,7 +241,9 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         StreamingProxyRoomParticipantReplyFailedCommand command,
         CancellationToken cancellationToken = default)
     {
-        // Refactor (issue1549): Old pattern: coordinator pruned failed participants and decided when no replies meant failure. New principle: failure observations are actor-owned progression facts.
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: coordinator pruned failed participants and decided when no replies meant failure.
+        //   New principle: failure observations are actor-owned progression facts.
         ArgumentNullException.ThrowIfNull(command);
 
         var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));

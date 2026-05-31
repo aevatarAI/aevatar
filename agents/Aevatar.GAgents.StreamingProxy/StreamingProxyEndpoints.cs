@@ -450,7 +450,9 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            // Refactor (issue1549): Old pattern: endpoint used a shallow participant service facade. New principle: query endpoint reads the room participants readmodel port directly.
+            // Refactor (iter104/cluster-1):
+            //   Old pattern: endpoint used a shallow participant service facade.
+            //   New principle: query endpoint reads the room participants readmodel port directly.
             var snapshot = await participantsQueryPort.GetAsync(roomId, ct);
             return Results.Ok(snapshot?.Participants.Select(participant => new ParticipantResponse(
                 participant.AgentId,
