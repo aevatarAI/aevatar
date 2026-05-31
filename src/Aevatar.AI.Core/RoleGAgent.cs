@@ -240,11 +240,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.ToolCallId,
                     pending.ArgumentsJson,
                     ToolApprovalMode.Auto,
-                    pending.IsDestructive,
-                    // Refactor (issue1253-first):
-                    //   Old pattern: Remote approval received scrubbed durable metadata that could include legacy control keys.
-                    //   New principle: Remote approval only receives open annotations.
-                    new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
+                    pending.IsDestructive),
                 CancellationToken.None);
 
             var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, submission.RemoteApprovalId, 1);
@@ -306,11 +302,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             snapshot = await RemoteToolApprovalPort.GetStatusAsync(
                 new RemoteToolApprovalStatusQuery(
                     pending.RequestId,
-                    pending.RemoteApprovalId,
-                    // Refactor (issue1253-first):
-                    //   Old pattern: Status checks forwarded pending.Metadata as a control surface.
-                    //   New principle: Status checks forward annotations only.
-                    new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
+                    pending.RemoteApprovalId),
                 CancellationToken.None);
         }
         catch (Exception ex)

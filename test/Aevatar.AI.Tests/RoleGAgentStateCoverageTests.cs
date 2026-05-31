@@ -642,9 +642,6 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-        agent.State.PendingApproval.Metadata["nyxid.access_token"] = "token-1";
-        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
-
         await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
         {
             RequestId = "req-1",
@@ -657,8 +654,7 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should()
             .Be(DateTimeOffset.FromUnixTimeSeconds(1_800).ToUnixTimeMilliseconds());
         remotePort.Submitted.Should().ContainSingle()
-            .Which.Items.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        remotePort.Submitted.Single().Items["trace-id"].Should().Be("trace-1");
+            .Which.RequestId.Should().Be("req-1");
         remotePort.StatusQueries.Should().BeEmpty();
         ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
             .TimeoutRequests.Should().ContainSingle(x =>
@@ -812,7 +808,7 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
-    public async Task HandleRemoteApprovalStatusCheck_ShouldScrubOwnedKeysAndPreserveTraceMetadata()
+    public async Task HandleRemoteApprovalStatusCheck_ShouldIssueStatusQueryWithoutPortLevelCarrier()
     {
         using var provider = BuildServiceProvider();
         var remotePort = new StubRemoteApprovalPort(
@@ -833,27 +829,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteStatusCheckAttempt = 1,
             RemoteApprovalExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
-        var ownedKeys = new[]
-        {
-            LLMRequestMetadataKeys.RequestId,
-            LLMRequestMetadataKeys.CallId,
-            LLMRequestMetadataKeys.ScopeId,
-            LLMRequestMetadataKeys.OwnerSubject,
-            LLMRequestMetadataKeys.ResponseId,
-            LLMRequestMetadataKeys.NyxIdAccessToken,
-            LLMRequestMetadataKeys.NyxIdOrgToken,
-            LLMRequestMetadataKeys.SenderNyxIdAccessToken,
-            LLMRequestMetadataKeys.SenderBindingId,
-            LLMRequestMetadataKeys.NyxIdRoutePreference,
-            LLMRequestMetadataKeys.ModelOverride,
-            LLMRequestMetadataKeys.MaxToolRoundsOverride,
-            LLMRequestMetadataKeys.UserMemoryPrompt,
-            LLMRequestMetadataKeys.ConnectedServicesContext,
-        };
-
-        foreach (var key in ownedKeys)
-            agent.State.PendingApproval.Metadata[key] = $"owned-{key}";
-        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
 
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
@@ -863,9 +838,9 @@ public sealed class RoleGAgentStateCoverageTests
             Attempt = 1,
         });
 
-        var items = remotePort.StatusQueries.Should().ContainSingle().Which.Items;
-        items.Should().NotContainKeys(ownedKeys);
-        items.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
+        var query = remotePort.StatusQueries.Should().ContainSingle().Which;
+        query.RequestId.Should().Be("req-1");
+        query.RemoteApprovalId.Should().Be("remote-1");
     }
 
     [Fact]
