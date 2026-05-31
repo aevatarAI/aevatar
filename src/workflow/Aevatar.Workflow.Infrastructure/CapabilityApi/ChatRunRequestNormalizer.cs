@@ -131,6 +131,9 @@ internal static class ChatRunRequestNormalizer
 
     private static SourceNormalizationResult NormalizeTypedSource(WorkflowChatSourceInput source)
     {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: typed direct source accepted actor id aliases and built Direct(actorId).
+        //   New principle: direct source is address-free; actor ids belong to DefinitionActor.
         var kind = NormalizeSourceKind(source.Kind);
         var workflowName = ResolveTypedWorkflowName(source, kind);
         var actorId = ResolveTypedActorId(source, kind);
@@ -154,8 +157,10 @@ internal static class ChatRunRequestNormalizer
                     string.IsNullOrWhiteSpace(workflowName) ? null : workflowName,
                     inlineYamlDocuments,
                     string.IsNullOrWhiteSpace(actorId) ? null : actorId)),
+            WorkflowChatSourceKind.Direct when !string.IsNullOrWhiteSpace(actorId) =>
+                SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
             WorkflowChatSourceKind.Direct =>
-                SourceNormalizationResult.Success(WorkflowChatSource.Direct(actorId)),
+                SourceNormalizationResult.Success(WorkflowChatSource.Direct()),
             _ => SourceNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml),
         };
     }

@@ -223,11 +223,13 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
     private static string? ResolveSourceActorId(WorkflowChatSource source)
     {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: Direct source could resolve a source actor binding through DefinitionActorSource.
+        //   New principle: only actor-addressed source variants participate in binding lookup.
         return source.Kind switch
         {
             WorkflowChatSourceKind.DefinitionActor => source.DefinitionActorSource?.ActorId,
             WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.ActorId,
-            WorkflowChatSourceKind.Direct => source.DefinitionActorSource?.ActorId,
             _ => null,
         };
     }
