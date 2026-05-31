@@ -12,8 +12,7 @@ export type StudioBuildFocus = `workflow:${string}` | `script:${string}` | `temp
 export type StudioIntent = 'create-member';
 export type StudioMemberKey =
   | `member:${string}`
-  | `workflow:${string}`
-  | `script:${string}`;
+  | `workflow:${string}`;
 
 type StudioRouteOptions = {
   scopeId?: string;
@@ -85,11 +84,6 @@ export function resolveStudioMemberRouteKey(input?: {
     return `workflow:${workflowId}`;
   }
 
-  const scriptId = trimOptional(input?.scriptId);
-  if (scriptId) {
-    return `script:${scriptId}`;
-  }
-
   return undefined;
 }
 
@@ -115,8 +109,7 @@ function normalizeStudioMemberKey(
   const normalizedValue = trimOptional(value);
   if (
     normalizedValue.startsWith('member:') ||
-    normalizedValue.startsWith('workflow:') ||
-    normalizedValue.startsWith('script:')
+    normalizedValue.startsWith('workflow:')
   ) {
     return normalizedValue as StudioMemberKey;
   }
@@ -284,8 +277,8 @@ export function buildStudioScriptsWorkspaceRoute(options?: {
   const scriptFocus = scriptId ? (`script:${scriptId}` as const) : undefined;
   return buildStudioRoute({
     ...options,
-    focus:
-      scriptFocus && scriptFocus !== memberKey ? scriptFocus : undefined,
+    memberKey: memberKey || undefined,
+    focus: scriptFocus,
     tab: 'scripts',
   });
 }

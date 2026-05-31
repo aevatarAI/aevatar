@@ -182,7 +182,7 @@ type StudioBuildFocusState = {
   value: string;
 };
 
-type StudioRouteMemberKind = 'workflow' | 'script' | 'member' | 'none';
+type StudioRouteMemberKind = 'workflow' | 'member' | 'none';
 type StudioRouteMemberState = {
   key: string;
   kind: StudioRouteMemberKind;
@@ -947,20 +947,6 @@ function parseStudioRouteMember(
       : { key: '', kind: 'none', value: '', memberId: '', serviceId: '', legacyServiceId: '' };
   }
 
-  if (normalizedValue.startsWith('script:')) {
-    const scriptId = readScriptIdFromMemberKey(normalizedValue);
-    return scriptId
-      ? {
-          key: `script:${scriptId}`,
-          kind: 'script',
-          value: scriptId,
-          memberId: '',
-          serviceId: '',
-          legacyServiceId: '',
-        }
-      : { key: '', kind: 'none', value: '', memberId: '', serviceId: '', legacyServiceId: '' };
-  }
-
   if (normalizedValue.startsWith('member:')) {
     const memberId = readMemberIdFromMemberKey(normalizedValue);
     return memberId
@@ -988,7 +974,16 @@ function parseStudioRouteMember(
 function readStudioBuildFocusFromParams(
   params: URLSearchParams,
 ): StudioBuildFocusState {
-  return parseStudioBuildFocus(params.get('focus'));
+  const explicitFocus = parseStudioBuildFocus(params.get('focus'));
+  if (explicitFocus.key) {
+    return explicitFocus;
+  }
+
+  const legacyMember = trimOptional(params.get('member'));
+  const legacyScriptId = readScriptIdFromMemberKey(legacyMember);
+  return legacyScriptId
+    ? parseStudioBuildFocus(`script:${legacyScriptId}`)
+    : explicitFocus;
 }
 
 function readStudioRouteMemberFromParams(
@@ -1459,11 +1454,9 @@ function readInitialBuildSurface(state: StudioRouteState): BuildSurface {
   }
 
   const buildFocus = parseStudioBuildFocus(state.focusKey);
-  const routeMember = parseStudioRouteMember(state.memberKey);
   if (
     state.tab === 'scripts' ||
-    buildFocus.kind === 'script' ||
-    routeMember.kind === 'script'
+    buildFocus.kind === 'script'
   ) {
     return 'scripts';
   }
@@ -2792,9 +2785,7 @@ const StudioPage: React.FC = () => {
     () =>
       initialBuildFocus.kind === 'script'
         ? initialBuildFocus.value
-        : initialSelectedMember.kind === 'script'
-          ? initialSelectedMember.value
-          : '',
+        : '',
   );
   const [scriptBuildState, setScriptBuildState] =
     useState<StudioScriptBuildState | null>(null);
@@ -2805,9 +2796,7 @@ const StudioPage: React.FC = () => {
       const initialScriptId =
         initialBuildFocus.kind === 'script'
           ? initialBuildFocus.value
-          : initialSelectedMember.kind === 'script'
-            ? initialSelectedMember.value
-            : '';
+          : '';
       return initialScriptId
         ? loadStoredScriptDraft(initialRouteState.scopeId || undefined, initialScriptId)
         : null;
@@ -2961,14 +2950,6 @@ const StudioPage: React.FC = () => {
           ? currentScriptId
           : routeBuildFocus.value,
       );
-    } else if (routeSelectedMember.kind === 'script') {
-      setSelectedScriptId((currentScriptId) =>
-        trimOptional(currentScriptId) === routeSelectedMember.value
-          ? currentScriptId
-          : routeSelectedMember.value,
-      );
-      setSelectedWorkflowId('');
-      setTemplateWorkflow('');
     }
     if (routeBuildFocus.kind === 'workflow' || routeSelectedMember.kind === 'workflow') {
       setBuildSurface((currentSurface) =>
@@ -10396,7 +10377,6 @@ const StudioPage: React.FC = () => {
         const scriptFocusId =
           trimOptional(selectedScriptId) ||
           (routeBuildFocus.kind === 'script' ? routeBuildFocus.value : '') ||
-          (routeSelectedMember.kind === 'script' ? routeSelectedMember.value : '') ||
           trimOptional(scriptBuildState?.scriptId);
         const memberKeyForBind =
           routeSelectedBackendMemberKey ||
@@ -10406,6 +10386,12 @@ const StudioPage: React.FC = () => {
           (routeSelectedMemberKey.startsWith('member:')
             ? routeSelectedMemberKey
             : '');
+        if (!memberKeyForBind) {
+          void message.warning(
+            'Select or create a member before opening Bind for this Script.',
+          );
+          return;
+        }
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
