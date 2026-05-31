@@ -4457,6 +4457,8 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
     expect(screen.getByLabelText("Script ID")).toHaveValue("script-alpha");
+    expect(screen.queryByText("Scripts Studio")).toBeNull();
+    expect(screen.queryByText("Leave Scripts Studio?")).toBeNull();
 
     fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
     const createDialog = await screen.findByRole("dialog", { name: "Create member" });
