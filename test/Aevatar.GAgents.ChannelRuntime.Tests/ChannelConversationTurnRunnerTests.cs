@@ -1108,7 +1108,7 @@ public sealed class ChannelConversationTurnRunnerTests
             .Should().Be("runtime-user-token-1");
         callerScopeResolver.CapturedMetadata[ChannelMetadataKeys.MessageId]
             .Should().Be("msg-runtime-token-agent-builder-1");
-        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]
@@ -2879,9 +2879,15 @@ public sealed class ChannelConversationTurnRunnerTests
 
         public Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
         {
-            CapturedMetadata = AgentToolRequestContext.CurrentMetadata is null
+            var current = AgentToolRequestContext.Current;
+            CapturedMetadata = current is null
                 ? null
-                : new Dictionary<string, string>(AgentToolRequestContext.CurrentMetadata, StringComparer.Ordinal);
+                : new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [LLMRequestMetadataKeys.NyxIdAccessToken] = current.Credentials.NyxIdAccessToken ?? string.Empty,
+                    [LLMRequestMetadataKeys.NyxIdOrgToken] = current.Credentials.NyxIdOrgToken ?? string.Empty,
+                    [ChannelMetadataKeys.MessageId] = current.Channel.MessageId ?? string.Empty,
+                };
             return Task.FromResult<OwnerScope?>(OwnerScope.ForChannel(
                 "nyx-user-1",
                 "lark",

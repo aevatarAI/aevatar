@@ -184,7 +184,7 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
-    public void ProductionSources_ShouldNotUseLegacyCurrentMetadataOrTryGetControlShims()
+    public void ProductionSources_ShouldNotUseLegacyToolMetadataControlShims()
     {
         var repositoryRoot = FindRepositoryRoot();
         var files = Directory
@@ -205,6 +205,7 @@ public sealed class AgentToolExecutionContextMapperTests
 
         source.Should().NotContain("AgentToolRequestContext.CurrentMetadata");
         source.Should().NotContain("AgentToolRequestContext.TryGet(");
+        source.Should().NotContain(".ToLegacyMetadata(");
     }
 
     private static string FindRepositoryRoot()

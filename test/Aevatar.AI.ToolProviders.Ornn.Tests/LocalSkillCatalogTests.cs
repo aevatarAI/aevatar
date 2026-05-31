@@ -209,11 +209,11 @@ public sealed class LocalSkillCatalogTests
 
     private static IDisposable BeginTokenScope(string token)
     {
-        var previous = AgentToolRequestContext.CurrentMetadata;
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
-        };
+        });
 
         return new RestoreContextScope(previous);
     }
@@ -248,8 +248,8 @@ public sealed class LocalSkillCatalogTests
     }
 
     // refactor helper, no behavior change
-    private sealed class RestoreContextScope(IReadOnlyDictionary<string, string>? previous) : IDisposable
+    private sealed class RestoreContextScope(AgentToolExecutionContext? previous) : IDisposable
     {
-        public void Dispose() => AgentToolRequestContext.CurrentMetadata = previous;
+        public void Dispose() => AgentToolRequestContext.Current = previous;
     }
 }

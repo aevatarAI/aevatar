@@ -297,10 +297,10 @@ public sealed class NyxIdApiClientCoverageTests
     [Fact]
     public async Task NyxIdLlmStatusTool_ShouldUseServicesEndpointAndRequireToken()
     {
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
             var missingTokenTool = new NyxIdLlmStatusTool(CreateClient("""{"services":[]}"""));
             var missingToken = await missingTokenTool.ExecuteAsync("{}", CancellationToken.None);
             missingToken.Should().Contain("No NyxID access token");
@@ -314,10 +314,10 @@ public sealed class NyxIdApiClientCoverageTests
                 new HttpClient(handler),
                 NullLogger<NyxIdApiClient>.Instance);
             var tool = new NyxIdLlmStatusTool(client);
-            AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-1",
-            };
+            });
 
             var response = await tool.ExecuteAsync("{}", CancellationToken.None);
 
@@ -327,7 +327,7 @@ public sealed class NyxIdApiClientCoverageTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
     }
 

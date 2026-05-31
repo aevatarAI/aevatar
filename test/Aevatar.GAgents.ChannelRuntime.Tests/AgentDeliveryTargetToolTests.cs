@@ -83,10 +83,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"list"}""");
@@ -101,7 +101,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -118,10 +118,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"upsert"}""");
@@ -130,7 +130,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -168,10 +168,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -207,7 +207,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -236,10 +236,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-2"}""");
@@ -248,7 +248,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -276,10 +276,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-2","confirm":true}""");
@@ -289,7 +289,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -324,10 +324,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-3","confirm":true}""");
@@ -338,7 +338,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -376,10 +376,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-7","confirm":true}""");
@@ -391,7 +391,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -412,10 +412,10 @@ public sealed class AgentDeliveryTargetToolTests
         tools.Should().ContainSingle();
         tools[0].Name.Should().Be("agent_delivery_targets");
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tools[0].ExecuteAsync("""{"action":"list"}""");
@@ -428,7 +428,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -450,10 +450,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(resolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"list"}""");
@@ -464,7 +464,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -488,10 +488,10 @@ public sealed class AgentDeliveryTargetToolTests
     public async Task ExecuteAsync_Upsert_Requires_ConversationId()
     {
         var (tool, _, _) = BuildBasicHarness();
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"upsert","agent_id":"agent-1"}""");
@@ -500,7 +500,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -508,10 +508,10 @@ public sealed class AgentDeliveryTargetToolTests
     public async Task ExecuteAsync_Upsert_Requires_NyxProviderSlug()
     {
         var (tool, _, _) = BuildBasicHarness();
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -522,7 +522,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -549,10 +549,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(resolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -571,7 +571,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -610,10 +610,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(resolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -633,7 +633,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -641,10 +641,10 @@ public sealed class AgentDeliveryTargetToolTests
     public async Task ExecuteAsync_Delete_RequiresAgentId()
     {
         var (tool, _, _) = BuildBasicHarness();
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"delete"}""");
@@ -653,7 +653,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -692,10 +692,10 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(resolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-slow","confirm":true}""");
@@ -705,7 +705,7 @@ public sealed class AgentDeliveryTargetToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
