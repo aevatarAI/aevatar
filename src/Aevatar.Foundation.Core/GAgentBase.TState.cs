@@ -61,12 +61,26 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         try
         {
             await OnDeactivateAsync(ct);
-            await eventSourcing.ConfirmEventsAsync(ct);
+            try
+            {
+                await eventSourcing.ConfirmEventsAsync(ct);
+            }
+            catch (EventStoreOptimisticConcurrencyException)
+            {
+                // Refactor (iter713/cluster-gagentbase-deactivation-occ-flush-containment):
+                // Old pattern: deactivation OCC escaped with stale pending events and could
+                // block base lifecycle cleanup. New principle: deactivation-only OCC
+                // containment drains stale pending events, skips snapshot, and still runs
+                // base shutdown.
+                eventSourcing.DiscardPendingEvents();
+                return;
+            }
+
             await eventSourcing.PersistSnapshotAsync(_state, ct);
         }
         finally
         {
-            // Refactor (iter290/cluster-gagentbase-deactivation-base-cleanup-finally):
+            // Refactor (iter713/cluster-gagentbase-deactivation-occ-flush-containment):
             // Old pattern: event-sourcing flush or snapshot failure skipped base lifecycle cleanup.
             // New principle: base cleanup always runs. When cleanup succeeds, the original
             // hook/confirm/snapshot failure propagates. When cleanup itself fails, callers

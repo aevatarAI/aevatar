@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Tests;
@@ -113,6 +114,58 @@ public class AgentLifecycleBddTests
         await act.ShouldThrowAsync<InvalidOperationException>();
     }
 
+    [Fact(DisplayName = "Given deactivation flush hits OCC, pending events should be discarded without snapshot and base lifecycle should complete")]
+    public async Task Given_DeactivationFlushHitsOcc_When_Deactivated_Then_DiscardsPendingSkipsSnapshotAndRunsBaseLifecycle()
+    {
+        // Given
+        var store = new InMemoryEventStore();
+        var snapshotStore = new RecordingSnapshotStore();
+        var behavior = new CounterReplayBehavior(
+            store,
+            "lifecycle-occ",
+            snapshotStore,
+            new IntervalSnapshotStrategy(1));
+        var module = new LifecycleTrackingModule();
+        var agent = new CounterAgent
+        {
+            EventSourcing = behavior,
+        };
+        agent.SetId("lifecycle-occ");
+        agent.Services = TestRuntimeServices.BuildProvider();
+        agent.RegisterModule(module);
+        await agent.ActivateAsync();
+        behavior.RaiseEvent(new IncrementEvent { Amount = 7 });
+
+        await store.AppendAsync(
+            "lifecycle-occ",
+            [new StateEvent
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Timestamp = TimestampHelper.Now(),
+                Version = 1,
+                EventType = typeof(IncrementEvent).FullName ?? nameof(IncrementEvent),
+                EventData = Any.Pack(new IncrementEvent { Amount = 100 }),
+                AgentId = "lifecycle-occ",
+            }],
+            expectedVersion: 0);
+
+        // When
+        await agent.DeactivateAsync();
+
+        // Then
+        var events = await store.GetEventsAsync("lifecycle-occ");
+        events.Count.ShouldBe(1);
+        events[0].EventData.Unpack<IncrementEvent>().Amount.ShouldBe(100);
+        behavior.CurrentVersion.ShouldBe(1);
+        snapshotStore.SaveCount.ShouldBe(0);
+        module.DisposeCount.ShouldBe(1);
+
+        var noop = await behavior.ConfirmEventsAsync();
+        noop.LatestVersion.ShouldBe(1);
+        events = await store.GetEventsAsync("lifecycle-occ");
+        events.Count.ShouldBe(1);
+    }
+
     [Fact(DisplayName = "Given OnDeactivate fails, when deactivated, should still run base lifecycle cleanup and propagate failure")]
     public async Task Given_OnDeactivateFails_When_Deactivated_Then_BaseCleanupRunsAndFailurePropagates()
     {
@@ -161,6 +214,7 @@ public class AgentLifecycleBddTests
         // Then
         thrown.ShouldBeSameAs(failure);
         behavior.SnapshotCalls.ShouldBe(0);
+        behavior.DiscardPendingEventsCount.ShouldBe(0);
         module.DisposeCount.ShouldBe(1);
     }
 
@@ -220,8 +274,12 @@ public class AgentLifecycleBddTests
 
     private sealed class CounterReplayBehavior : EventSourcingBehavior<CounterState>
     {
-        public CounterReplayBehavior(IEventStore eventStore, string agentId)
-            : base(eventStore, agentId) { }
+        public CounterReplayBehavior(
+            IEventStore eventStore,
+            string agentId,
+            IEventSourcingSnapshotStore<CounterState>? snapshotStore = null,
+            ISnapshotStrategy? snapshotStrategy = null)
+            : base(eventStore, agentId, snapshotStore, snapshotStrategy) { }
 
         public override CounterState TransitionState(CounterState current, IMessage evt)
             => StateTransitionMatcher
@@ -232,6 +290,32 @@ public class AgentLifecycleBddTests
                     Name = state.Name,
                 })
                 .OrCurrent();
+    }
+
+    private sealed class RecordingSnapshotStore : IEventSourcingSnapshotStore<CounterState>
+    {
+        public int SaveCount { get; private set; }
+
+        public Task<EventSourcingSnapshot<CounterState>?> LoadAsync(
+            string agentId,
+            CancellationToken ct = default)
+        {
+            _ = agentId;
+            _ = ct;
+            return Task.FromResult<EventSourcingSnapshot<CounterState>?>(null);
+        }
+
+        public Task SaveAsync(
+            string agentId,
+            EventSourcingSnapshot<CounterState> snapshot,
+            CancellationToken ct = default)
+        {
+            _ = agentId;
+            _ = snapshot;
+            _ = ct;
+            SaveCount++;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FailingDeactivateCounterAgent : CounterAgent
@@ -266,6 +350,8 @@ public class AgentLifecycleBddTests
         public int ConfirmCalls { get; private set; }
 
         public int SnapshotCalls { get; private set; }
+
+        public int DiscardPendingEventsCount { get; private set; }
 
         public void RaiseEvent<TEvent>(TEvent evt)
             where TEvent : IMessage
@@ -305,7 +391,7 @@ public class AgentLifecycleBddTests
             return Task.FromResult<CounterState?>(new CounterState());
         }
 
-        public void DiscardPendingEvents() { }
+        public void DiscardPendingEvents() => DiscardPendingEventsCount++;
 
         public CounterState TransitionState(CounterState current, IMessage evt)
         {
