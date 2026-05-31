@@ -8,6 +8,9 @@ internal static class ChatCapabilityMessageTypes
     public const string ChatCommand = "chat.command";
 }
 
+// Refactor (phase9/cluster-349):
+//   Old pattern: public chat input duplicated actor authority through top-level agentId and source actorId aliases.
+//   New principle: actor targeting is owned only by typed source variant submessages; deleted aliases are rejected at the JSON boundary.
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChatInput
 {
@@ -72,6 +75,9 @@ public sealed record ChatLlmControlInput
     public string? UserMemoryPrompt { get; init; }
 }
 
+// Refactor (phase9/cluster-349):
+//   Old pattern: source.actorId acted as a flat alias whose meaning changed with source kind.
+//   New principle: actor id is explicit on definitionActor or inlineBundle, and strict JSON rejects the removed flat alias.
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkflowChatSourceInput
 {

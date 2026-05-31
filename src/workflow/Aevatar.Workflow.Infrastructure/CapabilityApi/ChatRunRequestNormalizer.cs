@@ -98,6 +98,9 @@ internal static class ChatRunRequestNormalizer
 
     private static SourceNormalizationResult NormalizeSource(ChatInput input)
     {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: legacy workflow inputs could smuggle actor authority through top-level agentId.
+        //   New principle: legacy name/YAML aliases resolve only workflow content; actor authority must be in typed source variants.
         if (input.Source != null)
             return NormalizeTypedSource(input.Source);
 
@@ -201,6 +204,9 @@ internal static class ChatRunRequestNormalizer
 
     private static string ResolveTypedActorId(WorkflowChatSourceInput source, WorkflowChatSourceKind kind)
     {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: source.actorId was a catch-all fallback for definition actor, inline bundle, and direct source.
+        //   New principle: each source kind reads only its typed actor-id slot; direct/catalog sources stay address-free.
         var value = kind switch
         {
             WorkflowChatSourceKind.DefinitionActor => source.DefinitionActor?.ActorId,
