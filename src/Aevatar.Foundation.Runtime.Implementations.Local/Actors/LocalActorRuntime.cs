@@ -297,12 +297,12 @@ public sealed class LocalActorRuntime : IActorRuntime
         await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
-        // Refactor (issue1271/first-slice): Old pattern: parent-side observation had to infer child
-        // completion through local runtime knowledge. New principle: committed facts are relayed by
-        // the shared stream-forwarding surface, so local and distributed runtimes expose the same
-        // observer-visible committed-facts path.
+        // Refactor (iter164/cluster-002-first):
+        // Old pattern: workflow modules inferred completion from presentation frame descriptors.
+        // New principle: committed child state is observed through runtime-owned stream relay.
+        // Local runtime registers the same child-to-parent committed observation path as Orleans.
         await _streams.GetStream(childId).UpsertRelayAsync(
-            StreamForwardingRules.CreateCommittedFactsObserverBinding(childId, parentId),
+            StreamForwardingRules.CreateCommittedObservationBinding(childId, parentId),
             ct);
 
         using var activity = AevatarActivitySource.StartAgentLink(parentId, childId);

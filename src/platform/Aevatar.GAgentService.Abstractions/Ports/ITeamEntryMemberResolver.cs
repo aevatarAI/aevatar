@@ -1,5 +1,14 @@
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
+// Refactor (iter-v1/issue1450-first):
+//   Old: resolver contract could be misread as a composite team readiness/status read model.
+//   New: resolver is only for InvokeTeam command target admission and exposes no cross-authority team status.
+/// <summary>
+/// Resolves the Studio team entry member for command target admission. This
+/// contract is not a stable team status/readiness read model and must not be
+/// reused by UI, reporting, or other query surfaces to display cross-actor
+/// authoritative state.
+/// </summary>
 public interface ITeamEntryMemberResolver
 {
     Task<TeamEntryMemberResolution> ResolveAsync(
@@ -8,6 +17,13 @@ public interface ITeamEntryMemberResolver
         CancellationToken ct = default);
 }
 
+/// <summary>
+/// Narrow command-target resolution result. It carries only the identifiers
+/// needed to dispatch to the selected entry member's published service; it is
+/// not a composite team readiness/status view. Freshness markers may only be
+/// added by passing through fields already exposed by the underlying team or
+/// member read models, never by inventing a resolver-local version.
+/// </summary>
 public sealed record TeamEntryMemberResolution(
     string ScopeId,
     string TeamId,

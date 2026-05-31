@@ -11,12 +11,15 @@ owner: eanzhao
 Accepted for the current `ChatRouteAction` contract: the active oneof variants
 are `ForwardToModel` and `Reject`; legacy
 `ForwardToGAgent`/`ForwardToTeam`/`ForwardToWorkflow`/`Bypass` names are
-reserved only. The `ForwardToModel.tool_set_ref + tool_choice_hint` fields are
-the current encoding for GAgent, team, workflow, and voice target hints.
+reserved only. The `ForwardToModel.tool_set_ref + tool_choice_hint` fields
+express tool availability, tool prefill, and the typed voice attach target.
+Tool prefilled arguments must not be interpreted as actor addressing.
 
 D5/D6 describe the later session-owned execution topology. `ChatRunActor` and
-`VoiceSessionActor` are not implemented by this ADR slice, and ordinary
-`/ws/voice` pure `ForwardToModel` execution remains deferred to Stage 5.
+`VoiceSessionActor` are not implemented by this ADR slice. Until that topology
+exists, ordinary `/ws/voice` supports only typed
+`tool_choice_hint.voice_attach_target` attachment; pure model forwarding
+remains fail-closed.
 
 ## Context
 
@@ -86,10 +89,11 @@ ADR-0024 D1 is preserved. Only the action set narrows.
   `"workspace.default"`, `"lark.self_notify"`, `"voice.realtime"`) maintained
   outside the policy proto so the action stays small.
 - `tool_choice_hint` — optional pinning of a particular tool plus
-  pre-filled named arguments. This is how a policy rule replaces the
-  semantics of "this caller's traffic should always reach GAgent X": it
-  ships `tool_set_ref=...; tool_choice_hint={name: "aevatar_invoke_gagent",
-  prefilled: {actor_id: "X"}}` instead of `ForwardToGAgent(X)`.
+  pre-filled named arguments. It configures the tool call input for ingress
+  paths that actually execute that tool loop. Its
+  `voice_attach_target { actor_id, voice_module_name }` sub-message is the
+  only `/ws/voice` attach target. `prefilled_arguments` is not actor addressing
+  and must not be used by `/ws/voice` to choose a WebSocket attach target.
 
 Per CLAUDE.md §"字段命名与 Metadata 决策树" step 1, both fields are typed
 sub-messages, not `map<string, string>` bags.
@@ -150,15 +154,16 @@ Per CLAUDE.md §"Actor 即业务实体", these are named for the business entity
 
 ### D6 — Voice converges on the same ingress shape
 
-`/ws/voice` no longer binds to an actor at WebSocket upgrade time.
-`ChatRouteResolver` runs once at session establishment, returns
-`ForwardToModel(tool_set_ref=..., tool_choice_hint=...)`, and the
-`VoiceSessionActor` issues `session.update` to the OpenAI Realtime provider
-declaring the resolved tool set. Function calls from the model
-(`response.function_call_arguments.done` events) feed the same
-`ToolCallLoop`. Tool results flow back via server-initiated
-`conversation.item.create` + `response.create`, which is the documented
-OpenAI Realtime backchannel for asynchronous tool output.
+`/ws/voice` may attach to a voice-enabled actor at WebSocket upgrade time only
+when the resolved `ForwardToModel.tool_choice_hint.voice_attach_target` carries
+the typed attach target. `actor_id` and `voice_module_name` in
+`prefilled_arguments` are ignored for voice attachment. Until a route-scoped
+`VoiceSessionActor` exists, ordinary `/ws/voice` still fails closed for pure
+model-forward `ForwardToModel` decisions before WebSocket accept. The later
+session actor can run `ChatRouteResolver` once at session establishment,
+declare the resolved tool set to the OpenAI Realtime provider, and feed
+function calls through the same `ToolCallLoop` without treating tool prefill as
+actor addressing.
 
 `/ws/voice/{actorId}` (dev/admin bypass from ADR-0024 D4) stays. It
 short-circuits the resolver, so its semantics are unaffected.
@@ -253,10 +258,9 @@ Runtime checks:
   policy would have routed to `ForwardToGAgent` / `ForwardToTeam`. The
   Anthropic facade can host the same orchestration because the
   orchestration lives in the tool layer, not the wire shape.
-- `/ws/voice` resolves a policy, declares tools to the Realtime provider,
-  and the model can call `aevatar_invoke_gagent` mid-conversation; the
-  result lands as a backchannel `conversation.item.create` + `response.create`
-  and the model speaks it aloud.
+- `/ws/voice` resolves a policy and attaches when the decision carries typed
+  `voice_attach_target`; `ForwardToModel` decisions without that typed target
+  return HTTP 501 before WebSocket accept.
 - NyxID-direct caller (no Aevatar UI session) hits `/v1/responses` with
   a NyxID bearer that has a Lark connection in NyxID; says "push X to
   my Lark"; the Lark tool dispatches under caller scope; the message
@@ -281,7 +285,7 @@ Stage 1's tool sources are merged.
 | **2** | Extend `ForwardToModel` proto with `tool_set_ref` + `tool_choice_hint`. Policy authors express GAgent, team, and workflow targets directly as tool-first `ForwardToModel` actions. `ChatRunActor` introduced for SSE sessions. | No |
 | **3** | Delete legacy wire actions and migration path. Reserve old proto tags/names for `ForwardToGAgent`, `ForwardToTeam`, `ForwardToWorkflow`, and `Bypass`; no new policy writer may emit them. | Yes (clients still using legacy actions) |
 | **4** | Remove code paths: `ResponsesEndpoints.cs:779-927`, `AgentRunGAgent.cs:1108-1141`, resolver branches for legacy actions. `/v1/messages` 501 fallback for these actions deleted. | Yes (clients still using legacy actions) |
-| **5** | `VoiceSessionActor` implementation. `/ws/voice` switches to `ForwardToModel + tool_set_ref`. `/ws/voice/{actorId}` dev bypass unaffected. **Blocked by:** VoicePresence.OpenAI GA migration. | Yes (voice clients) |
+| **5** | `VoiceSessionActor` implementation. `/ws/voice` switches from typed attach target to session-owned `ForwardToModel + tool_set_ref` execution. `/ws/voice/{actorId}` dev bypass unaffected. **Blocked by:** VoicePresence.OpenAI GA migration. | Yes (voice clients) |
 
 ## Supersedes
 

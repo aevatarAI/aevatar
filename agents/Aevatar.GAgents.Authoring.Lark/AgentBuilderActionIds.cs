@@ -2,8 +2,8 @@ namespace Aevatar.GAgents.Authoring.Lark;
 
 /// <summary>
 /// Single source of truth for the <c>agent_builder_action</c> identifiers wired between the
-/// card-rendering surface (<see cref="AgentBuilderCardContent"/>) and the dispatch surfaces
-/// (<see cref="AgentBuilderCardFlow"/>, <see cref="NyxRelayAgentBuilderFlow"/>).
+/// card-rendering surface (<see cref="AgentBuilderCardContent"/>) and the dispatch surface
+/// (<see cref="AgentBuilderCardFlow"/>).
 /// </summary>
 /// <remarks>
 /// Keeping these in one place avoids the silent-divergence hazard of redeclaring the same string

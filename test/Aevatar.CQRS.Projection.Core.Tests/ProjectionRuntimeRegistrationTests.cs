@@ -307,7 +307,7 @@ public sealed class ProjectionRuntimeRegistrationTests
         });
 
         lease.Should().NotBeNull();
-        lease!.ScopeId.Should().Be("actor-session");
+        lease!.Context.RootActorId.Should().Be("actor-session");
         lease.SessionId.Should().Be("session-lookup");
         runtime.CreatedActorIds.Should().BeEmpty();
         dispatchPort.Dispatched.Should().BeEmpty();
@@ -480,9 +480,12 @@ public sealed class ProjectionRuntimeRegistrationTests
         public string SessionId { get; init; } = string.Empty;
     }
 
+    // Refactor (iter367/cluster-issue377): Old pattern: test lease implemented IProjectionPortSessionLease.
+    // Refactor (iter367/cluster-issue377): Old pattern: ScopeId repeated Context.RootActorId.
+    // Refactor (iter367/cluster-issue377): New principle: test registration only requires typed context lease.
+    // Refactor (iter367/cluster-issue377): New principle: assertions read RootActorId from Context.
     private sealed class TestSessionLease
         : EventSinkProjectionRuntimeLeaseBase<StringValue>,
-          IProjectionPortSessionLease,
           IProjectionContextRuntimeLease<TestSessionContext>
     {
         public TestSessionLease(TestSessionContext context)
@@ -492,8 +495,6 @@ public sealed class ProjectionRuntimeRegistrationTests
         }
 
         public TestSessionContext Context { get; }
-
-        public string ScopeId => Context.RootActorId;
 
         public string SessionId => Context.SessionId;
     }

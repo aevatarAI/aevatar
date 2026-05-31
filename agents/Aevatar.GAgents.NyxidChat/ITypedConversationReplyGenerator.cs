@@ -24,15 +24,21 @@ internal interface IAgentRunStepConversationReplyGenerator : ITypedConversationR
         IReadOnlyDictionary<string, string> metadata,
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
+        bool forceDisableTools,
         CancellationToken ct);
 
     MessageContent? TryTakeOutboundIntent() => null;
 }
 
+// Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+// slash silently consumed.
+// New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+// non-slash text path unchanged (owner-LLM chat fallback).
 public sealed record AgentRunReplyStepPlan(
     ChatRuntimeStepExecutor StepExecutor,
     IReadOnlyDictionary<string, string> Metadata,
     LLMControlContext LlmControl,
     AgentToolExecutionContext ToolContext,
     IReadOnlyList<ChatMessage> InitialMessages,
-    int MaxToolRounds);
+    int MaxToolRounds,
+    bool DisableTools = false);

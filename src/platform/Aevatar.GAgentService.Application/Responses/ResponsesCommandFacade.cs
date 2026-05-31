@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Application.Internal;
@@ -366,6 +367,13 @@ public sealed class ResponsesCommandFacade(
             ? normalized.Model
             : forwardToModel.ModelName.Trim();
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
+        var toolContext = toolProviderContext.ToolContext with
+        {
+            Routing = toolProviderContext.ToolContext.Routing with
+            {
+                NyxIdRoutePreference = resolvedRouteValue,
+            },
+        };
         var llmRequest = BuildLlmRequest(
             normalized,
             previousSnapshot,
@@ -373,14 +381,15 @@ public sealed class ResponsesCommandFacade(
             bearerToken,
             effectiveModel,
             resolvedRouteValue,
-            toolClassification);
+            toolClassification,
+            toolContext);
 
         return ExecutionPlanResult.FromPlan(new ResponsesCreateCommandPlan(
             normalized,
             responseSession,
             previousSnapshot,
             llmRequest,
-            toolProviderContext.ToolContextMetadata,
+            toolContext,
             toolClassification,
             toolPlan.ToolChoiceHintPlan,
             createdAt));
@@ -467,7 +476,8 @@ public sealed class ResponsesCommandFacade(
         string bearerToken,
         string effectiveModel,
         string? resolvedRouteValue,
-        ResponsesToolClassification toolClassification)
+        ResponsesToolClassification toolClassification,
+        AgentToolExecutionContext toolContext)
     {
         var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -485,6 +495,7 @@ public sealed class ResponsesCommandFacade(
                 normalized.ResponseId,
                 new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
+            ToolContext = toolContext,
             LlmControl = new LLMControlContext(
                 NyxIdAccessToken: null,
                 NyxIdOrgToken: null,
@@ -499,26 +510,34 @@ public sealed class ResponsesCommandFacade(
         };
     }
 
+    // Refactor (issue1416-first):
+    //   Old pattern: Responses downgraded request identity, caller scope, and bearer credentials into ToolContextMetadata.
+    //   New principle: Responses reuses AgentToolExecutionContext as the typed tool execution authority.
     private static ResponsesToolProviderContext BuildToolProviderContext(
         ResponsesCallerScope callerScope,
         string responseId,
-        string bearerToken)
-    {
-        return new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
+        string bearerToken) =>
+        new(BuildToolContext(callerScope, responseId, bearerToken, routePreference: null));
+
+    private static AgentToolExecutionContext BuildToolContext(
+        ResponsesCallerScope callerScope,
+        string responseId,
+        string bearerToken,
+        string? routePreference) =>
+        new(
+            new AgentToolRequestIdentity(responseId, null),
+            new AgentToolCredentials(bearerToken, null, null),
+            new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+            new AgentToolChannelContext(
+                callerScope.OriginKind.ToString(),
+                null,
                 callerScope.ScopeId,
-                callerScope.OwnerSubject,
-                callerScope.OriginKind.ToString()),
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = responseId,
-                [LLMRequestMetadataKeys.ResponseId] = responseId,
-                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
-                [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
-            });
-    }
+                null,
+                null),
+            AgentToolSenderBindingContext.Empty,
+            new LLMRequestRoutingContext(null, routePreference, null, null),
+            AgentToolConnectedServicesContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
     private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         ResponsesCallerScope callerScope,
@@ -837,8 +856,12 @@ public sealed class ResponsesCommandFacade(
             CallId = call.Id,
             ToolName = call.Name,
             ArgumentsJson = call.ArgumentsJson,
+            Arguments = ResponsesProtoPayloads.ParseStruct(call.ArgumentsJson),
         };
 
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: durable LlmSession tool declarations and choice hints wrote only *_json strings.
+    //   New principle: typed Struct fields are the write path; legacy strings stay populated for fallback reads.
     private static LlmSessionRuntimeToolSelection ToToolSelection(
         ResponsesToolClassification classification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan)
@@ -852,6 +875,7 @@ public sealed class ResponsesCommandFacade(
         {
             selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
             selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
+            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
         }
 
         selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
@@ -860,6 +884,7 @@ public sealed class ResponsesCommandFacade(
                 ToolName = tool.Name,
                 Description = tool.Description,
                 ParametersJson = tool.ParametersJson,
+                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
                 SchemaHash = tool.SchemaHash,
             }));
         return selection;

@@ -300,6 +300,7 @@ Bash(
      --cd <worktree> --add-dir /Users/auric/aevatar \
      --prompt <prompt-file> --log <log-file> --timeout 5400
    ```
+   `spawn-codex.sh` 启动接受时输出 `ACCEPTED: execution_id=<id> ack_stage=accepted`,同 id 在 `.refactor-loop/markers/<execution_id>.running.json` 与 `.done.json` 中持续；未传 `--execution-id` 时由 wrapper 自动生成,旧 `SPAWN/DONE` banner 仍保留给 legacy reader。
 
 **反模式(❌ 已废,已删除见 #1242)`spawn_with_banner.py + Popen 自 detach`**:
 - 用 `Popen + start_new_session` 把 codex 脱离 python parent → harness 看不见 codex
@@ -937,9 +938,9 @@ Daemon 工作流(2026-05-30 重写 — PR-based 双向 sync):
 2. 每方向:计算 source ahead of target = N;N==0 → skip
 3. 没 open sync PR → 创 sync branch + open PR(forward 立即 enable auto-merge;reverse 等 maintainer review)
 4. 有 open sync PR + `mergeStateStatus`:
-   - **DIRTY** → spawn codex resolve in REVERSE_WT/FORWARD_WT
+   - **DIRTY** → daemon 物化 conflict-resolve prompt/log/worktree 并写 pending event;controller 下次 wakeup 用 `spawn-codex.sh` 派发
    - **BEHIND** → `gh api .../update-branch`(GitHub merge base into PR head)
-   - **CI fail** → spawn codex fix-ci
+   - **CI fail** → daemon 物化 fix-ci prompt/log/worktree 并写 pending event;controller 下次 wakeup 用 `spawn-codex.sh` 派发
    - **CLEAN + sync_branch behind source by N > 0**(stale)→ 自动 `git reset --hard origin/<source>` + `git push --force-with-lease`(2026-05-30 修复:之前会卡在 CLEAN 状态等 maintainer 看陈旧 PR)
    - **CLEAN + sync 同步** → 等 GitHub auto-merge(forward)/ maintainer review(reverse)
 5. Reverse gate:trunk 落后 dev > 0 → reverse 暂停(先完 forward 让 trunk superset of dev)
@@ -951,6 +952,7 @@ Daemon 工作流(2026-05-30 重写 — PR-based 双向 sync):
 | 任务 | 谁做 |
 |---|---|
 | dev → auto-refact-dev sync(常规 + 冲突解决) | **daemon**(600s 自主) |
+| sync conflict / CI fix codex dispatch | daemon 只写 `.refactor-loop/.controller-pending-events.log`;controller 用 `spawn-codex.sh` 派发 |
 | 处理 design issue / Phase 9 / Phase 8 fix loop | controller(wakeup) |
 | 派 reviewer / fix / implement codex | controller |
 | 监控 daemon liveness + restart | controller per-wakeup |
@@ -971,7 +973,7 @@ tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FA
 
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
 - ❌ daemon push 后 controller 不 fetch 就 commit(stale base bug)
-- ❌ Daemon 派 codex 自己 push(daemon 决定 push 时机,codex 只 resolve + merge --continue)
+- ❌ Daemon `nohup` / `Popen` / `disown` 自派 codex;daemon 只能物化 pending event,controller 负责 harness-tracked dispatch
 - ❌ 多 daemon 实例(`pgrep -c dev-sync-daemon` 必须 = 1)
 
 ### Sync procedure
@@ -1070,16 +1072,17 @@ maintainer 只加 1 label:`auto-loop-triage`
 
 `.claude/skills/codex-refactor-loop/scripts/triage-monitor.sh` 60s 周期:
 - 扫 `gh issue list --label "auto-loop-triage" --state open`
-- 新 issue → mark seen + **直接 spawn triage codex**(nohup + disown,daemon 自己派)
+- 新 issue → mark seen + 物化 triage prompt/log path + 写 `.refactor-loop/.controller-pending-events.log`
+- controller 读取 pending event 后用 `spawn-codex.sh` 派 triage codex,由 `spawn-codex.sh` 写标准 `.refactor-loop/markers/*.running|done.json`
 - triage codex 自己读 issue body + update GitHub(reshape or 评论 + label 切换)
-- daemon 不依赖 controller 中转,无中间 event log
+- daemon 只负责 detect / log / prompt materialization,不自己派 codex
 - state 存 `.refactor-loop/triage-monitor-state.json` 防重复
 - 启动:`nohup bash .claude/skills/codex-refactor-loop/scripts/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
 - Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
 - Codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`(写 issue 评论 + 切 label)
 - Controller 下次 wakeup 从 GitHub state derive(issue label 改了即看见)
 
-**事故记录**:2026-05-23 #560 maintainer 加 `auto-loop-triage` label,初版 daemon 只 emit event 到 `.controller-pending-events.log` 等 controller 中转,**但 controller 没 sweep pending-events**,#560 漏读 20min,maintainer 问"为什么没自动扫到"。修法:daemon 直接 spawn codex,移除中转环节(daemon = comment-monitor.sh eyes-react pattern,自己 take action 不让 controller 中转)。
+**事故修正(issue1337)**:`auto-loop-triage` daemon 不得 `nohup + disown` 自派 codex。daemon 写 pending event 后,controller 必须在 wakeup step 1.6 读取并用 `spawn-codex.sh` 派发,让 harness 可见并复用标准 marker path。
 
 Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),对每个新 issue:
 1. 派 **triage codex**(`prompts/triage-external-issue.md`)读 issue body + 判断:
@@ -1897,7 +1900,7 @@ controller **不派 fix codex 不 auto-merge**(此 phase 是 advisory,不接 fix
 | **Issue body 有最小描述** | body 长度 ≥ 100 chars(过短 issue triage 也判不出) |
 | **未在 ongoing 维护讨论** | 最近 24h 内**无** human comment(避免打断真人 maintainer 已在 reply 的 issue) |
 
-全部 yes → 加 `auto-loop-triage` label,由 `.claude/skills/codex-refactor-loop/scripts/triage-monitor.sh` daemon 自动 spawn triage codex(已有现成 daemon,本 phase 复用)。
+全部 yes → 加 `auto-loop-triage` label,由 `.claude/skills/codex-refactor-loop/scripts/triage-monitor.sh` daemon 写 controller pending event;controller 再用 `spawn-codex.sh` 派 triage codex。
 
 ### Triage codex 行为(已 by Phase 7 Path B 定义)
 
@@ -1971,7 +1974,7 @@ Concretely, this means:
 2. **stale `🚀 phase:pr-open` + `👀 phase:reviewing` PR**:扫 reviewer log,有 REVIEW_DONE × 3 + reject → 派 fix r+1;有 FIX_DONE → 派 reviewer r+1;all-approve + CI 绿 → merge
 3. **CI 红 PR**(`gh pr checks` bucket=fail):立即拉 fail log + 派 fix codex(per "CI 监控即时推进")
 4. **stuck label 3h+ issue**(`auto-loop-stuck` / `🆘 human:卡死` / `👤 human:需-maintainer-决策`):派 fresh reflector(per "Stuck issue 3h 超时" 节)
-5. **未处理 / 长期未动 open issue**(>3h 未 update,non-bot):batch `auto-loop-triage` label,daemon spawn triage codex
+5. **未处理 / 长期未动 open issue**(>3h 未 update,non-bot):batch `auto-loop-triage` label,daemon 写 controller pending event,controller spawn triage codex
 6a. **`🔍 phase:design-solving` issue 但 0 solver log**(从未派出 r1 三 solver)→ **每 issue 派 3 solver**(每 issue 占 3 codex slot)— **强制最高级 Phase 9 优先级**(per Auric 2026-05-29 "一堆issues没完成, 为什么发新审计?")。Auric 已纠正过两次:script 当 audit 是"floor 填底"时,会跨过此条 → 22+ design-solving issue 静默积压。修法:wakeup-check.sh Step F2 检测此状态,HARD GATE 优先级表把"design-solving 无 solver"压在 audit 之前。
 6b. **active Phase 9 issue 等 judge / r+1 solver**:三 solver 全 EXIT=0 但无 judge log → 派 judge;judge converge → 派 r+1 三 solver;judge consensus → 派 implement
 7. **Phase 10 advisory review**(eligible open PR 池,非 auto-loop)
@@ -2647,6 +2650,15 @@ Bash(
 2. **No external repo changes** — NyxID / chrono-* are out of scope.
 3. **Code self-documents the refactor** — every refactored type/method gets a 3-5 line comment of the form `// Refactor (iterN/cluster-XXX): Old pattern: …  New principle: …`.
 4. **No `commit`/`push`/`checkout`/`gh pr create`/`git branch` inside codex prompts** — the controller owns git topology(branch 创建、commit、push、PR 开均由 controller 做)。事故记录:#952 codex 自开 PR 默认 `base=dev`(而非 `auto-refact-dev`)→ 与 dev CONFLICTING + 误对外发布。如不显式禁止,`gh pr create` 默认 base = repo default branch 错误。**Implement/fix/test-add prompt template 必须 verbatim 含此禁令**(不只在 SKILL hint,要在 prompt 里写明)。
+
+   **例外:`conflict-resolve` role codex** — 解 textual conflict 必须能跑 `git fetch` / `git merge` / `git add`(否则 git 不知 conflict 已解)。允许:
+   - `git fetch origin`
+   - `git merge origin/<base-branch>`(包括 `--abort` 恢复)
+   - `git add <resolved-file>`(只 add resolved files,不 add 其他)
+   
+   仍禁止:`git commit`、`git push`、`git checkout`、新 file 创建、对 conflict file 外的文件改动。这些由 controller 主控。
+   
+   事故记录:2026-05-30 conflict-resolve v1 prompt 没说允许 git add → codex 保守按 hard rule 4 全拒,输出 `CONFLICT_BLOCKED:git_commit_forbidden_by_shared_hard_rules`。本次例外补齐;`prompts/conflict-resolve-*.md` 模板用此例外措辞即可,不用每个 PR override。
 5. **No `Task.Delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.

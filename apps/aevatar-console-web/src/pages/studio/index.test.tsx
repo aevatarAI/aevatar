@@ -5716,10 +5716,8 @@ describe("StudioPage", () => {
     );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.getByText("candidate:draft1")).toBeTruthy();
-      expect(screen.getByText("service:no-service")).toBeTruthy();
-    });
+    expect(await screen.findByText("candidate:draft1")).toBeTruthy();
+    expect(await screen.findByText("service:no-service")).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));

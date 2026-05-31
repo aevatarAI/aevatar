@@ -38,10 +38,10 @@ REVERSE_PREFIX = "chore/sync-trunk-to-dev-"
 FORWARD_WT = Path(os.environ.get("FORWARD_WT", "/Users/auric/aevatar-wt-sync-forward"))
 REVERSE_WT = Path(os.environ.get("REVERSE_WT", "/Users/auric/aevatar-wt-sync-reverse"))
 
-SPAWN_CODEX = MAIN_REPO / ".claude" / "skills" / "codex-refactor-loop" / "scripts" / "spawn-codex.sh"
 LOGS_DIR = MAIN_REPO / ".refactor-loop" / "logs"
 PROMPTS_DIR = MAIN_REPO / ".refactor-loop" / "prompts"
 LOCK_FILE = MAIN_REPO / ".refactor-loop" / "dev-sync-daemon.lock"
+PENDING_EVENTS = MAIN_REPO / ".refactor-loop" / ".controller-pending-events.log"
 
 # ===== utils =====
 
@@ -149,7 +149,8 @@ def create_sync_pr(source: str, target: str, branch_prefix: str, ahead: int, lab
         return
     log(f"{label}: pushed {new_branch} ({ahead} commits)")
     body = (f"daemon 双向同步 `{source}` → `{target}` 共 {ahead} commits。"
-            f"CI 绿后 GitHub auto-merge。冲突或 CI fail 由 daemon 派 codex 在独立 worktree 解决。"
+            f"CI 绿后 GitHub auto-merge。冲突或 CI fail 由 daemon 写 pending event,"
+            f"再由 controller 派 codex 在独立 worktree 解决。"
             f"\n\n⟦AI:AUTO-LOOP⟧\n")
     r = run(["gh", "pr", "create", "--base", target, "--head", new_branch,
              "--title", f"chore: {source} → {target} 自动同步 ({ahead} commits)",
@@ -175,7 +176,7 @@ def create_sync_pr(source: str, target: str, branch_prefix: str, ahead: int, lab
 
 def dispatch_codex(wt: Path, pr_num: int, sync_branch: str, source: str, target: str,
                    action: str, label: str) -> None:
-    """action: 'resolve-conflict' | 'fix-ci'. 派 codex 在 wt 上 work + push 回 sync_branch."""
+    """action: 'resolve-conflict' | 'fix-ci'. 物化 codex dispatch request for controller pickup."""
     if not ensure_worktree(wt, sync_branch):
         return
     ts = int(time.time())
@@ -186,6 +187,17 @@ def dispatch_codex(wt: Path, pr_num: int, sync_branch: str, source: str, target:
 
     if action == "resolve-conflict":
         body = f"""# {label} sync — 解冲突 PR #{pr_num}
+
+## 🚨 SHARED HARD RULE EXCEPTION(本 role 例外,优先级 > shared hard rules)
+
+本 role 由 dev_sync_daemon 派出,**例外允许**以下命令(覆盖 shared hard rules 禁令):
+- `git fetch origin`
+- `git merge origin/{target}`(含 `--abort` 恢复)
+- `git add -A`(只 add resolved files,不 add 范围外文件)
+- `git commit -m "..."`
+- `git push origin HEAD:{sync_branch}`(必须 push,daemon 不会自己 push)
+
+仍**禁止**:`git checkout`、`git branch`、`gh pr create/merge`、force push、改 sync 范围外文件。
 
 worktree: `{wt}`(已 checkout `{sync_branch}` + reset to `origin/{sync_branch}`)
 sync 方向: `{source}` → `{target}`(PR base=`{target}`)
@@ -214,6 +226,15 @@ sync 方向: `{source}` → `{target}`(PR base=`{target}`)
 """
     else:  # fix-ci
         body = f"""# {label} sync — 修 CI fail PR #{pr_num}
+
+## 🚨 SHARED HARD RULE EXCEPTION(本 role 例外,优先级 > shared hard rules)
+
+本 role 由 dev_sync_daemon 派出,**例外允许**以下命令(覆盖 shared hard rules 禁令):
+- `git add -A`(只 add 修复 CI 必需文件)
+- `git commit -m "..."`
+- `git push origin HEAD:{sync_branch}`(必须 push,daemon 不会自己 push;不 push CI 不重跑 → PR 永远红)
+
+仍**禁止**:`git checkout`、`git branch`、`gh pr create/merge`、force push、改 sync 范围外文件、disable test、添加 `[Skip]`、`Task.Delay`。
 
 worktree: `{wt}`(已 checkout `{sync_branch}` + reset to `origin/{sync_branch}`)
 sync 方向: `{source}` → `{target}`(PR base=`{target}`)
@@ -244,13 +265,22 @@ sync 方向: `{source}` → `{target}`(PR base=`{target}`)
 所有 AI 生成的对外内容必须末尾独立一行加 sentinel `⟦AI:AUTO-LOOP⟧`。
 """
     prompt_file.write_text(body)
-    log(f"{label}: dispatch codex({action}) PR #{pr_num} wt={wt} prompt={prompt_file.name}")
-    subprocess.Popen(
-        ["bash", "-lc",
-         f"nohup {SPAWN_CODEX} --cd {wt} --add-dir {MAIN_REPO} "
-         f"--prompt {prompt_file} --log {log_file} --timeout 5400 "
-         f">/dev/null 2>&1 & disown"],
-        cwd=str(MAIN_REPO))
+    # Refactor (issue1369/first-slice):
+    #   Old pattern: daemon detached codex via nohup/Popen, bypassing harness tracking.
+    #   New principle: daemon writes pending event; controller dispatches via spawn-codex.sh; harness tracked + task-notification on exit.
+    event_action = "conflict-resolve" if action == "resolve-conflict" else "fix-ci"
+    event_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    PENDING_EVENTS.parent.mkdir(parents=True, exist_ok=True)
+    with PENDING_EVENTS.open("a", encoding="utf-8") as fp:
+        fp.write(
+            f"{event_ts} dispatch-codex action={event_action} "
+            f"prompt={prompt_file.resolve()} log={log_file.resolve()} worktree={wt.resolve()} "
+            f"add_dir={MAIN_REPO.resolve()} timeout=5400 issue_or_pr={pr_num}\n"
+        )
+    log(
+        f"{label}: queued codex({event_action}) PR #{pr_num} wt={wt} "
+        f"prompt={prompt_file.name} pending={PENDING_EVENTS}"
+    )
 
 
 def trigger_update_branch(pr_num: int, label: str) -> None:

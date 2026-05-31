@@ -796,7 +796,7 @@ public sealed class MainnetMessagesEndpointsTests
                 var completion = await completionService.CollectAsync(
                     providerFactory.GetDefault(),
                     plan.LlmRequest,
-                    plan.ToolContextMetadata,
+                    plan.ToolContext,
                     plan.ToolClassification,
                     ct);
                 var snapshot = BuildCompletionSnapshot(completion);
@@ -817,7 +817,7 @@ public sealed class MainnetMessagesEndpointsTests
                 var completion = await completionService.StreamAsync(
                     providerFactory.GetDefault(),
                     plan.LlmRequest,
-                    plan.ToolContextMetadata,
+                    plan.ToolContext,
                     plan.ToolClassification,
                     onTextDelta,
                     ct);

@@ -53,7 +53,7 @@ Verdict semantics:
 - **comment**: small naming/clarity nits; unrelated drive-by changes worth surfacing; CA1502 borderline.
 - **reject**: significant dead code, harmful single-implementer abstraction, missing/illegible self-doc on a major refactor, or scope creep into unrelated cleanup.
 
-End with marker: `REVIEW_DONE:${PR_NUMBER}:quality:<verdict>`
+End with marker: `REVIEW_DONE:${ISSUE_NUMBER}:quality:<verdict>`
 
 ## Hard rules
 

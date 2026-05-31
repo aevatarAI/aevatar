@@ -11,14 +11,22 @@ namespace Aevatar.CQRS.Projection.Core.DependencyInjection;
 /// <summary>
 /// Shared registration helpers for actorized session projection components.
 /// </summary>
+// Refactor (iter367/cluster-issue377): Old pattern: registration required IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: the alias duplicated Context.RootActorId and Context.SessionId.
+// Refactor (iter367/cluster-issue377): New principle: runtime registration depends on typed session context.
+// Refactor (iter367/cluster-issue377): New principle: session identity is read from Context at lifecycle boundaries.
 public static class EventSinkProjectionRuntimeRegistration
 {
+    // Refactor (iter367/cluster-issue377): Old pattern: session runtimes had to implement an alias lease contract.
+    // Refactor (iter367/cluster-issue377): Old pattern: DI accepted duplicate ScopeId + SessionId surfaces.
+    // Refactor (iter367/cluster-issue377): New principle: TRuntimeLease only needs runtime lease and context lease contracts.
+    // Refactor (iter367/cluster-issue377): New principle: the context factory is the single source for RootActorId/session.
     public static IServiceCollection AddEventSinkProjectionRuntimeCore<TContext, TRuntimeLease, TEvent, TScopeAgent>(
         this IServiceCollection services,
         Func<ProjectionRuntimeScopeKey, TContext> contextFactory,
         Func<TContext, TRuntimeLease> leaseFactory)
         where TContext : class, IProjectionSessionContext
-        where TRuntimeLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionPortSessionLease, IProjectionRuntimeLease, IProjectionContextRuntimeLease<TContext>
+        where TRuntimeLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionRuntimeLease, IProjectionContextRuntimeLease<TContext>
         where TEvent : class
         where TScopeAgent : IAgent
     {

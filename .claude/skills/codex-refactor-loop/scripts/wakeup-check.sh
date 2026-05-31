@@ -27,7 +27,13 @@ epoch_of() {
 # ============================================================================
 echo "=== DAEMON HEALTH ==="
 for d in concurrency_monitor.py comment-monitor.sh codex-progress-reporter.sh dev_sync_daemon.py triage-monitor.sh; do
-    c=$(ps -ef | grep "$d" | grep -v grep | wc -l | tr -d ' ')
+    # Narrow match: argv must invoke the daemon via bash or python (start of token)
+    # at path `.claude/skills/codex-refactor-loop/scripts/<d>` — either relative
+    # (daemons started from aevatar repo root) or absolute. Substring match catches
+    # unrelated codex processes whose prompt body mentions the daemon name; cross-repo
+    # wrappers (chrono-ai / newmath consensus-rnd-cli) embed the daemon name as an
+    # argv constant but never invoke the aevatar daemon script directly.
+    c=$(ps -eo args | grep -E "(bash|python[0-9.]*|Python) (\.|/.+)?\.claude/skills/codex-refactor-loop/scripts/$d( |$)" | grep -v grep | wc -l | tr -d ' ')
     if [ "$c" -ge 1 ]; then
         echo "$d: $c OK"
     else
@@ -38,8 +44,12 @@ done
 # ============================================================================
 echo ""
 echo "=== FLOOR ==="
-CODEX_LINES=$(ps -ef | grep "codex exec" | grep -v grep)
-ACTIVE=$(echo "$CODEX_LINES" | grep -c "codex exec" | tr -d ' \n')
+# Each codex spawn creates 3 ps rows: `timeout NNNN codex exec` (parent wrapper) +
+# `node .../codex exec` (Node host) + native `codex` binary. Counting all three
+# inflates ACTIVE 3x. Filter to the wrapper line only — it carries the --log path
+# used for categorization too.
+CODEX_LINES=$(ps -ef | grep -E "timeout (3600|5400) codex exec" | grep -v grep)
+ACTIVE=$(echo "$CODEX_LINES" | grep -cE "timeout (3600|5400) codex exec" | tr -d ' \n')
 [ -z "$CODEX_LINES" ] && ACTIVE=0
 AUDIT=$(echo "$CODEX_LINES" | grep -c "audit-iter" | tr -d ' \n')
 IMPL=$(echo "$CODEX_LINES" | grep -c "implement" | tr -d ' \n')
@@ -56,11 +66,11 @@ fi
 # ============================================================================
 echo ""
 echo "=== STEP 0: MILESTONE ==="
+M_FOUND=0
 M_LABELS=$(gh label list --search "milestone:" --json name --jq '.[].name' 2>/dev/null | grep -E "^milestone:" | sort)
 if [ -z "$M_LABELS" ]; then
     echo "(no milestone labels defined)"
 else
-    M_FOUND=0
     for ml in $(echo "$M_LABELS" | grep "^milestone:p0:") $(echo "$M_LABELS" | grep -v "^milestone:p0:"); do
         ISSUES=$(gh issue list --state open --label "$ml" --json number --jq '.[].number' 2>/dev/null | tr '\n' ' ')
         if [ -n "$ISSUES" ]; then
@@ -73,23 +83,30 @@ fi
 
 # ============================================================================
 echo ""
-echo "=== STEP A: STALE IMPLEMENTING (IMPLEMENT_DONE marker but no PR) ==="
+echo "=== STEP A: STALE IMPLEMENTING (IMPLEMENT_DONE marker but no PR, OR never dispatched) ==="
 A_COUNT=0
 while IFS= read -r n; do
     [ -z "$n" ] && continue
     log=$(ls -t "$LOGDIR"/implement-*"${n}"*.log 2>/dev/null | head -1)
     [ -z "$log" ] && log="$LOGDIR/implement-issue${n}.log"
-    [ -f "$log" ] || continue
-    marker=$(tail -10 "$log" | grep -E "^(IMPLEMENT_DONE|EXIT)" | tail -1)
-    age_min=$(( (NOW_EPOCH - $(stat -f %m "$log" 2>/dev/null || echo "$NOW_EPOCH")) / 60 ))
     # 检查关联 PR 是否存在
     pr=$(gh pr list --state open --search "#${n}" --json number --jq '.[0].number' 2>/dev/null)
+    if [ ! -f "$log" ]; then
+        # 从未派过 implement codex（log 不存在）— 若也无 PR,需 controller 派 implement
+        if [ -z "$pr" ]; then
+            echo "#${n}: NO implement log AND NO open PR — ACTION: dispatch implement codex (label suggests in-flight but never started)"
+            A_COUNT=$((A_COUNT+1))
+        fi
+        continue
+    fi
+    marker=$(tail -10 "$log" | grep -E "^(IMPLEMENT_DONE|EXIT)" | tail -1)
+    age_min=$(( (NOW_EPOCH - $(stat -f %m "$log" 2>/dev/null || echo "$NOW_EPOCH")) / 60 ))
     if [ -z "$pr" ] && echo "$marker" | grep -qE "(IMPLEMENT_DONE.*:ok|EXIT=0)"; then
         echo "#${n}: log=$(basename "$log") age=${age_min}min marker=\"$marker\" — ACTION: controller commit+push+open PR + Phase 8 reviewer × 3"
         A_COUNT=$((A_COUNT+1))
     fi
 done < <(gh issue list --state open --label "🛠️ phase:implementing" --json number --jq '.[].number' 2>/dev/null)
-[ "$A_COUNT" -eq 0 ] && echo "(none — implementing issues all have open PR or no IMPLEMENT_DONE marker)"
+[ "$A_COUNT" -eq 0 ] && echo "(none — implementing issues all have open PR or in-flight)"
 
 # ============================================================================
 echo ""
@@ -187,6 +204,7 @@ done < <(gh issue list --state open --limit 50 --json number,author,updatedAt,la
     .[] | select(
         (.author.login | endswith("[bot]") | not)
         and ([.labels[].name] | (contains(["🎉 phase:merged"]) or contains(["auto-loop-triage"]) or contains(["🔍 phase:design-solving"]) or contains(["🛠️ phase:implementing"]) or contains(["🚀 phase:pr-open"]) or contains(["phase11-not-eligible"]) or contains(["🆘 human:卡死-需-rework"]) or contains(["👤 human:需-maintainer-决策"])) | not)
+        and ([.labels[].name] | map(startswith("milestone:")) | any | not)
     ) | "\(.number) \(.updatedAt)"' 2>/dev/null)
 [ "$E_COUNT" -eq 0 ] && echo "(none — no untouched issues older than 3h needing triage)"
 
@@ -212,8 +230,48 @@ while IFS= read -r n; do
     if [ "$solver_done" -eq 3 ] && [ ! -f "$judge_log" ]; then
         echo "#${n}: ${latest_round} 3 solvers done, no judge log — ACTION: spawn meta-judge for ${latest_round}"
         F_COUNT=$((F_COUNT+1))
+        continue
     fi
-done < <(gh issue list --state open --label "🔍 phase:design-solving" --json number --jq '.[].number' 2>/dev/null)
+    # NEW (2026-05-31): judge log exists but marker requires controller action
+    # 之前 Step F 只检测 "judge log 缺失",漏判 split / converge / escalate / crashed / consensus 等
+    # 已发现 7 个 design-solving issue 静默积压(部分 3 天)— per Auric "一堆issues没完成"
+    if [ -f "$judge_log" ]; then
+        if ! grep -q "^META_JUDGE_DONE:" "$judge_log" 2>/dev/null; then
+            if grep -qE "^EXIT=" "$judge_log" 2>/dev/null; then
+                echo "#${n}: ${latest_round} judge has EXIT but NO META_JUDGE_DONE — ACTION: re-spawn judge (crashed)"
+                F_COUNT=$((F_COUNT+1))
+            fi
+            continue
+        fi
+        marker=$(grep "^META_JUDGE_DONE:" "$judge_log" | head -1)
+        case "$marker" in
+            META_JUDGE_DONE:split:*)
+                echo "#${n}: ${latest_round} judge=split — ACTION: controller close + open 2 sub-issues (first impl / later design)"
+                F_COUNT=$((F_COUNT+1))
+                ;;
+            META_JUDGE_DONE:converge:*)
+                next_round_num=$(echo "$latest_round" | tr -d 'r' | awk '{print $1+1}')
+                if [ ! -f "$LOGDIR/phase9-issue${n}-r${next_round_num}-minimal.log" ]; then
+                    echo "#${n}: ${latest_round} judge=converge — ACTION: spawn r${next_round_num} three solvers"
+                    F_COUNT=$((F_COUNT+1))
+                fi
+                ;;
+            META_JUDGE_DONE:escalate:stalled:*|META_JUDGE_DONE:escalate:philosophy:*|META_JUDGE_DONE:escalate:*)
+                refl_recent=$(find "$LOGDIR"/meta-reflect-issue${n}*.log -mmin -30 2>/dev/null | head -1)
+                if [ -z "$refl_recent" ]; then
+                    echo "#${n}: ${latest_round} judge=${marker#META_JUDGE_DONE:} — ACTION: spawn reflector codex"
+                    F_COUNT=$((F_COUNT+1))
+                fi
+                ;;
+            META_JUDGE_DONE:consensus:*)
+                if [ -z "$(ls "$LOGDIR"/implement-issue${n}*.log 2>/dev/null | head -1)" ]; then
+                    echo "#${n}: ${latest_round} judge=consensus but no implement log — ACTION: dispatch implement codex"
+                    F_COUNT=$((F_COUNT+1))
+                fi
+                ;;
+        esac
+    fi
+done < <(gh issue list --state open --label "🔍 phase:design-solving" --json number,labels --jq '.[] | select([.labels[].name] | contains(["⏸️ phase:blocked"]) | not) | .number' 2>/dev/null)
 if [ "$F_COUNT" -eq 0 ] && [ "$F2_COUNT" -eq 0 ]; then
     echo "(none — no Phase 9 issue waiting for judge or r1 solver dispatch)"
 fi

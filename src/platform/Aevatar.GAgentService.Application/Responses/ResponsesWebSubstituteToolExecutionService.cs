@@ -30,19 +30,23 @@ public sealed class ResponsesWebSubstituteToolExecutionService
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Refactor (issue1323-first): canonicalize local Responses Web aliases before cache identity is built.
+        var canonicalToolName = CanonicalizeWebToolName(request.ToolName);
+
         // Refactor (iter159/cluster-624):
         //   Old pattern: Host 层 ResponsesAevatarToolProvider 直接编排 WebFetch/WebSearch 工具调用
         //   New principle: 编排下沉到 Application/AI 边界;Host 只做协议适配
-        return request.ToolName switch
+        return canonicalToolName switch
         {
-            "WebFetch" or "web_fetch" => await ExecuteFetchAsync(request, ct).ConfigureAwait(false),
-            "WebSearch" or "web_search" => await ExecuteSearchAsync(request, ct).ConfigureAwait(false),
+            "WebFetch" => await ExecuteFetchAsync(request, canonicalToolName, ct).ConfigureAwait(false),
+            "WebSearch" => await ExecuteSearchAsync(request, canonicalToolName, ct).ConfigureAwait(false),
             _ => throw new InvalidOperationException($"Unsupported Responses Web substitute tool '{request.ToolName}'."),
         };
     }
 
     private async Task<ResponsesWebSubstituteToolExecutionResult> ExecuteFetchAsync(
         ResponsesWebSubstituteToolExecutionRequest request,
+        string canonicalToolName,
         CancellationToken ct)
     {
         var validation = ResponsesWebFetchUrlGuard.Validate(NormalizeUrl(request.Fetch?.Url));
@@ -52,20 +56,21 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         }
 
         var url = validation.NormalizedUrl!;
-        var cacheKey = ComputeCacheKey(request.ToolName, url);
+        var cacheKey = ComputeCacheKey(canonicalToolName, url);
         // Refactor (iter161-cluster-001 #1251-first):
         //   Old pattern: fetch trace/cache result was downgraded to Value before recording.
         //   New principle: trace/cache normal writes carry typed ResponsesWebToolResult.
         var cached = await _queryPort.GetWebCacheEntryAsync(
             request.ScopeId,
             request.OwnerSubject,
-            request.ToolName,
+            canonicalToolName,
             cacheKey,
             ct).ConfigureAwait(false);
         if (cached != null)
         {
             await RecordTraceAsync(
                 request,
+                canonicalToolName,
                 cacheKey,
                 url,
                 query: string.Empty,
@@ -94,6 +99,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         var typedOutput = ResponsesWebResultMigration.FromFetch(protoOutput);
         await RecordTraceAsync(
             request,
+            canonicalToolName,
             cacheKey,
             url,
             query: string.Empty,
@@ -105,6 +111,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 
     private async Task<ResponsesWebSubstituteToolExecutionResult> ExecuteSearchAsync(
         ResponsesWebSubstituteToolExecutionRequest request,
+        string canonicalToolName,
         CancellationToken ct)
     {
         var query = request.Search?.Query;
@@ -116,20 +123,21 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             : _backend.DefaultMaxSearchResults;
         maxResults = Math.Clamp(maxResults, 1, 20);
         var cacheValue = $"{query.Trim()}\n{maxResults}";
-        var cacheKey = ComputeCacheKey(request.ToolName, cacheValue);
+        var cacheKey = ComputeCacheKey(canonicalToolName, cacheValue);
         // Refactor (iter161-cluster-001 #1251-first):
         //   Old pattern: search/error trace/cache results were written as Value.
         //   New principle: typed search/error results are written through the existing command->actor->projection chain.
         var cached = await _queryPort.GetWebCacheEntryAsync(
             request.ScopeId,
             request.OwnerSubject,
-            request.ToolName,
+            canonicalToolName,
             cacheKey,
             ct).ConfigureAwait(false);
         if (cached != null)
         {
             await RecordTraceAsync(
                 request,
+                canonicalToolName,
                 cacheKey,
                 query,
                 cacheHit: true,
@@ -148,6 +156,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
                 "No NyxID access token available. User must be authenticated.");
             await RecordTraceAsync(
                 request,
+                canonicalToolName,
                 cacheKey,
                 query,
                 cacheHit: false,
@@ -165,6 +174,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
         var typedSearchResult = ResponsesWebResultMigration.FromSearch(searchResult);
         await RecordTraceAsync(
             request,
+            canonicalToolName,
             cacheKey,
             query,
             cacheHit: false,
@@ -175,6 +185,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 
     private Task RecordTraceAsync(
         ResponsesWebSubstituteToolExecutionRequest request,
+        string canonicalToolName,
         string cacheKey,
         string url,
         string query,
@@ -187,7 +198,7 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             request.ResponseId,
             new ResponsesWebTraceInput(
                 ResponseAgentToolStateIds.NewWebTraceId(),
-                request.ToolName,
+                canonicalToolName,
                 cacheKey,
                 url,
                 query,
@@ -197,18 +208,28 @@ public sealed class ResponsesWebSubstituteToolExecutionService
 
     private Task RecordTraceAsync(
         ResponsesWebSubstituteToolExecutionRequest request,
+        string canonicalToolName,
         string cacheKey,
         string query,
         bool cacheHit,
         ResponsesWebToolResult result,
         CancellationToken ct) =>
-        RecordTraceAsync(request, cacheKey, url: string.Empty, query, cacheHit, result, ct);
+        RecordTraceAsync(request, canonicalToolName, cacheKey, url: string.Empty, query, cacheHit, result, ct);
 
     public static string ComputeCacheKey(string toolName, string value)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{toolName}\n{value.Trim().ToLowerInvariant()}"));
+        var canonicalToolName = CanonicalizeWebToolName(toolName);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{canonicalToolName}\n{value.Trim().ToLowerInvariant()}"));
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    private static string CanonicalizeWebToolName(string toolName) =>
+        toolName switch
+        {
+            "web_fetch" => "WebFetch",
+            "web_search" => "WebSearch",
+            _ => toolName,
+        };
 
     private static string? NormalizeUrl(string? url)
     {

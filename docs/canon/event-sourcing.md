@@ -26,6 +26,12 @@ owner: eanzhao
 3. 只有 Actor 在处理这些入站消息后显式调用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 持久化的领域事件，才会成为 `StateEvent` 并进入 `EventStore`。
 4. 因此，`EventEnvelope` 流与 `StateEvent` 流不是同一层：前者是 transport/runtime 层，后者是事实/event-sourcing 层。
 
+## 2.2 Actor Evolution Matrix
+
+Actor 演进的统一判定树见 [actor-evolution.md](actor-evolution.md)。
+
+Event Sourcing 侧只保留一个内聚结论：同一 actor、同一 identity、同一事实拥有者内的 state schema 演进使用 lazy state migration；事实拥有者变化的 split / merge / re-key / replace 不属于 EventStore replay 或 query-time rebuild 问题，必须走 projection-driven bootstrap 与新 owner 自提交事实。
+
 ## 3. 当前代码事实（权威路径）
 - ES 行为契约：`src/Aevatar.Foundation.Core/EventSourcing/IEventSourcingBehavior.cs`
 - ES 默认实现：`src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs`

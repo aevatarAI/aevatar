@@ -164,7 +164,10 @@ public class LarkToolsTests
     }
 
     [Fact]
-    public async Task LarkMessagesReplyTool_ShouldDefaultToCurrentMessage_AndReplyInThread()
+    // Refactor (issue1378/first-slice):
+    //   Old pattern: ResolveOrCurrent hid missing message_id by replying to the current message.
+    //   New principle: reply tests require structured error and explicit external message_id.
+    public async Task LarkMessagesReplyTool_ShouldRejectMissingMessageId_AndKeepExplicitExternalReply()
     {
         var client = new StubLarkNyxClient
         {
@@ -179,15 +182,25 @@ public class LarkToolsTests
                 ["channel.platform_message_id"] = "om_current_2",
             });
 
-        var result = await tool.ExecuteAsync("""{"text":"收到，我继续看一下","reply_in_thread":true}""");
+        var missingResult = await tool.ExecuteAsync("""{"text":"收到，我继续看一下","reply_in_thread":true}""");
+        using (var missingDocument = JsonDocument.Parse(missingResult))
+        {
+            missingDocument.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+            missingDocument.RootElement.GetProperty("code").GetString().Should().Be("missing_message_id");
+            missingDocument.RootElement.GetProperty("error").GetString().Should().Be("message_id is required");
+            missingDocument.RootElement.GetProperty("recommended_action").GetString().Should().Be("final_answer");
+        }
+
+        client.LastReplyRequest.Should().BeNull();
+
+        var result = await tool.ExecuteAsync("""{"message_id":"om_external_2","text":"收到，我继续看一下","reply_in_thread":true}""");
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
         document.RootElement.GetProperty("message_id").GetString().Should().Be("om_reply_1");
         document.RootElement.GetProperty("reply_in_thread").GetBoolean().Should().BeTrue();
-        document.RootElement.GetProperty("used_current_message").GetBoolean().Should().BeTrue();
         client.LastReplyRequest.Should().NotBeNull();
-        client.LastReplyRequest!.MessageId.Should().Be("om_current_2");
+        client.LastReplyRequest!.MessageId.Should().Be("om_external_2");
         client.LastReplyRequest.ReplyInThread.Should().BeTrue();
         client.LastReplyRequest.MessageType.Should().Be("text");
     }
@@ -232,7 +245,10 @@ public class LarkToolsTests
     }
 
     [Fact]
-    public async Task LarkMessagesReactTool_ShouldDefaultToCurrentMessage_AndOkEmoji()
+    // Refactor (issue1378/first-slice):
+    //   Old pattern: ResolveOrCurrent hid missing message_id by reacting to the current message.
+    //   New principle: reaction tests require structured error and explicit external message_id.
+    public async Task LarkMessagesReactTool_ShouldRejectMissingMessageId_AndKeepExplicitExternalReaction()
     {
         var client = new StubLarkNyxClient
         {
@@ -263,16 +279,26 @@ public class LarkToolsTests
                 ["channel.message_id"] = "om_current_1",
             });
 
-        var result = await tool.ExecuteAsync("""{}""");
+        var missingResult = await tool.ExecuteAsync("""{}""");
+        using (var missingDocument = JsonDocument.Parse(missingResult))
+        {
+            missingDocument.RootElement.GetProperty("success").GetBoolean().Should().BeFalse();
+            missingDocument.RootElement.GetProperty("code").GetString().Should().Be("missing_message_id");
+            missingDocument.RootElement.GetProperty("error").GetString().Should().Be("message_id is required");
+            missingDocument.RootElement.GetProperty("recommended_action").GetString().Should().Be("final_answer");
+        }
+
+        client.LastReactionRequest.Should().BeNull();
+
+        var result = await tool.ExecuteAsync("""{"message_id":"om_external_1"}""");
 
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-        document.RootElement.GetProperty("message_id").GetString().Should().Be("om_current_1");
+        document.RootElement.GetProperty("message_id").GetString().Should().Be("om_external_1");
         document.RootElement.GetProperty("emoji_type").GetString().Should().Be("OK");
         document.RootElement.GetProperty("reaction_id").GetString().Should().Be("reaction_123");
-        document.RootElement.GetProperty("used_current_message").GetBoolean().Should().BeTrue();
         client.LastReactionRequest.Should().NotBeNull();
-        client.LastReactionRequest!.MessageId.Should().Be("om_current_1");
+        client.LastReactionRequest!.MessageId.Should().Be("om_external_1");
         client.LastReactionRequest.EmojiType.Should().Be("OK");
     }
 
@@ -302,7 +328,7 @@ public class LarkToolsTests
                    }))
         {
             (await tool.ExecuteAsync("""{}"""))
-                .Should().Contain("Current turn metadata did not expose a Lark platform message_id");
+                .Should().Contain("message_id is required");
         }
 
         var errorTool = new LarkMessagesReactTool(new StubLarkNyxClient

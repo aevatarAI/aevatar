@@ -61,7 +61,7 @@ Verdict semantics:
 - **comment**: minor observations or improvements; not blocking but worth surfacing in the PR comment.
 - **reject**: real CLAUDE/AGENTS clause violation introduced or worsened; merge would degrade architecture compliance.
 
-End with marker line: `REVIEW_DONE:${PR_NUMBER}:architect:<verdict>`
+End with marker line: `REVIEW_DONE:${ISSUE_NUMBER}:architect:<verdict>`
 
 ## Hard rules
 

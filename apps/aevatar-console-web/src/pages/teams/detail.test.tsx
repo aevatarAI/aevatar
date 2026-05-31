@@ -879,6 +879,9 @@ describe("TeamDetailPage", () => {
     const configurationHeading = screen.getByText("配置明细");
     expect(screen.getByRole("button", { name: "测试团队" })).toBeTruthy();
     expect(currentPostureHeading).toBeTruthy();
+    expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
+    expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
+    expect(await screen.findByText("运行 · 等待处理")).toBeTruthy();
     expect(compositionHeading).toBeTruthy();
     expect(configurationHeading).toBeTruthy();
     expect(screen.queryByLabelText("Team test prompt")).toBeNull();
@@ -907,6 +910,7 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "处理等待 Run" })).toBeNull();
     expect(screen.queryByRole("button", { name: "治理绑定" })).toBeNull();
     expect(screen.queryByRole("button", { name: "部署记录" })).toBeNull();
+    expect(screen.queryByText("稳定")).toBeNull();
     expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
   });
 
@@ -938,6 +942,9 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
+    expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
     expect(screen.queryByText("Comparing run run-current against baseline run-good.")).toBeNull();
     expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();

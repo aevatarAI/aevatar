@@ -34,6 +34,93 @@ if [ -d "src/Aevatar.Host.Api" ] || [ -d "src/Aevatar.Host.Gateway" ]; then
   exit 1
 fi
 
+# Refactor (v1/issue1454-first):
+#   Old: 无中央 .NET 版本源,各项目自带或默认 1.0.0.0,无中央事实
+#   New: Directory.Build.props 中央 v0.1.0-beta + guard 防回归
+check_directory_build_version_guard() {
+  local props_file="Directory.Build.props"
+
+  if ! rg -q "<Version>0\.1\.0-beta</Version>" "${props_file}"; then
+    echo "Directory.Build.props must define <Version>0.1.0-beta</Version>."
+    exit 1
+  fi
+
+  if ! rg -q "<VersionPrefix>0\.1\.0</VersionPrefix>" "${props_file}"; then
+    echo "Directory.Build.props must define <VersionPrefix>0.1.0</VersionPrefix>."
+    exit 1
+  fi
+
+  if ! rg -q "<VersionSuffix>beta</VersionSuffix>" "${props_file}"; then
+    echo "Directory.Build.props must define <VersionSuffix>beta</VersionSuffix>."
+    exit 1
+  fi
+
+  if ! rg -q "<PackageVersion>0\.1\.0-beta</PackageVersion>" "${props_file}"; then
+    echo "Directory.Build.props must define <PackageVersion>0.1.0-beta</PackageVersion>."
+    exit 1
+  fi
+
+  if ! rg -q "<InformationalVersion>0\.1\.0-beta</InformationalVersion>" "${props_file}"; then
+    echo "Directory.Build.props must define <InformationalVersion>0.1.0-beta</InformationalVersion>."
+    exit 1
+  fi
+
+  if ! rg -q "<AssemblyVersion>0\.1\.0\.0</AssemblyVersion>" "${props_file}"; then
+    echo "Directory.Build.props must define <AssemblyVersion>0.1.0.0</AssemblyVersion>."
+    exit 1
+  fi
+
+  if ! rg -q "<FileVersion>0\.1\.0\.0</FileVersion>" "${props_file}"; then
+    echo "Directory.Build.props must define <FileVersion>0.1.0.0</FileVersion>."
+    exit 1
+  fi
+}
+
+check_directory_build_version_guard
+
+# Refactor (v1/issue1466-first):
+#   Old: ChannelInboundEvent.registration_token looked like a durable runtime credential carrier.
+#   New: proto field 9/name are reserved and mappers/docs stay credential-free.
+#   Principle: channel inbound durable facts must not contain runtime tokens.
+check_channel_inbound_no_runtime_credential() {
+  local proto_file="agents/Aevatar.GAgents.Channel.Runtime/protos/channel_bot_registration.proto"
+  local runner_file="agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs"
+  local canon_doc="docs/canon/daily-command-pipeline.md"
+
+  if ! awk '
+    /message ChannelInboundEvent[[:space:]]*\{/ { in_msg = 1 }
+    in_msg && /reserved[[:space:]]+9[[:space:]]*;/ { has_reserved_number = 1 }
+    in_msg && /reserved[[:space:]]+"registration_token"[[:space:]]*;/ { has_reserved_name = 1 }
+    in_msg && /^[[:space:]]*\}/ { in_msg = 0 }
+    END { exit(has_reserved_number && has_reserved_name ? 0 : 1) }
+  ' "${proto_file}"; then
+    echo "ChannelInboundEvent must reserve field 9 and name registration_token."
+    exit 1
+  fi
+
+  if awk '
+    /message ChannelInboundEvent[[:space:]]*\{/ { in_msg = 1; next }
+    in_msg && /^[[:space:]]*\}/ { in_msg = 0 }
+    in_msg && /^[[:space:]]*string[[:space:]]+registration_token[[:space:]]*=/ { print FILENAME ":" FNR ":" $0; found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "${proto_file}"; then
+    echo "ChannelInboundEvent.registration_token is forbidden; keep runtime credentials out of durable inbound facts."
+    exit 1
+  fi
+
+  if rg -n "RegistrationToken[[:space:]]*=" "${runner_file}"; then
+    echo "ToInboundEvent must not write RegistrationToken. Runtime tokens belong in transient context only."
+    exit 1
+  fi
+
+  if rg -n "registration_token" "${canon_doc}"; then
+    echo "Canonical channel inbound durable facts docs must not list registration_token."
+    exit 1
+  fi
+}
+
+check_channel_inbound_no_runtime_credential
+
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
 
@@ -103,6 +190,27 @@ if [ -n "${workflow_telegram_bridge_report}" ]; then
   exit 1
 fi
 
+set +e
+nyx_relay_agent_builder_flow_report="$(
+  rg -n "NyxRelayAgentBuilderFlow" \
+    agents src test \
+    -g '!**/bin/**' \
+    -g '!**/obj/**'
+)"
+nyx_relay_agent_builder_flow_status=$?
+set -e
+
+if [[ ${nyx_relay_agent_builder_flow_status} -ne 0 && ${nyx_relay_agent_builder_flow_status} -ne 1 ]]; then
+  echo "Retired Nyx relay agent-builder flow guard execution failed."
+  exit "${nyx_relay_agent_builder_flow_status}"
+fi
+
+if [ -n "${nyx_relay_agent_builder_flow_report}" ]; then
+  echo "${nyx_relay_agent_builder_flow_report}"
+  echo "NyxRelayAgentBuilderFlow was deleted in #1306. Do not reintroduce it in production code or tests."
+  exit 1
+fi
+
 if rg -n "docs\\\\SOLUTION_AUDIT_REPORT_" aevatar.slnx; then
   echo "Working audit documents must not be added to solution."
   exit 1
@@ -117,6 +225,63 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   echo "Found sync-over-async usage."
   exit 1
 fi
+
+# Refactor (v1/issue1468-first):
+#   Old pattern: query/read files could grow hidden event replay, state rebuild, or
+#   projection materialization calls in request paths.
+#   New principle: QueryPort/QueryService/ApplicationService files only read
+#   materialized read models; owner-change bootstrap is a v1 non-goal.
+check_no_query_time_replay() {
+  local query_read_files=()
+  while IFS= read -r -d '' query_read_file; do
+    query_read_files+=("${query_read_file}")
+  done < <(
+    find src agents \
+      -type f \
+      \( -name '*QueryPort.cs' -o -name '*QueryService.cs' -o -name '*ApplicationService.cs' \) \
+      -not -path '*/bin/*' \
+      -not -path '*/obj/*' \
+      -not -name '*.g.cs' \
+      -not -name '*.Designer.cs' \
+      -print0
+  )
+
+  if (( ${#query_read_files[@]} == 0 )); then
+    return
+  fi
+
+  set +e
+  local query_time_replay_report
+  query_time_replay_report="$(
+    rg -n "\b(ReadEventsAsync|GetEventsAsync|RebuildAsync|MaterializeAsync)\b" "${query_read_files[@]}" \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+
+  print $0;
+}'
+  )"
+  local query_time_replay_status=$?
+  set -e
+
+  if [[ ${query_time_replay_status} -ne 0 && ${query_time_replay_status} -ne 1 ]]; then
+    echo "Query-time replay guard execution failed."
+    exit "${query_time_replay_status}"
+  fi
+
+  if [ -n "${query_time_replay_report}" ]; then
+    echo "${query_time_replay_report}"
+    echo "Query/read paths must not replay events, rebuild state, or materialize projections in request paths. Use committed projection/readmodel materialization outside the query call stack."
+    exit 1
+  fi
+}
+
+check_no_query_time_replay
 
 # Refactor (iter56/cluster-920-workflow-catalog-async-query):
 #   Old pattern: production workflow query ports could hide async readmodel I/O behind sync .Result/.Wait calls.
@@ -192,6 +357,40 @@ if rg -n "EventEnvelope\.Metadata|StepCompletedEvent\.Metadata|CompletionMetadat
   -g '!docs/architecture/*blueprint*.md'
 then
   echo "Legacy documentation terminology is forbidden. Use typed envelope fields, Annotations, and current session sourcing."
+  exit 1
+fi
+
+set +e
+workflow_trusted_control_metadata_report="$(
+  rg -n "BuildLegacyMetadata|WorkflowChatRunRequest\.Metadata\[[^]]*(scope|nyx|model|tool|control|owner|response)|Metadata:\s*.*(LLMRequestMetadataKeys|scope_id)" \
+    src/Aevatar.AI.ToolProviders.AevatarInvocation \
+    src/workflow \
+    -g '*.cs' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+
+  print $0;
+}'
+)"
+workflow_trusted_control_metadata_status=$?
+set -e
+
+if [[ ${workflow_trusted_control_metadata_status} -ne 0 && ${workflow_trusted_control_metadata_status} -ne 1 ]]; then
+  echo "Workflow trusted-control metadata guard execution failed."
+  exit "${workflow_trusted_control_metadata_status}"
+fi
+
+if [ -n "${workflow_trusted_control_metadata_report}" ]; then
+  echo "${workflow_trusted_control_metadata_report}"
+  echo "Workflow/team trusted control must use typed ScopeId / ToolContext / LlmControl fields, not Metadata bag entries."
   exit 1
 fi
 

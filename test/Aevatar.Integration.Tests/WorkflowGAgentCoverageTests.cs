@@ -1624,6 +1624,84 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_RoleReplyFact_ShouldContinueLlmStepCompletion()
+    {
+        var eventStore = new InMemoryEventStore();
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var services = BuildServices(eventStore, workflowResolver: null);
+        var modulePacks = new IWorkflowModulePack[] { new WorkflowCoreModulePack() };
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            eventStore: eventStore,
+            packs: modulePacks,
+            eventModuleFactory: new WorkflowModuleFactory(services, modulePacks));
+        SetAgentId(agent, "workflow-run-role-reply-continuation");
+        runtime.RegisterAgent(agent.Id, agent);
+        agent.EventPublisher = publisher;
+        agent.CommittedStateEventPublisher = publisher;
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition",
+            """
+            name: wf_role_reply
+            roles:
+              - id: assistant
+                name: Assistant
+                system_prompt: "help"
+            steps:
+              - id: llm_1
+                type: llm_call
+            """,
+            "wf_role_reply",
+            runId: "run-role-reply");
+
+        await agent.HandleEventAsync(Envelope(
+            new ChatRequestEvent
+            {
+                Prompt = "question",
+                SessionId = "root-session",
+            },
+            "test",
+            TopologyAudience.Self));
+
+        var start = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
+        await agent.HandleEventAsync(Envelope(start, agent.Id, TopologyAudience.Self));
+
+        var stepRequest = publisher.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        await agent.HandleEventAsync(Envelope(stepRequest, agent.Id, TopologyAudience.Self));
+
+        var chatRequest = publisher.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-run-role-reply-continuation:assistant"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-role-reply-continuation",
+                    EventData = Any.Pack(new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = chatRequest.SessionId,
+                        RoleId = "assistant",
+                        Content = "answer",
+                        ContentEmitted = true,
+                    }),
+                },
+            }),
+        });
+
+        var completed = publisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("llm_1");
+        completed.RunId.Should().Be("run-role-reply");
+        completed.Output.Should().Be("answer");
+        runtime.DispatchRequests.Should().Contain(agent.Id);
+    }
+
+    [Fact]
     public void WorkflowRunGAgent_Constructor_ShouldValidateRequiredDependencies()
     {
         var runtime = new RecordingActorRuntime();

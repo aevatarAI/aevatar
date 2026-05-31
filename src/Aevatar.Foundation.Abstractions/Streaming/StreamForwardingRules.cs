@@ -1,5 +1,7 @@
 namespace Aevatar.Foundation.Abstractions.Streaming;
 
+using Google.Protobuf.WellKnownTypes;
+
 /// <summary>
 /// Shared stream-forwarding rules used by local runtime and Orleans runtime.
 /// </summary>
@@ -26,18 +28,23 @@ public static class StreamForwardingRules
         };
     }
 
+    public static StreamForwardingBinding CreateCommittedObservationBinding(
+        string sourceStreamId,
+        string targetStreamId) =>
+        CreateCommittedFactsObserverBinding(sourceStreamId, targetStreamId);
+
     public static StreamForwardingBinding CreateCommittedFactsObserverBinding(
         string sourceStreamId,
         string targetStreamId,
         StreamForwardingMode forwardingMode = StreamForwardingMode.HandleThenForward)
     {
-        // Refactor (issue1271/first-slice): Old pattern: committed facts could stop at the child stream.
-        // New principle: committed observer publications must follow the same runtime forwarding contract.
-        // This binding lets parent observers receive child committed facts without introducing a second
-        // projection path or a process-local actor/session registry.
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
 
+        // Refactor (iter164/cluster-002-first):
+        // Old pattern: modules watched presentation completion frames as local workflow facts.
+        // New principle: committed observation forwarding belongs to the runtime relay path.
+        // Child actors publish committed state once, and runtime stream rules fan that fact to parents.
         return new StreamForwardingBinding
         {
             SourceStreamId = sourceStreamId,
@@ -46,6 +53,10 @@ public static class StreamForwardingRules
             DirectionFilter =
             [
                 TopologyAudience.Unspecified,
+            ],
+            EventTypeFilter =
+            [
+                $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}",
             ],
         };
     }
