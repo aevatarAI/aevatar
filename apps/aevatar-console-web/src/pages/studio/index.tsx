@@ -8999,6 +8999,10 @@ const StudioPage: React.FC = () => {
       }
 
       if (normalizedMemberKey.startsWith('script:')) {
+        // Refactor (iter1/cluster-studio-member-routing):
+        // Old: script rail items reused member=script:<id>, which made a
+        // script artifact look like a lifecycle member target. New: scripts are
+        // Build focus only; Bind still requires a real backend member:<id>.
         pinnedRouteBackendMemberIdRef.current = '';
         setPinnedRouteBackendMemberId('');
         const scriptId = normalizedMemberKey.slice('script:'.length);
@@ -9023,7 +9027,7 @@ const StudioPage: React.FC = () => {
               scopeId: resolvedStudioScopeId || undefined,
               teamId: routeState.teamId || undefined,
               returnTo: routeState.returnTo || undefined,
-              memberKey: normalizedMemberKey,
+              focus: `script:${scriptId}`,
               step: currentLifecycleStep,
             }),
           );
@@ -9035,7 +9039,7 @@ const StudioPage: React.FC = () => {
             scopeId: resolvedStudioScopeId || undefined,
             teamId: routeState.teamId || undefined,
             returnTo: routeState.returnTo || undefined,
-            memberKey: normalizedMemberKey,
+            focus: `script:${scriptId}`,
             tab: 'scripts',
           }),
         );
