@@ -99,6 +99,35 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
+    public async Task SetRequestMetadata_ShouldThrowAndNotMutatePassthroughWhenCancellationRequested()
+    {
+        var host = new RecordingStateHost();
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
+            host,
+            new Dictionary<string, string>
+            {
+                ["trace-id"] = "abc",
+            });
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await FluentActions.Awaiting(() => WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
+                host,
+                new Dictionary<string, string>
+                {
+                    ["trace-id"] = "changed",
+                    ["request-id"] = "request-1",
+                },
+                cts.Token))
+            .Should()
+            .ThrowAsync<OperationCanceledException>();
+
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainSingle();
+        host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("request-id");
+    }
+
+    [Fact]
     public async Task RemoveRequestMetadata_ShouldValidateAndClearTypedExecutionContext()
     {
         var host = new RecordingStateHost();
