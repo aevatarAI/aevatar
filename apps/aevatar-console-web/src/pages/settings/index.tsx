@@ -478,10 +478,10 @@ const SettingsPage: React.FC = () => {
         : draft.preferredLlmRoute,
     [draft, loadedDraft, userLlmSettingsQuery.data?.effectiveRoute],
   );
-  const routeFallbackActive = draftsEqual(draft, loadedDraft)
+  const draftMatchesLoaded = draftsEqual(draft, loadedDraft);
+  const routeFallbackActive = draftMatchesLoaded
     ? Boolean(userLlmSettingsQuery.data?.routeFallbackActive)
     : false;
-  const draftMatchesLoaded = draftsEqual(draft, loadedDraft);
   const backendEffectiveRouteLabel = trimConversationValue(
     userLlmSettingsQuery.data?.effectiveRouteLabel,
   );

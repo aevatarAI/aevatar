@@ -9,6 +9,9 @@ export const LLM_ROUTE_HEADER_KEY = "nyxid.route_preference";
 export const LLM_MODEL_HEADER_KEY = "aevatar.model_override";
 export const CONVERSATION_ROUTE_DEFAULT_VALUE = "__config_default__";
 export const CONVERSATION_ROUTE_GATEWAY_VALUE = "__gateway__";
+// Refactor (iter164/cluster-003-draft-run): Old: conversation route labels
+// hard-coded gateway branding when user settings did not provide a label.
+// New: backend route labels win, with only a neutral generic fallback.
 const USER_LLM_ROUTE_GATEWAY_LABEL = "Gateway";
 
 export type ConversationRouteOption = {
