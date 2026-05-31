@@ -5,16 +5,15 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
 
-internal static class NyxIdChatStreamingRunner
+internal static class NyxIdChatAguiSseEventWriter
 {
-    public static async ValueTask<string?> WriteAguiEventAsync(
+    public static async ValueTask<string?> WriteAsync(
         AGUIEvent aguiEvent,
         string messageId,
         NyxIdChatSseWriter writer)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+        // Refactor (issue1533): Old pattern: a runner-named type implied session/runtime ownership for a presentation mapper.
+        // New principle: the endpoint keeps command interaction ownership while this adapter only writes typed AGUI events as NyxID SSE frames.
         switch (aguiEvent.EventCase)
         {
             case AGUIEvent.EventOneofCase.TextMessageStart:
