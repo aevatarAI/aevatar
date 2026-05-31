@@ -1001,12 +1001,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
-                       await BuildAgentBuilderMetadataAsync(
-                    activity,
-                    inboundEvent,
-                    ResolveUserAccessToken(activity, runtimeContext),
-                    ct))))
+            var metadata = await BuildAgentBuilderMetadataAsync(activity, inboundEvent, ct);
+            var toolContext = BuildAgentBuilderToolContext(
+                activity,
+                inboundEvent,
+                metadata,
+                ResolveUserAccessToken(activity, runtimeContext));
+            using (AgentToolContextScope.Push(toolContext))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
@@ -1388,7 +1389,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["scope_id"] = inboundEvent.RegistrationScopeId,
             [ChannelMetadataKeys.Platform] = inboundEvent.Platform,
             [ChannelMetadataKeys.SenderId] = inboundEvent.SenderId,
             [ChannelMetadataKeys.SenderName] = inboundEvent.SenderName,
@@ -1426,7 +1426,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
-        string? userAccessToken,
         CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(
@@ -1435,12 +1434,32 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
-        if (!string.IsNullOrWhiteSpace(userAccessToken))
-        {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken.Trim();
-            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken.Trim();
-        }
         return metadata;
+    }
+
+    private static AgentToolExecutionContext BuildAgentBuilderToolContext(
+        ChatActivity activity,
+        ChannelInboundEvent inboundEvent,
+        IReadOnlyDictionary<string, string> metadata,
+        string? userAccessToken)
+    {
+        var normalizedToken = NormalizeOptional(userAccessToken);
+        var platformMessageId = NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId);
+        return AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(normalizedToken, normalizedToken, null),
+            Caller = new AgentToolCallerContext(
+                NormalizeOptional(inboundEvent.RegistrationScopeId),
+                null,
+                null),
+            Channel = new AgentToolChannelContext(
+                NormalizeOptional(inboundEvent.Platform),
+                NormalizeOptional(inboundEvent.SenderId),
+                NormalizeOptional(inboundEvent.RegistrationScopeId),
+                NormalizeOptional(inboundEvent.MessageId),
+                platformMessageId),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
     }
 
     internal static InboundMessage ToInboundMessage(ChatActivity activity)

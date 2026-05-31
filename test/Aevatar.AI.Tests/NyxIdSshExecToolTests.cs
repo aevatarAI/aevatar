@@ -542,10 +542,10 @@ public class NyxIdSshExecToolTests
 
     private static void SetMetadata(string token)
     {
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
-        });
+            Credentials = new AgentToolCredentials(token, null, null),
+        };
     }
 
     private static void ClearMetadata() => AgentToolRequestContext.Current = null;

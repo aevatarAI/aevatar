@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.GAgents.NyxidChat;
@@ -214,14 +215,14 @@ public class NyxIdChannelBotsToolTests
 
     private static void SetFakeToken()
     {
-        var key = Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdAccessToken;
-        Aevatar.AI.Abstractions.ToolProviders.AgentToolRequestContext.Current =
-            Aevatar.AI.Abstractions.ToolProviders.AgentToolExecutionContextMapper.FromMetadata(
-                new Dictionary<string, string> { [key] = "fake-token" });
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("fake-token", null, null),
+        };
     }
 
     private static void ClearToken() =>
-        Aevatar.AI.Abstractions.ToolProviders.AgentToolRequestContext.Current = null;
+        AgentToolRequestContext.Current = null;
 
     internal sealed class CaptureHandler : DelegatingHandler
     {

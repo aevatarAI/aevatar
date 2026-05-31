@@ -353,9 +353,9 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task TypedContextPropagation_ShouldSetAsyncLocalDuringExecutionAndRestore()
+    public async Task MetadataFallback_ShouldExposeExternalAnnotationsOnlyDuringExecutionAndRestore()
     {
-        string? capturedToken = null;
+        string? capturedToken = "unset";
         string? capturedExternal = null;
         string? capturedCallId = null;
         var tools = new ToolManager();
@@ -369,7 +369,7 @@ public class StreamingToolExecutorTests
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "typed-secret",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-secret",
             ["auth_token"] = "secret-123",
         };
 
@@ -381,7 +381,7 @@ public class StreamingToolExecutorTests
 
         await foreach (var _ in executor.GetRemainingResultsAsync(executionState, CancellationToken.None)) { }
 
-        capturedToken.Should().Be("typed-secret");
+        capturedToken.Should().BeNull();
         capturedExternal.Should().Be("secret-123");
         capturedCallId.Should().Be("tc-1");
         AgentToolRequestContext.Current.Should().BeNull();

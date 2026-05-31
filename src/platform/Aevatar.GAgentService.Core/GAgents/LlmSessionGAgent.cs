@@ -588,7 +588,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             {
                 Messages = [.. messages],
                 RequestId = command.ResponseId,
-                Metadata = BuildProviderMetadata(command),
+                Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
                 CallerContext = new LLMRequestCallerContext(
                     command.ScopeId,
                     command.OwnerSubject,
@@ -831,13 +831,6 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             new LLMRequestRoutingContext(null, NormalizeOptional(command.RoutePreference), null, null),
             AgentToolConnectedServicesContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal));
-
-    private static IReadOnlyDictionary<string, string> BuildProviderMetadata(LlmRunRequested command) =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
-            ["scope_id"] = command.ScopeId,
-        };
 
     private static ChatMessage ToChatMessage(LlmSessionRuntimeChatMessage message) =>
         new()

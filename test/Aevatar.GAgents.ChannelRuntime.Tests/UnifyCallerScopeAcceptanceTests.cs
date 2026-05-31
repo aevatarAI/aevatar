@@ -291,10 +291,10 @@ public sealed class UnifyCallerScopeAcceptanceTests
 
         var resolver = new NyxIdNativeCallerScopeResolver(inner);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "expired-token",
-        });
+            Credentials = new AgentToolCredentials("expired-token", null, null),
+        };
         try
         {
             await Assert.ThrowsAsync<CallerScopeUnavailableException>(() => resolver.TryResolveAsync());
@@ -311,12 +311,11 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var inner = Substitute.For<INyxIdCurrentUserResolver>();
         var resolver = new ChannelMetadataCallerScopeResolver(inner);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [ChannelMetadataKeys.Platform] = "lark",
-            // no sender_id
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+            Channel = new AgentToolChannelContext("lark", null, null, null, null),
+        };
         try
         {
             await Assert.ThrowsAsync<CallerScopeUnavailableException>(() => resolver.TryResolveAsync());
@@ -333,11 +332,10 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var inner = Substitute.For<INyxIdCurrentUserResolver>();
         var resolver = new ChannelMetadataCallerScopeResolver(inner);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-            // no channel.platform
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             (await resolver.TryResolveAsync()).Should().BeNull(

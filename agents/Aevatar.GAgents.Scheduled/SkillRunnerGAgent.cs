@@ -325,7 +325,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = await BuildExecutionMetadataAsync(ct);
         var llmControl = await BuildExecutionLlmControlAsync(ct);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromMetadata(metadata));
+        var toolContext = BuildExecutionToolContext(llmControl, metadata);
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
@@ -801,11 +801,28 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
-        if (!string.IsNullOrWhiteSpace(State.ScopeId))
-            metadata["scope_id"] = State.ScopeId;
 
         return metadata;
     }
+
+    private AgentToolExecutionContext BuildExecutionToolContext(
+        LLMControlContext llmControl,
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext(
+                NormalizeOptional(State.ScopeId),
+                null,
+                null),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
+
+        return llmControl.ToToolContext(context);
+    }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private async Task<LLMControlContext> BuildExecutionLlmControlAsync(CancellationToken ct)
     {

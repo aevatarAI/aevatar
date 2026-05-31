@@ -101,13 +101,11 @@ public class NyxIdCodeExecuteToolTests
 
     private static void SetMetadata(string token, string? servicesContext)
     {
-        var metadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
+            Credentials = new AgentToolCredentials(token, null, null),
+            ConnectedServices = new AgentToolConnectedServicesContext(servicesContext),
         };
-        if (servicesContext is not null)
-            metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = servicesContext;
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
     }
 
     private static void ClearMetadata()

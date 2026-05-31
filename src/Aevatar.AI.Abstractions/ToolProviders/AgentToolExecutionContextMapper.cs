@@ -4,7 +4,7 @@ namespace Aevatar.AI.Abstractions.ToolProviders;
 
 // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
 //   Old pattern: any tool could parse control keys from Metadata directly.
-//   New principle: legacy metadata decoding is isolated here; tool control flow uses typed context.
+//   New principle: Metadata is external annotation only; tool control flow uses typed context.
 public static class AgentToolExecutionContextMapper
 {
     private static readonly HashSet<string> OwnedControlKeys = new(StringComparer.Ordinal)
@@ -43,13 +43,9 @@ public static class AgentToolExecutionContextMapper
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (request.ToolContext is { } typedContext)
-            return request.LlmControl?.ToToolContext(typedContext) ?? typedContext;
-
-        var mapped = FromMetadata(request.Metadata);
-        mapped = request.LlmControl?.ToToolContext(mapped) ?? mapped;
+        var mapped = request.ToolContext ?? AgentToolExecutionContext.Empty;
         var caller = request.CallerContext;
-        return mapped with
+        mapped = mapped with
         {
             Request = new AgentToolRequestIdentity(
                 AgentToolExecutionContext.Normalize(request.RequestId) ?? mapped.Request.RequestId,
@@ -70,6 +66,8 @@ public static class AgentToolExecutionContextMapper
             Routing = request.RoutingContext ?? mapped.Routing,
             ExternalMetadata = StripOwnedControlKeys(request.Metadata),
         };
+
+        return request.LlmControl?.ToToolContext(mapped) ?? mapped;
     }
 
     public static AgentToolExecutionContext FromRequestWithCallId(LLMRequest request, string? callId)
@@ -173,33 +171,10 @@ public static class AgentToolExecutionContextMapper
         if (metadata == null || metadata.Count == 0)
             return AgentToolExecutionContext.Empty;
 
-        var maxToolRounds = TryGet(metadata, LLMRequestMetadataKeys.MaxToolRoundsOverride);
-        return new AgentToolExecutionContext(
-            new AgentToolRequestIdentity(
-                TryGet(metadata, LLMRequestMetadataKeys.RequestId),
-                TryGet(metadata, LLMRequestMetadataKeys.CallId)),
-            new AgentToolCredentials(
-                TryGet(metadata, LLMRequestMetadataKeys.NyxIdAccessToken),
-                TryGet(metadata, LLMRequestMetadataKeys.NyxIdOrgToken),
-                TryGet(metadata, LLMRequestMetadataKeys.SenderNyxIdAccessToken)),
-            new AgentToolCallerContext(
-                TryGet(metadata, LLMRequestMetadataKeys.ScopeId) ?? TryGet(metadata, "scope_id"),
-                TryGet(metadata, LLMRequestMetadataKeys.OwnerSubject),
-                TryGet(metadata, LLMRequestMetadataKeys.ResponseId)),
-            new AgentToolChannelContext(
-                TryGet(metadata, "channel.platform") ?? TryGet(metadata, "platform"),
-                TryGet(metadata, "channel.sender_id") ?? TryGet(metadata, "sender_id") ?? TryGet(metadata, "lark.open_id"),
-                TryGet(metadata, "registration_scope_id"),
-                TryGet(metadata, "channel.message_id") ?? TryGet(metadata, "message_id") ?? TryGet(metadata, "lark.message_id"),
-                TryGet(metadata, "channel.platform_message_id") ?? TryGet(metadata, "platform_message_id")),
-            new AgentToolSenderBindingContext(TryGet(metadata, LLMRequestMetadataKeys.SenderBindingId)),
-            new LLMRequestRoutingContext(
-                TryGet(metadata, LLMRequestMetadataKeys.ModelOverride),
-                TryGet(metadata, LLMRequestMetadataKeys.NyxIdRoutePreference),
-                int.TryParse(maxToolRounds, out var parsedMaxToolRounds) ? parsedMaxToolRounds : null,
-                TryGet(metadata, LLMRequestMetadataKeys.UserMemoryPrompt)),
-            new AgentToolConnectedServicesContext(TryGet(metadata, LLMRequestMetadataKeys.ConnectedServicesContext)),
-            StripOwnedControlKeys(metadata));
+        return AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = StripOwnedControlKeys(metadata),
+        };
     }
 
     public static IReadOnlyDictionary<string, string> StripOwnedControlKeys(IReadOnlyDictionary<string, string>? metadata)
@@ -219,6 +194,4 @@ public static class AgentToolExecutionContextMapper
         return result;
     }
 
-    private static string? TryGet(IReadOnlyDictionary<string, string> metadata, string key) =>
-        metadata.TryGetValue(key, out var value) ? AgentToolExecutionContext.Normalize(value) : null;
 }

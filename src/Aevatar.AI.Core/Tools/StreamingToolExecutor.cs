@@ -46,7 +46,12 @@ public sealed class StreamingToolExecutor
         _toolMiddlewares = toolMiddlewares ?? [];
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
-            ?? AgentToolExecutionContextMapper.FromMetadata(requestMetadata);
+            ?? (requestMetadata is { Count: > 0 }
+                ? AgentToolExecutionContext.Empty with
+                {
+                    ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(requestMetadata),
+                }
+                : null);
     }
 
     public ExecutionState CreateExecutionState() => new();

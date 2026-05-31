@@ -165,7 +165,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var disableTools = forceDisableTools || replyPlan.DisableTools;
         var tools = await BuildTurnToolsAsync(disableTools, ct);
         var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
-            replyPlan.PrimaryToolContext ?? AgentToolExecutionContextMapper.FromMetadata(replyPlan.Primary));
+            WithExternalMetadata(replyPlan.PrimaryToolContext, replyPlan.Primary));
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
         var runtime = BuildRuntime(
             activity,
@@ -256,7 +256,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
-        var toolContext = llmControl.ToToolContext(baseToolContext ?? AgentToolExecutionContextMapper.FromMetadata(effectiveMetadata));
+        var toolContext = llmControl.ToToolContext(WithExternalMetadata(baseToolContext, effectiveMetadata));
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(effectiveMetadata);
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
@@ -531,6 +531,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         context == null
             ? null
             : context with { SenderBinding = AgentToolSenderBindingContext.Empty };
+
+    private static AgentToolExecutionContext WithExternalMetadata(
+        AgentToolExecutionContext? context,
+        IReadOnlyDictionary<string, string>? metadata) =>
+        (context ?? AgentToolExecutionContext.Empty) with
+        {
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
 
     private static bool IsChannelTurn(IReadOnlyDictionary<string, string> metadata) =>
         metadata.ContainsKey(ChannelMetadataKeys.Platform) &&

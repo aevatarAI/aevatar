@@ -464,10 +464,10 @@ public class TelegramToolsTests
                 return;
             }
 
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+            AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
             {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken,
-            });
+                Credentials = new AgentToolCredentials(accessToken, null, null),
+            };
         }
 
         public void Dispose() => AgentToolRequestContext.Current = _previous;

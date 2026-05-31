@@ -164,10 +164,10 @@ public sealed class WebFetchUrlGuardTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
             {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "secret-token",
-            });
+                Credentials = new AgentToolCredentials("secret-token", null, null),
+            };
 
             var result = await tool.ExecuteAsync("""{"url":"http://8.8.8.8/"}""");
 

@@ -62,10 +62,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -149,10 +149,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -215,10 +215,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -286,10 +286,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -363,10 +363,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
@@ -417,10 +417,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -477,10 +477,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -542,10 +542,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -604,10 +604,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -668,10 +668,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             await tool.ExecuteAsync("""{"action":"run_agent","agent_id":"skill-runner-1"}""");
@@ -744,10 +744,10 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
@@ -790,10 +790,10 @@ public sealed class AgentBuilderToolTests
         tools.Should().ContainSingle();
         tools[0].Name.Should().Be("agent_builder");
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+            Credentials = new AgentToolCredentials("session-token", null, null),
+        };
         try
         {
             var result = await tools[0].ExecuteAsync("""{"action":"list_agents"}""");

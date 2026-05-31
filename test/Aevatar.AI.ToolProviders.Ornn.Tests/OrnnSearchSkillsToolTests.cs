@@ -46,10 +46,10 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
             {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            });
+                Credentials = new AgentToolCredentials("access-token", null, null),
+            };
             var tool = CreateTool(handler);
 
             var result = await tool.ExecuteAsync("""{ "query": "translate", "scope": "private" }""");
@@ -76,10 +76,10 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
             {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            });
+                Credentials = new AgentToolCredentials("access-token", null, null),
+            };
             var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson(
                 """{ "error": "bad" }""",
                 System.Net.HttpStatusCode.BadGateway));
@@ -101,10 +101,10 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
             {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            });
+                Credentials = new AgentToolCredentials("access-token", null, null),
+            };
             var tool = CreateTool(handler);
 
             var result = await tool.ExecuteAsync("not-json");
