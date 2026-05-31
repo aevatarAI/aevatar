@@ -58,12 +58,6 @@ type StudioMemberBindPanelProps = {
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
   readonly onBindPendingCandidate?: (() => Promise<PendingBindNotice | void>) | null;
-  readonly postBindEntryActions?: {
-    readonly busy?: boolean;
-    readonly isEntryMember?: boolean;
-    readonly memberId: string;
-    readonly onSetEntryAndTest: () => void;
-  } | null;
   readonly onSelectionChange?: (selection: {
     serviceId: string;
     endpointId: string;
@@ -518,44 +512,6 @@ function describeEndpointPurpose(endpoint: ServiceEndpointSnapshot): string {
   return '给需要固定输入格式的 API/SDK 调用场景使用。';
 }
 
-function renderPostBindEntryAction(
-  postBindEntryActions: NonNullable<StudioMemberBindPanelProps['postBindEntryActions']>,
-) {
-  return (
-    <Space direction="vertical" size={8} style={{ width: '100%' }}>
-      {postBindEntryActions.isEntryMember ? (
-        <>
-          <Typography.Text>
-            当前成员已经是团队入口。可以直接返回 Team 页面测试完整链路。
-          </Typography.Text>
-          <Button
-            loading={postBindEntryActions.busy}
-            onClick={postBindEntryActions.onSetEntryAndTest}
-            size="small"
-            type="primary"
-          >
-            测试 Team
-          </Button>
-        </>
-      ) : (
-        <>
-          <Typography.Text>
-            Bind 已完成。下一步建议设为团队入口，并返回 Team 页面测试完整链路。
-          </Typography.Text>
-          <Button
-            loading={postBindEntryActions.busy}
-            onClick={postBindEntryActions.onSetEntryAndTest}
-            size="small"
-            type="primary"
-          >
-            设为入口并测试 Team
-          </Button>
-        </>
-      )}
-    </Space>
-  );
-}
-
 const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   buildWorkflowYamls,
   scopeId,
@@ -568,7 +524,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   onSelectionChange,
   onContinueToInvoke,
   onBindPendingCandidate,
-  postBindEntryActions,
   pendingBindingCandidate,
   authSession,
   servicesLoading,
@@ -1038,18 +993,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   type={currentBindingRunNotice.type}
                 />
               ) : null}
-              {postBindEntryActions ? (
-                <Alert
-                  showIcon
-                  type="success"
-                  message={
-                    postBindEntryActions.isEntryMember
-                      ? 'This member is the Team entry.'
-                      : 'This member can be the Team entry.'
-                  }
-                  description={renderPostBindEntryAction(postBindEntryActions)}
-                />
-              ) : null}
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                 <Button
                   loading={pendingBindBusy}
@@ -1096,18 +1039,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             </Space>
           }
         >
-          {postBindEntryActions ? (
-            <Alert
-              showIcon
-              type="success"
-              message={
-                postBindEntryActions.isEntryMember
-                  ? 'This member is the Team entry.'
-                  : 'This member can be the Team entry.'
-              }
-              description={renderPostBindEntryAction(postBindEntryActions)}
-            />
-          ) : null}
           <div style={sourcePanelStyle}>
             <div style={sourceSummaryStyle}>
               <div style={sourceStatusStyle}>
