@@ -1360,15 +1360,24 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/workflow/draft-run")
         {
-            prompt = "run the draft",
-            workflowYamls = new[]
+            Content = JsonContent.Create(new
             {
-                "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
-            },
-            eventFormat = "agui",
-        });
+                prompt = "run the draft",
+                workflowYamls = new[]
+                {
+                    "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
+                },
+                eventFormat = "agui",
+                headers = new Dictionary<string, string>
+                {
+                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer stale-metadata-token",
+                },
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-123");
+        var response = await host.Client.SendAsync(httpRequest);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -1376,6 +1385,8 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(1);
+        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
@@ -1484,11 +1495,20 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/invoke/chat:stream", new
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/invoke/chat:stream")
         {
-            prompt = "hello",
-            headers = new Dictionary<string, string> { ["source"] = "tests" },
-        });
+            Content = JsonContent.Create(new
+            {
+                prompt = "hello",
+                headers = new Dictionary<string, string>
+                {
+                    ["source"] = "tests",
+                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer stale-metadata-token",
+                },
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-123");
+        var response = await host.Client.SendAsync(httpRequest);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
@@ -1496,7 +1516,9 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
         // Service-run registry receives the actual workflow run actor id as the run id, so
         // /runs/{runId} can resolve the same id the SSE RunStarted frame carries.
         host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle();
@@ -1940,6 +1962,7 @@ public sealed class ScopeServiceEndpointsTests
             "hello",
             new Dictionary<string, string>(),
             null,
+            null,
             null);
 
         FluentActions.Invoking(() => InvokePrivateStaticVoid("EnsureWorkflowStreamTarget", target, request))
@@ -2149,11 +2172,20 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat:stream", new
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/services/orders/invoke/chat:stream")
         {
-            prompt = "hello orders",
-            headers = new Dictionary<string, string> { ["channel"] = "tests" },
-        });
+            Content = JsonContent.Create(new
+            {
+                prompt = "hello orders",
+                headers = new Dictionary<string, string>
+                {
+                    ["channel"] = "tests",
+                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer stale-metadata-token",
+                },
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-orders");
+        var response = await host.Client.SendAsync(httpRequest);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
@@ -2161,7 +2193,9 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-orders");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
@@ -3885,19 +3919,16 @@ public sealed class ScopeServiceEndpointsTests
         };
         successContext.Request.Headers.Authorization = "Bearer token-123";
 
-        var scopedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
-            "BuildScopedHeadersAsync",
-            "scope-a",
-            explicitHeaders,
-            successContext,
-            CancellationToken.None);
+        var scopedHeaders = InvokePrivateStatic<Dictionary<string, string>>(
+            "BuildScopedHeaders",
+            explicitHeaders);
 
         scopedHeaders.Should().NotContainKey("scope_id");
         scopedHeaders.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         scopedHeaders[LLMRequestMetadataKeys.ModelOverride].Should().Be("existing-model");
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer token-123");
+        scopedHeaders.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
 
         var scopedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",
@@ -3918,12 +3949,9 @@ public sealed class ScopeServiceEndpointsTests
                 .AddSingleton<IUserConfigQueryPort>(new ThrowingUserConfigStore())
                 .BuildServiceProvider(),
         };
-        var failedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
-            "BuildScopedHeadersAsync",
-            "scope-a",
-            null,
-            failingContext,
-            CancellationToken.None);
+        var failedHeaders = InvokePrivateStatic<Dictionary<string, string>>(
+            "BuildScopedHeaders",
+            (object?)null);
         failedHeaders.Should().BeEmpty();
         var failedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",
@@ -4143,13 +4171,16 @@ public sealed class ScopeServiceEndpointsTests
             " chat ",
             "prompt",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
+            "Bearer connector-token",
             " rev-1 ",
             " app-x ");
         invocation.Identity.AppId.Should().Be("app-x");
         invocation.Identity.ServiceId.Should().Be("orders");
         invocation.EndpointId.Should().Be("chat");
         invocation.RevisionId.Should().Be("rev-1");
-        invocation.Payload!.Unpack<ChatRequestEvent>().Metadata["trace-id"].Should().Be("abc");
+        var payload = invocation.Payload!.Unpack<ChatRequestEvent>();
+        payload.Metadata["trace-id"].Should().Be("abc");
+        payload.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");
 
         InvokePrivateStatic<string>("ResolveDefaultScopeServiceId", options).Should().Be("default");
     }

@@ -17,7 +17,7 @@ namespace Aevatar.Workflow.Core.Tests.Execution;
 public sealed class WorkflowExecutionRuntimeContextTests
 {
     [Fact]
-    public async Task SetRequestMetadata_ShouldPromoteControlValuesToTypedState_AndGuardPassthrough()
+    public async Task SetRequestMetadata_ShouldNotPromoteConnectorAuthorization_AndGuardPassthrough()
     {
         var host = new RecordingStateHost();
 
@@ -34,7 +34,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ["empty"] = " ",
             });
 
-        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        host.ExecutionContextState.Connector.Should().BeNull();
         host.ExecutionContextState.Llm.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainKey("trace-id");
         host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
@@ -125,6 +125,19 @@ public sealed class WorkflowExecutionRuntimeContextTests
         await FluentActions.Awaiting(() => WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(null!))
             .Should()
             .ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void BuildConnectorAuthorizationDelta_ShouldPromoteOnlyTypedConnectorAuthorization()
+    {
+        var delta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(" Bearer secret ");
+
+        delta.ClearConnector.Should().BeTrue();
+        delta.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+
+        var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(" ");
+        emptyDelta.ClearConnector.Should().BeTrue();
+        emptyDelta.Connector.Should().BeNull();
     }
 
     [Fact]

@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -386,6 +387,7 @@ public sealed class ScopeWorkflowEndpointsTests
             },
         };
         var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer token-123";
 
         await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
             http,
@@ -408,8 +410,10 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
+        interactionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
+        interactionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
