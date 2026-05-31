@@ -271,7 +271,12 @@ while IFS= read -r n; do
                 ;;
         esac
     fi
-done < <(gh issue list --state open --label "🔍 phase:design-solving" --json number,labels --jq '.[] | select([.labels[].name] | contains(["⏸️ phase:blocked"]) | not) | .number' 2>/dev/null)
+# 2026-05-31 修:**不再**过滤 ⏸️ phase:blocked。Auric 抱怨"在处理完积攒issues
+# 之前不开新审计",发现 design-solving + blocked 的 later-slice issue(#1494/#1488/
+# #1484)被这条 filter 漏掉,导致 STEP F 报空 → STEP G 派新 audit。blocked 只是
+# "first-slice 未完"的提示,不应阻止 Phase 9 派 solver(solver 不动 code,只产
+# design plan,可与 first-slice impl 并行)。
+done < <(gh issue list --state open --label "🔍 phase:design-solving" --json number --jq '.[].number' 2>/dev/null)
 if [ "$F_COUNT" -eq 0 ] && [ "$F2_COUNT" -eq 0 ]; then
     echo "(none — no Phase 9 issue waiting for judge or r1 solver dispatch)"
 fi
@@ -279,9 +284,30 @@ fi
 F_COUNT=$(( F_COUNT + F2_COUNT * 3 ))
 
 # ============================================================================
+# STEP E2 — auto-loop-triage 积压(2026-05-31 新增,per Auric "在处理完积攒
+# issues 之前不开新审计")
+# triage-monitor.sh daemon 应自动派 triage codex,但实际:30 个 auto-loop-triage
+# issue 在 GitHub,daemon 11+ 小时未 queue 新 event,pending events offset 已对齐。
+# 说明:daemon 没 detect 到新 label 或者 dedup state 把它们当处理过的。
+# 修法:wakeup-check.sh 直接统计 auto-loop-triage label 数量(去掉已开 PR 关联的)
+# 报 ACTION:controller 自己 spawn triage codex,堵住 audit。
+echo ""
+echo "=== STEP E2: AUTO-LOOP-TRIAGE BACKLOG ==="
+TRIAGE_COUNT=$(gh issue list --state open --label "auto-loop-triage" --json number --jq 'length' 2>/dev/null | head -1)
+TRIAGE_COUNT=${TRIAGE_COUNT:-0}
+if [ "$TRIAGE_COUNT" -gt 0 ]; then
+    # 列前 5 个最老的,给 controller 直接派
+    TRIAGE_OLDEST=$(gh issue list --state open --label "auto-loop-triage" --json number,updatedAt --jq 'sort_by(.updatedAt) | .[0:5] | .[].number' 2>/dev/null | tr '\n' ' ')
+    echo "auto-loop-triage backlog: ${TRIAGE_COUNT} issues — ACTION: spawn triage codex for #${TRIAGE_OLDEST}(top 5 oldest)"
+    echo "  triage daemon 派工不及时,controller 直接用 spawn-codex.sh + prompts/triage-external-issue.md 派"
+else
+    echo "(none — no auto-loop-triage backlog)"
+fi
+
+# ============================================================================
 echo ""
 echo "=== STEP G: AUDIT BACKFILL (only when A-F all empty — per Auric 2026-05-29) ==="
-G_BUSY=$(( A_COUNT + B_COUNT + C_COUNT + D_COUNT + E_COUNT + F_COUNT ))
+G_BUSY=$(( A_COUNT + B_COUNT + C_COUNT + D_COUNT + E_COUNT + F_COUNT + TRIAGE_COUNT ))
 LAST_ITER=$(ls .refactor-loop/runs/audit-iter-*.md 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
 LAST_LOG_ITER=$(ls "$LOGDIR"/audit-iter-*.log 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
 NEXT_ITER=$((${LAST_LOG_ITER:-${LAST_ITER:-0}} + 1))
@@ -341,7 +367,10 @@ else
     take "$C_COUNT" "P3 spawn fix codex for CI-red PR"
     take "$D_COUNT" "P4 spawn reflector for stuck 3h+ issue"
     take "$E_COUNT" "P5 controller-action: gh issue edit --add-label auto-loop-triage (daemon spawns triage codex)"
+    # 2026-05-31:Phase 9 in-flight issue 优先于 fresh triage(前者已投入 3 solver 工作)
     take "$F_COUNT" "P6 spawn judge OR r1 solvers for Phase 9 design-solving issue (each F2 = 3 slots)"
+    # 2026-05-31 新增 P6b — auto-loop-triage 积压(per Auric "积压 issues 优先")
+    take "$TRIAGE_COUNT" "P6b spawn triage codex for auto-loop-triage backlog (controller direct, daemon 跟不上)"
     # Per Auric 2026-05-29 "一堆issues没完成, 为什么发新审计?" — audit is backfill,
     # not floor-filler. Only spawn audit when A-F all empty. If gap remains after
     # P0-P6 are exhausted, that means the actionable backlog truly is processed.
