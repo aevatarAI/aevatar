@@ -99,10 +99,18 @@ public sealed class ScopeWorkflowsUpsertTool : IAgentTool
             return JsonSerializer.Serialize(new
             {
                 success = true,
-                workflow = result.Workflow,
+                accepted = true,
+                scope_id = result.ScopeId,
+                workflow_id = result.WorkflowId,
+                service_key = result.ServiceKey,
                 revision_id = result.RevisionId,
                 definition_actor_id_prefix = result.DefinitionActorIdPrefix,
                 expected_actor_id = result.ExpectedActorId,
+                expected_deployment_id = result.ExpectedDeploymentId,
+                acceptance_stage = result.AcceptanceStage,
+                propagation_stage = result.PropagationStage,
+                read_model_url = result.ReadModelUrl,
+                command_handles = result.CommandHandles,
             }, JsonDefaults.SnakeCase);
         }
         catch (OperationCanceledException) { throw; }
