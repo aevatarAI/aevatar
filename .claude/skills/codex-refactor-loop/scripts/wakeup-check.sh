@@ -236,7 +236,7 @@ while IFS= read -r n; do
     # 之前 Step F 只检测 "judge log 缺失",漏判 split / converge / escalate / crashed / consensus 等
     # 已发现 7 个 design-solving issue 静默积压(部分 3 天)— per Auric "一堆issues没完成"
     if [ -f "$judge_log" ]; then
-        if ! grep -q "^META_JUDGE_DONE:" "$judge_log" 2>/dev/null; then
+        if ! grep -q "META_JUDGE_DONE:" "$judge_log" 2>/dev/null; then
             if grep -qE "^EXIT=" "$judge_log" 2>/dev/null; then
                 echo "#${n}: ${latest_round} judge has EXIT but NO META_JUDGE_DONE — ACTION: re-spawn judge (crashed)"
                 F_COUNT=$((F_COUNT+1))
@@ -247,7 +247,9 @@ while IFS= read -r n; do
         # 根因:judge codex 在 reasoning 阶段可能多次输出 META_JUDGE_DONE 假设(converge → split 等),
         # 最终决定是最后一个 marker。head -1 会取最早假设,导致 #1572 r2 实际 split 被报 converge,
         # controller 误派 r3 solvers 而不是 split admin。
-        marker=$(grep "^META_JUDGE_DONE:" "$judge_log" | tail -1)
+        # 2026-06-01 补修:去 `^` anchor(codex 偶尔以 `+META_JUDGE_DONE:` 前缀输出 diff context,
+        # 之前会全部漏读 → judge "crashed" 误报。#1528 r1 验证)。
+        marker=$(grep "META_JUDGE_DONE:" "$judge_log" | grep -oE "META_JUDGE_DONE:[^[:space:]]*" | tail -1)
         case "$marker" in
             META_JUDGE_DONE:split:*)
                 echo "#${n}: ${latest_round} judge=split — ACTION: controller close + open 2 sub-issues (first impl / later design)"
