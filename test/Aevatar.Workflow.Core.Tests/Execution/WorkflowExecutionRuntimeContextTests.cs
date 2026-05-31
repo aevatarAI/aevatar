@@ -70,9 +70,10 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public async Task SetRequestMetadata_ShouldClearTypedConnectorAndPassthroughWhenMetadataIsNullEmptyOrInvalid()
+    public async Task SetRequestMetadata_ShouldOnlyClearPassthroughWhenMetadataIsNullEmptyOrInvalid()
     {
         var host = new RecordingStateHost();
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer typed");
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
@@ -83,7 +84,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
 
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
@@ -93,7 +94,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [" "] = " ",
             });
 
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
