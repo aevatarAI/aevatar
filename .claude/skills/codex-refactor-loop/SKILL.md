@@ -2733,13 +2733,22 @@ Per Auric (2026-05-19) 二次确认 "github上的也都中文,除了注释英文
 
 ---
 
-## 并发豁免删除(强制,per Auric 2026-05-30 "禁止任何并发豁免, 如果并发不足, 则处理已经存在的issues、pr或者提新的审计来产生issues")
+## 并发范围 10-30(强制,per Auric 2026-05-31 "floor最低10, 最高30, 优先处理所有存量issues/pr")
 
-**2026-05-30 重写**:之前 stop / throttle / "floor=3 throttle 底线" 是并发豁免,允许 controller 在某些条件下 floor < 5 甚至 = 0。Auric 明确**取消所有豁免**:
+**2026-05-31 更新**:之前 floor=5/floor=10 反复,Auric 明确**范围 10-30**:
+
+| ACTIVE codex | 动作 |
+|---|---|
+| `< 10` | **必补**,turn 内派满到 ≥10 才允许 ScheduleWakeup |
+| `10 ≤ N < 30` | OK,可补但不强制 |
+| `≥ 30` | **不主动派**,等 task-notification 自然下降 |
+| 0(仅 `.pause` 存在时) | 唯一合法 |
+
+**优先处理所有存量 issues/PR**:audit 仍是 backfill;只在 1-12 优先级表全部 actionable 为空 + ACTIVE < 10 时才派 audit 补足。
 
 ### 唯一停止信号
 
-**只有** `.refactor-loop/.pause` 文件存在时 controller 才允许 0 codex(maintainer 手动 touch)。删除文件后立即恢复 floor=5。
+**只有** `.refactor-loop/.pause` 文件存在时 controller 才允许 0 codex(maintainer 手动 touch)。删除文件后立即恢复 floor=10。
 
 `.refactor-loop/.auto-stopped` 已废弃 — controller **不允许**自己写 stop 标记。
 
@@ -2756,7 +2765,7 @@ Per Auric (2026-05-19) 二次确认 "github上的也都中文,除了注释英文
 - ❌ Triage eligible 率低 → 仍主动 scan
 - ❌ concurrency floor 任何"降到 3"豁免
 
-**铁律**:任何时刻 `ps -ef | grep "codex exec"` < 5 + 无 `.pause` 文件 → controller **必须**派满 floor=5,**优先处理已存在 issues/PRs**;**没有可派工作**时**派新 audit** 产生 issues。
+**铁律**:任何时刻 `ps -ef | grep "codex exec"` < 10 + 无 `.pause` 文件 → controller **必须**派满 floor=10,**优先处理已存在 issues/PRs**;**没有可派工作**时**派新 audit** 产生 issues。ACTIVE ≥ 30 时**不主动派**。
 
 ### 派什么填底线(优先级,严格,无豁免)
 
@@ -2770,26 +2779,26 @@ Per Auric (2026-05-19) 二次确认 "github上的也都中文,除了注释英文
 8. **conflict PR** → 派 conflict-resolve codex
 9. **Phase 10 advisory review**(eligible 非 auto-loop PR)
 10. **Phase 11 triage**(eligible 非 auto-loop issue)
-11. **下一 iter audit** → 即使 1-10 有 in-flight,floor < 5 时仍派(audit 不阻塞 cluster work)
-12. **next-next iter audit**(N+2 speculative)— floor 仍不足继续派
+11. **下一 iter audit** → 仅当 1-10 全部 actionable 为空且 ACTIVE < 10 时派(优先存量 issues/PR)
+12. **next-next iter audit**(N+2 speculative)— 同 11
 13. **历史 closed design issue retrospective**
 
-**重点变化**:audit 从"backfill only"升级为 **floor < 5 即可派**(原先要求 1-11 全空)。理由:audit 是产生新工作的唯一入口,不应被"等其他在跑"借口阻塞。
+**优先级铁律**:Auric 2026-05-31 "优先处理所有存量 issues/pr" — audit 是 last-resort backfill,1-10 任一可推进 → 不允许派 audit。
 
 ### 反面(❌ 严禁)
 
-- ❌ 看到 floor < 5 但不补派 → 违规
-- ❌ 用"throttle 降到 3"借口不补 → 已删除豁免
+- ❌ 看到 ACTIVE < 10 但不补派 → 违规
 - ❌ 用"等 CI 跑完"借口不补 → CI 不算 codex
-- ❌ 用"Audit 干涸"借口停 loop → 应继续产新 audit
+- ❌ 用"Audit 干涸"借口停 loop → 应继续产新 audit(仅在 1-10 全空时)
 - ❌ 自己写 `.auto-stopped` → 只 `.pause` 是 maintainer 信号
-- ❌ ScheduleWakeup 时 floor < 5 + 无 `.pause` → P0 bug
+- ❌ ScheduleWakeup 时 ACTIVE < 10 + 无 `.pause` → P0 bug
+- ❌ ACTIVE ≥ 30 仍主动派新 codex → 资源浪费,违反上限
 
-### Hard floor = 5 codex(强制,per Auric 2026-05-26 "把最小并发数改回5",此前 2026-05-25 一度降到 2 后已回滚)
+### Hard floor = 10 codex(强制,per Auric 2026-05-31 "floor最低10, 最高30")
 
-**铁律**:**`ps -ef | grep "codex exec" | wc -l` 必须 >= 5**(除非 stop 标记激活)。每次 controller wakeup 第一动作之后 + 每次 spawn / merge / banner 完成后,**必须立即 verify** `active_codex >= 5`,否则**当 turn 内**派满到 5 才允许 ScheduleWakeup / end-turn。
-
-throttle 状态可降到 3(per "Throttle 条件"节,2 个触发任一)。**正常 floor 5,绝对底线 throttle 3**。Stop 状态(`.refactor-loop/.auto-stopped` 存在)是唯一允许 0 codex 的合法情况。
+**铁律**:**`ps -ef | grep "codex exec" | wc -l` 必须在 [10, 30]**(除非 `.pause` 存在)。每次 controller wakeup 第一动作之后 + 每次 spawn / merge / banner 完成后,**必须立即 verify** `10 ≤ active_codex < 30`,否则:
+- `< 10` → 当 turn 内派满到 ≥10 才允许 ScheduleWakeup / end-turn
+- `≥ 30` → 不主动派新 codex,等 task-notification 自然下降到 < 30 再补
 
 **派什么填底线**(优先级,从前往后选,per Auric 2026-05-29 "默认优先处理已经存在的issues/pr, 无任务时才审计" + "一堆issues没完成, 为什么发新审计? 改skills跟脚本, 彻底避免这个问题, 先处理积压的issues"):
 
@@ -2805,30 +2814,32 @@ throttle 状态可降到 3(per "Throttle 条件"节,2 个触发任一)。**正�
 10. **PR 刚 push 等 CI** → arm CI Monitor(Monitor 不算 codex)
 11. **Phase 10 advisory review** → 扫 eligible 非 auto-loop open PR 派 3 reviewer
 12. **Phase 11 issue intake** → label `auto-loop-triage` 给 eligible 非 auto-loop open issue
-13. **审计 backlog(priority fallback)**:已按 1-12 推进一轮后仍 `ACTIVE < 5` 时,派 `audit-iter-N+1`(若上一 audit 已完成 + N+1 log 不存在),用于补足 hard floor
+13. **审计 backlog(priority fallback)**:仅当 1-12 本 turn 已穷尽可立即推进项 + `ACTIVE < 10` 时派 `audit-iter-N+1`(若上一 audit 已完成 + N+1 log 不存在),用于补足 hard floor
 14. **next-next iter audit(priority fallback)**:同 13,floor 仍不足继续派
 
-**铁律**:priority reversal 仍然成立:controller 必须先处理已经存在的 issue/PR backlog,不能把 audit 当成默认动作。但 2026-05-30 删除并发豁免后,若 1-12 本 turn 已穷尽可立即推进项且 `ACTIVE < 5`,必须用 audit 补足 hard floor,禁止以"等其他在跑"为由低于 5。violate 已发生两次:
+**铁律**:priority reversal 永远成立(per Auric 2026-05-31 "优先处理所有存量 issues/pr"):controller 必须先处理所有存量 issue/PR backlog,audit 是 last-resort backfill。1-12 本 turn 有可推进项 → **禁止**派 audit;仅 1-12 全空 + ACTIVE < 10 才允许 audit 补足 hard floor。violate 历史:
 - 2026-05-29 首次:audit 200-257 共 50+ 次,期间 20+ implementing issue 漏处理 IMPLEMENT_DONE
 - 2026-05-29 第二次:audit always-available 让 22+ design-solving issue 0 solver 静默积压
-- 2026-05-30 并发豁免删除后:floor < 5 时不能因 audit 曾是 backfill 而停止补派
-root cause 合并结论:**审计不是 existing backlog 的替代品,而是 floor 仍不足时的产能入口**——audit 产 design issue,design issue 必须先派 solver 才推进。
+- 2026-05-31 Auric 改 floor 10-30 范围 + "优先处理所有存量 issues/pr" → audit 退回 last-resort backfill (1-12 全空才派)
+root cause 合并结论:**审计不是 existing backlog 的替代品,而是产能入口**——优先存量 issues/PR,audit 是补足 floor 的最后手段。
 
-**强制执行机制**(per Auric 2026-05-29 "改skills跟脚本, 彻底避免这个问题"):
-1. `wakeup-check.sh` Step F2:扫 `🔍 phase:design-solving` 无 r1 solver log 的 issue,每个 issue 占 3 slot,推荐 ACTION
+**强制执行机制**:
+1. `wakeup-check.sh` Step F2:扫 `🔍 phase:design-solving` 无 r1 solver log 的 issue,每个 issue 占 3 slot
 2. `wakeup-check.sh` Step G:仅 A-F 无可立即推进项时才推荐 audit
-3. HARD GATE queue:issue/PR actionable 优先级永远高于 audit;但 floor 仍不足时 audit 必须补位
-4. controller wakeup 必须先 run wakeup-check.sh,按 RECOMMENDATION 顺序派,**禁止**自决"audit 也算 backlog 推进"
-5. 若 RECOMMENDATION 用尽后 `ACTIVE < 5` 且无 `.pause`,继续派 audit / next-next audit 补足 floor
+3. HARD GATE queue:issue/PR actionable 优先级永远高于 audit
+4. controller wakeup 必须先 run wakeup-check.sh,按 RECOMMENDATION 顺序派
+5. 若 RECOMMENDATION 用尽后 `ACTIVE < 10` 且无 `.pause`,继续派 audit / next-next audit 补足 floor
 
 **自检脚本**(每 wakeup 第一动作之后):
 ```bash
 ACTIVE=$(ps -ef | grep "codex exec" | grep -v grep | wc -l | tr -d ' ')
 if [ -f .refactor-loop/.pause ]; then
   : # 唯一 stop 状态:maintainer 手动 touch .pause
-elif (( ACTIVE < 5 )); then
-  echo "FLOOR_VIOLATION: active=$ACTIVE < 5 — must dispatch before end-turn"
-  # 按上面优先级派 (5 - ACTIVE) 个,priority 1-10 + audit(11-13)穷举
+elif (( ACTIVE < 10 )); then
+  echo "FLOOR_VIOLATION: active=$ACTIVE < 10 — must dispatch before end-turn"
+  # 按上面优先级派 (10 - ACTIVE) 个,priority 1-12 优先穷举,audit 仅 last-resort
+elif (( ACTIVE >= 30 )); then
+  echo "CEILING_OK: active=$ACTIVE >= 30 — do NOT spawn new codex, wait for task-notification"
 fi
 ```
 
@@ -2837,16 +2848,18 @@ fi
 注:per Auric 2026-05-26 "ps grep timeout" undercount,改用 `grep "codex exec"` 直接抓 codex exec 进程。
 
 **反面**:
-- ❌ wakeup 结束时 `ACTIVE < 5` 且无 `.pause` → P0 bug
-- ❌ "等 CI 跑完"作为 0 codex 理由 → 派下一波 audit/Phase 10/11
-- ❌ "Audit 干涸"借口停 loop → 仍派下一 audit
+- ❌ wakeup 结束时 `ACTIVE < 10` 且无 `.pause` → P0 bug
+- ❌ ACTIVE ≥ 30 仍主动派 → 资源浪费
+- ❌ "等 CI 跑完"作为 floor < 10 理由 → 派下一波 audit/Phase 10/11
+- ❌ "Audit 干涸"借口停 loop → 仍派下一 audit(仅 1-12 全空时)
 - ❌ 自己写 `.refactor-loop/.auto-stopped` → 仅 maintainer `.pause` 是合法 stop 信号
-- ❌ floor < 5 派 audit 之前要求"1-11 全空"→ 已废止此 gate
+- ❌ 1-12 有可推进项时派 audit → 违反 priority reversal
 
 事故记录:
 - 2026-05-25 floor 从 5 降到 2 → 响应慢,2026-05-26 回滚 5
 - 2026-05-29 audit 误用"backfill only"导致连续派 audit 50+ 次漏 IMPLEMENT_DONE → priority 列表 1-10 优先 issue/PR,audit 升级为 priority 11(floor < 5 即派,无 1-10 全空 gate)
 - 2026-05-30 Auric 删所有并发豁免(throttle / stop / `.auto-stopped`)→ floor 严格 = 5,只 `.pause` 允许 0
+- 2026-05-31 Auric 改 floor 10-30 范围 + 重申"优先处理所有存量 issues/pr" → audit 退回 last-resort,1-12 全空才派
 
 ---
 

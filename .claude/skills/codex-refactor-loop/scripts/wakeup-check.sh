@@ -307,16 +307,20 @@ echo ""
 echo "==================================================================="
 echo "=== HARD GATE — AI MUST DISPATCH BEFORE END-TURN ================="
 echo "==================================================================="
-FLOOR_REQUIRED=10
-NEEDED=$(( FLOOR_REQUIRED - ACTIVE ))
-if [ -f .refactor-loop/.auto-stopped ]; then
-    echo "STOP_ACTIVE=1 — dispatch FORBIDDEN (auto-stopped marker exists)"
+FLOOR_MIN=10
+FLOOR_MAX=30
+NEEDED=$(( FLOOR_MIN - ACTIVE ))
+if [ -f .refactor-loop/.pause ]; then
+    echo "PAUSE_ACTIVE=1 — dispatch FORBIDDEN (.pause marker exists)"
     echo "AI may end-turn without dispatch."
+elif [ "$ACTIVE" -ge "$FLOOR_MAX" ]; then
+    echo "floor_actual=$ACTIVE floor_range=[$FLOOR_MIN,$FLOOR_MAX]"
+    echo "CEILING_HIT=1 — ACTIVE >= $FLOOR_MAX, do NOT spawn new codex (per Auric 2026-05-31 max=30)."
 elif [ "$NEEDED" -le 0 ]; then
-    echo "floor_actual=$ACTIVE floor_required=$FLOOR_REQUIRED gap=0"
+    echo "floor_actual=$ACTIVE floor_range=[$FLOOR_MIN,$FLOOR_MAX]"
     echo "FLOOR_OK=1 — AI may end-turn (or ScheduleWakeup) without dispatching new codex."
 else
-    echo "floor_actual=$ACTIVE floor_required=$FLOOR_REQUIRED gap=$NEEDED"
+    echo "floor_actual=$ACTIVE floor_range=[$FLOOR_MIN,$FLOOR_MAX] gap=$NEEDED"
     echo "MUST_DISPATCH=$NEEDED — AI MUST spawn $NEEDED codex BEFORE ScheduleWakeup / end-turn."
     echo ""
     echo "ACTIONABLE WORK QUEUE (pick top $NEEDED by priority):"
