@@ -52,6 +52,7 @@ type RunsLaunchRailProps = {
   onEndpointChange: (value: string) => void;
   onEndpointKindChange: (value: RunEndpointKind) => void;
   onSelectRouteName: (value: string) => void;
+  onScopeIdChange: (value: string) => void;
   onSubmitRun: (values: RunFormValues) => Promise<void>;
   onTransportChange: (value: RunTransport) => void;
   onUsePreset: (preset: RunPreset) => void;
@@ -388,6 +389,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   onEndpointChange,
   onEndpointKindChange,
   onSelectRouteName,
+  onScopeIdChange,
   onSubmitRun,
   onTransportChange,
   onUsePreset,
@@ -397,7 +399,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
 
   return (
     <ProCard
-      title={isChatVariant ? "Setup" : "Run setup"}
+      title={isChatVariant ? "Run context" : "Run setup"}
       hoverable
       {...moduleCardProps}
       style={workbenchCardStyle}
@@ -444,7 +446,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
           items={[
             {
               key: "compose",
-              label: "Compose",
+              label: isChatVariant ? "Context" : "Compose",
               children: (
                 <div style={compactStackStyle}>
                   {renderRouteMiniCard(
@@ -487,6 +489,13 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         values.transport
                       ) {
                         onTransportChange(values.transport);
+                      }
+                      if ("scopeId" in changedValues) {
+                        onScopeIdChange(
+                          typeof values.scopeId === "string"
+                            ? values.scopeId
+                            : "",
+                        );
                       }
                     }}
                     onFinish={async (values) => {

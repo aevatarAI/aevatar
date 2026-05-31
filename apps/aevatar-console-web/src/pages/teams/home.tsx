@@ -495,7 +495,7 @@ function buildMemberRosterPreview(input: {
     attentionDetail = "最近一次成员运行正常，可继续进入详情查看。";
   } else if (serviceId || matchedService) {
     attention = "no-recent-runs";
-    attentionDetail = "成员已绑定服务，最近还没有运行记录。";
+    attentionDetail = "成员已绑定服务。下一步：进入团队详情后测试团队，生成第一条可见运行。";
   } else if (
     trimOptional(input.member.lastBoundRevisionId) ||
     input.member.lifecycleStage === "bind_ready"
@@ -598,7 +598,7 @@ function buildTeamRosterPreview(input: {
 
   let attention: TeamOperationalAttention =
     mostImportantMemberPreview?.attention ?? "draft";
-  let attentionDetail = "这个 Team 已经存在后端事实，但还没有分配成员。";
+  let attentionDetail = "这个 Team 还没有成员。下一步：添加入口成员后再测试团队。";
   if (input.team.lifecycleStage === "archived") {
     attention = "draft";
     attentionDetail = "这个 Team 已归档，列表中仅保留它的后端 roster 事实。";
@@ -694,10 +694,10 @@ const TeamRosterCard: React.FC<{
         style={{
           color: token.colorTextSecondary,
           display: "block",
-          fontSize: 13,
+          fontSize: 12,
         }}
       >
-        Team 标识：{preview.teamId}
+        ID：{preview.teamId}
       </Typography.Text>
 
       <div
@@ -749,7 +749,7 @@ const TeamRosterCard: React.FC<{
           size="large"
           type="primary"
         >
-          查看团队
+          测试或配置团队
         </Button>
       </Space>
     </article>
@@ -822,17 +822,17 @@ const TeamRosterRow: React.FC<{
             style={{
               color: token.colorTextSecondary,
               display: "block",
-              fontSize: 13,
+              fontSize: 12,
               marginTop: 4,
             }}
           >
-            Team 标识：{preview.teamId}
+            ID：{preview.teamId}
           </Typography.Text>
         </div>
 
         <Space className="teams-home-roster-row-actions" wrap>
           <Button onClick={() => history.push(preview.detailHref)} type="primary">
-            查看团队
+            测试或配置团队
           </Button>
         </Space>
       </div>
@@ -1152,8 +1152,8 @@ const TeamsHomePage: React.FC = () => {
               }}
             >
               <SummaryStatCard accent label="AI Team 总数" value={visibleTeamCount} />
-              <SummaryStatCard label="待处理 Team" value={actionableTeamCount} />
-              <SummaryStatCard label="运行稳定" value={healthyTeamCount} />
+              <SummaryStatCard label="待启动 Team" value={actionableTeamCount} />
+              <SummaryStatCard label="已有稳定运行" value={healthyTeamCount} />
             </div>
 
             {teamsQuery.isLoading ? (

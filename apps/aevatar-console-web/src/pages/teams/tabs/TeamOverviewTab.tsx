@@ -48,6 +48,7 @@ type TeamOverviewTabProps = {
   readonly latestVisibleUpdateLabel: string;
   readonly latestVisibleUpdateNote: string;
   readonly onClearEntryMember?: () => void;
+  readonly startupGuidance: string;
 };
 
 const surfaceStyle = (
@@ -89,6 +90,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   latestVisibleUpdateLabel,
   latestVisibleUpdateNote,
   onClearEntryMember,
+  startupGuidance,
 }) => {
   const { token } = theme.useToken();
   const hasEntryMember = Boolean(entryMemberId?.trim());
@@ -108,13 +110,16 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <Space wrap size={8}>
               <Typography.Text strong style={{ fontSize: 16 }}>
-                当前态势
+                启动状态
               </Typography.Text>
               <DetailPill
                 style={currentHeaderStatusStyle}
                 text={currentHeaderStatusFriendly}
               />
             </Space>
+            <Typography.Text type="secondary">
+              {startupGuidance}
+            </Typography.Text>
           </div>
           <Space wrap size={[8, 8]}>
             <DetailPill

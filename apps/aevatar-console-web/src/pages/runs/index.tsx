@@ -349,6 +349,36 @@ const runsChatComposerHintStyle: React.CSSProperties = {
   fontSize: 12,
 };
 
+const runsChatComposerContextStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 6,
+  justifyContent: "flex-end",
+};
+
+const runsChatComposerContextTagStyle: React.CSSProperties = {
+  background: "rgba(255, 255, 255, 0.78)",
+  border: "1px solid rgba(148, 163, 184, 0.22)",
+  borderRadius: 999,
+  color: "var(--ant-color-text-secondary)",
+  fontSize: 12,
+  fontWeight: 600,
+  lineHeight: "18px",
+  maxWidth: 240,
+  overflow: "hidden",
+  padding: "3px 8px",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const runsChatComposerWarningStyle: React.CSSProperties = {
+  color: "var(--ant-color-warning-text)",
+  fontSize: 12,
+  lineHeight: "18px",
+  textAlign: "right",
+};
+
 const runsChatComposerSendButtonStyle: React.CSSProperties = {
   borderRadius: 14,
   boxShadow: "0 12px 24px rgba(22, 119, 255, 0.2)",
@@ -680,6 +710,12 @@ const RunsPage: React.FC = () => {
   const handleEndpointChange = useCallback((value: string) => {
     const normalizedValue = value.trim();
     setActiveEndpointId((currentValue) =>
+      currentValue === normalizedValue ? currentValue : normalizedValue
+    );
+  }, []);
+  const handleScopeIdChange = useCallback((value: string) => {
+    const normalizedValue = value.trim();
+    setActiveScopeId((currentValue) =>
       currentValue === normalizedValue ? currentValue : normalizedValue
     );
   }, []);
@@ -1217,6 +1253,7 @@ const RunsPage: React.FC = () => {
   const actorId = session.context?.actorId;
   const commandId = session.context?.commandId ?? "";
   const canOpenMissionControl = Boolean(activeScopeId.trim() && session.runId);
+  const hasRunInspectorTarget = Boolean(actorId || session.runId);
   const handleOpenMissionControl = useCallback(() => {
     const runId = session.runId?.trim();
     const scopeId = activeScopeId.trim();
@@ -1909,6 +1946,11 @@ const RunsPage: React.FC = () => {
         : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
   const isChatConsole = endpointKind === "chat";
+  const composerScopeId = resolveRunScopeId();
+  const composerRouteLabel =
+    routeName || (scopeDraftPayload ? scopeDraftPayload.bundleName : "Workspace default");
+  const composerEndpointLabel = endpointName || "chat";
+  const composerReady = Boolean(composerScopeId.trim());
 
   const handleSubmitResume = useCallback(
     async (values: ResumeFormValues) => {
@@ -2085,6 +2127,7 @@ const RunsPage: React.FC = () => {
       onEndpointChange={handleEndpointChange}
       onEndpointKindChange={handleEndpointKindChange}
       onSelectRouteName={handleRouteSelection}
+      onScopeIdChange={handleScopeIdChange}
       onSubmitRun={async (values) => {
         await sendRun(values.scopeId ?? "", values);
       }}
@@ -2174,31 +2217,33 @@ const RunsPage: React.FC = () => {
             >
               Workflow catalog
             </Button>
-            <Button
-              className={runsWorkbenchHeaderButtonClassName}
-              disabled={!actorId && !session.runId}
-              icon={<DeploymentUnitOutlined />}
-              onClick={() =>
-                history.push(
-                  buildRuntimeExplorerHref({
-                    actorId: actorId ?? undefined,
-                    runId: session.runId || undefined,
-                    scopeId: activeScopeId || undefined,
-                    serviceOverrideId: activeServiceOverrideId || undefined,
-                  })
-                )
-              }
-            >
-              Actor explorer
-            </Button>
-            <Button
-              className={`${runsWorkbenchHeaderButtonClassName} ${runsWorkbenchHeaderButtonAccentClassName}`}
-              disabled={!canOpenMissionControl}
-              icon={<ControlOutlined />}
-              onClick={handleOpenMissionControl}
-            >
-              Mission Control
-            </Button>
+            {hasRunInspectorTarget ? (
+              <Button
+                className={runsWorkbenchHeaderButtonClassName}
+                icon={<DeploymentUnitOutlined />}
+                onClick={() =>
+                  history.push(
+                    buildRuntimeExplorerHref({
+                      actorId: actorId ?? undefined,
+                      runId: session.runId || undefined,
+                      scopeId: activeScopeId || undefined,
+                      serviceOverrideId: activeServiceOverrideId || undefined,
+                    })
+                  )
+                }
+              >
+                Actor explorer
+              </Button>
+            ) : null}
+            {canOpenMissionControl ? (
+              <Button
+                className={`${runsWorkbenchHeaderButtonClassName} ${runsWorkbenchHeaderButtonAccentClassName}`}
+                icon={<ControlOutlined />}
+                onClick={handleOpenMissionControl}
+              >
+                Mission Control
+              </Button>
+            ) : null}
           </div>
         </div>
         {isChatConsole ? (
@@ -2256,10 +2301,26 @@ const RunsPage: React.FC = () => {
                 <style>{runsChatComposerCss}</style>
                 <div style={runsChatComposerHeaderStyle}>
                   <div style={runsChatComposerLabelStyle}>Prompt</div>
-                  <Typography.Text style={runsChatComposerHintStyle}>
-                    Enter to send
-                  </Typography.Text>
+                  <div style={runsChatComposerContextStyle}>
+                    <span style={runsChatComposerContextTagStyle}>
+                      Workspace: {composerScopeId || "required"}
+                    </span>
+                    <span style={runsChatComposerContextTagStyle}>
+                      Route: {composerRouteLabel}
+                    </span>
+                    <span style={runsChatComposerContextTagStyle}>
+                      Endpoint: {composerEndpointLabel}
+                    </span>
+                    <Typography.Text style={runsChatComposerHintStyle}>
+                      Enter to send
+                    </Typography.Text>
+                  </div>
                 </div>
+                {!composerReady ? (
+                  <div style={runsChatComposerWarningStyle}>
+                    Add a workspace ID in Run context before sending.
+                  </div>
+                ) : null}
                 <div className={runsChatComposerBodyClassName}>
                   <div style={runsChatComposerInputWrapStyle}>
                     <div
@@ -2279,7 +2340,9 @@ const RunsPage: React.FC = () => {
                             !event.nativeEvent.isComposing
                           ) {
                             event.preventDefault();
-                            void handleSubmitComposer();
+                            if (composerReady) {
+                              void handleSubmitComposer();
+                            }
                           }
                         }}
                         placeholder="Describe the task to run."
@@ -2293,6 +2356,7 @@ const RunsPage: React.FC = () => {
                     style={runsChatComposerActionsStyle}
                   >
                     <Button
+                      disabled={!composerReady}
                       icon={<SendOutlined />}
                       loading={streaming}
                       onClick={() => void handleSubmitComposer()}

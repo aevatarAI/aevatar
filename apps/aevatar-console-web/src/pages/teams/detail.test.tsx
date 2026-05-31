@@ -874,7 +874,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("link", { name: "Teams" })).toBeTruthy();
     expect(screen.getByText("scopeId")).toBeTruthy();
     expect(screen.getByText("scope-1")).toBeTruthy();
-    const currentPostureHeading = screen.getByText("当前态势");
+    const currentPostureHeading = screen.getByText("启动状态");
     const compositionHeading = screen.getByText("团队构成");
     const configurationHeading = screen.getByText("配置明细");
     expect(screen.getByRole("button", { name: "测试团队" })).toBeTruthy();
@@ -918,7 +918,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(await screen.findByText("启动状态")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("配置明细")).toBeTruthy();
     expect(screen.queryByText("信任态势")).toBeNull();
@@ -937,7 +937,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(await screen.findByText("启动状态")).toBeTruthy();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
     expect(screen.queryByText("Comparing run run-current against baseline run-good.")).toBeNull();
     expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();
@@ -1102,7 +1102,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(await screen.findByText("启动状态")).toBeTruthy();
     expect(screen.queryByText("当前任务事件流")).toBeNull();
 
     await waitFor(() => {
@@ -1177,6 +1177,30 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("当前成员")).toBeTruthy();
     expect(screen.getAllByText("member-team-alpha").length).toBeGreaterThan(0);
     expect(screen.getByText("memberId · member-team-alpha")).toBeTruthy();
+  });
+
+  it("guides the user to test the Team when no run is visible yet", async () => {
+    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateRunsCatalog(),
+      runs: [],
+    });
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-team-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(screen.getAllByText("等待首次测试").length).toBeGreaterThan(0);
+    expect(screen.getByText("下一步 · 测试团队")).toBeTruthy();
+    expect(
+      screen.getByText("团队入口已就绪，但还没有可见运行。点击“测试团队”生成第一条运行。"),
+    ).toBeTruthy();
+    expect(screen.getByText("测试团队后会在这里显示最新运行。")).toBeTruthy();
+    expect(screen.queryByText("暂无可见运行")).toBeNull();
+    expect(screen.queryByText("暂无近期可见运行")).toBeNull();
   });
 
   it("shows the configured Team entry member without treating it as the service target", async () => {
@@ -1646,7 +1670,7 @@ describe("TeamDetailPage", () => {
     expect((await screen.findAllByText("Team summary")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("3 个成员").length).toBeGreaterThan(0);
     expect(screen.getAllByText("来自 Team 更新时间").length).toBeGreaterThan(0);
-    expect(screen.getByText("当前态势")).toBeTruthy();
+    expect(screen.getByText("启动状态")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("配置明细")).toBeTruthy();
     expect(screen.queryByText("Team 更新时间")).toBeNull();
@@ -1789,7 +1813,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(await screen.findByText("启动状态")).toBeTruthy();
     expect(await screen.findByText("团队构成")).toBeTruthy();
     expect(await screen.findByText("配置明细")).toBeTruthy();
     expect(screen.queryByText("Team summary 暂不可用")).toBeNull();

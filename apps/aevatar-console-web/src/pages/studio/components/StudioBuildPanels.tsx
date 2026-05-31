@@ -2654,7 +2654,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           <div style={{ display: 'grid', gap: 4 }}>
             <div style={sectionEyebrowStyle}>Script Source</div>
             <div style={sectionDescriptionStyle}>
-              Script mode 只做一件事：围绕当前 script draft 的 typed source、lints 和 dry-run 迭代实现。
+              {hasActiveScript
+                ? 'Script mode 只做一件事：围绕当前 script draft 的 typed source、lints 和 dry-run 迭代实现。'
+                : 'Create or select a script first. Validation, save, bind, and dry-run unlock after there is a script to work on.'}
             </div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
@@ -2702,25 +2704,27 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 ]}
               />
             </Space>
-            <Space wrap size={[8, 8]}>
-              <Button
-                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                disabled={!activeScript?.script?.scriptId || validationPending}
-                loading={validationPending}
-                onClick={() => void handleValidate()}
-              >
-                Validate
-              </Button>
-              <Button
-                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                disabled={saveDisabled}
-                icon={<CheckCircleOutlined />}
-                loading={savePending}
-                onClick={() => void handleSave()}
-              >
-                Save script
-              </Button>
-            </Space>
+            {hasActiveScript ? (
+              <Space wrap size={[8, 8]}>
+                <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                  disabled={validationPending}
+                  loading={validationPending}
+                  onClick={() => void handleValidate()}
+                >
+                  Validate
+                </Button>
+                <Button
+                  className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                  disabled={saveDisabled}
+                  icon={<CheckCircleOutlined />}
+                  loading={savePending}
+                  onClick={() => void handleSave()}
+                >
+                  Save script
+                </Button>
+              </Space>
+            ) : null}
           </div>
           {saveNotice ? (
             <Alert
@@ -3005,7 +3009,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             </div>
           ) : (
             <Empty
-              description="Create a Script draft or select a saved workspace script to start editing."
+              description="Create a script capability or select a saved workspace script. After that, this panel will show validation, save, bind, and dry-run controls."
             >
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -3018,21 +3022,37 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           )}
         </section>
 
-        <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
-          <Typography.Text type="secondary">
-            {scriptReadyToBind
-              ? 'Script revision is catalog-applied. Continue to Bind to publish the callable member contract.'
-              : `Script Build keeps code editing here. ${bindReadinessLabel}.`}
-          </Typography.Text>
-          <Button
-            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            disabled={!scriptReadyToBind}
-            type="primary"
-            onClick={onContinueToBind}
+        {hasActiveScript ? (
+          <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
+            <Typography.Text type="secondary">
+              {scriptReadyToBind
+                ? 'Script revision is catalog-applied. Continue to Bind to publish the callable member contract.'
+                : `Script Build keeps code editing here. ${bindReadinessLabel}.`}
+            </Typography.Text>
+            <Button
+              className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+              disabled={!scriptReadyToBind}
+              type="primary"
+              onClick={onContinueToBind}
+            >
+              Continue to Bind
+            </Button>
+          </div>
+        ) : (
+          <div
+            style={{
+              background: '#fffdf8',
+              border: '1px solid #efe7da',
+              borderRadius: 16,
+              color: '#667085',
+              fontSize: 13,
+              lineHeight: '20px',
+              padding: '12px 14px',
+            }}
           >
-            Continue to Bind
-          </Button>
-        </div>
+            Start with Add script or select an existing script. Bind becomes available only after a saved catalog revision exists.
+          </div>
+        )}
 
         <ScriptLeaveDialog
           open={leaveDialogOpen}
@@ -3042,91 +3062,103 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       </div>
 
       <aside style={dryRunAsideStyle}>
-        <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
-          <div style={{ display: 'grid', gap: 4 }}>
-            <div style={sectionEyebrowStyle}>Dry-run</div>
-            <Typography.Text strong>Script draft run</Typography.Text>
-          </div>
-          <span style={{ ...statusTagStyle, background: '#fffbe6', color: '#ad6800' }}>
-            seeded fixture
-          </span>
-        </div>
-        <div style={sectionDescriptionStyle}>
-          Draft-run 会直接调用当前 source editor 里的脚本，不需要先把 scope 默认服务切到这个 script。
-        </div>
-        <Input.TextArea
-          aria-label="Script dry run input"
-          autoSize={{ minRows: 6, maxRows: 10 }}
-          disabled={!hasActiveScript}
-          value={runInput}
-          onChange={(event) => setRunInput(event.target.value)}
-        />
-        <Space wrap size={[8, 8]}>
-          <Button
-            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            icon={<PlayCircleOutlined />}
-            disabled={!hasActiveScript}
-            loading={runPending}
-            type="primary"
-            onClick={() => void handleRun()}
-          >
-            Run
-          </Button>
-          <Button
-            className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            onClick={() =>
-              setRunInput(
-                JSON.stringify(
-                  {
-                    channel: 'telegram',
-                    text: 'refund for order #92817 — 3rd time asking',
-                    user: 'alex',
-                  },
-                  null,
-                  2,
-                ),
-              )
-            }
-          >
-            Load fixture
-          </Button>
-        </Space>
-        <div>
-          {lastRunResult ? (
-            <div
-              aria-label="Script dry run facts"
-              style={{
-                border: '1px solid #efe7da',
-                borderRadius: 14,
-                display: 'grid',
-                gap: 6,
-                marginBottom: 12,
-                padding: 12,
-              }}
-            >
-              <div style={sectionEyebrowStyle}>Run facts</div>
-              {[
-                ['Run', lastRunResult.runId],
-                ['Runtime', lastRunResult.runtimeActorId],
-                ['Definition', lastRunResult.definitionActorId],
-                ['Command type', lastRunResult.commandTypeUrl],
-                ['Source hash', lastRunResult.sourceHash],
-                ['Activity', lastRunResult.activityUrl],
-              ].map(([label, value]) => (
-                <div key={label} style={{ display: 'grid', gap: 2 }}>
-                  <span style={{ color: '#8b7b63', fontSize: 11, fontWeight: 700 }}>
-                    {label}
-                  </span>
-                  <Typography.Text copyable={Boolean(value)} ellipsis style={{ fontSize: 12 }}>
-                    {value || '-'}
-                  </Typography.Text>
-                </div>
-              ))}
+        {hasActiveScript ? (
+          <>
+            <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
+              <div style={{ display: 'grid', gap: 4 }}>
+                <div style={sectionEyebrowStyle}>Dry-run</div>
+                <Typography.Text strong>Script draft run</Typography.Text>
+              </div>
+              <span style={{ ...statusTagStyle, background: '#fffbe6', color: '#ad6800' }}>
+                seeded fixture
+              </span>
             </div>
-          ) : null}
-          <div style={sectionEyebrowStyle}>Output</div>
-          <pre style={dryRunOutputStyle}>{runOutput}</pre>
-        </div>
+            <div style={sectionDescriptionStyle}>
+              Draft-run 会直接调用当前 source editor 里的脚本，不需要先把 scope 默认服务切到这个 script。
+            </div>
+            <Input.TextArea
+              aria-label="Script dry run input"
+              autoSize={{ minRows: 6, maxRows: 10 }}
+              value={runInput}
+              onChange={(event) => setRunInput(event.target.value)}
+            />
+            <Space wrap size={[8, 8]}>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                icon={<PlayCircleOutlined />}
+                loading={runPending}
+                type="primary"
+                onClick={() => void handleRun()}
+              >
+                Run
+              </Button>
+              <Button
+                className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+                onClick={() =>
+                  setRunInput(
+                    JSON.stringify(
+                      {
+                        channel: 'telegram',
+                        text: 'refund for order #92817 — 3rd time asking',
+                        user: 'alex',
+                      },
+                      null,
+                      2,
+                    ),
+                  )
+                }
+              >
+                Load fixture
+              </Button>
+            </Space>
+            <div>
+              {lastRunResult ? (
+                <div
+                  aria-label="Script dry run facts"
+                  style={{
+                    border: '1px solid #efe7da',
+                    borderRadius: 14,
+                    display: 'grid',
+                    gap: 6,
+                    marginBottom: 12,
+                    padding: 12,
+                  }}
+                >
+                  <div style={sectionEyebrowStyle}>Run facts</div>
+                  {[
+                    ['Run', lastRunResult.runId],
+                    ['Runtime', lastRunResult.runtimeActorId],
+                    ['Definition', lastRunResult.definitionActorId],
+                    ['Command type', lastRunResult.commandTypeUrl],
+                    ['Source hash', lastRunResult.sourceHash],
+                    ['Activity', lastRunResult.activityUrl],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ display: 'grid', gap: 2 }}>
+                      <span style={{ color: '#8b7b63', fontSize: 11, fontWeight: 700 }}>
+                        {label}
+                      </span>
+                      <Typography.Text copyable={Boolean(value)} ellipsis style={{ fontSize: 12 }}>
+                        {value || '-'}
+                      </Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div style={sectionEyebrowStyle}>Output</div>
+              <pre style={dryRunOutputStyle}>{runOutput}</pre>
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'grid', gap: 4 }}>
+              <div style={sectionEyebrowStyle}>Dry-run</div>
+              <Typography.Text strong>Create a script before running it</Typography.Text>
+            </div>
+            <Typography.Text type="secondary">
+              The run input, fixture loader, and output stream appear after a script draft or saved script is selected.
+            </Typography.Text>
+          </div>
+        )}
         {hasActiveScript ? (
           <details
             aria-label="Script promotion history"

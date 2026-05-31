@@ -52,6 +52,7 @@ describe("RunsLaunchRail", () => {
         onEndpointChange={jest.fn()}
         onEndpointKindChange={jest.fn()}
         onSelectRouteName={jest.fn()}
+        onScopeIdChange={jest.fn()}
         onSubmitRun={async () => {}}
         onTransportChange={jest.fn()}
         onUsePreset={onUsePreset}
@@ -110,6 +111,7 @@ describe("RunsLaunchRail", () => {
         onEndpointChange={jest.fn()}
         onEndpointKindChange={jest.fn()}
         onSelectRouteName={jest.fn()}
+        onScopeIdChange={jest.fn()}
         onSubmitRun={async () => {}}
         onTransportChange={jest.fn()}
         onUsePreset={jest.fn()}

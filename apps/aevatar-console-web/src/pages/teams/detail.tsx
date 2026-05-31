@@ -808,6 +808,7 @@ const TeamDetailPage: React.FC = () => {
     lens.currentRun?.runId ||
     focusedOperationalUnit?.latestRun?.runId ||
     "";
+  const hasVisibleRun = Boolean(activeRunId);
   const currentRevisionId = trimText(lens.activeRevision?.revisionId) || "--";
   const currentRevisionStatus =
     trimText(lens.activeRevision?.servingState) ||
@@ -817,9 +818,6 @@ const TeamDetailPage: React.FC = () => {
     trimText(lens.currentService?.deploymentStatus) ||
     trimText(lens.activeRevision?.status) ||
     "--";
-  const currentHeaderStatus =
-    trimText(lens.currentRun?.completionStatus) || currentDeploymentStatus;
-  const currentHeaderStatusFriendly = formatFriendlyStatus(currentHeaderStatus);
   const currentRevisionFriendly = formatFriendlyStatus(currentRevisionStatus);
   const currentDeploymentFriendly = formatFriendlyStatus(currentDeploymentStatus);
   const currentServiceKey =
@@ -829,9 +827,9 @@ const TeamDetailPage: React.FC = () => {
   const currentServiceDisplayName =
     trimText(lens.currentService?.displayName) || "--";
   const currentRunStatus = trimText(lens.currentRun?.completionStatus) || "--";
-  const currentRunFriendly = activeRunId
+  const currentRunFriendly = hasVisibleRun
     ? formatFriendlyStatus(currentRunStatus)
-    : "暂无可见运行";
+    : "等待首次测试";
   const currentMemberLabel =
     trimText(preferredMemberSummary?.displayName) ||
     teamRosterRows.find((row) => row.memberId === currentMemberId)?.name ||
@@ -847,6 +845,22 @@ const TeamDetailPage: React.FC = () => {
     currentServiceDisplayName !== "--"
       ? currentServiceDisplayName
       : runtimeServiceId || "--";
+  const hasRunnableTeamEntry =
+    Boolean(entryMemberId) ||
+    Boolean(currentMemberId) ||
+    currentServiceFriendly !== "--" ||
+    currentServiceKey !== "--" ||
+    Boolean(runtimeServiceId);
+  const currentHeaderStatus = hasVisibleRun
+    ? currentRunStatus
+    : hasRunnableTeamEntry
+      ? "waiting"
+      : currentDeploymentStatus;
+  const currentHeaderStatusFriendly = hasVisibleRun
+    ? formatFriendlyStatus(currentRunStatus)
+    : hasRunnableTeamEntry
+      ? "等待首次测试"
+      : formatFriendlyStatus(currentDeploymentStatus);
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
@@ -859,9 +873,9 @@ const TeamDetailPage: React.FC = () => {
     currentVersionFriendly !== "--"
       ? `版本 · ${currentVersionFriendly}`
       : "版本待确认";
-  const currentRunPillText = activeRunId
+  const currentRunPillText = hasVisibleRun
     ? `运行 · ${currentRunFriendly}`
-    : "暂无近期可见运行";
+    : "下一步 · 测试团队";
   const currentServiceCardCaption = runtimeServiceId
     ? `serviceId · ${compactOptionalId(runtimeServiceId)}`
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
@@ -872,12 +886,17 @@ const TeamDetailPage: React.FC = () => {
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
       ? `serviceKey · ${currentServiceKey}`
       : "当前还没有更多服务标识";
-  const currentRunCardCaption = activeRunId
+  const currentRunCardCaption = hasVisibleRun
     ? `runId · ${compactId(activeRunId)}`
-    : "当前还没有同步到可见运行";
-  const currentRunCardTooltip = activeRunId
+    : "测试团队后会在这里显示最新运行。";
+  const currentRunCardTooltip = hasVisibleRun
     ? `runId · ${activeRunId}`
-    : "当前还没有同步到可见运行";
+    : "测试团队后会在这里显示最新运行。";
+  const teamStartupGuidance = hasVisibleRun
+    ? "最近运行已可见，可继续测试团队或调整成员配置。"
+    : hasRunnableTeamEntry
+      ? "团队入口已就绪，但还没有可见运行。点击“测试团队”生成第一条运行。"
+      : "还没有可用入口。先配置入口成员和服务，再测试团队。";
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
@@ -947,7 +966,7 @@ const TeamDetailPage: React.FC = () => {
         key: "fallback-actor",
         kind: "actor",
         name: "当前执行",
-        summary: activeRunId ? currentRunFriendly : "暂无最近运行",
+        summary: hasVisibleRun ? currentRunFriendly : "测试团队后会显示最近运行",
       },
       {
         key: "fallback-service",
@@ -958,10 +977,10 @@ const TeamDetailPage: React.FC = () => {
     ];
   }, [
     activeWorkflowId,
-    activeRunId,
     currentRunFriendly,
     currentServiceFriendly,
     hasExplicitRuntimeFocus,
+    hasVisibleRun,
     teamRosterRows,
     workflowNameValue,
   ]);
@@ -1404,7 +1423,7 @@ const TeamDetailPage: React.FC = () => {
         currentRunCardCaption={currentRunCardCaption}
         currentRunCardTooltip={currentRunCardTooltip}
         currentRunFriendly={currentRunFriendly}
-        currentRunPillStyle={resolveStatusPillStyle(token, currentRunStatus)}
+        currentRunPillStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
         currentRunPillText={currentRunPillText}
         currentServiceCardCaption={currentServiceCardCaption}
         currentServiceCardTooltip={currentServiceCardTooltip}
@@ -1425,6 +1444,7 @@ const TeamDetailPage: React.FC = () => {
             ? () => void handleClearEntry()
             : undefined
         }
+        startupGuidance={teamStartupGuidance}
       />
     );
   };
