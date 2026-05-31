@@ -51,6 +51,9 @@ import {
 } from './bindSnippets';
 
 type StudioMemberBindPanelProps = {
+  // Refactor (iter1/cluster-1618): Old flow let Studio bind completion pass
+  //   post-bind Team entry actions through this panel. New flow keeps Team
+  //   entry mutation and testing owned by the Team detail/inventory surface.
   readonly buildWorkflowYamls?: (() => Promise<string[]>) | null;
   readonly initialEndpointId?: string;
   readonly memberId?: string;
