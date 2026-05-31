@@ -67,7 +67,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             }
             catch (EventStoreOptimisticConcurrencyException)
             {
-                // Refactor (issue1489/first-slice): Old pattern: deactivation OCC escaped with stale pending events and could block base lifecycle. New principle: deactivation-only OCC containment drains stale pending events, skips snapshot, and still runs base shutdown.
+                // Refactor (iter713/cluster-gagentbase-deactivation-occ-flush-containment): Old pattern: deactivation OCC escaped with stale pending events and could block base lifecycle. New principle: deactivation-only OCC containment drains stale pending events, skips snapshot, and still runs base shutdown.
                 eventSourcing.DiscardPendingEvents();
                 return;
             }
