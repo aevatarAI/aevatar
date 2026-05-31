@@ -70,6 +70,46 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_ShouldPassTypedConnectorAuthorization_AndScrubMetadata()
+    {
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput
+            {
+                Prompt = "hello",
+                Metadata = new Dictionary<string, string>
+                {
+                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer body-secret",
+                    ["trace-id"] = "trace-1",
+                },
+            },
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None,
+            defaultMetadata: new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer default-secret",
+                ["default-trace"] = "trace-default",
+            },
+            connectorHttpAuthorization: " Bearer command-secret ");
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.ConnectorHttpAuthorization.Should().Be("Bearer command-secret");
+        service.LastCommand.Metadata.Should().Contain("trace-id", "trace-1");
+        service.LastCommand.Metadata.Should().Contain("default-trace", "trace-default");
+        service.LastCommand.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+    }
+
+    [Fact]
     public async Task HandleCommand_ShouldPreserveOpaqueActorIdInAcceptedLocationAndPayload()
     {
         const string opaqueActorId = "script-runtime:opaque-actor-9";
