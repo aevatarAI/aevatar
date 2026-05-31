@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -311,7 +312,7 @@ public static class ScopeWorkflowEndpoints
 
         if (resolvedEventFormat == ScopeWorkflowStreamEventFormat.Workflow)
         {
-            var scopedHeaders = BuildScopedHeaders(scopeId, headers);
+            var scopedHeaders = BuildScopedHeaders(headers);
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
@@ -328,7 +329,7 @@ public static class ScopeWorkflowEndpoints
             return;
         }
 
-        var aguiHeaders = BuildScopedHeaders(scopeId, headers);
+        var aguiHeaders = BuildScopedHeaders(headers);
         await HandleAguiStreamAsync(
             http,
             scopeId,
@@ -337,7 +338,7 @@ public static class ScopeWorkflowEndpoints
             sessionId,
             aguiHeaders,
             await BuildScopedLlmControlAsync(http, ct),
-            ExtractConnectorHttpAuthorization(http),
+            WorkflowCapabilityEndpoints.ExtractConnectorHttpAuthorization(http),
             chatRunService,
             ct);
     }
@@ -539,15 +540,15 @@ public static class ScopeWorkflowEndpoints
         return false;
     }
 
-    private static Dictionary<string, string> BuildScopedHeaders(
-        string scopeId,
-        IReadOnlyDictionary<string, string>? headers)
+    // Refactor (iter159/cluster-1559): Old pattern: scoped metadata helper injected connector bearer auth. New principle: scoped headers only carry extension entries; connector auth is typed separately.
+    private static Dictionary<string, string> BuildScopedHeaders(IReadOnlyDictionary<string, string>? headers)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
+        scopedHeaders.Remove(ConnectorRequest.HttpAuthorizationMetadataKey);
         return scopedHeaders;
     }
 
@@ -626,14 +627,6 @@ public static class ScopeWorkflowEndpoints
 
         var bearerToken = auth["Bearer ".Length..].Trim();
         return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
-    }
-
-    private static string? ExtractConnectorHttpAuthorization(HttpContext http)
-    {
-        var bearerToken = ExtractBearerToken(http);
-        return string.IsNullOrWhiteSpace(bearerToken)
-            ? null
-            : $"Bearer {bearerToken.Trim()}";
     }
 
     internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)

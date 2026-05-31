@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -130,6 +131,46 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         var metadata = command!.Metadata ?? throw new InvalidOperationException("Expected metadata capture.");
         metadata["telegram.chat_id"].Should().Be("-100-request");
         metadata["telegram.openclaw_bot_username"].Should().Be("openclaw_bot");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldPassTypedConnectorAuthorization_AndScrubMetadata()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandInteractionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.AgentNotFound)),
+        };
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-auth",
+                new ChatInput
+                {
+                    Prompt = "hello",
+                    Metadata = new Dictionary<string, string>
+                    {
+                        [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer body-secret",
+                        ["trace-id"] = "trace-1",
+                    },
+                },
+                WebSocketMessageType.Text),
+            service,
+            ApiRequestScope.BeginHttp(),
+            CancellationToken.None,
+            defaultMetadata: new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer default-secret",
+            },
+            connectorHttpAuthorization: " Bearer websocket-secret ");
+
+        service.LastRequest.Should().NotBeNull();
+        service.LastRequest!.ConnectorHttpAuthorization.Should().Be("Bearer websocket-secret");
+        service.LastRequest.Metadata.Should().Contain("trace-id", "trace-1");
+        service.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]

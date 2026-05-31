@@ -636,7 +636,8 @@ public static class WorkflowCapabilityEndpoints
             .Replace(':', '.');
     }
 
-    private static string? ExtractConnectorHttpAuthorization(HttpContext http)
+    // Refactor (iter159/cluster-1559): Old pattern: endpoint adapters each parsed Bearer auth before writing connector auth metadata. New principle: adapters share one trusted HTTP header to typed connector auth mapper.
+    public static string? ExtractConnectorHttpAuthorization(HttpContext http)
     {
         var bearerToken = ExtractBearerToken(http);
         return string.IsNullOrWhiteSpace(bearerToken)

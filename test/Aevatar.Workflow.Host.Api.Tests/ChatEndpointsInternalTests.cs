@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -359,6 +360,51 @@ public sealed class ChatEndpointsInternalTests
         http.Response.Headers["X-Correlation-Id"].ToString().Should().Be("corr-1");
         body.Should().Contain("aevatar.run.context");
         body.Should().Contain("\"delta\": \"hello\"");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldPassTrustedBearerAsTypedConnectorAuthorization()
+    {
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = "message-1",
+                        Delta = "hello",
+                    },
+                }, ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer token-123";
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "hello",
+                Metadata = new Dictionary<string, string>
+                {
+                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer body-secret",
+                    ["trace-id"] = "trace-1",
+                },
+            },
+            interactionService,
+            CancellationToken.None);
+
+        interactionService.LastRequest.Should().NotBeNull();
+        interactionService.LastRequest!.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        interactionService.LastRequest.Metadata.Should().Contain("trace-id", "trace-1");
+        interactionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
@@ -1084,12 +1130,17 @@ public sealed class ChatEndpointsInternalTests
                 CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
+        public WorkflowChatRunRequest? LastRequest { get; private set; }
+
         public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
-            CancellationToken ct = default) =>
-            ResultFactory(request, emitAsync, onAcceptedAsync, ct);
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return ResultFactory(request, emitAsync, onAcceptedAsync, ct);
+        }
     }
 
     private sealed class FakeCommandDispatchService

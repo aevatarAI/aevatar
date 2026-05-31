@@ -35,7 +35,7 @@ message ChatRequestEvent  {
   // Narrow LLM-control carrier. Model routing, NyxID credentials and tool-round limits
   // belong here, not in metadata or tool_context.
   LLMControlContextPayload llm_control = 10;
-  // Refactor (issue1559): Old pattern: connector HTTP auth used Metadata["connector.http.authorization"] as authority. New principle: connector auth is a typed actor inbox field and Metadata is extension-only.
+  // Refactor (iter159/cluster-1559): Old pattern: connector HTTP auth used Metadata["connector.http.authorization"] as authority. New principle: connector auth is a typed actor inbox field and Metadata is extension-only.
   string connector_http_authorization = 11;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }

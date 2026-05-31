@@ -1309,10 +1309,17 @@ public sealed class ScopeServiceEndpointsTests
             return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
+        host.Client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-123");
 
         var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
         {
             prompt = "run the draft",
+            headers = new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer body-secret",
+                ["trace-id"] = "trace-1",
+            },
             workflowYamls = new[]
             {
                 "name: main\nsteps:\n  - run: echo hello",
@@ -1327,6 +1334,9 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest!.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Source.WorkflowYamls.Should().NotBeNull();
         host.InteractionService.LastRequest.Source.WorkflowYamls.Should().HaveCount(2);
+        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.Metadata.Should().Contain("trace-id", "trace-1");
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
@@ -1359,10 +1369,17 @@ public sealed class ScopeServiceEndpointsTests
             return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
+        host.Client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-123");
 
         var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
         {
             prompt = "run the draft",
+            headers = new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer body-secret",
+                ["trace-id"] = "trace-agui",
+            },
             workflowYamls = new[]
             {
                 "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
@@ -1376,6 +1393,9 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(1);
+        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.Metadata.Should().Contain("trace-id", "trace-agui");
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
@@ -3887,7 +3907,6 @@ public sealed class ScopeServiceEndpointsTests
 
         var scopedHeaders = InvokePrivateStatic<Dictionary<string, string>>(
             "BuildScopedHeaders",
-            "scope-a",
             explicitHeaders);
 
         scopedHeaders.Should().NotContainKey("scope_id");
@@ -3896,7 +3915,7 @@ public sealed class ScopeServiceEndpointsTests
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         scopedHeaders.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
-        InvokePrivateStatic<string?>("ExtractConnectorHttpAuthorization", successContext)
+        WorkflowCapabilityEndpoints.ExtractConnectorHttpAuthorization(successContext)
             .Should()
             .Be("Bearer token-123");
 
@@ -3921,8 +3940,7 @@ public sealed class ScopeServiceEndpointsTests
         };
         var failedHeaders = InvokePrivateStatic<Dictionary<string, string>>(
             "BuildScopedHeaders",
-            "scope-a",
-            null);
+            new object?[] { null });
         failedHeaders.Should().BeEmpty();
         var failedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",

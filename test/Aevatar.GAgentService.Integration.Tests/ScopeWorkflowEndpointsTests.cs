@@ -1,5 +1,6 @@
 using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -386,6 +387,7 @@ public sealed class ScopeWorkflowEndpointsTests
             },
         };
         var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer token-123";
 
         await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
             http,
@@ -393,7 +395,11 @@ public sealed class ScopeWorkflowEndpointsTests
             "approval",
             new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
                 "hello",
-                Headers: new Dictionary<string, string> { ["scope_id"] = "aevatar" },
+                Headers: new Dictionary<string, string>
+                {
+                    ["scope_id"] = "aevatar",
+                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer body-secret",
+                },
                 EventFormat: "agui"),
             BuildQueryPort(queryPort: queryPort),
             interactionService,
@@ -408,8 +414,10 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
+        interactionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
+        interactionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]

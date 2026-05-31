@@ -76,7 +76,7 @@ internal static class WorkflowRunExecutionContextStateAccess
         if (string.IsNullOrWhiteSpace(normalizedAuthorization))
             return delta;
 
-        // Refactor (issue1559): Old pattern: Metadata promoted connector HTTP auth into actor state. New principle: only the typed ChatRequestEvent connector auth field can update connector execution context.
+        // Refactor (iter159/cluster-1559): Old pattern: Metadata promoted connector HTTP auth into actor state. New principle: only the typed ChatRequestEvent connector auth field can update connector execution context.
         delta.Connector = new WorkflowRunConnectorExecutionContextDelta
         {
             HttpAuthorization = normalizedAuthorization,

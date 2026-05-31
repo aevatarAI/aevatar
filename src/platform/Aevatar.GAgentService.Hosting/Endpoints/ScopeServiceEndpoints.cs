@@ -4,6 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
@@ -110,7 +111,7 @@ public static class ScopeServiceEndpoints
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
 
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers);
+            var scopedHeaders = BuildScopedHeaders(request.Headers);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
             {
                 await WriteJsonErrorResponseAsync(
@@ -129,7 +130,7 @@ public static class ScopeServiceEndpoints
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
                 LlmControl: await BuildScopedLlmControlAsync(http, ct),
-                ConnectorHttpAuthorization: ExtractConnectorHttpAuthorization(http));
+                ConnectorHttpAuthorization: WorkflowCapabilityEndpoints.ExtractConnectorHttpAuthorization(http));
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -1495,7 +1496,7 @@ public static class ScopeServiceEndpoints
                 return;
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers);
+            var scopedHeaders = BuildScopedHeaders(request.Headers);
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -2869,15 +2870,15 @@ const response = await fetch("{{invokePath}}", {
             throw new InvalidOperationException("Workflow service has no active definition actor.");
     }
 
-    private static Dictionary<string, string> BuildScopedHeaders(
-        string scopeId,
-        IReadOnlyDictionary<string, string>? headers)
+    // Refactor (iter159/cluster-1559): Old pattern: scoped metadata helper injected connector bearer auth. New principle: scoped headers only carry extension entries; connector auth is typed separately.
+    private static Dictionary<string, string> BuildScopedHeaders(IReadOnlyDictionary<string, string>? headers)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
+        scopedHeaders.Remove(ConnectorRequest.HttpAuthorizationMetadataKey);
         return scopedHeaders;
     }
 
@@ -2956,14 +2957,6 @@ const response = await fetch("{{invokePath}}", {
 
         var bearerToken = auth["Bearer ".Length..].Trim();
         return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
-    }
-
-    private static string? ExtractConnectorHttpAuthorization(HttpContext http)
-    {
-        var bearerToken = ExtractBearerToken(http);
-        return string.IsNullOrWhiteSpace(bearerToken)
-            ? null
-            : $"Bearer {bearerToken.Trim()}";
     }
 
     private static void CopyHeaders(

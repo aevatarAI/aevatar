@@ -33,6 +33,7 @@ internal static class ChatRunRequestNormalizer
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         string? connectorHttpAuthorization = null)
     {
+        // Refactor (iter159/cluster-1559): Old pattern: connector HTTP auth could arrive through Metadata extension keys. New principle: only the trusted adapter parameter can populate typed connector auth.
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
         //   Old pattern: WorkflowAuthoringSkillPromptAugmentor rewrote chat prompt via hidden workflow.authoring.enabled metadata + AEVATAR_WORKFLOW_AUTHORING_AUTO_INJECT env
@@ -309,6 +310,9 @@ internal static class ChatRunRequestNormalizer
     // Refactor (iter15/cluster-029):
     //   Old pattern: scope metadata keys promoted into control-flow ScopeId or conflict errors.
     //   New principle: scope metadata keys are not control input and are not forwarded as extension metadata.
+    // Refactor (iter159/cluster-1559):
+    //   Old pattern: connector HTTP auth metadata could survive normalization as an open extension entry.
+    //   New principle: connector auth metadata is scrubbed; trusted auth enters through the typed command carrier only.
     private static void AddNormalizedMetadataEntry(
         IDictionary<string, string> metadata,
         string key,
