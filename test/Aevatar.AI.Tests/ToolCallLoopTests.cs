@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Reflection;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -188,6 +189,63 @@ public class ToolCallLoopTests
         capturedExternal.Should().Be("trace-1");
         capturedCallId.Should().Be("tool-call-1");
         messages.Should().ContainSingle(m => m.Role == "tool" && m.ToolCallId == "tool-call-1");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteToolCallsAsync_WhenMetadataHasOwnedKeys_ShouldPushOnlyExternalAnnotations()
+    {
+        string? capturedToken = null;
+        string? capturedScope = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("capture", _ =>
+        {
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedScope = AgentToolRequestContext.ScopeId;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
+            capturedCallId = AgentToolRequestContext.CallId;
+            return """{"ok":true}""";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            [LLMRequestMetadataKeys.ScopeId] = "metadata-scope",
+            [LLMRequestMetadataKeys.CallId] = "metadata-call",
+            ["trace-id"] = "trace-standalone",
+        };
+        var method = typeof(ToolCallLoop).GetMethod(
+            "ExecuteToolCallsAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var task = (Task)method!.Invoke(loop,
+        [
+            new List<ToolCall>
+            {
+                new()
+                {
+                    Id = "standalone-tool-call",
+                    Name = "capture",
+                    ArgumentsJson = "{}",
+                },
+            },
+            messages,
+            metadata,
+            CancellationToken.None,
+        ])!;
+
+        await task;
+
+        capturedToken.Should().BeNull();
+        capturedScope.Should().BeNull();
+        capturedExternal.Should().Be("trace-standalone");
+        capturedCallId.Should().Be("standalone-tool-call");
+        messages.Should().ContainSingle(m =>
+            m.Role == "tool" &&
+            m.ToolCallId == "standalone-tool-call" &&
+            m.Content == """{"ok":true}""");
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
