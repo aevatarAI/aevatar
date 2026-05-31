@@ -9,9 +9,11 @@ export const LLM_ROUTE_HEADER_KEY = "nyxid.route_preference";
 export const LLM_MODEL_HEADER_KEY = "aevatar.model_override";
 export const CONVERSATION_ROUTE_DEFAULT_VALUE = "__config_default__";
 export const CONVERSATION_ROUTE_GATEWAY_VALUE = "__gateway__";
-// Refactor (iter164/cluster-003-draft-run): Old: conversation route labels
-// hard-coded gateway branding when user settings did not provide a label.
-// New: backend route labels win, with only a neutral generic fallback.
+/**
+ * Refactor (issue1525): Old pattern: conversation route labels hard-coded
+ * gateway branding when user settings did not provide a label.
+ * New principle: backend route labels win, with only a neutral generic fallback.
+ */
 const USER_LLM_ROUTE_GATEWAY_LABEL = "Gateway";
 
 export type ConversationRouteOption = {
@@ -89,6 +91,12 @@ export function decodeConversationRouteSelectValue(
     : normalizeUserLlmRoute(value);
 }
 
+/**
+ * Refactor (issue1525): Old pattern: callers depended on route names or
+ * service-specific literals when a typed backend label was unavailable.
+ * New principle: resolve labels from backend route options first, then fall
+ * back to the route value or neutral gateway wording.
+ */
 export function describeConversationRoute(
   route: string | undefined,
   routeOptions: readonly ConversationRouteOption[]
@@ -102,6 +110,12 @@ export function describeConversationRoute(
     USER_LLM_ROUTE_GATEWAY_LABEL;
 }
 
+/**
+ * Refactor (issue1525): Old pattern: UI code derived gateway wording from
+ * route/provider details when building route choices.
+ * New principle: preserve backend option labels and synthesize only neutral
+ * labels for routes that are present locally but absent from backend options.
+ */
 export function buildConversationRouteOptions(
   settings: StudioUserLlmSettings | undefined,
   globalPreferredRoute?: string,
