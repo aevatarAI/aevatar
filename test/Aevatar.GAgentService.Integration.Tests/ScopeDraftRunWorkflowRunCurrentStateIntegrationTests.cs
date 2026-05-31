@@ -5,6 +5,9 @@ using System.Text.Json;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -16,6 +19,7 @@ using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
@@ -49,6 +53,8 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 
         var actorId = ExtractRunContextActorId(body);
         actorId.Should().NotBeNullOrWhiteSpace();
+
+        await host.CurrentStateWriteObserver.WaitForCompletedAsync(actorId!, CancellationToken.None);
 
         using var snapshotResponse = await host.Client.GetAsync($"/api/workflow-actors/{Uri.EscapeDataString(actorId!)}/current-state");
         var snapshot = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>();
@@ -97,12 +103,18 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
     {
         private readonly WebApplication _app;
 
-        private DraftRunWorkflowActorCurrentStateHost(WebApplication app, HttpClient client, string repoRoot, string scopeId)
+        private DraftRunWorkflowActorCurrentStateHost(
+            WebApplication app,
+            HttpClient client,
+            string repoRoot,
+            string scopeId,
+            CompletedWorkflowCurrentStateWriteObserver currentStateWriteObserver)
         {
             _app = app;
             Client = client;
             RepoRoot = repoRoot;
             ScopeId = scopeId;
+            CurrentStateWriteObserver = currentStateWriteObserver;
         }
 
         public HttpClient Client { get; }
@@ -110,6 +122,8 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         public string RepoRoot { get; }
 
         public string ScopeId { get; }
+
+        public CompletedWorkflowCurrentStateWriteObserver CurrentStateWriteObserver { get; }
 
         public static async Task<DraftRunWorkflowActorCurrentStateHost> StartAsync()
         {
@@ -151,6 +165,10 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
             builder.Services.AddSingleton<ITeamEntryMemberResolver, DraftRunWorkflowActorCurrentStateTeamEntryMemberResolver>();
             DraftRunProjectionActivationServiceCollectionExtensions.AddWorkflowRunProjectionActivatingInteractionService(
                 builder.Services);
+            var currentStateWriteObserver = new CompletedWorkflowCurrentStateWriteObserver();
+            WorkflowExecutionCurrentStateWriteDispatcherTestExtensions.DecorateWorkflowExecutionCurrentStateWriteDispatcher(
+                builder.Services,
+                currentStateWriteObserver);
             builder.Services.AddAuthentication("Test")
                 .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
             builder.Services.AddAuthorization();
@@ -177,7 +195,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
                 BaseAddress = new Uri(addressFeature.Addresses.Single()),
             };
 
-            return new DraftRunWorkflowActorCurrentStateHost(app, client, repoRoot, scopeId);
+            return new DraftRunWorkflowActorCurrentStateHost(app, client, repoRoot, scopeId, currentStateWriteObserver);
         }
 
         public async ValueTask DisposeAsync()
@@ -412,6 +430,81 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
             var principal = new ClaimsPrincipal(identity);
             var ticket = new AuthenticationTicket(principal, Scheme.Name);
             return Task.FromResult(AuthenticateResult.Success(ticket));
+        }
+    }
+
+    private sealed class CompletedWorkflowCurrentStateWriteObserver
+    {
+        private readonly object _gate = new();
+        private readonly Dictionary<string, TaskCompletionSource<WorkflowExecutionCurrentStateDocument>> _waiters =
+            new(StringComparer.Ordinal);
+        private readonly HashSet<string> _completedActorIds = new(StringComparer.Ordinal);
+
+        public Task WaitForCompletedAsync(string actorId, CancellationToken ct)
+        {
+            lock (_gate)
+            {
+                if (_completedActorIds.Contains(actorId))
+                    return Task.CompletedTask;
+
+                if (!_waiters.TryGetValue(actorId, out var waiter))
+                {
+                    waiter = new TaskCompletionSource<WorkflowExecutionCurrentStateDocument>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    _waiters[actorId] = waiter;
+                }
+
+                return waiter.Task.WaitAsync(ct);
+            }
+        }
+
+        public void Observe(WorkflowExecutionCurrentStateDocument document)
+        {
+            if (!string.Equals(document.Status, "completed", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            TaskCompletionSource<WorkflowExecutionCurrentStateDocument>? waiter = null;
+            lock (_gate)
+            {
+                _completedActorIds.Add(document.ActorId);
+                if (_waiters.Remove(document.ActorId, out var existing))
+                    waiter = existing;
+            }
+
+            waiter?.TrySetResult(document);
+        }
+    }
+
+    private sealed class ObservingWorkflowExecutionCurrentStateWriteDispatcher(
+        IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> inner,
+        CompletedWorkflowCurrentStateWriteObserver observer)
+        : IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>
+    {
+        public async Task<ProjectionWriteResult> UpsertAsync(
+            WorkflowExecutionCurrentStateDocument readModel,
+            CancellationToken ct = default)
+        {
+            var result = await inner.UpsertAsync(readModel, ct);
+            if (result.IsApplied)
+                observer.Observe(readModel);
+            return result;
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            inner.DeleteAsync(id, ct);
+    }
+
+    private static class WorkflowExecutionCurrentStateWriteDispatcherTestExtensions
+    {
+        public static IServiceCollection DecorateWorkflowExecutionCurrentStateWriteDispatcher(
+            IServiceCollection services,
+            CompletedWorkflowCurrentStateWriteObserver observer)
+        {
+            services.AddSingleton<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>(provider =>
+                new ObservingWorkflowExecutionCurrentStateWriteDispatcher(
+                    provider.GetRequiredService<ProjectionStoreDispatcher<WorkflowExecutionCurrentStateDocument>>(),
+                    observer));
+            return services;
         }
     }
 }
