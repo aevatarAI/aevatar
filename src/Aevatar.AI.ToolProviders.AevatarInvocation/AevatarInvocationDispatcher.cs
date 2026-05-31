@@ -536,8 +536,8 @@ public sealed class AevatarInvocationDispatcher
         TeamEntryMemberResolution resolution,
         InvokeTeamToolRequest request)
     {
-        // Refactor (iter1353/cluster-001): Old pattern: team dispatch stamped trusted caller/control facts into Headers.
-        // New principle: Headers carries only filtered payload headers; typed ToolContext and LlmControl carry trusted facts.
+        // Refactor (issue1495/first-slice): Old pattern: static team dispatch accepted trusted caller/control facts through legacy Headers.
+        // New principle: static team Headers carry only filtered payload headers; service identity and caller fields remain the admission boundary.
         var headers = BuildPayloadHeaders(request.Payload.Headers);
         var identity = new ServiceIdentity
         {

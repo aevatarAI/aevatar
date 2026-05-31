@@ -442,6 +442,50 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeTeam_ShouldKeepProtectedTrustedKeysOutOfStaticInvocationHeaders()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_team");
+
+        using var _ = PushContext(callId: "call-team-protected-headers");
+        var output = await tool.ExecuteAsync($$"""
+            {
+              "team_id": "team-1",
+              "endpoint_id": "entry",
+              "payload": {
+                "prompt": "go",
+                "headers": {
+                  "{{LLMRequestMetadataKeys.RequestId}}": "evil-request",
+                  "{{LLMRequestMetadataKeys.CallId}}": "evil-call",
+                  "{{LLMRequestMetadataKeys.OwnerSubject}}": "evil-owner",
+                  "{{LLMRequestMetadataKeys.ResponseId}}": "evil-response",
+                  "{{LLMRequestMetadataKeys.NyxIdAccessToken}}": "evil-access-token",
+                  "{{LLMRequestMetadataKeys.NyxIdOrgToken}}": "evil-org-token",
+                  "{{LLMRequestMetadataKeys.SenderNyxIdAccessToken}}": "evil-sender-token",
+                  "{{LLMRequestMetadataKeys.SenderBindingId}}": "evil-binding",
+                  "{{LLMRequestMetadataKeys.ScopeId}}": "evil-scope",
+                  "{{LLMRequestMetadataKeys.ModelOverride}}": "evil-model",
+                  "{{LLMRequestMetadataKeys.NyxIdRoutePreference}}": "evil-route",
+                  "{{LLMRequestMetadataKeys.MaxToolRoundsOverride}}": "99",
+                  "{{LLMRequestMetadataKeys.ConnectedServicesContext}}": "evil-services",
+                  "scope_id": "evil-legacy-scope",
+                  "client-note": "open-extension"
+                }
+              },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.TeamInvocation.Request.Should().NotBeNull();
+        var request = harness.TeamInvocation.Request!;
+        request.Input.Headers.Should().Contain("client-note", "open-extension");
+        request.Identity.TenantId.Should().Be("scope-1");
+        request.Input.Caller!.TenantId.Should().Be("scope-1");
+        ShouldNotCarryTrustedCallerValues(request.Input.Headers);
+    }
+
+    [Fact]
     public async Task InvokeTeam_WhenInvocationReturnsFailureBeforeAcceptance_ShouldReturnStructuredError()
     {
         var harness = new Harness();
