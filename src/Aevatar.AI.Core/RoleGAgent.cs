@@ -574,7 +574,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private static AgentToolExecutionContext ResolvePendingToolContext(PendingToolApprovalState pending)
     {
-        // Refactor (issue1487/first-slice): Old pattern: pending approval Metadata remained the primary resume context. New principle: pending ToolContext is authoritative, with metadata only as old-state fallback.
+        // Refactor (iter290/cluster-002-invocation-trusted-context-metadata-bag):
+        //   Old pattern: pending approval Metadata remained the primary resume context.
+        //   New principle: pending ToolContext is authoritative; metadata is only a scrubbed old-state annotation fallback.
         var context = pending.ToolContext != null
             ? AgentToolExecutionContextMapper.FromPayload(pending.ToolContext)
             : AgentToolExecutionContext.Empty with
