@@ -87,9 +87,12 @@ def save_state(s: dict) -> None:
 
 
 def count_in_flight_codex() -> int:
+    # Unified with wakeup-check.sh per Auric 2026-05-29 "计算方法统一即可":
+    # grep 'codex exec' directly catches the codex exec subprocess regardless of
+    # timeout-wrapper layer. Previously this counted only timeout-wrapped lines
+    # which undercounted vs wakeup-check.sh.
     r = run(["ps", "-eo", "command="])
-    n = sum(1 for line in r.stdout.splitlines()
-            if "timeout 3600 codex" in line or "timeout 5400 codex" in line)
+    n = sum(1 for line in r.stdout.splitlines() if "codex exec" in line)
     return n
 
 
@@ -202,13 +205,48 @@ def tick() -> None:
     save_state(state)
 
 
+def cleanup_logs() -> None:
+    """删 logs/*.log >3d, prompts/*.md >7d, runs/{*.md,*.ndjson} >14d, /tmp codex-prompt* >1d."""
+    import shutil
+    loop_dir = REPO_ROOT / ".refactor-loop"
+    now = time.time()
+    deleted = {"logs": 0, "prompts": 0, "runs": 0, "tmp": 0}
+    targets = [
+        (loop_dir / "logs", ["*.log"], 3 * 86400, "logs"),
+        (loop_dir / "prompts", ["*.md"], 7 * 86400, "prompts"),
+        (loop_dir / "runs", ["*.md", "*.ndjson"], 14 * 86400, "runs"),
+        (Path("/tmp"), ["codex-prompt*"], 1 * 86400, "tmp"),
+    ]
+    for base, patterns, max_age, key in targets:
+        if not base.exists():
+            continue
+        for pattern in patterns:
+            for p in base.rglob(pattern):
+                try:
+                    if p.is_file() and now - p.stat().st_mtime > max_age:
+                        p.unlink()
+                        deleted[key] += 1
+                except OSError:
+                    pass
+    log(f"log-cleanup: logs=-{deleted['logs']} prompts=-{deleted['prompts']} runs=-{deleted['runs']} tmp=-{deleted['tmp']}")
+
+
 def main() -> None:
     log(f"concurrency_monitor (Python) started: interval={INTERVAL}s")
+    tick_count = 0
+    # log cleanup 每 60 ticks(60s × 60 = 1h)
+    CLEANUP_EVERY = int(os.environ.get("CLEANUP_EVERY_TICKS", "60"))
     while True:
         try:
             tick()
         except Exception as e:
             log(f"EXCEPTION in tick: {e!r}")
+        tick_count += 1
+        if tick_count % CLEANUP_EVERY == 0:
+            try:
+                cleanup_logs()
+            except Exception as e:
+                log(f"EXCEPTION in cleanup_logs: {e!r}")
         time.sleep(INTERVAL)
 
 

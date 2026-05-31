@@ -2,9 +2,9 @@
 """
 post_banner.py — 只 post GitHub status banner,不 spawn codex
 
-per Auric 2026-05-21 "codex 可以执行得很好,为什么你做不到":
-spawn_with_banner.py 的 detached Popen 模式让 harness 看不见 codex,导致
-codex done 后 controller 不知道,monitor 60s 报警 zero_streak 涨 13 没人理。
+per 2026-05-21 incident review:
+detached Popen spawn made codex invisible to the harness, so the controller
+missed codex completion and the 60s monitor reported zero_streak=13.
 
 新架构:**两步**
 1. 此脚本(blocking,几秒)post banner 到 issue/PR

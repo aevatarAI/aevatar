@@ -9,6 +9,7 @@ public sealed record ChatRunStartRequest(
     IReadOnlyList<ChatMessage> Messages,
     TimeSpan? IdleTtl = null);
 
+// Refactor (iter290/cluster001): Old pattern: chat-run completion control was parsed back out of ResultJson. New principle: completion control crosses the public contract as typed scalar fields.
 public sealed record ChatRunToolCompletionRequest(
     string ResponseId,
     string? ModelName,
@@ -16,15 +17,28 @@ public sealed record ChatRunToolCompletionRequest(
     ToolCall ToolCall,
     string ArgumentsJson,
     string ToolExecutionResultJson,
-    int LlmRound);
+    int LlmRound,
+    string RunId = "",
+    string StreamTopic = "",
+    string ActorId = "",
+    string ServiceId = "",
+    string EndpointId = "",
+    string ScopeId = "",
+    ChatRunSubRunWaitMode WaitMode = ChatRunSubRunWaitMode.Unspecified,
+    string Status = "",
+    string CompletionResultJson = "",
+    bool CompletionObserved = false,
+    string ErrorCode = "");
 
-public sealed record ChatRunToolCompletionResult(
-    string ActorId,
-    string RunId,
-    string ToolCallId,
-    string ToolName,
-    string ResultJson);
+// Refactor (iter290/cluster001): Old pattern: chat-run tools returned only boundary JSON to the coordinator. New principle: chat-run-aware tools return a typed completion request for command observation.
+public interface IChatRunToolCompletionControlExecutor
+{
+    Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct = default);
+}
 
+// Refactor (issue1363): Removed unused symbols. Original cluster #1335 split into first-slice delete + later-slice design-pending.
 public interface IChatRunActorPort
 {
     Task<string> StartAsync(ChatRunStartRequest request, CancellationToken ct = default);
@@ -47,12 +61,5 @@ public interface IChatRunActorPort
     Task TerminateAsync(
         string chatRunActorId,
         string reason,
-        CancellationToken ct = default);
-}
-
-public interface IChatRunToolCompletionSink
-{
-    ValueTask OnToolResultReadyAsync(
-        ChatRunToolResultReady ready,
         CancellationToken ct = default);
 }

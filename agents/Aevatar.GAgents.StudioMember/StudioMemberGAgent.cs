@@ -21,6 +21,42 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 {
     public static string ProjectionKind => "studio-member";
 
+    // Refactor (iter1345/cluster-519-draft-member-authority):
+    //   Old pattern: workflow draft saves could leave member authority creation
+    //   to API-side orchestration or read-model freshness assumptions.
+    //   New principle: committed draft facts enter projection fanout, then the
+    //   standard actor command path asks this member actor to own creation
+    //   idempotently from its authoritative state.
+    [EventHandler(EndpointName = "ensureMember")]
+    public async Task HandleEnsureStudioMember(EnsureStudioMember command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!string.IsNullOrEmpty(State.MemberId))
+        {
+            if (!string.Equals(State.MemberId, command.MemberId, StringComparison.Ordinal)
+                || !string.Equals(State.ScopeId, command.ScopeId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"member already initialized as '{State.ScopeId}/{State.MemberId}'.");
+            }
+
+            return;
+        }
+
+        await PersistDomainEventAsync(new StudioMemberCreatedEvent
+        {
+            MemberId = command.MemberId,
+            ScopeId = command.ScopeId,
+            DisplayName = command.DisplayName,
+            Description = command.Description,
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = StudioMemberConventions.BuildPublishedServiceId(command.MemberId),
+            CreatedAtUtc = command.RequestedAtUtc
+                ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+    }
+
     [EventHandler(EndpointName = "createMember")]
     public async Task HandleCreated(StudioMemberCreatedEvent evt)
     {

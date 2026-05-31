@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 
 namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -21,6 +23,8 @@ public sealed record GAgentDraftRunInputPart
     public string? Name { get; init; }
 }
 
+// Refactor (iter1353/cluster-001): Old pattern: draft-run commands rebuilt trusted caller/control facts from headers and legacy scalars.
+// New principle: commands carry typed ToolContext and LlmControl as the authoritative internal control fields.
 public sealed record GAgentDraftRunCommand(
     string ScopeId,
     string ActorTypeName,
@@ -33,7 +37,9 @@ public sealed record GAgentDraftRunCommand(
     IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
     bool UseCorrelationIdAsFallbackSessionId = true,
-    string? AgentKind = null) : ICommandContextSeed
+    string? AgentKind = null,
+    AgentToolExecutionContext? ToolContext = null,
+    LLMControlContext? LlmControl = null) : ICommandContextSeed
 {
     public string? CommandId => null;
 

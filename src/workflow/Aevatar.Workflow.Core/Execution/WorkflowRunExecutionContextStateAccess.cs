@@ -2,11 +2,9 @@ using Aevatar.Workflow.Core.Primitives;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-// Refactor (iter115/cluster-3):
-//   Old pattern: request-scoped LLM and connector control facts lived in
-//                WorkflowExecutionRuntimeContext and disappeared on replay.
-//   New principle: durable control/security facts are typed actor state under
-//                  WorkflowRunState.ExecutionContext.
+// Refactor (iter159/cluster-613-first):
+//   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+//   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
 internal static class WorkflowRunExecutionContextStateAccess
 {
     public static WorkflowRunExecutionContextState Get(IWorkflowExecutionStateHost stateHost)
@@ -95,13 +93,11 @@ internal static class WorkflowRunExecutionContextStateAccess
 
         var llm = new WorkflowRunLlmExecutionContextDelta
         {
-            NyxidAccessToken = Normalize(toolContext.Credentials.NyxIdAccessToken),
             ModelOverride = Normalize(toolContext.Routing.ModelOverride),
             NyxidRoutePreference = Normalize(toolContext.Routing.NyxIdRoutePreference),
         };
 
-        if (string.IsNullOrWhiteSpace(llm.NyxidAccessToken) &&
-            string.IsNullOrWhiteSpace(llm.ModelOverride) &&
+        if (string.IsNullOrWhiteSpace(llm.ModelOverride) &&
             string.IsNullOrWhiteSpace(llm.NyxidRoutePreference))
         {
             return delta;
@@ -131,8 +127,7 @@ internal static class WorkflowRunExecutionContextStateAccess
         out WorkflowLlmExecutionContextState llm)
     {
         llm = Get(ctx).Llm ?? new WorkflowLlmExecutionContextState();
-        return !string.IsNullOrWhiteSpace(llm.NyxidAccessToken) ||
-               !string.IsNullOrWhiteSpace(llm.ModelOverride) ||
+        return !string.IsNullOrWhiteSpace(llm.ModelOverride) ||
                !string.IsNullOrWhiteSpace(llm.NyxidRoutePreference);
     }
 

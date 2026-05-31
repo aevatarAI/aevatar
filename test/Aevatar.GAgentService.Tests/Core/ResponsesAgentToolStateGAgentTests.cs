@@ -72,7 +72,12 @@ public sealed class ResponsesAgentToolStateGAgentTests
         var actor = CreateActor();
         await RegisterAsync(actor);
 
-        var resultPayload = ResponsesJsonValues.ParseBoundaryPayload("""{"content":"fresh"}""");
+        var resultPayload = ResponsesWebResultMigration.FromFetch(new ResponsesWebFetchToolOutput
+        {
+            Url = "https://example.com",
+            StatusCode = 200,
+            Content = "fresh",
+        });
         await actor.HandleRecordWebTraceAsync(new RecordResponsesWebTraceRequested
         {
             SourceResponseId = "resp_1",
@@ -80,7 +85,7 @@ public sealed class ResponsesAgentToolStateGAgentTests
             ToolName = "WebFetch",
             CacheKey = "cache-1",
             Url = "https://example.com",
-            Result = resultPayload,
+            TypedResult = resultPayload,
             ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00")),
         });
         await actor.HandleRecordWebTraceAsync(new RecordResponsesWebTraceRequested
@@ -91,73 +96,20 @@ public sealed class ResponsesAgentToolStateGAgentTests
             CacheKey = "cache-1",
             Url = "https://example.com",
             CacheHit = true,
-            Result = resultPayload,
+            TypedResult = resultPayload,
             ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:01:00+00:00")),
         });
 
         actor.State.WebTraces.Should().HaveCount(2);
+        actor.State.WebTraces[0].TypedResult.Fetch.Content.Should().Be("fresh");
         ResponsesJsonValues.ToBoundaryJson(actor.State.WebTraces[0].Result)
-            .Should().Be("""{"content":"fresh"}""");
+            .Should().Be("""{"url":"https://example.com","status_code":200,"content_type":"","content":"fresh"}""");
         actor.State.WebCacheEntries.Should().ContainSingle();
+        actor.State.WebCacheEntries[0].TypedResult.Fetch.Content.Should().Be("fresh");
         ResponsesJsonValues.ToBoundaryJson(actor.State.WebCacheEntries[0].Result)
-            .Should().Be("""{"content":"fresh"}""");
+            .Should().Be("""{"url":"https://example.com","status_code":200,"content_type":"","content":"fresh"}""");
         actor.State.WebCacheEntries[0].HitCount.Should().Be(1);
         actor.State.WebCacheEntries[0].LastHitAt.Should().NotBeNull();
-    }
-
-    [Fact]
-    public async Task HandleRecordTaskAsync_ShouldPersistTaskTopologyTrace()
-    {
-        var actor = CreateActor();
-        await RegisterAsync(actor);
-
-        await actor.HandleRecordTaskAsync(new RecordResponsesTaskRequested
-        {
-            SourceResponseId = "resp_1",
-            TaskId = "task_1",
-            ChildActorId = "responses-agent-tools-scope-task-1",
-            Description = "summarize",
-            Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"prompt":"summarize"}"""),
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"status":"accepted"}"""),
-            Status = ResponsesAgentToolTaskStatus.Accepted,
-        });
-
-        actor.State.TaskTraces.Should().ContainSingle();
-        actor.State.TaskTraces[0].ChildActorId.Should().Be("responses-agent-tools-scope-task-1");
-        actor.State.TaskTraces[0].Status.Should().Be(ResponsesAgentToolTaskStatus.Accepted);
-        ResponsesJsonValues.ToBoundaryJson(actor.State.TaskTraces[0].Arguments)
-            .Should().Be("""{"prompt":"summarize"}""");
-        ResponsesJsonValues.ToBoundaryJson(actor.State.TaskTraces[0].Result)
-            .Should().Be("""{"status":"accepted"}""");
-    }
-
-    [Fact]
-    public async Task HandleRecordTaskAsync_ShouldIgnoreDuplicateTaskRecord_AndReusePersistedTrace()
-    {
-        var actor = CreateActor();
-        await RegisterAsync(actor);
-
-        var command = new RecordResponsesTaskRequested
-        {
-            SourceResponseId = "resp_1",
-            TaskId = "task_1",
-            ChildActorId = "responses-agent-tools-scope-task-1",
-            Description = "summarize",
-            Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"prompt":"summarize"}"""),
-            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"status":"accepted"}"""),
-            Status = ResponsesAgentToolTaskStatus.Accepted,
-            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00")),
-        };
-
-        await actor.HandleRecordTaskAsync(command);
-        var versionAfterFirstRecord = actor.State.LastAppliedEventVersion;
-
-        await actor.HandleRecordTaskAsync(command);
-
-        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstRecord);
-        actor.State.TaskTraces.Should().ContainSingle();
-        actor.State.TaskTraces[0].TaskId.Should().Be("task_1");
-        actor.State.TaskTraces[0].Status.Should().Be(ResponsesAgentToolTaskStatus.Accepted);
     }
 
     private static ResponsesAgentToolStateGAgent CreateActor() =>

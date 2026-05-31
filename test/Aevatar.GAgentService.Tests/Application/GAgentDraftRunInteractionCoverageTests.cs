@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -398,6 +399,34 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     [Fact]
+    public void EnvelopeFactory_ShouldSerializeCommandTypedToolControlFields()
+    {
+        var factory = new GAgentDraftRunCommandEnvelopeFactory();
+        var toolContext = NewToolContext();
+        var llmControl = NewLlmControl();
+
+        var envelope = factory.CreateEnvelope(
+            new GAgentDraftRunCommand(
+                ScopeId: "scope-a",
+                ActorTypeName: typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
+                Prompt: "hello",
+                NyxIdAccessToken: " legacy-token ",
+                ModelOverride: " legacy-model ",
+                PreferredLlmRoute: " legacy-route ",
+                ToolContext: toolContext,
+                LlmControl: llmControl),
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>
+            {
+                ["x-trace"] = "trace-1",
+            }));
+
+        var payload = envelope.Payload.Unpack<ChatRequestEvent>();
+        payload.Metadata.Should().Contain("x-trace", "trace-1");
+        AgentToolExecutionContextMapper.FromPayload(payload.ToolContext).Should().BeEquivalentTo(toolContext);
+        LLMControlContextMapper.FromPayload(payload.LlmControl).Should().BeEquivalentTo(llmControl);
+    }
+
+    [Fact]
     public void EnvelopeFactory_ShouldLeaveSessionEmpty_WhenFallbackIsDisabled()
     {
         var factory = new GAgentDraftRunCommandEnvelopeFactory();
@@ -508,6 +537,23 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         result.Should().Be(CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete);
         terminalQuery.SessionCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.sessionId == "session-1");
     }
+
+    private static AgentToolExecutionContext NewToolContext() =>
+        new(
+            new AgentToolRequestIdentity("request-1", "call-1"),
+            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCallerContext("scope-a", "owner-a", "response-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolSenderBindingContext("binding-1"),
+            new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
+            new AgentToolConnectedServicesContext("connected"),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["external"] = "value",
+            });
+
+    private static LLMControlContext NewLlmControl() =>
+        new("access-token", "org-token", "sender-token", "model-1", "route-1", 3, "remember");
 
     [Fact]
     public async Task DurableCompletionResolver_ShouldIgnoreSessionFallback_WhenInteractionKindDiffers()

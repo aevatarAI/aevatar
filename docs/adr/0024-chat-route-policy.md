@@ -100,55 +100,29 @@ scope in Phase 4 so prod traffic doesn't bypass policy.
 
 ### D5 — v1 scope reduction
 
-`ForwardToGAgent`, `ForwardToModel`, `ForwardToTeam`, and
-`ForwardToStudioMember` are implemented in v1.
+This section's original v1 wire-action list is superseded by ADR-0026.
+The current `ChatRouteAction` oneof exposes only:
 
-- `Reject` is declared on the wire but unused by v1 rule semantics — it lets
-  endpoints uniformly return HTTP 403 when policy lookup fails closed.
-- The old `ForwardToWorkflow` tag/name are reserved only for protobuf
-  compatibility; workflow invocation is tool-first through
-  `aevatar_start_workflow`.
-- `ForwardToGAgent` is supported only on GAgent-native ingress entries
-  (NyxIdChat, Relay, Voice). It always means a raw Orleans grain key bound
-  directly to the ingress (Voice binds `/ws/voice/{actorId}`; NyxIdChat
-  overrides `NeedsLlmReplyEvent.TargetActorId`). LLM facades must reject this
-  action instead of treating `actor_id` as a Studio member identity.
-- `ForwardToTeam` is supported on GAgent-native ingress entries and the
-  OpenAI-shaped LLM facade entry (`/v1/responses`). It resolves
-  `(team_id, endpoint_id)` to a Studio entry-member's `published_service_id`
-  via `ITeamEntryMemberResolver` and dispatches through
-  `IStaticGAgentStreamInvocationPort<AGUIEvent>`.
-- On the LLM facade (`/v1/responses`) `ForwardToTeam` and
-  `ForwardToStudioMember` flow through the same AGUI → Responses SSE/JSON
-  adapter (`AGUIEventToResponsesSseAdapter`). `ForwardToTeam` uses
-  `ITeamEntryMemberResolver`; `ForwardToStudioMember.member_id` goes through
-  `IMemberPublishedServiceResolver`.
-      The wire-format assumption ("OpenAI Responses cannot carry AGUI")
-      that an earlier draft of this ADR relied on did not hold up against
-      the actual proto: AGUI events
-      (`text_message_start/content/end`, `tool_call_start/end`,
-      `run_started/finished`) are structurally isomorphic with Responses
-      SSE events (`response.created`, `response.output_text.delta/done`,
-      `response.output_item.added/done`, `response.completed`), so the
-      adapter is ~280 lines of typed mapping, not an independent milestone.
-- `/v1/messages` (Anthropic Messages facade) still rejects `ForwardToTeam`,
-  `ForwardToStudioMember`, and `ForwardToGAgent` at HTTP 501. Adding
-  AGUI-backed forwarding there is symmetric to the `/v1/responses` work but
-  is not in this milestone; track separately.
-- `ForwardToStudioMember.endpoint_id` is optional; `/v1/responses` pins empty
-  values to the conventional `"chat"` endpoint on the resolved member's
-  published service. Callers that need a team entry endpoint should use
-  `ForwardToTeam` (which carries `endpoint_id`) or the direct Studio member
-  invoke surface
-  (`POST /api/scopes/{scopeId}/members/{memberId}/invoke/{endpointId}[:stream]`).
-- No `Bypass` action exists on `ChatRouteAction`. The dev endpoint
-  `/ws/voice/{actorId}` does not produce a `ChatRouteAction` at all — it
-  reads the `actorId` from the route directly and short-circuits the
-  resolver. The previous `Bypass` oneof variant has been removed (tag 5
-  reserved on the wire) because letting a persisted policy encode a
-  dev-only bypass target contradicted CLAUDE.md "API 字段单一语义".
-- No voice "scratch actor" (`ForwardToModel` over `/ws/voice`); voice in v1
-  must target an existing voice-enabled GAgent.
+- `ForwardToModel`
+- `Reject`
+
+GAgent, team, Studio member, and workflow targets are no longer separate
+policy action variants. Policies express them through
+`ForwardToModel.tool_set_ref + tool_choice_hint`:
+
+- GAgent routing: `tool_choice_hint.tool_name = aevatar_invoke_gagent`
+- Team routing: `tool_choice_hint.tool_name = aevatar_invoke_team`
+- Workflow routing: `tool_choice_hint.tool_name = aevatar_start_workflow`
+
+The old `ForwardToGAgent`, `ForwardToTeam`, `ForwardToWorkflow`, and `Bypass`
+tags/names remain reserved for protobuf compatibility only. They are not live
+policy actions and must not be reintroduced as fields.
+
+`/ws/voice/{actorId}` remains a dev/admin explicit-actor bypass outside
+`ChatRouteAction`; it reads the `actorId` from the route and short-circuits the
+resolver. Ordinary `/ws/voice` tool-first `ForwardToModel` execution through a
+voice session actor is not implemented in this milestone and remains the
+later Stage 5 work described by ADR-0026.
 
 The write side also drops `ResetChatRoutePolicyRequested`: because
 `default_target` is REQUIRED whenever the actor exists (per D6 below), a

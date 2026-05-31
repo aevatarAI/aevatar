@@ -16,9 +16,7 @@ namespace Aevatar.GAgentService.Core.GAgents;
 // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
 //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
-// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
-//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
-//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
+// Refactor (iter355/issue1438-first): Old pattern: durable LlmSession tool runtime contracts persisted arguments, schemas, hints, and results as *_json strings New principle: typed Struct/Value fields are authoritative for new writes; legacy *_json fields are read fallback only
 public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
@@ -510,8 +508,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             {
                 CallId = call.CallId,
                 ToolName = call.ToolName,
-                Result = ResponsesJsonValues.ParseBoundaryPayload(
-                    string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson),
+                Result = RuntimeToolArgumentsValue(call),
             });
         }
 
@@ -579,8 +576,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         CancellationToken ct)
     {
         var provider = Services.GetRequiredService<ILLMProviderFactory>().GetDefault();
-        var contextMetadata = BuildToolContextMetadata(command);
-        var tools = await BuildEffectiveToolsAsync(command, contextMetadata, ct);
+        var toolContext = BuildToolContext(command);
+        var tools = await BuildEffectiveToolsAsync(command, toolContext, ct);
         var messages = command.Messages.Select(ToChatMessage).ToList();
         var outputText = new System.Text.StringBuilder();
         TokenUsage? usage = null;
@@ -598,6 +595,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                     command.ResponseId,
                     new LLMRequestCallerCredentials(command.BearerToken)),
                 Tools = tools,
+                ToolContext = toolContext,
                 LlmControl = new LLMControlContext(
                     NyxIdAccessToken: null,
                     NyxIdOrgToken: null,
@@ -612,7 +610,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             };
 
             var toolCalls = new RuntimeToolCallAccumulator();
-            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(contextMetadata)))
+            using (AgentToolContextScope.Push(toolContext))
             {
                 await foreach (var chunk in provider.ChatStreamAsync(roundRequest, ct))
                 {
@@ -696,7 +694,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                 Role = "assistant",
                 ToolCalls = localToolCalls,
             });
-            await ExecuteLocalToolCallsAsync(command, runId, round, localToolCalls, tools, messages, contextMetadata, ct);
+            await ExecuteLocalToolCallsAsync(command, runId, round, localToolCalls, tools, messages, toolContext, ct);
         }
 
         await PersistDomainEventAsync(new LlmRunCompleted
@@ -711,16 +709,18 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
     private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
         LlmRunRequested command,
-        IReadOnlyDictionary<string, string> contextMetadata,
+        AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
         var providers = Services.GetServices<IResponsesToolProvider>().ToArray();
         var context = new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
-                command.ScopeId,
-                command.OwnerSubject,
-                State.Record?.OriginKind.ToString() ?? string.Empty),
-            contextMetadata);
+            toolContext with
+            {
+                Channel = toolContext.Channel with
+                {
+                    Platform = State.Record?.OriginKind.ToString(),
+                },
+            });
 
         var substituteTools = new List<IAgentTool>();
         var additiveTools = new List<IAgentTool>();
@@ -776,7 +776,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         IReadOnlyList<ToolCall> localToolCalls,
         IReadOnlyList<IAgentTool> tools,
         List<ChatMessage> messages,
-        IReadOnlyDictionary<string, string> contextMetadata,
+        AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
         var toolsByName = tools
@@ -784,13 +784,17 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
 
-        using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(contextMetadata)))
+        using (AgentToolContextScope.Push(toolContext))
         {
             foreach (var toolCall in localToolCalls)
             {
+                using var _ = AgentToolContextScope.Push(toolContext.WithCallId(toolCall.Id));
+                var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson)
+                    ? "{}"
+                    : toolCall.ArgumentsJson;
                 var result = toolsByName.TryGetValue(toolCall.Name, out var tool)
                     ? await tool.ExecuteAsync(
-                        string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson,
+                        argumentsJson,
                         ct)
                     : System.Text.Json.JsonSerializer.Serialize(new
                     {
@@ -806,6 +810,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                     ToolCall = ToRuntimeToolCall(toolCall),
                     Forwarded = false,
                     LocalResultJson = result,
+                    LocalResult = ResponsesJsonValues.ParseBoundaryPayload(result),
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 });
                 messages.Add(ChatMessage.Tool(toolCall.Id, result));
@@ -813,16 +818,19 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         }
     }
 
-    private static IReadOnlyDictionary<string, string> BuildToolContextMetadata(LlmRunRequested command) =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
-            [LLMRequestMetadataKeys.ResponseId] = command.ResponseId,
-            [LLMRequestMetadataKeys.ScopeId] = command.ScopeId,
-            [LLMRequestMetadataKeys.OwnerSubject] = command.OwnerSubject,
-            ["scope_id"] = command.ScopeId,
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = command.BearerToken,
-        };
+    // Refactor (issue1416-first):
+    //   Old pattern: actor helper rebuilt Responses tool context as string-key metadata from LlmRunRequested scalars.
+    //   New principle: actor helper builds AgentToolExecutionContext directly until the later proto slice can carry tool_context.
+    private static AgentToolExecutionContext BuildToolContext(LlmRunRequested command) =>
+        new(
+            new AgentToolRequestIdentity(command.ResponseId, null),
+            new AgentToolCredentials(command.BearerToken, null, null),
+            new AgentToolCallerContext(command.ScopeId, command.OwnerSubject, command.ResponseId),
+            AgentToolChannelContext.Empty,
+            AgentToolSenderBindingContext.Empty,
+            new LLMRequestRoutingContext(null, NormalizeOptional(command.RoutePreference), null, null),
+            AgentToolConnectedServicesContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
     private static IReadOnlyDictionary<string, string> BuildProviderMetadata(LlmRunRequested command) =>
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -848,7 +856,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         {
             Id = call.CallId,
             Name = call.ToolName,
-            ArgumentsJson = call.ArgumentsJson,
+            ArgumentsJson = RuntimeToolArgumentsJson(call),
         };
 
     private static LlmSessionRuntimeToolCall ToRuntimeToolCall(ToolCall call) =>
@@ -857,6 +865,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             CallId = call.Id,
             ToolName = call.Name,
             ArgumentsJson = call.ArgumentsJson,
+            Arguments = ParseStruct(call.ArgumentsJson),
         };
 
     private static LlmSessionTokenUsage ToSessionUsage(TokenUsage usage) =>
@@ -926,7 +935,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         JsonObject prefilled;
         try
         {
-            prefilled = ParseJsonObject(selection.ToolChoiceHintArgumentsJson);
+            prefilled = ParseJsonObject(ToolChoiceHintArgumentsJson(selection));
         }
         catch (JsonException ex)
         {
@@ -988,6 +997,68 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
                ?? throw new JsonException("Root value must be an object.");
     }
 
+    // Refactor (iter355/issue1438-first): Old pattern: durable LlmSession tool arguments were reconstructed from *_json strings. New principle: actor payload helpers prefer typed Struct writes and keep empty Struct as legacy fallback.
+    private static Struct ParseStruct(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new Struct();
+
+        try
+        {
+            return JsonParser.Default.Parse<Struct>(json);
+        }
+        catch
+        {
+            return new Struct();
+        }
+    }
+
+    private static string RuntimeToolArgumentsJson(LlmSessionRuntimeToolCall call)
+    {
+        if (call.Arguments is { Fields.Count: > 0 })
+            return JsonFormatter.Default.Format(call.Arguments);
+        return string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson;
+    }
+
+    private static Value RuntimeToolArgumentsValue(LlmSessionRuntimeToolCall call)
+    {
+        if (call.Arguments is { Fields.Count: > 0 })
+            return Value.ForStruct(call.Arguments.Clone());
+        return ResponsesJsonValues.ParseBoundaryPayload(
+            string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+    }
+
+    private static Value ToolCallArgumentsValue(ToolCall call)
+    {
+        var arguments = ParseStruct(call.ArgumentsJson);
+        if (arguments.Fields.Count > 0)
+            return Value.ForStruct(arguments);
+        return ResponsesJsonValues.ParseBoundaryPayload(
+            string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+    }
+
+    private static string ToolChoiceHintArgumentsJson(LlmSessionRuntimeToolSelection selection)
+    {
+        if (selection.ToolChoiceHintArguments is { Fields.Count: > 0 })
+            return JsonFormatter.Default.Format(selection.ToolChoiceHintArguments);
+        return selection.ToolChoiceHintArgumentsJson;
+    }
+
+    private static string ToolDeclarationParametersJson(LlmSessionRuntimeToolDeclaration declaration)
+    {
+        if (declaration.Parameters is { Fields.Count: > 0 })
+            return JsonFormatter.Default.Format(declaration.Parameters);
+        return declaration.ParametersJson;
+    }
+
+    private static Struct MergeStruct(Struct? existing, Struct incoming)
+    {
+        var merged = existing?.Clone() ?? new Struct();
+        foreach (var (key, value) in incoming.Fields)
+            merged.Fields[key] = value.Clone();
+        return merged;
+    }
+
     private static ToolCall CloneWithArguments(ToolCall call, string argumentsJson) =>
         new()
         {
@@ -1043,8 +1114,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             CallId = toolCall.Id,
             ToolName = toolCall.Name,
             SchemaHash = declaration?.SchemaHash ?? string.Empty,
-            Arguments = ResponsesJsonValues.ParseBoundaryPayload(
-                string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
+            Arguments = ToolCallArgumentsValue(toolCall),
             Status = LlmSessionForwardedToolCallStatus.Pending,
             EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow),
             Expiry = Timestamp.FromDateTime(DateTime.UtcNow.Add(DefaultTtl.ToTimeSpan())),
@@ -1100,6 +1170,8 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 
         if (!string.IsNullOrWhiteSpace(incoming.ToolName))
             existing.ToolName = incoming.ToolName;
+        if (incoming.Arguments is { Fields.Count: > 0 })
+            existing.Arguments = MergeStruct(existing.Arguments, incoming.Arguments);
         if (!string.IsNullOrEmpty(incoming.ArgumentsJson))
             existing.ArgumentsJson += incoming.ArgumentsJson;
     }
@@ -1119,7 +1191,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             ArgumentNullException.ThrowIfNull(declaration);
             Name = declaration.ToolName;
             Description = declaration.Description;
-            ParametersSchema = declaration.ParametersJson;
+            ParametersSchema = ToolDeclarationParametersJson(declaration);
         }
 
         public string Name { get; }

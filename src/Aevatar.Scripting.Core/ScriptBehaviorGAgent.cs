@@ -13,6 +13,8 @@ namespace Aevatar.Scripting.Core;
 
 public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
 {
+    // Refactor (iter149/cluster-1133): Old pattern: script run completion was inferred from domain fact/readmodel side effects.  New principle: script run completion is an actor-owned committed outcome event observed through the projection session channel.
+    // Refactor (issue1289): persist only committed fact data; derived readmodel/native/graph payloads belong to projection materialization.
     // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
     //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
     //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root
@@ -58,6 +60,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             .Match(current, evt)
             .On<ScriptBehaviorBoundEvent>(ApplyBound)
             .On<ScriptDomainFactCommitted>(ApplyCommittedFact)
+            .On<ScriptRunOutcomeRecordedEvent>(ApplyOutcomeRecorded)
             .OrCurrent();
 
     private async Task HandleBindRequestedAsync(
@@ -99,35 +102,36 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         EventEnvelope envelope,
         CancellationToken ct)
     {
+        // Refactor (iter149/cluster-1133): Old pattern: dispatch call sites inferred script run outcome from returned facts or readmodel visibility.  New principle: the actor commits a typed run outcome event for projection-session observation.
         EnsureBound();
 
-        if (envelope.Payload?.Is(RunScriptRequestedEvent.Descriptor) == true)
+        var run = ResolveRunRequest(envelope);
+        try
         {
-            var run = envelope.Payload.Unpack<RunScriptRequestedEvent>();
-            if (!string.IsNullOrWhiteSpace(run.DefinitionActorId) &&
-                !string.Equals(run.DefinitionActorId, State.DefinitionActorId, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Runtime actor `{Id}` is bound to definition `{State.DefinitionActorId}`, but run targeted `{run.DefinitionActorId}`.");
-            }
-
-            if (!string.IsNullOrWhiteSpace(run.ScriptRevision) &&
-                !string.Equals(run.ScriptRevision, State.Revision, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Runtime actor `{Id}` is bound to revision `{State.Revision}`, but run targeted `{run.ScriptRevision}`.");
-            }
-
-            if (!string.IsNullOrWhiteSpace(State.ScopeId) &&
-                !string.IsNullOrWhiteSpace(run.ScopeId) &&
-                !string.Equals(run.ScopeId, State.ScopeId, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Runtime actor `{Id}` is bound to scope `{State.ScopeId}`, but run targeted `{run.ScopeId}`.");
-            }
+            ValidateRunTarget(run);
+        }
+        catch (Exception ex) when (run != null && ex is InvalidOperationException)
+        {
+            var failedScopeId = ResolveScopeId(envelope, State.ScopeId);
+            await PersistDomainEventAsync(
+                BuildOutcomeRecordedEvent(
+                    ResolveRunId(envelope),
+                    ResolveCommandId(envelope),
+                    ResolveCorrelationId(envelope),
+                    failedScopeId,
+                    ScriptRunOutcomeStatus.Failed,
+                    ex.Message,
+                    null,
+                    0,
+                    State.LastAppliedEventVersion + 1),
+                ct);
+            throw;
         }
 
         var scopeId = ResolveScopeId(envelope, State.ScopeId);
+        var runId = ResolveRunId(envelope);
+        var commandId = ResolveCommandId(envelope);
+        var correlationId = ResolveCorrelationId(envelope);
         var capabilities = _capabilityFactory.Create(
             new ScriptBehaviorRuntimeCapabilityContext(
                 ActorId: Id,
@@ -135,8 +139,8 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 Revision: State.Revision ?? string.Empty,
                 DefinitionActorId: State.DefinitionActorId ?? string.Empty,
                 ScopeId: scopeId,
-                RunId: ResolveRunId(envelope),
-                CorrelationId: ResolveCorrelationId(envelope)),
+                RunId: runId,
+                CorrelationId: correlationId),
             publishAsync: (message, audience, token) => PublishAsync(message, audience, token),
             sendToAsync: (targetActorId, message, token) => SendToAsync(targetActorId, message, token),
             publishToSelfAsync: (message, token) => PublishAsync(message, TopologyAudience.Self, token),
@@ -144,27 +148,95 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, message, ct: token),
             cancelCallbackAsync: CancelDurableCallbackAsync);
 
-        var facts = await _dispatcher.DispatchAsync(
-            new ScriptBehaviorDispatchRequest(
-                ActorId: Id,
-                DefinitionActorId: State.DefinitionActorId ?? string.Empty,
-                ScriptId: State.ScriptId ?? string.Empty,
-                Revision: State.Revision ?? string.Empty,
-                ScopeId: scopeId,
-                SourceHash: State.SourceHash ?? string.Empty,
-                ScriptPackage: RequireBoundPackage(State.ScriptPackage),
-                StateTypeUrl: State.StateTypeUrl ?? string.Empty,
-                ReadModelTypeUrl: State.ReadModelTypeUrl ?? string.Empty,
-                CurrentStateRoot: State.StateRoot?.Clone(),
-                CurrentStateVersion: State.LastAppliedEventVersion,
-                Envelope: envelope,
-                Capabilities: capabilities),
-            ct);
+        IReadOnlyList<ScriptDomainFactCommitted> facts;
+        try
+        {
+            facts = await _dispatcher.DispatchAsync(
+                new ScriptBehaviorDispatchRequest(
+                    ActorId: Id,
+                    DefinitionActorId: State.DefinitionActorId ?? string.Empty,
+                    ScriptId: State.ScriptId ?? string.Empty,
+                    Revision: State.Revision ?? string.Empty,
+                    ScopeId: scopeId,
+                    SourceHash: State.SourceHash ?? string.Empty,
+                    ScriptPackage: RequireBoundPackage(State.ScriptPackage),
+                    StateTypeUrl: State.StateTypeUrl ?? string.Empty,
+                    ReadModelTypeUrl: State.ReadModelTypeUrl ?? string.Empty,
+                    CurrentStateRoot: State.StateRoot?.Clone(),
+                    CurrentStateVersion: State.LastAppliedEventVersion,
+                    Envelope: envelope,
+                    Capabilities: capabilities),
+                ct);
+        }
+        catch (Exception ex) when (run != null && ex is not OperationCanceledException)
+        {
+            await PersistDomainEventAsync(
+                BuildOutcomeRecordedEvent(
+                    runId,
+                    commandId,
+                    correlationId,
+                    scopeId,
+                    ScriptRunOutcomeStatus.Failed,
+                    ex.Message,
+                    null,
+                    0,
+                    State.LastAppliedEventVersion + 1),
+                ct);
+            throw;
+        }
 
-        if (facts.Count == 0)
+        if (run == null)
+        {
+            if (facts.Count > 0)
+                await PersistDomainEventsAsync(facts, ct);
+            return;
+        }
+
+        var result = facts.Count == 0
+            ? null
+            : facts[^1].DomainEventPayload?.Clone();
+        var currentVersion = State.LastAppliedEventVersion;
+        var outcomeStateVersion = currentVersion + facts.Count + 1;
+        var outcomeEvent =
+            BuildOutcomeRecordedEvent(
+                runId,
+                commandId,
+                correlationId,
+                scopeId,
+                ScriptRunOutcomeStatus.Succeeded,
+                string.Empty,
+                result,
+                facts.Count,
+                outcomeStateVersion);
+        await PersistDomainEventsAsync(facts.Concat<IMessage>([outcomeEvent]).ToList(), ct);
+    }
+
+    private void ValidateRunTarget(RunScriptRequestedEvent? run)
+    {
+        if (run == null)
             return;
 
-        await PersistDomainEventsAsync(facts, ct);
+        if (!string.IsNullOrWhiteSpace(run.DefinitionActorId) &&
+            !string.Equals(run.DefinitionActorId, State.DefinitionActorId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Runtime actor `{Id}` is bound to definition `{State.DefinitionActorId}`, but run targeted `{run.DefinitionActorId}`.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(run.ScriptRevision) &&
+            !string.Equals(run.ScriptRevision, State.Revision, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Runtime actor `{Id}` is bound to revision `{State.Revision}`, but run targeted `{run.ScriptRevision}`.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.ScopeId) &&
+            !string.IsNullOrWhiteSpace(run.ScopeId) &&
+            !string.Equals(run.ScopeId, State.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Runtime actor `{Id}` is bound to scope `{State.ScopeId}`, but run targeted `{run.ScopeId}`.");
+        }
     }
 
     private static ScriptBehaviorState ApplyBound(
@@ -256,6 +328,53 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         return next;
     }
 
+    private ScriptRunOutcomeRecordedEvent BuildOutcomeRecordedEvent(
+        string runId,
+        string commandId,
+        string correlationId,
+        string scopeId,
+        ScriptRunOutcomeStatus status,
+        string error,
+        Any? result,
+        int committedFactCount,
+        long stateVersion)
+    {
+        // Refactor (iter149/cluster-1133): Old pattern: script outcome details had no typed committed event owned by the run actor.  New principle: outcome status, error, and result are explicit proto fields.
+        return new ScriptRunOutcomeRecordedEvent
+        {
+            ScriptRunId = runId ?? string.Empty,
+            Status = status,
+            Error = error ?? string.Empty,
+            Result = result?.Clone(),
+            ActorId = Id,
+            DefinitionActorId = State.DefinitionActorId ?? string.Empty,
+            ScriptId = State.ScriptId ?? string.Empty,
+            ScriptRevision = State.Revision ?? string.Empty,
+            CommandId = commandId ?? string.Empty,
+            CorrelationId = correlationId ?? string.Empty,
+            ScopeId = scopeId ?? string.Empty,
+            CommittedFactCount = committedFactCount,
+            StateVersion = stateVersion,
+            OccurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+    }
+
+    private static ScriptBehaviorState ApplyOutcomeRecorded(
+        ScriptBehaviorState state,
+        ScriptRunOutcomeRecordedEvent evt)
+    {
+        // Refactor (iter149/cluster-1133): Old pattern: outcome observation depended on readmodel side effects.  New principle: outcome events are committed observations and do not mutate the script behavior state machine.
+        var next = state.Clone();
+        next.LastRunId = evt.ScriptRunId ?? string.Empty;
+        next.LastRunOutcome = evt.Clone();
+        next.LastAppliedEventVersion = evt.StateVersion <= 0
+            ? state.LastAppliedEventVersion + 1
+            : evt.StateVersion;
+        if (string.IsNullOrWhiteSpace(next.ScopeId) && !string.IsNullOrWhiteSpace(evt.ScopeId))
+            next.ScopeId = evt.ScopeId;
+        return next;
+    }
+
     private bool IsSameBinding(BindScriptBehaviorRequestedEvent evt)
     {
         return string.Equals(State.DefinitionActorId, evt.DefinitionActorId, StringComparison.Ordinal) &&
@@ -302,8 +421,31 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         return envelope.Id ?? string.Empty;
     }
 
+    private static RunScriptRequestedEvent? ResolveRunRequest(EventEnvelope envelope)
+    {
+        // Refactor (iter149/cluster-1133): Old pattern: run request identity was unpacked separately in each dispatch helper.  New principle: extract the run request once so outcome and dispatch share the same identity fields.
+        if (envelope.Payload?.Is(RunScriptRequestedEvent.Descriptor) != true)
+            return null;
+
+        return envelope.Payload.Unpack<RunScriptRequestedEvent>();
+    }
+
+    private static string ResolveCommandId(EventEnvelope envelope)
+    {
+        // Refactor (iter149/cluster-1133): Old pattern: command identity was implicit in dispatch plumbing only.  New principle: outcome event carries the stable command id as typed data.
+        if (envelope.Payload?.Is(RunScriptRequestedEvent.Descriptor) == true)
+        {
+            var run = envelope.Payload.Unpack<RunScriptRequestedEvent>();
+            if (!string.IsNullOrWhiteSpace(run.CommandId))
+                return run.CommandId;
+        }
+
+        return envelope.Id ?? string.Empty;
+    }
+
     private static string ResolveCorrelationId(EventEnvelope envelope)
     {
+        // Refactor (iter149/cluster-1133): Old pattern: caller correlation was only a transport concern.  New principle: outcome event records the correlation id consumed by projection-session observers.
         if (!string.IsNullOrWhiteSpace(envelope.Propagation?.CorrelationId))
             return envelope.Propagation.CorrelationId;
 

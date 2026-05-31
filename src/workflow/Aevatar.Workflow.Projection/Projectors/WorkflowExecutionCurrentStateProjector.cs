@@ -21,6 +21,14 @@ public sealed class WorkflowExecutionCurrentStateProjector
         MappedCurrentStateProjectionInput<WorkflowExecutionMaterializationContext, WorkflowRunState> input)
     {
         var context = input.Context;
+        var publisherActorId = input.Envelope.Route?.PublisherActorId ?? string.Empty;
+        // Refactor (issue1271/first-slice): Old pattern: reverse-relayed child WorkflowRunState roots
+        // could overwrite the parent actor current-state document.
+        // New principle: actor-scoped current-state readmodels only materialize facts committed by
+        // the same authoritative actor as the projection scope; relayed child facts stay observable artifacts.
+        if (!string.Equals(context.RootActorId, publisherActorId, StringComparison.Ordinal))
+            return null;
+
         var stateEvent = input.StateEvent;
         var state = input.State;
 

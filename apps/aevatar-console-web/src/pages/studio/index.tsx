@@ -16,6 +16,10 @@ import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
 import {
+  normalizeAsyncOperationState,
+  probeAsyncOperation,
+} from '@/shared/asyncOperations';
+import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
   extractRunFinishedOutput,
@@ -230,53 +234,80 @@ type StudioBindingRunOutcome =
       readonly run: StudioMemberBindingRunStatusResponse | null;
     };
 
-const MEMBER_BINDING_RUN_POLL_INTERVAL_MS = 900;
 const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
 
-function waitForStudioMemberBindingRunTick(): Promise<void> {
+// Refactor (iter160/cluster-1200): member binding run waiting uses shared
+//   probeAsyncOperation normalized states instead of duplicated page-local
+//   status mapping. The fixed timeout remains pre-refactor page-local pacing;
+//   the shared helper accepts an injectable scheduler for deterministic tests.
+function waitForAsyncOperationProbeTick(): Promise<void> {
   return new Promise((resolve) => {
-    window.setTimeout(resolve, MEMBER_BINDING_RUN_POLL_INTERVAL_MS);
+    window.setTimeout(resolve, 900);
   });
 }
 
-function isStudioMemberBindingRunTerminal(
-  run: StudioMemberBindingRunStatusResponse,
-): boolean {
-  return ['succeeded', 'failed', 'rejected'].includes(run.status);
+function normalizeStudioMemberBindingRunState(
+  run: StudioMemberBindingRunStatusResponse | null,
+) {
+  return normalizeAsyncOperationState({
+    accepted: true,
+    observation: run,
+    observationStatus:
+      run?.status === 'succeeded'
+        ? 'succeeded'
+        : run?.status === 'failed'
+          ? 'failed'
+          : run?.status === 'rejected'
+            ? 'rejected'
+            : run
+              ? 'pending'
+              : null,
+    stateVersion: run?.stateVersion ?? null,
+    message:
+      run?.failure?.message ||
+      (run?.status === 'rejected'
+        ? 'Binding request was rejected by the member authority.'
+        : run?.status === 'failed'
+          ? 'Binding failed while publishing the member contract.'
+          : ''),
+  });
 }
 
 function buildStudioMemberBindingFailureMessage(
   run: StudioMemberBindingRunStatusResponse,
 ): string {
-  return (
-    run.failure?.message ||
-    (run.status === 'rejected'
-      ? 'Binding request was rejected by the member authority.'
-      : 'Binding failed while publishing the member contract.')
-  );
+  return normalizeStudioMemberBindingRunState(run).message;
 }
 
 function resolveStudioMemberBindingRunOutcome(
   run: StudioMemberBindingRunStatusResponse | null,
 ): StudioBindingRunOutcome {
-  if (run?.status === 'failed' || run?.status === 'rejected') {
+  const state = normalizeStudioMemberBindingRunState(run);
+  if (state.status === 'failed' && run) {
     throw new Error(buildStudioMemberBindingFailureMessage(run));
   }
 
-  if (run?.status === 'succeeded') {
+  if (state.status === 'observed' && run) {
     return { kind: 'succeeded', run };
   }
 
   return { kind: 'pending', run };
 }
 
-function buildStudioMemberBindingPendingNotice(
+export function buildStudioMemberBindingPendingNotice(
   displayName: string,
   run: StudioMemberBindingRunStatusResponse | null,
 ): StudioNotice {
+  const state = normalizeStudioMemberBindingRunState(run);
   const status = run?.status ? ` Current status: ${run.status}.` : '';
+  const freshness =
+    state.freshness === 'observed' && state.stateVersion != null
+      ? ` Read model observed v${state.stateVersion}.`
+      : state.freshness === 'accepted-only'
+        ? ' Read model has not materialized this run yet.'
+        : ' Status read model is still catching up.';
   return {
-    message: `${displayName} binding request was accepted and is still running.${status} Studio will keep refreshing the status before treating it as bound.`,
+    message: `${displayName} binding request was accepted and is still running.${status}${freshness} Studio will keep refreshing the status before treating it as bound.`,
     type: 'info',
   };
 }
@@ -4805,39 +4836,29 @@ const StudioPage: React.FC = () => {
     selectedWorkflowId,
     studioScopeMembers,
   ]);
-  const waitForMemberBindingRun = useCallback(
+  const observeMemberBindingRunOnce = useCallback(
     async (
       receipt: StudioMemberBindingAcceptedResponse,
     ): Promise<StudioMemberBindingRunStatusResponse | null> => {
-      let latestRun: StudioMemberBindingRunStatusResponse | null = null;
-
-      for (let attempt = 0; attempt < MEMBER_BINDING_RUN_POLL_ATTEMPTS; attempt += 1) {
-        if (attempt > 0) {
-          await waitForStudioMemberBindingRunTick();
-        }
-
-        try {
-          latestRun = await studioApi.getMemberBindingRun(
+      const result = await probeAsyncOperation({
+        maxAttempts: MEMBER_BINDING_RUN_POLL_ATTEMPTS,
+        read: () =>
+          studioApi.getMemberBindingRun(
             receipt.scopeId,
             receipt.memberId,
             receipt.bindingRunId,
-          );
-        } catch (error) {
+          ),
+        isTerminal: (run) =>
+          normalizeStudioMemberBindingRunState(run).terminal,
+        canRetryError: (error) => {
           // The run status is read-model backed, so the first request can
           // legitimately arrive before projection catches up to the accepted ACK.
-          if (isStudioApiStatus(error, 404)) {
-            continue;
-          }
+          return isStudioApiStatus(error, 404);
+        },
+        waitForNextAttempt: waitForAsyncOperationProbeTick,
+      });
 
-          throw error;
-        }
-
-        if (isStudioMemberBindingRunTerminal(latestRun)) {
-          return latestRun;
-        }
-      }
-
-      return latestRun;
+      return result.observation;
     },
     [],
   );
@@ -4870,7 +4891,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -4911,7 +4932,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -4954,7 +4975,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -5165,7 +5186,7 @@ const StudioPage: React.FC = () => {
     scopeServicesQuery,
     studioMembersQueryKey,
     studioScopeMembers,
-    waitForMemberBindingRun,
+    observeMemberBindingRunOnce,
   ]);
 
   const openWorkspaceWorkflow = useCallback((workflowId: string) => {

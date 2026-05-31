@@ -1368,6 +1368,8 @@ function decodeStudioMemberBindingRunStatusResponse(
       ["memberId", "MemberId"],
       "StudioMemberBindingRunStatusResponse.memberId"
     ),
+    stateVersion:
+      readOptionalNumber(record.stateVersion ?? record.StateVersion) ?? null,
     platformBindingCommandId:
       readNullableString(
         record,

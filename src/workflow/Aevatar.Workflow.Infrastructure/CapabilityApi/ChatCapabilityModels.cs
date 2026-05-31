@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal static class ChatCapabilityMessageTypes
@@ -54,6 +56,9 @@ public sealed record ChatInput
     public IDictionary<string, string>? Metadata { get; init; }
 
     public ChatLlmControlInput? LlmControl { get; init; }
+
+    // Refactor (issue1332): Old pattern: workflow chat control used metadata or LlmControl only. New principle: reuse AgentToolExecutionContext as typed ToolContext without adding a workflow-specific abstraction.
+    public AgentToolExecutionContext? ToolContext { get; init; }
 }
 
 public sealed record ChatLlmControlInput
@@ -70,9 +75,42 @@ public sealed record ChatLlmControlInput
 public sealed record WorkflowChatSourceInput
 {
     public string? Kind { get; init; }
+    public WorkflowChatCatalogNameSourceInput? CatalogName { get; init; }
+    public WorkflowChatDefinitionActorSourceInput? DefinitionActor { get; init; }
+    public WorkflowChatInlineYamlBundleSourceInput? InlineBundle { get; init; }
+
+    /// <summary>Legacy source workflow name alias. Prefer the typed source variant submessages.</summary>
     public string? WorkflowName { get; init; }
+
+    /// <summary>Legacy source actor id alias. Prefer the typed source variant submessages.</summary>
     public string? ActorId { get; init; }
+
+    /// <summary>Legacy inline YAML bundle alias. Prefer <see cref="InlineBundle"/>.</summary>
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
+}
+
+public sealed record WorkflowChatCatalogNameSourceInput
+{
+    public string? WorkflowName { get; init; }
+}
+
+public sealed record WorkflowChatDefinitionActorSourceInput
+{
+    public string? ActorId { get; init; }
+    public string? WorkflowName { get; init; }
+}
+
+public sealed record WorkflowChatInlineYamlBundleSourceInput
+{
+    public string? EntryName { get; init; }
+    public IReadOnlyList<WorkflowChatInlineYamlDocumentInput>? YamlDocuments { get; init; }
+    public string? ActorId { get; init; }
+}
+
+public sealed record WorkflowChatInlineYamlDocumentInput
+{
+    public string? Name { get; init; }
+    public string? Yaml { get; init; }
 }
 
 public sealed record ChatInputContentPart

@@ -5,10 +5,8 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
-using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using ProtobufStringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
 namespace Aevatar.CQRS.Core.Tests;
 
@@ -178,34 +176,6 @@ public class CommandDispatchPipelineTests
         result.Admission!.CommandId.Should().Be("evt-1");
     }
 
-    [Fact]
-    public async Task OutcomeDispatchService_ShouldSubscribeBeforeDispatch_AndReturnActorOutcome()
-    {
-        var target = new FakeCommandTarget("actor-1");
-        var channel = new StreamActorOutcomeChannel<ProtobufStringValue>(new InMemoryStreamProvider());
-        var dispatcher = new OutcomePublishingTargetDispatcher(channel);
-        var pipeline = new DefaultCommandDispatchPipeline<SeededCommand, FakeCommandTarget, string, FakeError>(
-            new SeededCommandResolver(target),
-            new DefaultCommandContextPolicy(),
-            new SeededCommandEnvelopeFactory(),
-            dispatcher,
-            new SeededCommandReceiptFactory("receipt-1"));
-        var service = new DefaultCommandOutcomeDispatchService<SeededCommand, FakeCommandTarget, string, FakeError, ProtobufStringValue>(
-            pipeline,
-            channel);
-
-        var result = await service.DispatchAndAwaitOutcomeAsync(new SeededCommand(
-            "hello",
-            "cmd-1",
-            "corr-1",
-            null));
-
-        result.Succeeded.Should().BeTrue();
-        result.Receipt.Should().Be("receipt-1");
-        result.Outcome.Should().NotBeNull();
-        result.Outcome!.Value.Should().Be("outcome:cmd-1");
-        dispatcher.DispatchedCommandIds.Should().ContainSingle().Which.Should().Be("cmd-1");
-    }
 }
 
 public class ActorCommandTargetDispatcherTests
@@ -309,14 +279,11 @@ public class CqrsCoreServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<IEventFrameMapper<int, string>, IntToStringFrameMapper>();
-        services.AddSingleton<Aevatar.Foundation.Abstractions.IStreamProvider, InMemoryStreamProvider>();
 
         services.AddCqrsCore();
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ICommandContextPolicy>().Should().BeOfType<DefaultCommandContextPolicy>();
-        provider.GetRequiredService<IActorOutcomeChannel<ProtobufStringValue>>()
-            .Should().BeOfType<StreamActorOutcomeChannel<ProtobufStringValue>>();
         provider.GetRequiredService<IEventOutputStream<int, string>>().Should().BeOfType<DefaultEventOutputStream<int, string>>();
         provider.GetRequiredService<ICommandObservationLifecycle<string, FakeCommandTarget, string, FakeError>>()
             .Should().BeOfType<NoOpCommandObservationLifecycle<string, FakeCommandTarget, string, FakeError>>();
@@ -435,22 +402,6 @@ internal sealed class ThrowingTargetDispatcher : ICommandTargetDispatcher<FakeCo
         _ = envelope;
         ct.ThrowIfCancellationRequested();
         throw new InvalidOperationException("dispatch failed");
-    }
-}
-
-internal sealed class OutcomePublishingTargetDispatcher(IActorOutcomeChannel<ProtobufStringValue> channel)
-    : ICommandTargetDispatcher<FakeCommandTarget>
-{
-    public List<string> DispatchedCommandIds { get; } = [];
-
-    public async Task<DispatchAdmission> DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
-    {
-        _ = target;
-        ct.ThrowIfCancellationRequested();
-        var commandId = envelope.Id;
-        DispatchedCommandIds.Add(commandId);
-        await channel.PublishAsync(commandId, new ProtobufStringValue { Value = $"outcome:{commandId}" }, ct);
-        return DispatchAdmissionFactory.Create(target.TargetId, envelope);
     }
 }
 

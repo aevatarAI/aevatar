@@ -61,7 +61,7 @@ Verdict semantics:
 - **comment**: minor observations or improvements; not blocking but worth surfacing in the PR comment.
 - **reject**: real CLAUDE/AGENTS clause violation introduced or worsened; merge would degrade architecture compliance.
 
-End with marker line: `REVIEW_DONE:${PR_NUMBER}:architect:<verdict>`
+End with marker line: `REVIEW_DONE:${ISSUE_NUMBER}:architect:<verdict>`
 
 ## Hard rules
 
@@ -71,25 +71,6 @@ End with marker line: `REVIEW_DONE:${PR_NUMBER}:architect:<verdict>`
 - Don't edit any file outside `${REVIEW_OUTPUT_PATH}`.
 - No bilingual requirement here (this is an internal artifact consumed by controller).
 
-## GitHub post (强制 — per maintainer 2026-05-19 "各角色直接调用gh")
+## Shared rules
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本仓库 `.claude/skills/codex-refactor-loop/prompts/_github-post-rules.md`)所有规则:
-
-- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
-- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
-- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
-- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
-
-可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
-不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
-
-
----
-
-## AI 内容标识符(强制)
-
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
-
-    ⟦AI:AUTO-LOOP⟧
-
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+见 `prompts/_shared.md`；需要 GitHub 发帖时再读 `prompts/_github-post-rules.md`。

@@ -3,11 +3,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-// Refactor (iter115/cluster-3):
-//   Old pattern: raw security/control state could become observable through
-//                committed WorkflowRunState state_root publication.
-//   New principle: actor state remains typed, while the observation envelope
-//                  gets a redacted clone before projection/AGUI fanout.
+// Refactor (iter159/cluster-613-first):
+//   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+//   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
 internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePublicationHook
 {
     public Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)

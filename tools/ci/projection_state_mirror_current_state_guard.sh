@@ -16,6 +16,7 @@ FILES=(
   "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
 )
 MAPPED_CURRENT_STATE_HELPER="src/Aevatar.CQRS.Projection.Core/Orchestration/MappedCurrentStateProjectionMaterializer.cs"
+WORKFLOW_BINDING_PROJECTOR="src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs"
 
 legacy_reader_hits="$(
   rg -n "IProjectionDocumentReader<|_documentReader|IProjectionEventReducer<|_reducersByType|EventEnvelopeTimestampResolver\\.Resolve\\(" \
@@ -26,6 +27,18 @@ legacy_reader_hits="$(
 if [[ -n "${legacy_reader_hits}" ]]; then
   echo "${legacy_reader_hits}"
   echo "Current-state projector paths must not read old readmodels, use reducers, or rely on raw envelope timestamp helpers."
+  exit 1
+fi
+
+binding_reader_hits="$(
+  rg -n "IProjectionDocumentReader<|_documentReader|GetOrCreateAsync|\\.GetAsync\\(" \
+    "${WORKFLOW_BINDING_PROJECTOR}" \
+    || true
+)"
+
+if [[ -n "${binding_reader_hits}" ]]; then
+  echo "${binding_reader_hits}"
+  echo "Workflow actor binding projector must construct full documents from committed event payloads without reading prior readmodels."
   exit 1
 fi
 

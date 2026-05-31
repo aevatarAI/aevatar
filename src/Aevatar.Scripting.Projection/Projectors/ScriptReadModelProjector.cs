@@ -11,6 +11,7 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptReadModelProjector
     : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
+    // Refactor (issue1289): readmodel documents consume materializer-derived payloads instead of event-embedded payloads.
     // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
     //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
     //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root

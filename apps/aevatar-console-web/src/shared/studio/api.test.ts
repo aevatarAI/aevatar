@@ -1067,6 +1067,7 @@ describe('studioApi host-session requests', () => {
           status: 'platform_binding_pending',
           scopeId: 'scope-1',
           memberId: 'joker',
+          stateVersion: 7,
           updatedAt: '2026-03-26T08:01:00Z',
         },
       }),
@@ -1082,12 +1083,58 @@ describe('studioApi host-session requests', () => {
         currentBindingRun: expect.objectContaining({
           bindingRunId: 'bind-1',
           status: 'platform_binding_pending',
+          stateVersion: 7,
         }),
       }),
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/scopes/scope-1/members/joker/binding',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
+  it('loads member binding run status with readmodel state version freshness', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        BindingRunId: 'bind-1',
+        Status: 'platform_binding_pending',
+        ScopeId: 'scope-1',
+        MemberId: 'joker',
+        StateVersion: 9,
+        UpdatedAt: '2026-03-26T08:01:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getMemberBindingRun('scope-1', 'joker', 'bind-1'),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        bindingRunId: 'bind-1',
+        status: 'platform_binding_pending',
+        stateVersion: 9,
+      }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/joker/binding-runs/bind-1',
       expect.objectContaining({
         credentials: 'same-origin',
       }),

@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -294,6 +296,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("corr-1");
         envelope.Route.IsDirect().Should().BeTrue();
@@ -304,8 +307,154 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Headers.Should().NotContainKey("workflow.command_id");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldScrubBearerFromDurableLlmControl_AndKeepRouting()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            LlmControl: new LLMControlContext(
+                NyxIdAccessToken: " access-token ",
+                NyxIdOrgToken: " org-token ",
+                SenderNyxIdAccessToken: " sender-token ",
+                ModelOverride: " model-a ",
+                NyxIdRoutePreference: " route-a ",
+                MaxToolRoundsOverride: 3,
+                UserMemoryPrompt: " memory "));
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+
+        request.LlmControl.NyxIdAccessToken.Should().BeEmpty();
+        request.LlmControl.NyxIdOrgToken.Should().BeEmpty();
+        request.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        request.LlmControl.ModelOverride.Should().Be(" model-a ");
+        request.LlmControl.NyxIdRoutePreference.Should().Be(" route-a ");
+        request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
+        request.LlmControl.UserMemoryPrompt.Should().Be(" memory ");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldCarryTypedToolContext_AndScrubCredentials()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ToolContext: AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity(" req-1 ", " call-1 "),
+                Credentials = new AgentToolCredentials(" access-token ", " org-token ", " sender-token "),
+                Caller = new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
+                Channel = new AgentToolChannelContext("lark", "sender-1", "reg-scope-1", "msg-1", "platform-msg-1"),
+                SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = " model-a ",
+                    NyxIdRoutePreference = " route-a ",
+                    MaxToolRoundsOverride = 4,
+                    UserMemoryPrompt = " memory ",
+                },
+                ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["trace-id"] = "trace-1",
+                },
+            });
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+
+        toolContext.Request.RequestId.Should().Be("req-1");
+        toolContext.Request.CallId.Should().Be("call-1");
+        toolContext.Credentials.Should().Be(AgentToolCredentials.Empty);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Channel.MessageId.Should().Be("msg-1");
+        toolContext.SenderBinding.BindingId.Should().Be("binding-1");
+        toolContext.Routing.ModelOverride.Should().Be("model-a");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
+        toolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
+        toolContext.Routing.UserMemoryPrompt.Should().Be("memory");
+        toolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
+        toolContext.ExternalMetadata["trace-id"].Should().Be("trace-1");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldMaterializeTrustedControlAsTypedProtoFields_NotMetadata()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunCommandMetadataKeys.ScopeId] = "evil-scope",
+                ["scope_id"] = "evil-legacy-scope",
+                ["client-note"] = "open-extension",
+            },
+            ScopeId: "scope-typed",
+            LlmControl: new LLMControlContext(
+                NyxIdAccessToken: "access-token",
+                NyxIdOrgToken: "org-token",
+                SenderNyxIdAccessToken: "sender-token",
+                ModelOverride: "model-a",
+                NyxIdRoutePreference: "route-a",
+                MaxToolRoundsOverride: 5,
+                UserMemoryPrompt: "memory"),
+            ToolContext: AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = "model-a",
+                    NyxIdRoutePreference = "route-a",
+                    MaxToolRoundsOverride = 5,
+                    UserMemoryPrompt = "memory",
+                },
+            });
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+
+        request.ScopeId.Should().Be("scope-typed");
+        request.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
+        request.ToolContext.Caller.OwnerSubject.Should().Be("owner-typed");
+        request.ToolContext.Routing.ModelOverride.Should().Be("model-a");
+        request.LlmControl.ModelOverride.Should().Be("model-a");
+        request.LlmControl.NyxIdRoutePreference.Should().Be("route-a");
+        request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
+        request.Metadata.Should().Contain("client-note", "open-extension");
+        request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        request.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]

@@ -13,7 +13,7 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
-import StudioPage from "./index";
+import StudioPage, { buildStudioMemberBindingPendingNotice } from "./index";
 
 jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
@@ -5526,6 +5526,7 @@ describe("StudioPage", () => {
       scopeId: "scope-1",
       memberId: "workspace-demo",
       status: "platform_binding_pending",
+      stateVersion: 11,
       failure: null,
       updatedAt: "2026-04-27T08:15:01Z",
     });
@@ -5557,6 +5558,54 @@ describe("StudioPage", () => {
 
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("member")).toBe("member:workspace-demo");
+  });
+
+  it("keeps accepted member binding pending when the run readmodel is not visible yet", async () => {
+    mockScopeRuntimeApi.listServices.mockReset();
+    mockScopeRuntimeApi.listServices.mockResolvedValue([]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    const notFoundError = new Error("not found");
+    notFoundError.name = "StudioApiError";
+    Object.assign(notFoundError, { status: 404 });
+    (studioApi.getMemberBindingRun as jest.Mock).mockRejectedValueOnce(notFoundError);
+
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+    });
+
+    await waitFor(() => {
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByText("service:no-service")).toBeTruthy();
+    expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
+  });
+
+  it("includes readmodel freshness in pending member binding notices", () => {
+    expect(
+      buildStudioMemberBindingPendingNotice("workspace-demo", {
+        bindingRunId: "bind-member-workflow-1",
+        scopeId: "scope-1",
+        memberId: "workspace-demo",
+        status: "platform_binding_pending",
+        stateVersion: 11,
+        failure: null,
+        updatedAt: "2026-04-27T08:15:01Z",
+      }).message,
+    ).toContain("Read model observed v11.");
+
+    expect(
+      buildStudioMemberBindingPendingNotice("workspace-demo", null).message,
+    ).toContain("Read model has not materialized this run yet.");
   });
 
   it("normalizes legacy workflow:default links and keeps the bound member contract when switching away and back", async () => {
@@ -5823,10 +5872,8 @@ describe("StudioPage", () => {
     );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.getByText("candidate:draft1")).toBeTruthy();
-      expect(screen.getByText("service:no-service")).toBeTruthy();
-    });
+    expect(await screen.findByText("candidate:draft1")).toBeTruthy();
+    expect(await screen.findByText("service:no-service")).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
