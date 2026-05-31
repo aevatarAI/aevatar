@@ -2494,7 +2494,60 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("relay_reply_edit_unsupported");
         result.EditUnsupported.Should().BeTrue();
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.HttpStatus.Should().Be(501);
         result.ErrorSummary.Should().Contain("edit_unsupported");
+        relayHandler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RunStreamChunkAsync_ShouldPropagateRelayUpdateFailureDiagnostics()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler(
+            """{"error":true,"status":429,"body":"{\"error\":\"rate_limited\",\"error_code\":1005,\"retry_after_seconds\":4}"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunStreamChunkAsync(
+            new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = "corr-stream-rate-limited-1",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-stream-rate-limited-1",
+                    ConversationScope.Group,
+                    "oc_group_chat_1",
+                    new OutboundDeliveryContext
+                    {
+                        ReplyMessageId = "relay-msg-stream-rate-limited-1",
+                        CorrelationId = "corr-stream-rate-limited-1",
+                    },
+                    new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                    }),
+                AccumulatedText = "updated stream",
+                ChunkAtUnixMs = 42,
+            },
+            currentPlatformMessageId: "om_stream_1",
+            RelayRuntimeContext(
+                "corr-stream-rate-limited-1",
+                replyToken: "relay-token-stream-rate-limited-1",
+                replyMessageId: "relay-msg-stream-rate-limited-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_update_rejected");
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.RetryAfter.Should().Be(TimeSpan.FromSeconds(4));
+        result.HttpStatus.Should().Be(429);
+        result.RawErrorKey.Should().Be("rate_limited");
+        result.RawErrorCode.Should().Be(1005);
         relayHandler.Requests.Should().ContainSingle();
     }
 

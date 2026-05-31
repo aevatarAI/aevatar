@@ -140,17 +140,27 @@ public sealed class NyxIdRelayOutboundPort
         if (!result.Succeeded)
         {
             _logger.LogWarning(
-                "Nyx relay reply update failed: platform={Platform}, platformMessageId={PlatformMessageId}, detail={Detail}, editUnsupported={EditUnsupported}",
+                "Nyx relay reply update failed: platform={Platform}, platformMessageId={PlatformMessageId}, detail={Detail}, editUnsupported={EditUnsupported}, failureKind={FailureKind}, httpStatus={HttpStatus}, rawErrorKey={RawErrorKey}, rawErrorCode={RawErrorCode}",
                 platform,
                 platformMessageId,
                 result.Detail,
-                result.EditUnsupported);
+                result.EditUnsupported,
+                result.FailureKind,
+                result.HttpStatus,
+                result.RawErrorKey,
+                result.RawErrorCode);
             var errorCode = result.EditUnsupported
                 ? "relay_reply_edit_unsupported"
                 : "relay_reply_update_rejected";
             return EmitResult.Failed(
                 errorCode,
-                result.Detail ?? "Nyx relay reply update rejected.");
+                result.Detail ?? "Nyx relay reply update rejected.",
+                result.RetryAfter,
+                ComposeCapability.Unsupported,
+                result.FailureKind,
+                result.HttpStatus,
+                result.RawErrorKey,
+                result.RawErrorCode);
         }
 
         return EmitResult.Sent(

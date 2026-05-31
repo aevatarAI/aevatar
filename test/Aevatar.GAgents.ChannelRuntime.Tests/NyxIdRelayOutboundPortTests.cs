@@ -290,14 +290,17 @@ public sealed class NyxIdRelayOutboundPortTests
 
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("relay_reply_edit_unsupported");
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.HttpStatus.Should().Be(501);
+        result.RawErrorKey.Should().Be("edit_unsupported");
     }
 
     [Fact]
-    public async Task UpdateAsync_ShouldMapGenericFailuresToUpdateRejected()
+    public async Task UpdateAsync_ShouldMapGenericFailuresToUpdateRejectedWithTypedDiagnostics()
     {
         var handler = new RecordingJsonHandler(
             HttpStatusCode.BadRequest,
-            """{"error":"invalid_request"}""");
+            """{"error":"validation_error","error_code":1008}""");
         var port = CreatePort(handler, new StubComposer("slack"));
 
         var result = await port.UpdateAsync(
@@ -311,6 +314,37 @@ public sealed class NyxIdRelayOutboundPortTests
 
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("relay_reply_update_rejected");
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.HttpStatus.Should().Be(400);
+        result.RawErrorKey.Should().Be("validation_error");
+        result.RawErrorCode.Should().Be(1008);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldPreserveTransientDiagnostics()
+    {
+        var handler = new RecordingJsonHandler(
+            HttpStatusCode.TooManyRequests,
+            """{"error":"rate_limited","error_code":1005}""",
+            retryAfter: TimeSpan.FromSeconds(3));
+        var port = CreatePort(handler, new StubComposer("slack"));
+
+        var result = await port.UpdateAsync(
+            "slack",
+            BuildConversation(),
+            new MessageContent { Text = "hello" },
+            new OutboundDeliveryContext { ReplyMessageId = "msg-1" },
+            platformMessageId: "om_abc",
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_update_rejected");
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.RetryAfterTimeSpan.Should().Be(TimeSpan.FromSeconds(3));
+        result.HttpStatus.Should().Be(429);
+        result.RawErrorKey.Should().Be("rate_limited");
+        result.RawErrorCode.Should().Be(1005);
     }
 
     private static NyxIdRelayOutboundPort CreatePort(HttpMessageHandler handler, params IMessageComposer[] composers)
@@ -337,7 +371,8 @@ public sealed class NyxIdRelayOutboundPortTests
 
     private sealed class RecordingJsonHandler(
         HttpStatusCode status = HttpStatusCode.OK,
-        string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""") : HttpMessageHandler
+        string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""",
+        TimeSpan? retryAfter = null) : HttpMessageHandler
     {
         public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
 
@@ -348,10 +383,14 @@ public sealed class NyxIdRelayOutboundPortTests
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
 
-            return new HttpResponseMessage(status)
+            var response = new HttpResponseMessage(status)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
             };
+            if (retryAfter.HasValue)
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(retryAfter.Value);
+
+            return response;
         }
     }
 

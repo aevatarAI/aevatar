@@ -965,7 +965,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return ConversationStreamChunkResult.Failed(
                 string.IsNullOrWhiteSpace(emit.ErrorCode) ? "stream_chunk_rejected" : emit.ErrorCode,
                 emit.ErrorMessage ?? "Relay stream chunk rejected.",
-                editUnsupported);
+                editUnsupported,
+                emit.FailureKind,
+                emit.RetryAfterTimeSpan,
+                emit.HttpStatus,
+                emit.RawErrorKey,
+                emit.RawErrorCode);
         }
 
         var resolvedPlatformMessageId = string.IsNullOrWhiteSpace(emit.PlatformMessageId)
