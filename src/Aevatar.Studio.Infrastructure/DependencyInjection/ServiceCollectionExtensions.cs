@@ -67,7 +67,6 @@ public static class ServiceCollectionExtensions
         //   Old pattern: Host constructed ChatRuntime for Studio Ask AI preview sessions.
         //   New principle: Infrastructure implements the typed Application LLM stream port with ChatStreamAsync.
         services.AddSingleton<IStudioAuthoringLLMStreamPort, ChatRuntimeStudioAuthoringLLMStreamPort>();
-        services.AddSingleton<IScriptStoragePort, ChronoStorageScriptStoragePort>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();
         return services;
     }

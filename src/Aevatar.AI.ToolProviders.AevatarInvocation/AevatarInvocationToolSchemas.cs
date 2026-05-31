@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
 internal static class AevatarInvocationToolSchemas
@@ -66,10 +64,4 @@ internal static class AevatarInvocationToolSchemas
         stringEnums: ReadModelValues);
 
     public static IReadOnlyList<string> ReadModelNames => ReadModelValues["readmodel_name"];
-
-    public static JsonElement ParseObject(string json)
-    {
-        using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.Clone();
-    }
 }

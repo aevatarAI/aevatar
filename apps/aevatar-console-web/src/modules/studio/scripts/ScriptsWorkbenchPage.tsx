@@ -238,6 +238,7 @@ type ScriptsWorkbenchPageProps = {
   initialScriptId?: string;
   onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
   onSelectScriptId?: (scriptId: string) => void;
+  waitForObservationProbeTick?: () => Promise<void>;
 };
 
 let draftCounter = 0;
@@ -755,6 +756,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   initialScriptId = '',
   onRegisterLeaveGuard,
   onSelectScriptId,
+  waitForObservationProbeTick = waitForAsyncOperationProbeTick,
 }) => {
   const queryClient = useQueryClient();
   const initialScriptIdRef = React.useRef(initialScriptId.trim());
@@ -1643,7 +1645,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       isTerminal: (observation) =>
         normalizeScriptSaveOperationState(observation).terminal,
       canRetryError: () => true,
-      waitForNextAttempt: waitForAsyncOperationProbeTick,
+      waitForNextAttempt: waitForObservationProbeTick,
     });
 
     if (result.observation != null) {
@@ -1665,7 +1667,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       currentScript: null,
       isTerminal: false,
     };
-  }, [resolvedScopeId]);
+  }, [resolvedScopeId, waitForObservationProbeTick]);
 
   const waitForPromotionCatalog = React.useCallback(async (
     decision: ScriptPromotionDecision,
@@ -1687,11 +1689,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         // Ignore transient query failures while the catalog is catching up.
       }
 
-      await waitForAsyncOperationProbeTick();
+      await waitForObservationProbeTick();
     }
 
     return null;
-  }, [resolvedScopeId]);
+  }, [resolvedScopeId, waitForObservationProbeTick]);
 
   const handleSave = React.useCallback(async () => {
     setSavePending(true);

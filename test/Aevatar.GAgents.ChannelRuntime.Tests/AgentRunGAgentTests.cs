@@ -1,6 +1,7 @@
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -505,7 +506,7 @@ public sealed class AgentRunGAgentTests
             actorRuntime,
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false });
 
         await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
@@ -623,6 +624,58 @@ public sealed class AgentRunGAgentTests
         observedControl.NyxIdRoutePreference.Should().Be(
             "/api/v1/proxy/s/anthropic-via-bot-owner",
             "the route preference is independent from the model override");
+    }
+
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    [Fact]
+    public async Task HandleStartAsync_WhenUnboundChannelTurnRequestsToolCall_CompletesWithoutToolDispatch()
+    {
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var providerFactory = new ToolCallAttemptProviderFactory();
+        var toolSource = new CountingAgentRunToolSource(new AgentRunNoopTool());
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [toolSource],
+            localSkillCatalog: new LocalSkillCatalog());
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var activity = BuildRelayActivity();
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-unbound-no-tools",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-unbound-no-tools",
+            ToolContext = AgentToolExecutionContext.Empty.ToPayload(),
+            LlmControl = ControlForAgentRun("owner-model", "owner-route", 4).ToPayload(),
+            Metadata =
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-unbound-no-tools",
+            },
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.GenerationStep.Should().NotBeNull();
+        runtime.State.GenerationStep!.FinalNoToolsStep.Should().BeTrue();
+        runtime.State.GenerationStep.PendingToolCalls.Should().BeEmpty();
+        runtime.State.ProducedReplyText.Should().Be("attempted tool");
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Tools.Should().BeNull();
+        toolSource.DiscoverCount.Should().Be(0);
     }
 
     [Fact]
@@ -2257,6 +2310,19 @@ public sealed class AgentRunGAgentTests
             },
         };
 
+    private static LLMControlContext ControlForAgentRun(
+        string? model = null,
+        string? route = null,
+        int? rounds = null) =>
+        new(
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: model,
+            NyxIdRoutePreference: route,
+            MaxToolRoundsOverride: rounds,
+            UserMemoryPrompt: null);
+
     private static ChatRouteAction GAgentToolHint(string actorId)
     {
         var arguments = new Struct();
@@ -3028,6 +3094,65 @@ public sealed class AgentRunGAgentTests
             }
             return new ConversationReplyResult(ReplyText, Usage: null, FinishReason: null);
         }
+    }
+
+    private sealed class ToolCallAttemptProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "tool-call-attempt";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            yield return new LLMStreamChunk { DeltaContent = "attempted tool" };
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-unbound",
+                    Name = AgentRunNoopTool.ToolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class CountingAgentRunToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public int DiscoverCount { get; private set; }
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            DiscoverCount++;
+            return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
+    }
+
+    private sealed class AgentRunNoopTool : IAgentTool
+    {
+        public const string ToolName = "agent_run_noop_tool";
+
+        public string Name => ToolName;
+
+        public string Description => "No-op test tool.";
+
+        public string ParametersSchema => "{}";
+
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"executed":true}""");
     }
 
     private sealed class ThrowingReplyGenerator(Exception exception) : IConversationReplyGenerator

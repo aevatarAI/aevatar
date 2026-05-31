@@ -817,9 +817,12 @@ const TeamDetailPage: React.FC = () => {
     trimText(lens.currentService?.deploymentStatus) ||
     trimText(lens.activeRevision?.status) ||
     "--";
-  const currentHeaderStatus =
-    trimText(lens.currentRun?.completionStatus) || currentDeploymentStatus;
-  const currentHeaderStatusFriendly = formatFriendlyStatus(currentHeaderStatus);
+  // Refactor (iterv1/issue1444-first):
+  //   Old pattern: Team workbench rendered completed as stable and mixed run/deployment status.
+  //   New principle: expose run completion, deployment serving, and readmodel freshness as separate facts.
+  const currentHeaderStatusFriendly = teamSummaryQuery.data
+    ? `ReadModel · ${formatCompactTimestamp(latestVisibleUpdate)}`
+    : "ReadModel 暂不可见";
   const currentRevisionFriendly = formatFriendlyStatus(currentRevisionStatus);
   const currentDeploymentFriendly = formatFriendlyStatus(currentDeploymentStatus);
   const currentServiceKey =
@@ -1397,7 +1400,10 @@ const TeamDetailPage: React.FC = () => {
         currentDeploymentPillStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
         currentDeploymentPillText={currentDeploymentPillText}
         currentHeaderStatusFriendly={currentHeaderStatusFriendly}
-        currentHeaderStatusStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
+        currentHeaderStatusStyle={{
+          background: token.colorFillQuaternary,
+          color: token.colorTextSecondary,
+        }}
         currentMemberCardCaption={currentMemberCardCaption}
         currentMemberCardTooltip={currentMemberCardTooltip}
         currentMemberLabel={currentMemberLabel}
@@ -1497,10 +1503,10 @@ const TeamDetailPage: React.FC = () => {
             style={resolveStatusPillStyle(token, teamLifecycleStatus)}
             text={teamLifecycleLabel}
           />
-        ) : currentHeaderStatusFriendly !== "--" ? (
+        ) : lens.currentRun?.completionStatus ? (
           <DetailPill
-            style={resolveStatusPillStyle(token, currentHeaderStatus)}
-            text={currentHeaderStatusFriendly}
+            style={resolveStatusPillStyle(token, lens.currentRun.completionStatus)}
+            text={formatFriendlyStatus(lens.currentRun.completionStatus)}
           />
         ) : null
       }

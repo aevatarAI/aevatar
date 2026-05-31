@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -27,11 +26,12 @@ public sealed class ResponsesCompletionApplicationServiceTests
         var result = await service.CollectAsync(
             provider,
             BuildRequest(tool),
-            new Dictionary<string, string>(),
+            BuildToolContext(),
             BuildClassification(tool));
 
         result.Text.Should().Be("typed completion consumed");
-        provider.SecondRoundToolResult.Should().Contain("\"typed\":true");
+        provider.SecondRoundToolResult.Should().Contain("\"status\":2");
+        provider.SecondRoundToolResult.Should().Contain("\"service_id\":\"service-1\"");
         tool.TypedExecuteCount.Should().Be(1);
         tool.LegacyExecuteCount.Should().Be(0);
         harness.ChatRunPort.SubmittedToolCalls.Should().ContainSingle().Which.ToolExecutionResultJson
@@ -50,7 +50,7 @@ public sealed class ResponsesCompletionApplicationServiceTests
         var result = await service.StreamAsync(
             provider,
             BuildRequest(tool),
-            new Dictionary<string, string>(),
+            BuildToolContext(),
             BuildClassification(tool),
             (delta, _) =>
             {
@@ -60,7 +60,8 @@ public sealed class ResponsesCompletionApplicationServiceTests
 
         result.Text.Should().Be("typed completion consumed");
         textDeltas.Should().Equal("typed completion consumed");
-        provider.SecondRoundToolResult.Should().Contain("\"typed\":true");
+        provider.SecondRoundToolResult.Should().Contain("\"status\":2");
+        provider.SecondRoundToolResult.Should().Contain("\"service_id\":\"service-1\"");
         tool.TypedExecuteCount.Should().Be(1);
         tool.LegacyExecuteCount.Should().Be(0);
         harness.ChatRunPort.SubmittedToolCalls.Should().ContainSingle().Which.ToolExecutionResultJson
@@ -75,6 +76,14 @@ public sealed class ResponsesCompletionApplicationServiceTests
             CallerContext = new LLMRequestCallerContext("scope-1", "owner-1", "resp_1"),
             Model = "test-model",
             Tools = [tool],
+            ToolContext = BuildToolContext(),
+        };
+
+    private static AgentToolExecutionContext BuildToolContext() =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-1", null),
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", "resp_1"),
         };
 
     private static ResponsesToolClassification BuildClassification(IAgentTool tool) =>
@@ -146,24 +155,21 @@ public sealed class ResponsesCompletionApplicationServiceTests
             {
                 ToolExecutionResultJson = """{"dispatch":"typed"}""",
                 RunId = "team-command",
-                Status = "RunFinished",
-                CompletionResultJson = """{"typed":true,"status":"RunFinished"}""",
+                Status = "accepted",
                 ServiceId = "service-1",
                 EndpointId = "entry",
                 ScopeId = "scope-1",
                 WaitMode = ChatRunSubRunWaitMode.Complete,
-                CompletionObserved = true,
+                CompletionObserved = false,
             });
         }
     }
 
     private sealed class CompletionHarness
     {
-        private readonly RecordingSubscriptionProvider _subscriptionProvider = new();
-
         public CompletionHarness()
         {
-            ChatRunPort = new RecordingChatRunActorPort(_subscriptionProvider);
+            ChatRunPort = new RecordingChatRunActorPort();
         }
 
         public RecordingChatRunActorPort ChatRunPort { get; }
@@ -171,14 +177,12 @@ public sealed class ResponsesCompletionApplicationServiceTests
         public ChatRunToolCompletionCoordinator CreateCoordinator() =>
             new(
                 ChatRunPort,
-                _subscriptionProvider,
                 new EmptyTerminalQueryPort(),
-                new EmptyServiceRunQueryPort(),
+                new StaticServiceRunQueryPort(),
                 new EmptyWorkflowQueryService());
     }
 
-    private sealed class RecordingChatRunActorPort(RecordingSubscriptionProvider subscriptionProvider)
-        : IChatRunActorPort
+    private sealed class RecordingChatRunActorPort : IChatRunActorPort
     {
         public ChatRunStartRequest? StartRequest { get; private set; }
 
@@ -209,21 +213,7 @@ public sealed class ResponsesCompletionApplicationServiceTests
             string chatRunActorId,
             ChatRunSubRunTerminalObserved observed,
             CancellationToken ct = default) =>
-            subscriptionProvider.PublishReadyAsync(
-                chatRunActorId,
-                new ChatRunToolResultReady
-                {
-                    ResponseId = StartRequest?.ResponseId ?? string.Empty,
-                    RunId = observed.RunId,
-                    CallerToolCallId = SubmittedToolCalls.Single().ToolCall.Id,
-                    ToolName = SubmittedToolCalls.Single().ToolCall.Name,
-                    InternalResultJson = observed.InternalResultJson,
-                    LlmRound = SubmittedToolCalls.Single().LlmRound,
-                    Status = observed.Status,
-                    ServiceId = observed.ServiceId,
-                    EndpointId = observed.EndpointId,
-                    CompletionObserved = observed.CompletionObserved,
-                });
+            Task.CompletedTask;
 
         public Task TerminateAsync(
             string chatRunActorId,
@@ -232,37 +222,7 @@ public sealed class ResponsesCompletionApplicationServiceTests
             Task.CompletedTask;
     }
 
-    private sealed class RecordingSubscriptionProvider : IActorEventSubscriptionProvider
-    {
-        private Func<ChatRunToolResultReady, Task>? _handler;
-
-        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
-            string actorId,
-            Func<TMessage, Task> handler,
-            CancellationToken ct = default)
-            where TMessage : class, IMessage, new()
-        {
-            if (typeof(TMessage) != typeof(ChatRunToolResultReady))
-                throw new NotSupportedException(typeof(TMessage).FullName);
-
-            _handler = ready => handler((TMessage)(object)ready);
-            return Task.FromResult<IAsyncDisposable>(new Subscription(this));
-        }
-
-        public Task PublishReadyAsync(string actorId, ChatRunToolResultReady ready) =>
-            _handler?.Invoke(ready) ?? Task.CompletedTask;
-
-        private sealed class Subscription(RecordingSubscriptionProvider owner) : IAsyncDisposable
-        {
-            public ValueTask DisposeAsync()
-            {
-                owner._handler = null;
-                return ValueTask.CompletedTask;
-            }
-        }
-    }
-
-    private sealed class EmptyServiceRunQueryPort : IServiceRunQueryPort
+    private sealed class StaticServiceRunQueryPort : IServiceRunQueryPort
     {
         public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(
             ServiceRunQuery query,
@@ -273,8 +233,33 @@ public sealed class ResponsesCompletionApplicationServiceTests
             string scopeId,
             string serviceId,
             string runId,
-            CancellationToken ct = default) =>
-            Task.FromResult<ServiceRunSnapshot?>(null);
+            CancellationToken ct = default)
+        {
+            ServiceRunSnapshot? snapshot = scopeId == "scope-1" && serviceId == "service-1" && runId == "team-command"
+                ? new ServiceRunSnapshot(
+                    "scope-1",
+                    "service-1",
+                    "service-key",
+                    "team-command",
+                    "team-command",
+                    "team-correlation",
+                    "entry",
+                    ServiceImplementationKind.Static,
+                    "target-actor",
+                    "revision-1",
+                    "deployment-1",
+                    ServiceRunStatus.Completed,
+                    "actor-1",
+                    "tenant-1",
+                    "app-1",
+                    "namespace-1",
+                    7,
+                    "event-7",
+                    DateTimeOffset.Parse("2026-05-23T00:00:00+00:00"),
+                    DateTimeOffset.Parse("2026-05-23T00:01:00+00:00"))
+                : null;
+            return Task.FromResult(snapshot);
+        }
 
         public Task<ServiceRunSnapshot?> GetByCommandIdAsync(
             string scopeId,

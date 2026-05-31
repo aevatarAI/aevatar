@@ -300,6 +300,7 @@ Bash(
      --cd <worktree> --add-dir /Users/auric/aevatar \
      --prompt <prompt-file> --log <log-file> --timeout 5400
    ```
+   `spawn-codex.sh` 启动接受时输出 `ACCEPTED: execution_id=<id> ack_stage=accepted`,同 id 在 `.refactor-loop/markers/<execution_id>.running.json` 与 `.done.json` 中持续；未传 `--execution-id` 时由 wrapper 自动生成,旧 `SPAWN/DONE` banner 仍保留给 legacy reader。
 
 **反模式(❌ 已废,已删除见 #1242)`spawn_with_banner.py + Popen 自 detach`**:
 - 用 `Popen + start_new_session` 把 codex 脱离 python parent → harness 看不见 codex
@@ -937,9 +938,9 @@ Daemon 工作流(2026-05-30 重写 — PR-based 双向 sync):
 2. 每方向:计算 source ahead of target = N;N==0 → skip
 3. 没 open sync PR → 创 sync branch + open PR(forward 立即 enable auto-merge;reverse 等 maintainer review)
 4. 有 open sync PR + `mergeStateStatus`:
-   - **DIRTY** → spawn codex resolve in REVERSE_WT/FORWARD_WT
+   - **DIRTY** → daemon 物化 conflict-resolve prompt/log/worktree 并写 pending event;controller 下次 wakeup 用 `spawn-codex.sh` 派发
    - **BEHIND** → `gh api .../update-branch`(GitHub merge base into PR head)
-   - **CI fail** → spawn codex fix-ci
+   - **CI fail** → daemon 物化 fix-ci prompt/log/worktree 并写 pending event;controller 下次 wakeup 用 `spawn-codex.sh` 派发
    - **CLEAN + sync_branch behind source by N > 0**(stale)→ 自动 `git reset --hard origin/<source>` + `git push --force-with-lease`(2026-05-30 修复:之前会卡在 CLEAN 状态等 maintainer 看陈旧 PR)
    - **CLEAN + sync 同步** → 等 GitHub auto-merge(forward)/ maintainer review(reverse)
 5. Reverse gate:trunk 落后 dev > 0 → reverse 暂停(先完 forward 让 trunk superset of dev)
@@ -951,6 +952,7 @@ Daemon 工作流(2026-05-30 重写 — PR-based 双向 sync):
 | 任务 | 谁做 |
 |---|---|
 | dev → auto-refact-dev sync(常规 + 冲突解决) | **daemon**(600s 自主) |
+| sync conflict / CI fix codex dispatch | daemon 只写 `.refactor-loop/.controller-pending-events.log`;controller 用 `spawn-codex.sh` 派发 |
 | 处理 design issue / Phase 9 / Phase 8 fix loop | controller(wakeup) |
 | 派 reviewer / fix / implement codex | controller |
 | 监控 daemon liveness + restart | controller per-wakeup |
@@ -971,7 +973,7 @@ tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FA
 
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
 - ❌ daemon push 后 controller 不 fetch 就 commit(stale base bug)
-- ❌ Daemon 派 codex 自己 push(daemon 决定 push 时机,codex 只 resolve + merge --continue)
+- ❌ Daemon `nohup` / `Popen` / `disown` 自派 codex;daemon 只能物化 pending event,controller 负责 harness-tracked dispatch
 - ❌ 多 daemon 实例(`pgrep -c dev-sync-daemon` 必须 = 1)
 
 ### Sync procedure
@@ -2648,6 +2650,15 @@ Bash(
 2. **No external repo changes** — NyxID / chrono-* are out of scope.
 3. **Code self-documents the refactor** — every refactored type/method gets a 3-5 line comment of the form `// Refactor (iterN/cluster-XXX): Old pattern: …  New principle: …`.
 4. **No `commit`/`push`/`checkout`/`gh pr create`/`git branch` inside codex prompts** — the controller owns git topology(branch 创建、commit、push、PR 开均由 controller 做)。事故记录:#952 codex 自开 PR 默认 `base=dev`(而非 `auto-refact-dev`)→ 与 dev CONFLICTING + 误对外发布。如不显式禁止,`gh pr create` 默认 base = repo default branch 错误。**Implement/fix/test-add prompt template 必须 verbatim 含此禁令**(不只在 SKILL hint,要在 prompt 里写明)。
+
+   **例外:`conflict-resolve` role codex** — 解 textual conflict 必须能跑 `git fetch` / `git merge` / `git add`(否则 git 不知 conflict 已解)。允许:
+   - `git fetch origin`
+   - `git merge origin/<base-branch>`(包括 `--abort` 恢复)
+   - `git add <resolved-file>`(只 add resolved files,不 add 其他)
+   
+   仍禁止:`git commit`、`git push`、`git checkout`、新 file 创建、对 conflict file 外的文件改动。这些由 controller 主控。
+   
+   事故记录:2026-05-30 conflict-resolve v1 prompt 没说允许 git add → codex 保守按 hard rule 4 全拒,输出 `CONFLICT_BLOCKED:git_commit_forbidden_by_shared_hard_rules`。本次例外补齐;`prompts/conflict-resolve-*.md` 模板用此例外措辞即可,不用每个 PR override。
 5. **No `Task.Delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.

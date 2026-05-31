@@ -55,7 +55,7 @@ Verdict semantics:
 - **comment**: missing nice-to-have tests, minor naming issues, or polling-allowlist addition lacks justification but is plausible.
 - **reject**: real coverage gap on net-new logic, or `[Skip]` added to bypass failure, or `Task.Delay` added without allowlist entry, or assertions weakened.
 
-End with marker: `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`
+End with marker: `REVIEW_DONE:${ISSUE_NUMBER}:tests:<verdict>`
 
 ## Hard rules
 

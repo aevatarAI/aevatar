@@ -49,6 +49,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
 
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    private sealed record SlashBindingLookup(
+        bool IdentityEnabled,
+        bool SubjectResolved,
+        ExternalSubjectRef? Subject,
+        BindingId? BindingId);
+
     private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
@@ -147,7 +157,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
 
-        var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity, runtimeContext));
+        var inboundEvent = ToInboundEvent(activity, registration, inbound);
 
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
@@ -214,74 +224,33 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         var handler = ResolveSlashCommandHandler(commandName);
+        var bindingLookup = await ResolveSlashBindingAsync(commandName, inbound, registration, queryPort, ct)
+            .ConfigureAwait(false);
+
         if (handler is null)
         {
-            // Unknown slash command — fall through to the LLM path to preserve
-            // the prior behaviour where /<unknown> just looked like a regular
-            // user message.
+            if (bindingLookup.IdentityEnabled && bindingLookup.SubjectResolved && bindingLookup.BindingId is null)
+                return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+
+            // Unknown slash command for bound senders falls through to the Ornn
+            // skill-discovery rewrite in BuildLlmReplyRequestAsync.
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
-        {
-            _logger.LogWarning(
-                "Slash command rejected: missing sender_id or platform on inbound message");
-            return null;
-        }
-
-        // Tenant resolution priority (avoids cross-tenant identity collapse on
-        // multi-tenant platforms like Lark — see ADR-0018 §Actor Architecture):
-        //   1. Platform adapter populated `tenant` / `open_tenant_id` in
-        //      InboundMessage.Extra. Preferred — adapter knows its own scope.
-        //   2. Fall back to `registration.ScopeId` so the binding is at least
-        //      per-bot-scoped (each bot is registered to one tenant; same
-        //      sender across two bots in two tenants becomes two bindings).
-        //   3. As a last resort, refuse the slash command rather than commit
-        //      a tenant-collapsed binding — production deployments MUST
-        //      surface this as a configuration error.
-        var tenant = ResolveTenant(inbound, registration);
-        if (tenant is null)
-        {
-            _logger.LogWarning(
-                "Slash command rejected: cannot resolve tenant for platform={Platform}, sender={Sender}, registration={RegistrationId}",
-                inbound.Platform,
-                inbound.SenderId,
-                registration.Id);
-            return null;
-        }
-
-        var subject = new ExternalSubjectRef
-        {
-            Platform = inbound.Platform.Trim().ToLowerInvariant(),
-            Tenant = tenant,
-            ExternalUserId = inbound.SenderId.Trim(),
-        };
-
-        BindingId? existing;
-        try
-        {
-            existing = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // Fail closed: if we can't tell whether the sender is bound, treat
-            // them as unbound so commands that need binding don't proceed
-            // against bot-owner credentials.
-            _logger.LogError(ex, "Binding lookup for slash command {Command} failed; treating sender as unbound", commandName);
-            existing = null;
-        }
-
-        if (handler.RequiresBinding && existing is null)
+        if (handler.RequiresBinding && bindingLookup.BindingId is null)
         {
             return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
         }
+
+        if (bindingLookup.Subject is null)
+            return null;
 
         var commandContext = new ChannelSlashCommandContext
         {
             CommandName = handler.Name,
             ArgumentText = argumentText,
-            Subject = subject,
-            BindingIdValue = existing?.Value,
+            Subject = bindingLookup.Subject,
+            BindingIdValue = bindingLookup.BindingId?.Value,
             RegistrationId = registration.Id,
             RegistrationScopeId = registration.ScopeId ?? string.Empty,
             SenderId = inbound.SenderId.Trim(),
@@ -680,6 +649,45 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             return new MessageContent { Text = ex.Message };
         }
+    }
+
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    private async Task<SlashBindingLookup> ResolveSlashBindingAsync(
+        string commandName,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        IExternalIdentityBindingQueryPort queryPort,
+        CancellationToken ct)
+    {
+        if (!TryResolveExternalSubject(inbound, registration, out var subject))
+        {
+            _logger.LogWarning(
+                "Slash command rejected: cannot resolve subject for command={Command}, platform={Platform}, sender={Sender}, registration={RegistrationId}",
+                commandName,
+                inbound.Platform,
+                inbound.SenderId,
+                registration.Id);
+            return new SlashBindingLookup(true, false, null, null);
+        }
+
+        BindingId? existing;
+        try
+        {
+            existing = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Fail closed: if we can't tell whether the sender is bound, treat
+            // them as unbound so commands that need binding don't proceed
+            // against bot-owner credentials.
+            _logger.LogError(ex, "Binding lookup for slash command {Command} failed; treating sender as unbound", commandName);
+            existing = null;
+        }
+
+        return new SlashBindingLookup(true, true, subject, existing);
     }
 
     private static bool TryResolveLlmSelectionAction(
@@ -1479,9 +1487,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static ChannelInboundEvent ToInboundEvent(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
-        InboundMessage inbound,
-        string? userAccessToken)
+        InboundMessage inbound)
     {
+        // Refactor (v1/issue1466-first):
+        //   Old: ChannelInboundEvent copied userAccessToken into registration_token.
+        //   New: inbound durable facts carry only stable routing facts.
+        //   Principle: runtime credentials flow through transient context, not proto facts.
         var inboundEvent = new ChannelInboundEvent
         {
             Text = inbound.Text,
@@ -1492,7 +1503,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = userAccessToken ?? string.Empty,
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
@@ -1511,7 +1521,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ResolvedSenderBinding? senderBinding,
         CancellationToken ct)
     {
-        var requestActivity = BuildLlmRequestActivity(activity, inboundEvent.Text);
+        var requestActivity = BuildLlmRequestActivity(
+            activity,
+            inboundEvent.Text,
+            _identityBindingQueryPort is null || senderBinding is not null);
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = activity.Id,
@@ -1588,13 +1601,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             .ConfigureAwait(false);
     }
 
-    private ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText)
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    private ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText, bool allowSkillInvocationPrompt)
     {
         var requestActivity = activity.Clone();
         if (requestActivity.Content is null)
             return requestActivity;
 
-        if (TryBuildSkillInvocationPrompt(inboundText, out var prompt))
+        if (allowSkillInvocationPrompt && TryBuildSkillInvocationPrompt(inboundText, out var prompt))
             requestActivity.Content.Text = prompt;
 
         return requestActivity;

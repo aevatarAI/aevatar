@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Xunit;
 
@@ -42,6 +43,44 @@ public sealed class ChannelRuntimeSourceRegressionTests
         }
     }
 
+    [Fact]
+    public void Lark_new_message_post_must_stay_behind_outbound_dispatcher()
+    {
+        var repositoryRoot = GetRepositoryRoot();
+        var bypasses = Directory.EnumerateFiles(Path.Combine(repositoryRoot, "agents"), "*.cs", SearchOption.AllDirectories)
+            .Where(static file => !file.EndsWith("LarkOutboundDispatcher.cs", StringComparison.Ordinal))
+            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: StripComments(File.ReadAllText(file, Encoding.UTF8))))
+            .Where(static item =>
+                item.Source.Contains("open-apis/im/v1/messages?receive_id_type=", StringComparison.Ordinal) ||
+                item.Source.Contains("open-apis/im/v1/messages?receive_id_type", StringComparison.Ordinal))
+            .Select(static item => item.File)
+            .ToArray();
+
+        bypasses.Should().BeEmpty(
+            "new Lark message POST, message_id parsing, and 230002 fallback belong to LarkOutboundDispatcher");
+    }
+
+    [Fact]
+    public void Retired_nyx_relay_agent_builder_flow_must_not_reappear_in_source_or_tests()
+    {
+        var repositoryRoot = GetRepositoryRoot();
+        var token = "NyxRelay" + "AgentBuilderFlow";
+        var hits = Directory.EnumerateFiles(repositoryRoot, "*.*", SearchOption.AllDirectories)
+            .Where(static file =>
+                (file.EndsWith(".cs", StringComparison.Ordinal) ||
+                 file.EndsWith(".proto", StringComparison.Ordinal) ||
+                 file.EndsWith(".csproj", StringComparison.Ordinal)) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: File.ReadAllText(file, Encoding.UTF8)))
+            .Where(item => item.Source.Contains(token, StringComparison.Ordinal))
+            .Select(static item => item.File)
+            .ToArray();
+
+        hits.Should().BeEmpty("the retired relay builder flow was deleted in #1306 and must not re-enter production code or tests");
+    }
+
     private static string ReadRepositorySources(params string[] relativeDirectories)
     {
         var repositoryRoot = GetRepositoryRoot();
@@ -65,6 +104,12 @@ public sealed class ChannelRuntimeSourceRegressionTests
     {
         var repositoryRoot = GetRepositoryRoot();
         return File.ReadAllText(Path.Combine(repositoryRoot, relativeFile), Encoding.UTF8);
+    }
+
+    private static string StripComments(string source)
+    {
+        var withoutBlockComments = Regex.Replace(source, @"/\*.*?\*/", " ", RegexOptions.Singleline);
+        return Regex.Replace(withoutBlockComments, @"//.*?$", string.Empty, RegexOptions.Multiline);
     }
 
     private static string GetRepositoryRoot()

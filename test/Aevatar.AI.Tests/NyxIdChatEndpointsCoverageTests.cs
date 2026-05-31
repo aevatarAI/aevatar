@@ -2577,7 +2577,7 @@ public class NyxIdChatEndpointsCoverageTests
         sessionHub.Published[0].Event.TextMessageContent.Delta.Should().Be("delta-1");
         sessionHub.Published[1].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
         sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
-        sessionHub.Published.Should().OnlyContain(x => x.ScopeId == "actor-1" && x.SessionId == "session-1");
+        sessionHub.Published.Should().OnlyContain(x => x.RootActorId == "actor-1" && x.SessionId == "session-1");
     }
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
@@ -3512,26 +3512,26 @@ public class NyxIdChatEndpointsCoverageTests
 
     private sealed class RecordingNyxIdChatSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
     {
-        public List<(string ScopeId, string SessionId, AGUIEvent Event)> Published { get; } = [];
+        public List<(string RootActorId, string SessionId, AGUIEvent Event)> Published { get; } = [];
 
         public Task PublishAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             AGUIEvent evt,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Published.Add((scopeId, sessionId, evt));
+            Published.Add((rootActorId, sessionId, evt));
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<AGUIEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
-            _ = scopeId;
+            _ = rootActorId;
             _ = sessionId;
             _ = handler;
             ct.ThrowIfCancellationRequested();

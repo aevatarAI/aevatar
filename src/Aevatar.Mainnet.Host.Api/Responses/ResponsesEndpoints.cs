@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -581,18 +582,17 @@ internal static partial class ResponsesApiEndpoints
         ArgumentNullException.ThrowIfNull(callerScope);
 
         return new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
-                callerScope.ScopeId,
-                callerScope.OwnerSubject,
-                callerScope.OriginKind.ToString()),
-            new Dictionary<string, string>(StringComparer.Ordinal)
+            AgentToolExecutionContext.Empty with
             {
-                [LLMRequestMetadataKeys.RequestId] = responseId,
-                [LLMRequestMetadataKeys.ResponseId] = responseId,
-                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
-                [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
+                Request = new AgentToolRequestIdentity(responseId, null),
+                Credentials = new AgentToolCredentials(bearerToken, null, null),
+                Caller = new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+                Channel = new AgentToolChannelContext(
+                    callerScope.OriginKind.ToString(),
+                    null,
+                    callerScope.ScopeId,
+                    null,
+                    null),
             });
     }
 

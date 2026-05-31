@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -62,6 +63,11 @@ public sealed class MessagesCommandFacadeTests
         result.StreamPlan.Should().NotBeNull();
         result.Completed.Should().BeNull();
         result.StreamPlan!.LlmRequest.Model.Should().Be("claude");
+        result.StreamPlan.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.MessageId);
+        result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        result.StreamPlan.LlmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
         sessions.Registered.Should().ContainSingle();
     }
 
@@ -87,12 +93,76 @@ public sealed class MessagesCommandFacadeTests
         command.Model.Should().Be("claude-sonnet");
     }
 
-    private static MessagesCommandRequest BuildRequest(string model, bool stream = false) =>
+    [Fact]
+    public async Task CreateAsync_WithToolPayloads_ShouldWriteTypedToolArgumentsSchemaAndChoiceHint()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(GAgentToolHintAction("member-1")),
+            toolClassificationService: new StaticResponsesToolClassificationService(
+                new ResponsesToolClassification(
+                    [
+                        new ResponsesApplicationToolDeclaration(
+                            "get_weather",
+                            "Get weather",
+                            """{"type":"object","properties":{"city":{"type":"string"}}}""",
+                            "schema-1"),
+                    ],
+                    [],
+                    [],
+                    [])));
+
+        var result = await facade.CreateAsync(
+            BuildRequest(
+                "claude-sonnet",
+                chatMessages:
+                [
+                    new ChatMessage
+                    {
+                        Role = "assistant",
+                        ToolCalls =
+                        [
+                            new ToolCall
+                            {
+                                Id = "call-1",
+                                Name = "get_weather",
+                                ArgumentsJson = """{"city":"Paris"}""",
+                            },
+                        ],
+                    },
+                ],
+                declaredTools:
+                [
+                    new ResponsesApplicationToolDeclaration(
+                        "get_weather",
+                        "Get weather",
+                        """{"type":"object","properties":{"city":{"type":"string"}}}""",
+                        "schema-1"),
+                ]),
+            CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Messages.Should().ContainSingle().Which.ToolCalls.Should().ContainSingle()
+            .Which.Arguments.Fields["city"].StringValue.Should().Be("Paris");
+        command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
+        var declaration = command.ToolSelection.ForwardedTools.Should().ContainSingle().Subject;
+        declaration.Parameters.Fields["type"].StringValue.Should().Be("object");
+        declaration.Parameters.Fields["properties"].StructValue.Fields["city"].StructValue.Fields["type"]
+            .StringValue.Should().Be("string");
+    }
+
+    private static MessagesCommandRequest BuildRequest(
+        string model,
+        bool stream = false,
+        IReadOnlyList<ChatMessage>? chatMessages = null,
+        IReadOnlyList<ResponsesApplicationToolDeclaration>? declaredTools = null) =>
         new(
             model,
             100,
-            [ChatMessage.User("hello")],
-            [],
+            chatMessages ?? [ChatMessage.User("hello")],
+            declaredTools ?? [],
             false,
             null,
             null,
@@ -105,7 +175,8 @@ public sealed class MessagesCommandFacadeTests
     private static MessagesCommandFacade CreateFacade(
         ILlmSessionRegistrationPort? sessionPort = null,
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
-        RecordingActorDispatchPort? dispatchPort = null)
+        RecordingActorDispatchPort? dispatchPort = null,
+        IResponsesToolClassificationService? toolClassificationService = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new MessagesCommandFacade(
@@ -114,7 +185,7 @@ public sealed class MessagesCommandFacadeTests
             new StaticResponsesRouteResolver("route-value"),
             effectiveSessionPort,
             dispatchPort ?? new RecordingActorDispatchPort(),
-            new StaticResponsesToolClassificationService(),
+            toolClassificationService ?? new StaticResponsesToolClassificationService(),
             new StaticResponsesDirectToolPlanService(),
             NullLogger<MessagesCommandFacade>.Instance);
     }
@@ -140,13 +211,39 @@ public sealed class MessagesCommandFacadeTests
                 Model = "claude-sonnet",
                 Messages = [ChatMessage.User("hello")],
             },
-            new Dictionary<string, string>(StringComparer.Ordinal),
+            BuildToolContext("msg_stream"),
             new ResponsesToolClassification([], [], [], []),
             ResponsesToolChoiceHintPlan.Empty);
+
+    private static AgentToolExecutionContext BuildToolContext(string responseId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(responseId, null),
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", responseId),
+        };
 
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
         ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
+    {
+        ForwardToModel = new ForwardToModel
+        {
+            ModelName = "claude-sonnet",
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
+                    },
+                },
+            },
+        },
     };
 
     private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
@@ -179,20 +276,25 @@ public sealed class MessagesCommandFacadeTests
             });
     }
 
-    private sealed class StaticResponsesToolClassificationService : IResponsesToolClassificationService
+    private sealed class StaticResponsesToolClassificationService(
+        ResponsesToolClassification? classification = null) : IResponsesToolClassificationService
     {
         public ValueTask<ResponsesToolClassification> ClassifyAsync(
             IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
             ResponsesToolProviderContext context,
             IEnumerable<IResponsesToolProvider>? additionalProviders = null,
             CancellationToken ct = default) =>
-            ValueTask.FromResult(new ResponsesToolClassification([], [], [], []));
+            ValueTask.FromResult(classification ?? new ResponsesToolClassification([], [], [], []));
     }
 
     private sealed class StaticResponsesDirectToolPlanService : IResponsesDirectToolPlanService
     {
         public ResponsesDirectToolPlan Build(ChatRouteAction? routeAction) =>
-            ResponsesDirectToolPlan.Empty;
+            ResponsesDirectToolPlan.Success(
+                [],
+                ResponsesToolChoiceHints.Create(
+                    routeAction?.ForwardToModel?.ToolChoiceHint?.ToolName,
+                    routeAction?.ForwardToModel?.ToolChoiceHint?.PrefilledArguments));
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort

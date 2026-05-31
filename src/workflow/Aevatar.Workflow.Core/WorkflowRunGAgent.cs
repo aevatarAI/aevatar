@@ -31,6 +31,9 @@ namespace Aevatar.Workflow.Core;
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
+// Refactor (iter164/cluster-002-first):
+//   Old pattern: LLM workflow modules listened to presentation frames for completion.
+//   New principle: committed role reply facts are persisted and then self-published as workflow-owned completion signals.
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost

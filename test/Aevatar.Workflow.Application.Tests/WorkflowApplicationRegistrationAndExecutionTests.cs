@@ -402,6 +402,62 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
+    public void EnvelopeFactory_ShouldMaterializeTrustedControlAsTypedProtoFields_NotMetadata()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunCommandMetadataKeys.ScopeId] = "evil-scope",
+                ["scope_id"] = "evil-legacy-scope",
+                ["client-note"] = "open-extension",
+            },
+            ScopeId: "scope-typed",
+            LlmControl: new LLMControlContext(
+                NyxIdAccessToken: "access-token",
+                NyxIdOrgToken: "org-token",
+                SenderNyxIdAccessToken: "sender-token",
+                ModelOverride: "model-a",
+                NyxIdRoutePreference: "route-a",
+                MaxToolRoundsOverride: 5,
+                UserMemoryPrompt: "memory"),
+            ToolContext: AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = "model-a",
+                    NyxIdRoutePreference = "route-a",
+                    MaxToolRoundsOverride = 5,
+                    UserMemoryPrompt = "memory",
+                },
+            });
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+
+        request.ScopeId.Should().Be("scope-typed");
+        request.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
+        request.ToolContext.Caller.OwnerSubject.Should().Be("owner-typed");
+        request.ToolContext.Routing.ModelOverride.Should().Be("model-a");
+        request.LlmControl.ModelOverride.Should().Be("model-a");
+        request.LlmControl.NyxIdRoutePreference.Should().Be("route-a");
+        request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
+        request.Metadata.Should().Contain("client-note", "open-extension");
+        request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        request.Metadata.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
     public void EnvelopeFactory_ShouldCarryInputParts_AlongsideTypedScopeId()
     {
         var services = new ServiceCollection();

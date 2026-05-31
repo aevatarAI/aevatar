@@ -182,9 +182,9 @@ public sealed class AevatarInvocationDispatcher
                 request.TeamId.Trim(),
                 ct);
             var invocation = BuildStaticInvocationRequest(resolution, request);
-            return wait == InvocationWaitMode.Complete
-                ? await InvokeTeamToCompletionAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct)
-                : await InvokeTeamToAcceptanceAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct);
+            // Refactor (v1/issue1470-first): InvokeTeam wait=complete must return the dispatch receipt only;
+            // terminal completion is observed through the service-run readmodel instead of folding live AGUI frames.
+            return await InvokeTeamToAcceptanceAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct);
         }
         catch (TeamEntryMemberResolutionException ex)
         {
@@ -224,8 +224,9 @@ public sealed class AevatarInvocationDispatcher
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
-        var metadata = BuildLegacyMetadata(scope.Value!, request.Inputs.Headers);
-        metadata[WorkflowRunCommandMetadataKeys.ScopeId] = scope.Value!.ScopeId;
+        // Refactor (iter1353/cluster-001): Old pattern: workflow dispatch stamped trusted caller/control facts into Metadata.
+        // New principle: Metadata carries only filtered payload headers; ScopeId, ToolContext, and LlmControl carry trusted facts.
+        var metadata = BuildPayloadHeaders(request.Inputs.Headers);
         var workflowYamls = request.WorkflowYamls.Count == 0
             ? null
             : request.WorkflowYamls
@@ -245,7 +246,9 @@ public sealed class AevatarInvocationDispatcher
             SessionId: ResolveSessionId(),
             InputParts: ToWorkflowInputParts(request.Inputs),
             Metadata: metadata,
-            ScopeId: scope.Value.ScopeId);
+            ScopeId: scope.Value!.ScopeId,
+            LlmControl: ToLlmControlContext(AgentToolRequestContext.Current),
+            ToolContext: AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty);
 
         var result = await _workflowDispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded || result.Receipt == null)
@@ -268,7 +271,7 @@ public sealed class AevatarInvocationDispatcher
             CommandId = receipt.CommandId,
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
-        }, scope.Value.ScopeId);
+        }, scope.Value!.ScopeId);
     }
 
     public async Task<string> ObserveRunAsync(string argumentsJson, CancellationToken ct = default)
@@ -417,44 +420,6 @@ public sealed class AevatarInvocationDispatcher
             wait), resolution.ScopeId);
     }
 
-    private async Task<ChatRunToolCompletionRequest> InvokeTeamToCompletionAsync(
-        ChatRunToolCompletionRequest? chatRunRequest,
-        StaticGAgentStreamInvocationRequest invocation,
-        TeamEntryMemberResolution resolution,
-        string endpointId,
-        InvocationWaitMode wait,
-        CancellationToken ct)
-    {
-        var frames = new List<AGUIEvent>();
-        var result = await _teamInvocationPort.InvokeAsync(
-            invocation,
-            (frame, _) =>
-            {
-                frames.Add(frame.Clone());
-                return ValueTask.CompletedTask;
-            },
-            null,
-            ct);
-
-        if (!result.Succeeded || result.Accepted == null)
-        {
-            var startError = Error(
-                result.StartError.ToString(),
-                $"Team invocation was not accepted: {result.StartError}");
-            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(startError), startError);
-        }
-
-        var accepted = BuildTeamAcceptedResult(resolution, endpointId, result.Accepted, wait);
-        accepted.Status = result.CompletionObserved ? result.CompletionStatus.ToString() : "accepted";
-        accepted.ResultJson = AevatarInvocationJson.ToJson(new
-        {
-            completion_status = result.CompletionStatus.ToString(),
-            completion_observed = result.CompletionObserved,
-            events = frames.Select(static frame => AevatarInvocationToolSchemas.ParseObject(ProtoJsonFormatter.Format(frame))).ToArray(),
-        });
-        return ToChatRunRequest(chatRunRequest, accepted, resolution.ScopeId);
-    }
-
     private InvocationToolResult BuildTeamAcceptedResult(
         TeamEntryMemberResolution resolution,
         string endpointId,
@@ -465,7 +430,7 @@ public sealed class AevatarInvocationDispatcher
         return new InvocationToolResult
         {
             RunId = runId,
-            Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
+            Status = wait == InvocationWaitMode.Stream ? "streaming" : "accepted",
             StreamTopic = wait == InvocationWaitMode.Stream
                 ? AevatarInvocationStreamTopics.ForServiceRun(resolution.ScopeId, resolution.PublishedServiceId, runId)
                 : string.Empty,
@@ -571,6 +536,8 @@ public sealed class AevatarInvocationDispatcher
         TeamEntryMemberResolution resolution,
         InvokeTeamToolRequest request)
     {
+        // Refactor (issue1495/first-slice): Old pattern: static team dispatch accepted trusted caller/control facts through legacy Headers.
+        // New principle: static team Headers carry only filtered payload headers; service identity and caller fields remain the admission boundary.
         var headers = BuildPayloadHeaders(request.Payload.Headers);
         var identity = new ServiceIdentity
         {
@@ -590,7 +557,9 @@ public sealed class AevatarInvocationDispatcher
                 TenantId = resolution.ScopeId,
                 AppId = ScopeServiceIdentityDefaults.ServiceAppId,
                 ServiceKey = string.Empty,
-            });
+            },
+            ToolContext: AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty,
+            LlmControl: ToLlmControlContext(AgentToolRequestContext.Current));
         return new StaticGAgentStreamInvocationRequest(identity, request.EndpointId.Trim(), input);
     }
 
@@ -853,7 +822,8 @@ public sealed class AevatarInvocationDispatcher
         string commandId,
         InvocationCallerScope scope)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         var headers = BuildPayloadHeaders(payload.Headers);
         var request = new ChatRequestEvent
         {
@@ -872,7 +842,8 @@ public sealed class AevatarInvocationDispatcher
     private static Dictionary<string, string> BuildPayloadHeaders(
         Google.Protobuf.Collections.MapField<string, string>? headers)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         var filteredHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
         if (headers == null)
             return filteredHeaders;
@@ -887,66 +858,9 @@ public sealed class AevatarInvocationDispatcher
         return filteredHeaders;
     }
 
-    private static Dictionary<string, string> BuildLegacyMetadata(
-        InvocationCallerScope scope,
-        Google.Protobuf.Collections.MapField<string, string>? headers = null)
-    {
-        var metadata = AgentToolRequestContext.Current?.ToLegacyMetadata() is { } current
-            ? new Dictionary<string, string>(current, StringComparer.Ordinal)
-            : new Dictionary<string, string>(StringComparer.Ordinal);
-        RemoveProtectedCallerMetadata(metadata);
-        if (headers != null)
-        {
-            foreach (var (key, value) in headers)
-            {
-                var normalizedKey = Normalize(key);
-                if (normalizedKey != null && !IsProtectedCallerMetadataKey(normalizedKey))
-                    metadata[normalizedKey] = value ?? string.Empty;
-            }
-        }
-
-        StampTrustedCallerMetadata(metadata, scope);
-        return metadata;
-    }
-
-    private static void RemoveProtectedCallerMetadata(IDictionary<string, string> metadata)
-    {
-        foreach (var key in ProtectedCallerMetadataKeys)
-            metadata.Remove(key);
-    }
-
     private static bool IsProtectedCallerMetadataKey(string key) =>
         ProtectedCallerMetadataKeys.Any(protectedKey =>
             string.Equals(protectedKey, key, StringComparison.Ordinal));
-
-    private static void StampTrustedCallerMetadata(
-        IDictionary<string, string> metadata,
-        InvocationCallerScope scope)
-    {
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.ScopeId, scope.ScopeId);
-        SetTrustedMetadata(metadata, "scope_id", scope.ScopeId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.OwnerSubject, scope.OwnerSubject);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.ResponseId, scope.ResponseId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.RequestId, AgentToolRequestContext.RequestId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.CallId, AgentToolRequestContext.CallId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.NyxIdAccessToken, AgentToolRequestContext.NyxIdAccessToken);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.NyxIdOrgToken, AgentToolRequestContext.NyxIdOrgToken);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.SenderNyxIdAccessToken, AgentToolRequestContext.SenderNyxIdAccessToken);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.SenderBindingId, AgentToolRequestContext.SenderBindingId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.ModelOverride, AgentToolRequestContext.ModelOverride);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.NyxIdRoutePreference, AgentToolRequestContext.NyxIdRoutePreference);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.MaxToolRoundsOverride, AgentToolRequestContext.MaxToolRoundsOverride?.ToString());
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.ConnectedServicesContext, AgentToolRequestContext.ConnectedServicesContext);
-    }
-
-    private static void SetTrustedMetadata(
-        IDictionary<string, string> metadata,
-        string key,
-        string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-            metadata[key] = value.Trim();
-    }
 
     private static void AppendMetadata(
         Google.Protobuf.Collections.MapField<string, string> destination,
@@ -961,7 +875,8 @@ public sealed class AevatarInvocationDispatcher
 
     private static AgentToolExecutionContextPayload ToPayload(AgentToolExecutionContext? context)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         var payload = new AgentToolExecutionContextPayload
         {
@@ -1014,7 +929,15 @@ public sealed class AevatarInvocationDispatcher
 
     private static LLMControlContextPayload ToLlmControlPayload(AgentToolExecutionContext? context)
     {
-        // Refactor (issue1300-first): Old pattern: stamp trusted caller/control to Headers/Metadata. New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        return ToLlmControlContext(context).ToPayload();
+    }
+
+    private static LLMControlContext ToLlmControlContext(AgentToolExecutionContext? context)
+    {
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         return new LLMControlContext(
             context.Credentials.NyxIdAccessToken,
@@ -1023,7 +946,7 @@ public sealed class AevatarInvocationDispatcher
             context.Routing.ModelOverride,
             context.Routing.NyxIdRoutePreference,
             context.Routing.MaxToolRoundsOverride,
-            context.Routing.UserMemoryPrompt).ToPayload();
+            context.Routing.UserMemoryPrompt);
     }
 
     private CallerScopeResolution ResolveCallerScope(bool requireOwner = true)

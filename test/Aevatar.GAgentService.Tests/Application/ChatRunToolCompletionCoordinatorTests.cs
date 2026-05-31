@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -15,7 +14,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ChatRunToolCompletionCoordinatorTests
 {
     [Fact]
-    public async Task ExecuteAsync_WaitCompleteTeam_ShouldFoldToolResultReturnedByDispatcher()
+    public async Task ExecuteAsync_WaitCompleteTeam_ShouldIgnoreFoldedDispatchResultAndUseReadModelObservation()
     {
         var harness = new Harness();
         var coordinator = harness.CreateCoordinator();
@@ -49,16 +48,17 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             }),
             llmRound: 1);
 
-        using var resultDocument = System.Text.Json.JsonDocument.Parse(result);
-        resultDocument.RootElement.GetProperty("completion_observed").GetBoolean().Should().BeTrue();
-        resultDocument.RootElement.GetProperty("completion_status").GetString().Should().Be("RunFinished");
-        result.Should().NotContain("completion_not_observed");
+        result.Should().Contain("completion_not_observed");
+        result.Should().Contain("\"run_id\":\"team-command\"");
+        result.Should().Contain("\"service_id\":\"service-1\"");
+        result.Should().NotContain("\"completion_observed\": true");
         harness.ChatRunPort.ObservedTerminals.Should().ContainSingle().Which.Should().Match<ChatRunSubRunTerminalObserved>(
             terminal => terminal.RunId == "team-command" &&
-                        terminal.Status == "RunFinished" &&
+                        terminal.Status == "completion_not_observed" &&
                         terminal.ServiceId == "service-1" &&
                         terminal.EndpointId == "entry" &&
-                        terminal.InternalResultJson.Contains("\"completion_observed\": true", StringComparison.Ordinal));
+                        !terminal.CompletionObserved &&
+                        terminal.InternalResultJson.Contains("completion_not_observed", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public sealed class ChatRunToolCompletionCoordinatorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WaitCompleteGAgent_WhenOnlyReadyNotificationArrives_ShouldReturnInternalResultJson()
+    public async Task ExecuteAsync_WaitCompleteGAgent_WhenNoTerminalReadModelExists_ShouldReturnCompletionNotObservedReceipt()
     {
         var harness = new Harness();
         var coordinator = harness.CreateCoordinator();
@@ -163,40 +163,30 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             Name = "aevatar_invoke_gagent",
             ArgumentsJson = """{"actor_id":"actor-ready","payload":{"prompt":"hi"},"wait":"complete"}""",
         };
-        const string foldedPayload = """{"run_id":"run-ready","content":"ready payload"}""";
 
         var result = await coordinator.ExecuteAsync(
             BuildRequest(),
             toolCall,
             toolCall.ArgumentsJson,
-            async (request, _) =>
+            (request, _) => Task.FromResult(request with
             {
-                await harness.PublishReadyAsync(new ChatRunToolResultReady
-                {
-                    ResponseId = request.ResponseId,
-                    RunId = "run-ready",
-                    CallerToolCallId = toolCall.Id,
-                    ToolName = toolCall.Name,
-                    InternalResultJson = foldedPayload,
-                    LlmRound = request.LlmRound,
-                    Status = "RunFinished",
-                    ActorId = "actor-ready",
-                    CompletionObserved = true,
-                });
-                return request with
-                {
-                    ToolExecutionResultJson = """{"opaque":"gagent-dispatch"}""",
-                    RunId = "run-ready",
-                    Status = "streaming",
-                    StreamTopic = "aevatar://actors/actor-ready/runs/run-ready",
-                    ActorId = "actor-ready",
-                    WaitMode = ChatRunSubRunWaitMode.Complete,
-                };
-            },
+                ToolExecutionResultJson = """{"opaque":"gagent-dispatch"}""",
+                RunId = "run-ready",
+                Status = "streaming",
+                StreamTopic = "aevatar://actors/actor-ready/runs/run-ready",
+                ActorId = "actor-ready",
+                WaitMode = ChatRunSubRunWaitMode.Complete,
+            }),
             llmRound: 2);
 
-        result.Should().Be(foldedPayload);
-        harness.ChatRunPort.ObservedTerminals.Should().BeEmpty();
+        result.Should().Contain("completion_not_observed");
+        result.Should().Contain("\"run_id\":\"run-ready\"");
+        result.Should().Contain("\"actor_id\":\"actor-ready\"");
+        harness.ChatRunPort.ObservedTerminals.Should().ContainSingle().Which.Should().Match<ChatRunSubRunTerminalObserved>(
+            terminal => terminal.RunId == "run-ready" &&
+                        terminal.Status == "completion_not_observed" &&
+                        terminal.ActorId == "actor-ready" &&
+                        !terminal.CompletionObserved);
         harness.ChatRunPort.SubmittedToolCalls.Should().ContainSingle()
             .Which.ToolExecutionResultJson.Should().Be("""{"opaque":"gagent-dispatch"}""");
     }
@@ -269,7 +259,6 @@ public sealed class ChatRunToolCompletionCoordinatorTests
 
     private sealed class Harness
     {
-        private readonly RecordingSubscriptionProvider _subscriptionProvider = new();
         public RecordingChatRunActorPort ChatRunPort { get; }
         public RecordingServiceRunQueryPort ServiceRunQuery { get; } = new();
         public RecordingTerminalQueryPort TerminalQuery { get; } = new();
@@ -277,23 +266,18 @@ public sealed class ChatRunToolCompletionCoordinatorTests
 
         public Harness()
         {
-            ChatRunPort = new RecordingChatRunActorPort(_subscriptionProvider);
+            ChatRunPort = new RecordingChatRunActorPort();
         }
 
         public ChatRunToolCompletionCoordinator CreateCoordinator() =>
             new(
                 ChatRunPort,
-                _subscriptionProvider,
                 TerminalQuery,
                 ServiceRunQuery,
                 WorkflowQuery);
-
-        public Task PublishReadyAsync(ChatRunToolResultReady ready) =>
-            _subscriptionProvider.PublishReadyAsync(ChatRunPort.ActorId, ready);
     }
 
-    private sealed class RecordingChatRunActorPort(RecordingSubscriptionProvider subscriptionProvider)
-        : IChatRunActorPort
+    private sealed class RecordingChatRunActorPort : IChatRunActorPort
     {
         public string ActorId { get; } = "chat-run:resp_1";
         public ChatRunStartRequest? StartRequest { get; private set; }
@@ -325,29 +309,13 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             return Task.CompletedTask;
         }
 
-        public async Task ObserveSubRunTerminalAsync(
+        public Task ObserveSubRunTerminalAsync(
             string chatRunActorId,
             ChatRunSubRunTerminalObserved observed,
             CancellationToken ct = default)
         {
             ObservedTerminals.Add(observed.Clone());
-            var request = ObservationRequests.LastOrDefault() ?? SubmittedToolCalls.Last();
-            await subscriptionProvider.PublishReadyAsync(
-                chatRunActorId,
-                new ChatRunToolResultReady
-                {
-                    ResponseId = StartRequest?.ResponseId ?? string.Empty,
-                    RunId = observed.RunId,
-                    CallerToolCallId = request.ToolCall.Id,
-                    ToolName = request.ToolCall.Name,
-                    InternalResultJson = observed.InternalResultJson,
-                    LlmRound = request.LlmRound,
-                    Status = observed.Status,
-                    ActorId = observed.ActorId,
-                    ServiceId = observed.ServiceId,
-                    EndpointId = observed.EndpointId,
-                    CompletionObserved = observed.CompletionObserved,
-                });
+            return Task.CompletedTask;
         }
 
         public Task TerminateAsync(
@@ -355,36 +323,6 @@ public sealed class ChatRunToolCompletionCoordinatorTests
             string reason,
             CancellationToken ct = default) =>
             Task.CompletedTask;
-    }
-
-    private sealed class RecordingSubscriptionProvider : IActorEventSubscriptionProvider
-    {
-        private Func<ChatRunToolResultReady, Task>? _handler;
-
-        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
-            string actorId,
-            Func<TMessage, Task> handler,
-            CancellationToken ct = default)
-            where TMessage : class, IMessage, new()
-        {
-            if (typeof(TMessage) != typeof(ChatRunToolResultReady))
-                throw new NotSupportedException(typeof(TMessage).FullName);
-
-            _handler = ready => handler((TMessage)(object)ready);
-            return Task.FromResult<IAsyncDisposable>(new Subscription(this));
-        }
-
-        public Task PublishReadyAsync(string actorId, ChatRunToolResultReady ready) =>
-            _handler?.Invoke(ready) ?? Task.CompletedTask;
-
-        private sealed class Subscription(RecordingSubscriptionProvider owner) : IAsyncDisposable
-        {
-            public ValueTask DisposeAsync()
-            {
-                owner._handler = null;
-                return ValueTask.CompletedTask;
-            }
-        }
     }
 
     private sealed class RecordingServiceRunQueryPort : IServiceRunQueryPort

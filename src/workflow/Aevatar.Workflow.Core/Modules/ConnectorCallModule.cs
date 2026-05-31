@@ -335,7 +335,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             ct);
         var connectorRequest = new ConnectorRequest
         {
-            Metadata = ExtractConnectorMetadata(ctx),
+            HttpAuthorization = ExtractConnectorHttpAuthorization(ctx),
             RunId = runId,
             StepId = request.StepId,
             Connector = connectorName,
@@ -823,18 +823,18 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 
-    private static IReadOnlyDictionary<string, string> ExtractConnectorMetadata(
+    // Refactor (issue1422/phase9-first-slice):
+    //   Old pattern: Connector execution rewrapped typed runtime authorization into Metadata.
+    //   New principle: Connector authorization crosses the execution boundary as a typed request field.
+    private static string ExtractConnectorHttpAuthorization(
         IWorkflowExecutionContext ctx)
     {
         if (ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(ctx, out var authorization) &&
             !string.IsNullOrWhiteSpace(authorization))
         {
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = authorization.Trim(),
-            };
+            return authorization.Trim();
         }
 
-        return new Dictionary<string, string>();
+        return string.Empty;
     }
 }

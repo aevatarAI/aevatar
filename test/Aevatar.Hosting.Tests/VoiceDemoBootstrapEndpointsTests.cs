@@ -9,7 +9,6 @@ using Aevatar.GAgents.Scheduled;
 using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -48,7 +47,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
                     RuleId = "voice-demo",
                     Priority = 900,
                     Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
-                    Action = GAgentToolHint("old-agent", "voice_presence_openai"),
+                    Action = TypedVoiceAttachTarget("old-agent", "voice_presence_openai"),
                     Description = "remove stale voice demo rule",
                 },
             ]);
@@ -90,8 +89,10 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         command.DefaultTarget.ForwardToModel.ModelName.Should().Be("existing-default");
         command.Rules.Should().ContainSingle(rule => rule.RuleId == "keep-chat")
             .Which.Action.ForwardToModel.ModelName.Should().Be("kept-model");
-        command.Rules.Should().NotContain(rule => rule.RuleId == "voice-demo",
-            "Refactor (issue1321-first): bootstrap removes the stale route that used tool_choice_hint as actor addressing");
+        var voiceRule = command.Rules.Should().ContainSingle(rule => rule.RuleId == "voice-demo").Subject;
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be(demoActorId);
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.VoiceModuleName.Should().Be("voice_presence_openai");
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Should().BeNull();
     }
 
     [Fact]
@@ -116,31 +117,13 @@ public sealed class VoiceDemoBootstrapEndpointsTests
             .Which.Should().Be((Scope, "voice_presence_openai"));
         catalogCommandPort.Commands.Should().ContainSingle()
             .Which.AgentId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
-        routePolicyCommandPort.Upserts.Should().BeEmpty(
-            "bootstrap must not create a placeholder route policy for unsupported voice realtime execution");
+        routePolicyCommandPort.Upserts.Should().BeEmpty();
         body.Should().ContainKey("route_policy_actor_id").WhoseValue.Should().BeNull();
         body.Should().ContainKey("route_policy_command_id").WhoseValue.Should().BeNull();
     }
 
-    private static ChatRouteAction GAgentToolHint(string actorId, string voiceModuleName) => new()
-    {
-        ForwardToModel = new ForwardToModel
-        {
-            ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
-            ToolChoiceHint = new ChatRouteToolChoiceHint
-            {
-                ToolName = "aevatar_invoke_gagent",
-                PrefilledArguments = new Struct
-                {
-                    Fields =
-                    {
-                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
-                        ["voice_module_name"] = Google.Protobuf.WellKnownTypes.Value.ForString(voiceModuleName),
-                    },
-                },
-            },
-        },
-    };
+    private static ChatRouteAction TypedVoiceAttachTarget(string actorId, string voiceModuleName) =>
+        ChatRouteActionTargets.ForwardToVoiceAttachTarget(actorId, voiceModuleName);
 
     private static async Task<WebApplication> CreateAppAsync(
         RecordingVoiceDemoAgentCommandPort voiceDemoCommandPort,

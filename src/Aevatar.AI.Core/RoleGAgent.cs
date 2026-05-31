@@ -127,16 +127,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 "[{Role}] Tool approval APPROVED. Executing tool={Tool} request={RequestId}",
                 RoleName, pending.ToolName, pending.RequestId);
 
-            // Refactor (iter163/cluster-001-first):
-            //   Old pattern: pending approval state stored stable tool/caller context in map<string,string> metadata
-            //                and rehydrated via AgentToolExecutionContextMapper.FromMetadata.
-            //   New principle: typed tool_context sub-message stores stable context;
-            //                  metadata bag only carries open annotations and legacy fallback.
+            // Refactor (issue1414/cluster-004):
+            //   Old pattern: pending approval state could rehydrate stable tool/caller context from metadata.
+            //   New principle: typed ToolContext/LlmControl are the only tool control authority; metadata carries annotations only.
             try
             {
                 // Refactor (issue1253-first):
                 //   Old pattern: Approval resume rebuilt control context from pending.Metadata.
-                //   New principle: Use typed pending.ToolContext first, with metadata only for old persisted state fallback.
+                //   New principle: Use typed pending.ToolContext only; metadata is never a control source.
                 var pendingToolContext = ResolvePendingToolContext(pending);
                 using (AgentToolContextScope.Push(pendingToolContext))
                 {
@@ -556,12 +554,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         string requestId,
         string toolCallId)
     {
+        // Refactor (issue1414/cluster-004):
+        //   Old pattern: active ChatRequestEvent.Metadata could be promoted into tool execution control.
+        //   New principle: active request control comes only from typed ToolContext/LlmControl fields.
         var context = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
-        if (context == AgentToolExecutionContext.Empty && request.Metadata.Count > 0)
-        {
-            context = AgentToolExecutionContextMapper.FromMetadata(
-                new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal));
-        }
 
         context = LLMControlContextMapper.FromPayload(request.LlmControl).ToToolContext(context);
         context = context with
@@ -578,18 +574,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private static AgentToolExecutionContext ResolvePendingToolContext(PendingToolApprovalState pending)
     {
-        if (pending.ToolContext != null)
-            return AgentToolExecutionContextMapper.FromPayload(pending.ToolContext) with
+        // Refactor (iter290/cluster-002-invocation-trusted-context-metadata-bag):
+        //   Old pattern: pending approval Metadata remained the primary resume context.
+        //   New principle: pending ToolContext is authoritative; metadata is only a scrubbed old-state annotation fallback.
+        var context = pending.ToolContext != null
+            ? AgentToolExecutionContextMapper.FromPayload(pending.ToolContext)
+            : AgentToolExecutionContext.Empty with
             {
-                Credentials = AgentToolCredentials.Empty,
+                ExternalMetadata = ScrubPendingApprovalMetadata(pending.Metadata),
             };
 
-        if (pending.Metadata.Count == 0)
-            return AgentToolExecutionContext.Empty;
-
-        var context = AgentToolExecutionContextMapper.FromMetadata(
-            new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal));
-        return context with { Credentials = AgentToolCredentials.Empty };
+        return context with
+        {
+            Credentials = AgentToolCredentials.Empty,
+            ExternalMetadata = ScrubPendingApprovalMetadata(context.ExternalMetadata),
+        };
     }
 
     private static string? NormalizeToolContextValue(string? value) =>

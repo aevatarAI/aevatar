@@ -1,4 +1,3 @@
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -30,10 +29,12 @@ internal static class ChatRunRequestNormalizer
 
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
-        WorkflowCapabilitiesDocument? capabilities = null,
         IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
+        // Refactor (iter349/cluster-349):
+        //   Old pattern: WorkflowAuthoringSkillPromptAugmentor rewrote chat prompt via hidden workflow.authoring.enabled metadata + AEVATAR_WORKFLOW_AUTHORING_AUTO_INJECT env
+        //   New principle: chat sources execute unchanged; hidden prompt mutation removed; explicit authoring surface (if needed) deferred to later-slice design
         ArgumentNullException.ThrowIfNull(input);
 
         var normalizedInputParts = NormalizeInputParts(input.InputParts);
@@ -46,25 +47,14 @@ internal static class ChatRunRequestNormalizer
         if (!sourceResult.Succeeded)
             return ChatRunRequestNormalizationResult.Failed(sourceResult.Error);
 
-        var source = sourceResult.Source!;
-        var requestedWorkflowName = ResolveRequestedWorkflowName(source);
-        var inlineWorkflowYamls = source.InlineBundle?.YamlDocuments.Select(static document => document.Yaml).ToArray() ?? [];
-
         var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
         if (rawPrompt.Length == 0)
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
-        var normalizedPrompt = WorkflowAuthoringSkillPromptAugmentor.AugmentPrompt(
-            rawPrompt,
-            requestedWorkflowName,
-            inlineWorkflowYamls.Length > 0,
-            normalizedMetadata,
-            capabilities);
-
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
-                Prompt: normalizedPrompt,
-                Source: source,
+                Prompt: rawPrompt,
+                Source: sourceResult.Source!,
                 SessionId: NormalizeSessionId(input.SessionId),
                 InputParts: normalizedInputParts,
                 Metadata: normalizedMetadata,
@@ -199,17 +189,6 @@ internal static class ChatRunRequestNormalizer
         return normalized;
     }
 
-    private static string ResolveRequestedWorkflowName(WorkflowChatSource source)
-    {
-        return source.Kind switch
-        {
-            WorkflowChatSourceKind.CatalogWorkflow => source.CatalogName?.WorkflowName ?? string.Empty,
-            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActorSource?.WorkflowName ?? string.Empty,
-            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.EntryName ?? string.Empty,
-            _ => string.Empty,
-        };
-    }
-
     private static string ResolveTypedWorkflowName(WorkflowChatSourceInput source, WorkflowChatSourceKind kind)
     {
         var value = kind switch
@@ -230,7 +209,7 @@ internal static class ChatRunRequestNormalizer
             WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.ActorId ?? source.ActorId,
             _ => source.ActorId,
         };
-        return NormalizeAgentId(value) ?? string.Empty;
+        return NormalizeActorId(value);
     }
 
     private static IReadOnlyList<WorkflowChatInlineYamlDocument> ResolveTypedInlineYamlDocuments(
@@ -352,6 +331,9 @@ internal static class ChatRunRequestNormalizer
 
     private static string? NormalizeAgentId(string? agentId) =>
         string.IsNullOrWhiteSpace(agentId) ? null : agentId.Trim();
+
+    private static string NormalizeActorId(string? actorId) =>
+        string.IsNullOrWhiteSpace(actorId) ? string.Empty : actorId.Trim();
 
     private static string? NormalizeSessionId(string? sessionId) =>
         string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim();
