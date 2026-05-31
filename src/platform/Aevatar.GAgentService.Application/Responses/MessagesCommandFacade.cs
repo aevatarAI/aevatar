@@ -483,6 +483,7 @@ public sealed class MessagesCommandFacade(
             ScopeId = request.CallerContext?.ScopeId ?? string.Empty,
             OwnerSubject = request.CallerContext?.OwnerSubject ?? string.Empty,
             BearerToken = request.CallerContext?.Credentials?.NyxIdBearer ?? string.Empty,
+            ToolContext = (request.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload(),
             RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
         if (request.Temperature is not null)

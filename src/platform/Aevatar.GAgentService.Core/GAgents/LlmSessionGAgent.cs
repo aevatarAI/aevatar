@@ -588,22 +588,22 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             {
                 Messages = [.. messages],
                 RequestId = command.ResponseId,
-                Metadata = BuildProviderMetadata(command),
+                Metadata = toolContext.ExternalMetadata,
                 CallerContext = new LLMRequestCallerContext(
-                    command.ScopeId,
-                    command.OwnerSubject,
-                    command.ResponseId,
-                    new LLMRequestCallerCredentials(command.BearerToken)),
+                    toolContext.Caller.ScopeId ?? string.Empty,
+                    toolContext.Caller.OwnerSubject ?? string.Empty,
+                    toolContext.Caller.ResponseId,
+                    new LLMRequestCallerCredentials(toolContext.Credentials.NyxIdAccessToken)),
                 Tools = tools,
                 ToolContext = toolContext,
                 LlmControl = new LLMControlContext(
-                    NyxIdAccessToken: null,
-                    NyxIdOrgToken: null,
-                    SenderNyxIdAccessToken: null,
-                    ModelOverride: null,
-                    NyxIdRoutePreference: NormalizeOptional(command.RoutePreference),
+                    NyxIdAccessToken: toolContext.Credentials.NyxIdAccessToken,
+                    NyxIdOrgToken: toolContext.Credentials.NyxIdOrgToken,
+                    SenderNyxIdAccessToken: toolContext.Credentials.SenderNyxIdAccessToken,
+                    ModelOverride: toolContext.Routing.ModelOverride,
+                    NyxIdRoutePreference: toolContext.Routing.NyxIdRoutePreference,
                     MaxToolRoundsOverride: null,
-                    UserMemoryPrompt: null),
+                    UserMemoryPrompt: toolContext.Routing.UserMemoryPrompt),
                 Model = NormalizeOptional(command.Model),
                 Temperature = command.HasTemperature ? command.Temperature : null,
                 MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,
@@ -818,11 +818,15 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
         }
     }
 
-    // Refactor (issue1416-first):
-    //   Old pattern: actor helper rebuilt Responses tool context as string-key metadata from LlmRunRequested scalars.
-    //   New principle: actor helper builds AgentToolExecutionContext directly until the later proto slice can carry tool_context.
-    private static AgentToolExecutionContext BuildToolContext(LlmRunRequested command) =>
-        new(
+    // Refactor (issue1521):
+    //   Old pattern: LlmRunRequested split tool control authority into scalars and provider metadata.
+    //   New principle: the command carries the existing typed AgentToolExecutionContextPayload; scalars remain legacy fallback only.
+    private static AgentToolExecutionContext BuildToolContext(LlmRunRequested command)
+    {
+        if (command.ToolContext is not null)
+            return AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+
+        return new(
             new AgentToolRequestIdentity(command.ResponseId, null),
             new AgentToolCredentials(command.BearerToken, null, null),
             new AgentToolCallerContext(command.ScopeId, command.OwnerSubject, command.ResponseId),
@@ -831,13 +835,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             new LLMRequestRoutingContext(null, NormalizeOptional(command.RoutePreference), null, null),
             AgentToolConnectedServicesContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal));
-
-    private static IReadOnlyDictionary<string, string> BuildProviderMetadata(LlmRunRequested command) =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = command.ResponseId,
-            ["scope_id"] = command.ScopeId,
-        };
+    }
 
     private static ChatMessage ToChatMessage(LlmSessionRuntimeChatMessage message) =>
         new()

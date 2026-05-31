@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgentService.Abstractions";
 import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
+import "ai_messages.proto";
 
 enum LlmSessionOriginKind {
   LLM_SESSION_ORIGIN_KIND_UNSPECIFIED = 0;
@@ -224,6 +225,7 @@ message LlmRunRequested {
   string bearer_token = 10;
   LlmSessionRuntimeToolSelection tool_selection = 11;
   google.protobuf.Timestamp requested_at = 12;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 13;
 }
 
 message LlmStreamChunkObserved {
