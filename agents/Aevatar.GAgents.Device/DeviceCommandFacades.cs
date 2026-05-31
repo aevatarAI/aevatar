@@ -252,7 +252,7 @@ internal sealed class DeviceCallbackCommandEnvelopeFactory
         ArgumentNullException.ThrowIfNull(command.Inbound);
         ArgumentNullException.ThrowIfNull(context);
 
-        // Refactor (iter1281/cluster-001-device-inbound-typed-payload): Old pattern risk was adding a second callback envelope shape.
+        // Refactor (issue1485/first-slice): Old pattern: adding a second callback envelope shape for typed device callbacks.
         // New principle: keep the existing command facade as the only dispatch skeleton.
         // DeviceInbound is packed once into the single EventEnvelope payload used by the actor system.
         // The endpoint must have already rejected unknown adapter event_type values; this facade only dispatches typed inbound payloads.
