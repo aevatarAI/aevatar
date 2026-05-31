@@ -95,6 +95,41 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void FromRequest_WhenToolContextIsProvided_ShouldReturnTypedContextAndIgnoreMetadataFallback()
+    {
+        var typedContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("typed-request", "typed-call"),
+            Credentials = new AgentToolCredentials("typed-token", null, null),
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["typed-note"] = "kept",
+            },
+        };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            ToolContext = typedContext,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = "metadata-request",
+                [LLMRequestMetadataKeys.CallId] = "metadata-call",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+                ["external-trace"] = "trace-1",
+            },
+        };
+
+        var context = AgentToolExecutionContextMapper.FromRequest(request);
+
+        context.Should().BeSameAs(typedContext);
+        context.Request.RequestId.Should().Be("typed-request");
+        context.Request.CallId.Should().Be("typed-call");
+        context.Credentials.NyxIdAccessToken.Should().Be("typed-token");
+        context.ExternalMetadata.Should().ContainSingle("typed-note", "kept");
+        context.ExternalMetadata.Should().NotContainKey("external-trace");
+    }
+
+    [Fact]
     public void FromMetadata_WhenChannelCanonicalKeysAreAbsent_ShouldMapLegacyAliases()
     {
         var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)

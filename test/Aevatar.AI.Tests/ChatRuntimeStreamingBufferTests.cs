@@ -306,6 +306,48 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public void CreateStepExecutor_BuildBaseRequest_ShouldMergeOverrideMetadataThenScrubOwnedKeys()
+    {
+        var provider = new RecordingStepProvider();
+        var runtime = CreateRuntime(
+            provider,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                RequestId = "base-request",
+                Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["safe"] = "base",
+                    ["override"] = "base",
+                    [LLMRequestMetadataKeys.NyxIdAccessToken] = "base-token",
+                    [LLMRequestMetadataKeys.ModelOverride] = "base-model",
+                },
+            });
+        var executor = runtime.CreateStepExecutor();
+
+        var request = executor.BuildBaseRequest(
+            " request-1 ",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["override"] = "override",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "override-token",
+                [LLMRequestMetadataKeys.CallId] = "override-call",
+            },
+            toolContext: null,
+            llmControl: null);
+
+        request.RequestId.Should().Be("request-1");
+        request.ToolContext!.Request.RequestId.Should().Be("request-1");
+        request.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        request.ToolContext.Routing.ModelOverride.Should().BeNull();
+        request.Metadata.Should().BeEquivalentTo(new Dictionary<string, string>
+        {
+            ["safe"] = "base",
+            ["override"] = "override",
+        });
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenStreamReturnsToolCall_ShouldExecuteToolAndContinueWithFollowUpRound()
     {
         var provider = new QueuedStreamingProvider(

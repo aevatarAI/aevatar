@@ -428,6 +428,50 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
+    public async Task TypedContext_ShouldTakePrecedenceOverRequestMetadata()
+    {
+        string? capturedToken = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
+        var tools = new ToolManager();
+        tools.Register(new DelegateAgentTool("meta-check", _ =>
+        {
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
+            capturedCallId = AgentToolRequestContext.CallId;
+            return "ok";
+        }));
+
+        var typedContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("typed-token", null, null),
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["trace-id"] = "typed-trace",
+            },
+        };
+        var requestMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            ["trace-id"] = "metadata-trace",
+        };
+        var executor = new StreamingToolExecutor(
+            tools,
+            requestMetadata: requestMetadata,
+            toolContext: typedContext);
+        using var executionState = executor.CreateExecutionState();
+
+        executor.AddTool(executionState, new ToolCall { Id = "tc-typed", Name = "meta-check", ArgumentsJson = "{}" });
+
+        await foreach (var _ in executor.GetRemainingResultsAsync(executionState, CancellationToken.None)) { }
+
+        capturedToken.Should().Be("typed-token");
+        capturedExternal.Should().Be("typed-trace");
+        capturedCallId.Should().Be("tc-typed");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
     public async Task NullRequestMetadataAndContext_ShouldNotCreateImplicitToolExecutionContext()
     {
         AgentToolExecutionContext? capturedContext = AgentToolExecutionContext.Empty;
