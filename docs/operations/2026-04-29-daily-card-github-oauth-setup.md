@@ -4,12 +4,10 @@ This runbook covers how to make `/daily` work end-to-end for a given Lark user
 by connecting their NyxID account to GitHub via OAuth, plus the playbook for
 the most common failure mode (`pending_auth` that never flips to `active`).
 
-It is the operations-side companion to
-[`docs/canon/daily-command-pipeline.md`](../canon/daily-command-pipeline.md),
-which describes the runtime pipeline. This file describes the steps a human
-operator (admin or end user) takes before the pipeline can ever run, and the
-diagnostic sequence to follow when those steps appear to have succeeded but
-the proxied call still fails with credential errors.
+This operations runbook describes the steps a human operator (admin or end
+user) takes before the skill workflow can ever run, and the diagnostic sequence
+to follow when those steps appear to have succeeded but the proxied call still
+fails with credential errors.
 
 ## Goal
 
@@ -278,7 +276,8 @@ or aevatar issues; this section is the source list.
 
 ## Cross-references
 
-- Runtime pipeline & failure modes: [`../canon/daily-command-pipeline.md`](../canon/daily-command-pipeline.md)
+- Lark reply completion semantics:
+  [`../canon/lark-reply-completion-semantics.md`](../canon/lark-reply-completion-semantics.md)
 - LLM provider setup (api_key flow, distinct from this OAuth flow):
   [`../canon/nyxid-llm-integration.md`](../canon/nyxid-llm-integration.md)
 - Lark webhook ingress & cutover:

@@ -12,7 +12,6 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Workflow Chat API 能力说明（框架层）](canon/chat-api.md)
 - [Connector 配置与执行逻辑](canon/connector.md)
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
-- [/daily Command Pipeline — Test Reference](canon/daily-command-pipeline.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
 - [Aevatar 前端设计基线](canon/frontend-design.md)
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
