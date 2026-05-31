@@ -66,6 +66,7 @@ import {
   cloneStudioWorkflowDocument,
   connectStepToTarget,
   insertStepByType,
+  normalizeStepParametersForType,
   removeStep,
   removeSteps,
   suggestBranchLabelForStep,
@@ -4273,8 +4274,126 @@ const StudioPage: React.FC = () => {
     [availableStepTypes, draftWorkflowName, workflowNames],
   );
 
-  const buildWorkflowYamlBundle = useCallback(async (): Promise<string[]> => {
-    const rootYaml = draftYaml.trim();
+  const normalizeWorkflowYamlForRuntime = useCallback(
+    async (
+      yaml: string,
+      document: StudioWorkflowDocument | null | undefined,
+      availableWorkflowNames: string[],
+    ): Promise<{
+      readonly yaml: string;
+      readonly document: StudioWorkflowDocument | null;
+    }> => {
+      const sourceYaml = yaml.trim();
+      if (!sourceYaml) {
+        return {
+          yaml: sourceYaml,
+          document: document ?? null,
+        };
+      }
+
+      let sourceDocument = cloneStudioWorkflowDocument(document);
+      if (!sourceDocument) {
+        sourceDocument =
+          cloneStudioWorkflowDocument(
+            (
+              await studioApi.parseYaml({
+                yaml: sourceYaml,
+                availableWorkflowNames,
+                availableStepTypes,
+              })
+            ).document,
+          ) ?? null;
+      }
+
+      if (!sourceDocument?.steps?.length) {
+        return {
+          yaml: sourceYaml,
+          document: sourceDocument,
+        };
+      }
+
+      const normalizedDocument: StudioWorkflowDocument = {
+        ...sourceDocument,
+        steps: sourceDocument.steps.map((step) => ({
+          ...step,
+          parameters: normalizeStepParametersForType(
+            trimOptional(step.type ?? step.originalType),
+            step.parameters && typeof step.parameters === 'object'
+              ? step.parameters
+              : {},
+          ),
+        })),
+      };
+
+      const serialized = await studioApi.serializeYaml({
+        document: normalizedDocument,
+        availableWorkflowNames,
+        availableStepTypes,
+      });
+
+      return {
+        yaml: serialized.yaml.trim() || sourceYaml,
+        document:
+          cloneStudioWorkflowDocument(serialized.document) ??
+          normalizedDocument,
+      };
+    },
+    [availableStepTypes],
+  );
+
+  const buildWorkflowYamlBundle = useCallback(async (
+    pendingStepDraft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ): Promise<string[]> => {
+    let rootYaml = draftYaml.trim();
+    let rootDocument: StudioWorkflowDocument | null | undefined =
+      activeWorkflowDocument;
+    let rootRuntimeYamlReady = false;
+
+    if (pendingStepDraft) {
+      const currentStepId = pendingStepDraft.stepId.trim();
+      if (!currentStepId) {
+        throw new Error('Select a workflow step before running its draft changes.');
+      }
+
+      const document =
+        cloneStudioWorkflowDocument(
+          activeWorkflowDocument ||
+            parsedWorkflowDocument ||
+            activeWorkflowFile?.document ||
+            null,
+        ) ||
+        cloneStudioWorkflowDocument(
+          (
+            await studioApi.parseYaml({
+              yaml: rootYaml,
+              availableWorkflowNames: workflowNames,
+              availableStepTypes,
+            })
+          ).document as StudioWorkflowDocument | null,
+        );
+      if (!document) {
+        throw new Error('Load a workflow draft before running its draft changes.');
+      }
+
+      const result = applyStepInspectorDraft(
+        document,
+        currentStepId,
+        pendingStepDraft.draft,
+      );
+      const serialized = await studioApi.serializeYaml({
+        document: result.document,
+        availableWorkflowNames: workflowNames,
+        availableStepTypes,
+      });
+
+      rootYaml = serialized.yaml.trim();
+      rootDocument = result.document;
+      rootRuntimeYamlReady = true;
+    }
+
     if (!rootYaml) {
       throw new Error('Workflow YAML is required.');
     }
@@ -4290,11 +4409,13 @@ const StudioPage: React.FC = () => {
       workflowName: string;
       yaml: string;
       document: StudioWorkflowDocument | null | undefined;
+      runtimeYamlReady?: boolean;
     }> = [
       {
         workflowName: activeWorkflowName.trim() || draftWorkflowName.trim(),
         yaml: rootYaml,
-        document: activeWorkflowDocument,
+        document: rootDocument,
+        runtimeYamlReady: rootRuntimeYamlReady,
       },
     ];
 
@@ -4312,9 +4433,29 @@ const StudioPage: React.FC = () => {
       if (normalizedWorkflowName) {
         seen.add(normalizedWorkflowName);
       }
-      bundle.push(current.yaml);
+      const normalizedCurrent = current.runtimeYamlReady
+        ? {
+            yaml: current.yaml,
+            document:
+              cloneStudioWorkflowDocument(current.document) ??
+              cloneStudioWorkflowDocument(
+                (
+                  await studioApi.parseYaml({
+                    yaml: current.yaml,
+                    availableWorkflowNames,
+                    availableStepTypes,
+                  })
+                ).document as StudioWorkflowDocument | null,
+              ),
+          }
+        : await normalizeWorkflowYamlForRuntime(
+            current.yaml,
+            current.document,
+            availableWorkflowNames,
+          );
+      bundle.push(normalizedCurrent.yaml);
 
-      for (const targetWorkflow of readWorkflowCallTargets(current.document)) {
+      for (const targetWorkflow of readWorkflowCallTargets(normalizedCurrent.document)) {
         if (seen.has(targetWorkflow)) {
           continue;
         }
@@ -4352,12 +4493,16 @@ const StudioPage: React.FC = () => {
     return bundle;
   }, [
     activeWorkflowDocument,
+    activeWorkflowFile?.document,
     activeWorkflowName,
     availableStepTypes,
     draftWorkflowName,
     draftYaml,
+    normalizeWorkflowYamlForRuntime,
+    parsedWorkflowDocument,
     resolvedStudioScopeId,
     visibleWorkflowSummaries,
+    workflowNames,
   ]);
   const recentPromptHistory = useMemo(
     () => promptHistory.slice(0, 3),
@@ -5164,35 +5309,53 @@ const StudioPage: React.FC = () => {
     async (
       savedWorkflow: StudioWorkflowFile,
       options?: {
+        readonly document?: StudioWorkflowDocument | null;
         readonly layout?: unknown;
+        readonly selectedNodeId?: string;
+        readonly yaml?: string;
       },
     ) => {
+      const hasDocumentOverride = options?.document !== undefined;
+      const nextWorkflow: StudioWorkflowFile = {
+        ...savedWorkflow,
+        document: hasDocumentOverride ? options.document ?? null : savedWorkflow.document,
+        yaml: options?.yaml ?? savedWorkflow.yaml,
+      };
+
       queryClient.setQueryData(
-        ['studio-workflow', workflowWorkspaceContextKey, savedWorkflow.workflowId],
-        savedWorkflow,
+        ['studio-workflow', workflowWorkspaceContextKey, nextWorkflow.workflowId],
+        nextWorkflow,
       );
       await queryClient.invalidateQueries({
         queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
       });
 
-      setSelectedWorkflowId(savedWorkflow.workflowId);
+      setSelectedWorkflowId(nextWorkflow.workflowId);
       setSelectedScriptId('');
       setTemplateWorkflow('');
       setBuildSurface('editor');
       setStudioSurface('build');
       setDraftSourceKey(
-        `workflow:${workflowWorkspaceContextKey}:${savedWorkflow.workflowId}`,
+        `workflow:${workflowWorkspaceContextKey}:${nextWorkflow.workflowId}`,
       );
-      setDraftYaml(savedWorkflow.yaml);
-      setDraftWorkflowName(savedWorkflow.name);
-      setDraftFileName(savedWorkflow.fileName);
-      setDraftDirectoryId(savedWorkflow.directoryId);
+      setDraftYaml(nextWorkflow.yaml);
+      setDraftWorkflowName(nextWorkflow.name);
+      setDraftFileName(nextWorkflow.fileName);
+      setDraftDirectoryId(nextWorkflow.directoryId);
       setDraftWorkflowLayout(
-        savedWorkflow.layout ||
+        nextWorkflow.layout ||
           options?.layout ||
           draftWorkflowLayout ||
-          buildStudioWorkflowLayout(savedWorkflow.name, workflowGraph.nodes),
+          buildStudioWorkflowLayout(nextWorkflow.name, workflowGraph.nodes),
       );
+      if (hasDocumentOverride) {
+        setEditableWorkflowDocument(
+          cloneStudioWorkflowDocument(options.document ?? null),
+        );
+      }
+      if (options?.selectedNodeId !== undefined) {
+        setSelectedGraphNodeId(options.selectedNodeId);
+      }
       setSaveNotice(null);
       setRunNotice(null);
     },
@@ -5212,7 +5375,86 @@ const StudioPage: React.FC = () => {
     return leaveGuard ? await leaveGuard() : true;
   }, [isBuildScriptsSurface]);
 
-  const handleSaveDraft = async () => {
+  const resolveWorkflowSavePayload = useCallback(
+    async (
+      pendingStepDraft?: {
+        readonly stepId: string;
+        readonly draft: StudioStepInspectorDraft;
+      } | null,
+    ): Promise<{
+      readonly document?: StudioWorkflowDocument | null;
+      readonly yaml: string;
+      readonly layout: unknown;
+      readonly selectedNodeId?: string;
+    } | null> => {
+      if (!pendingStepDraft) {
+        return {
+          yaml: draftYaml,
+          layout:
+            draftWorkflowLayout ||
+            activeWorkflowFile?.layout ||
+            buildStudioWorkflowLayout(activeWorkflowName, workflowGraph.nodes),
+        };
+      }
+
+      const currentStepId = pendingStepDraft.stepId.trim();
+      if (!currentStepId) {
+        setSaveNotice({
+          type: 'error',
+          message: 'Select a workflow step before saving its draft changes.',
+        });
+        return null;
+      }
+
+      const document = await resolveEditableWorkflowDocument();
+      if (!document) {
+        return null;
+      }
+
+      const result = applyStepInspectorDraft(
+        document,
+        currentStepId,
+        pendingStepDraft.draft,
+      );
+      const serialized = await studioApi.serializeYaml({
+        document: result.document,
+        availableWorkflowNames: workflowNames,
+        availableStepTypes,
+      });
+      const nextLayout =
+        draftWorkflowLayout ||
+        activeWorkflowFile?.layout ||
+        buildStudioWorkflowLayout(activeWorkflowName, workflowGraph.nodes);
+
+      setDraftYaml(serialized.yaml);
+      setEditableWorkflowDocument(cloneStudioWorkflowDocument(serialized.document));
+      setSelectedGraphNodeId(result.nodeId);
+
+      return {
+        document: serialized.document,
+        yaml: serialized.yaml,
+        layout: nextLayout,
+        selectedNodeId: result.nodeId,
+      };
+    },
+    [
+      activeWorkflowFile?.layout,
+      activeWorkflowName,
+      availableStepTypes,
+      draftWorkflowLayout,
+      draftYaml,
+      resolveEditableWorkflowDocument,
+      workflowGraph.nodes,
+      workflowNames,
+    ],
+  );
+
+  const handleSaveDraft = async (
+    pendingStepDraft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ) => {
     const directoryId = resolvedDraftDirectoryId;
     if (!directoryId) {
       setSaveNotice({
@@ -5235,6 +5477,11 @@ const StudioPage: React.FC = () => {
     setSaveNotice(null);
 
     try {
+      const savePayload = await resolveWorkflowSavePayload(pendingStepDraft);
+      if (!savePayload) {
+        return;
+      }
+
       const savedWorkflow = await studioApi.saveWorkflow({
         workflowId: activeWorkflowFile?.workflowId || undefined,
         draftExists: activeWorkflowFile?.draftExists,
@@ -5242,15 +5489,15 @@ const StudioPage: React.FC = () => {
         directoryId,
         workflowName,
         fileName: draftFileName,
-        yaml: draftYaml,
-        layout:
-          draftWorkflowLayout ||
-          activeWorkflowFile?.layout ||
-          buildStudioWorkflowLayout(activeWorkflowName, workflowGraph.nodes),
+        yaml: savePayload.yaml,
+        layout: savePayload.layout,
       });
 
       await applySavedWorkflowSelection(savedWorkflow, {
-        layout: draftWorkflowLayout,
+        document: savePayload.document,
+        layout: savePayload.layout,
+        selectedNodeId: savePayload.selectedNodeId,
+        yaml: savePayload.yaml,
       });
       const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
         routeSelectedBackendMemberKey,
@@ -10084,7 +10331,7 @@ const StudioPage: React.FC = () => {
         setEditableWorkflowDocument(null);
         setSaveNotice(null);
       }}
-      onSaveDraft={() => void handleSaveDraft()}
+      onSaveDraft={(draft) => void handleSaveDraft(draft)}
       savePending={savePending}
       canSaveWorkflow={canSaveWorkflow}
       saveNotice={saveNotice}
