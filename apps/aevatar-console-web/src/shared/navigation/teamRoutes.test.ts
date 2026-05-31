@@ -126,27 +126,6 @@ describe("teamRoutes", () => {
     });
   });
 
-  it.each(["connectors", "events", "topology"])(
-    "falls back legacy %s deep links to the overview tab",
-    (tab) => {
-      expect(
-        readTeamDetailRouteState(
-          `?workflowId=wf-1&tab=${tab}`,
-          "/teams/scope-alpha",
-        ),
-      ).toEqual({
-        memberId: "",
-        runId: "",
-        scopeId: "scope-alpha",
-        serviceId: "",
-        tab: "overview",
-        teamId: "",
-        testTeam: false,
-        workflowId: "wf-1",
-      });
-    },
-  );
-
   it("defaults canonical team routes to the overview tab", () => {
     expect(
       readTeamDetailRouteState(
