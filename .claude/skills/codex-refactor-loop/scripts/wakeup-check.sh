@@ -243,7 +243,11 @@ while IFS= read -r n; do
             fi
             continue
         fi
-        marker=$(grep "^META_JUDGE_DONE:" "$judge_log" | head -1)
+        # 2026-05-31 修(per Auric "有bug必须修"):取 tail -1 而非 head -1
+        # 根因:judge codex 在 reasoning 阶段可能多次输出 META_JUDGE_DONE 假设(converge → split 等),
+        # 最终决定是最后一个 marker。head -1 会取最早假设,导致 #1572 r2 实际 split 被报 converge,
+        # controller 误派 r3 solvers 而不是 split admin。
+        marker=$(grep "^META_JUDGE_DONE:" "$judge_log" | tail -1)
         case "$marker" in
             META_JUDGE_DONE:split:*)
                 echo "#${n}: ${latest_round} judge=split — ACTION: controller close + open 2 sub-issues (first impl / later design)"
