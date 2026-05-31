@@ -197,6 +197,36 @@ public sealed class ChatRunActorTests
     }
 
     [Fact]
+    public async Task SubRunTerminal_WhenRunIdDoesNotMatchPendingSubscription_ShouldIgnoreSignal()
+    {
+        var actor = await StartedActorAsync("resp_stale_terminal");
+
+        await actor.HandleSubmitToolCallAsync(BuildSubmit(
+            toolCallId: "call_live",
+            runId: "run_live",
+            waitMode: ChatRunSubRunWaitMode.Complete,
+            llmRound: 2));
+
+        await actor.HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
+        {
+            RunId = "run_stale",
+            Status = "RunFinished",
+            InternalResultJson = """{"run_id":"run_stale","content":"stale"}""",
+            CompletionObserved = true,
+        });
+
+        actor.State.ActiveSubRunSubscriptions.Should().ContainSingle(subscription =>
+            subscription.RunId == "run_live" &&
+            subscription.CallerToolCallId == "call_live");
+        actor.State.Messages.Should().NotContain(message =>
+            message.Role == "tool" &&
+            message.Content.Contains("stale", StringComparison.Ordinal));
+        actor.State.ToolCallHistory.Should().ContainSingle()
+            .Which.InternalResultJson.Contains("stale", StringComparison.Ordinal).Should().BeFalse();
+        actor.State.CurrentLlmRound.Should().Be(2);
+    }
+
+    [Fact]
     public async Task SubRunTerminal_ShouldFoldTypedInternalResult_AheadOfLegacyJsonFallback()
     {
         var eventStore = new InMemoryEventStore();

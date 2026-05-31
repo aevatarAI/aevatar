@@ -105,6 +105,50 @@ public sealed class ChatRunToolCompletionCoordinatorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WaitCompleteWorkflow_WhenReadModelIsTerminal_ShouldReturnObservedPayload()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Snapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "workflow-actor",
+            LastCommandId = "wf-command",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+        };
+        var coordinator = harness.CreateCoordinator();
+        var toolCall = new ToolCall
+        {
+            Id = "call_workflow_done",
+            Name = "aevatar_start_workflow",
+            ArgumentsJson = """{"workflow_id":"wf-main","wait":"complete"}""",
+        };
+
+        var result = await coordinator.ExecuteAsync(
+            BuildRequest(),
+            toolCall,
+            toolCall.ArgumentsJson,
+            (request, _) => Task.FromResult(request with
+            {
+                ToolExecutionResultJson = """{"opaque":"workflow-dispatch"}""",
+                RunId = "wf-command",
+                Status = "accepted",
+                StreamTopic = "aevatar://actors/workflow-actor/runs/wf-command",
+                ActorId = "workflow-actor",
+                WaitMode = ChatRunSubRunWaitMode.Complete,
+            }),
+            llmRound: 1);
+
+        result.Should().Contain("\"completionStatusValue\": 1");
+        result.Should().NotContain("completion_not_observed");
+        harness.WorkflowQuery.LastActorId.Should().Be("workflow-actor");
+        var observed = harness.ChatRunPort.ObservedTerminals.Should().ContainSingle().Subject;
+        observed.RunId.Should().Be("wf-command");
+        observed.Status.Should().Be(WorkflowRunCompletionStatus.Completed.ToString());
+        observed.ActorId.Should().Be("workflow-actor");
+        observed.CompletionObserved.Should().BeTrue();
+        result.Should().Be(observed.InternalResultJson);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WaitCompleteGAgentResolvedByName_ShouldStartObservationAfterActorIdIsKnown()
     {
         var harness = new Harness();
