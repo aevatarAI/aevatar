@@ -574,15 +574,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private static AgentToolExecutionContext ResolvePendingToolContext(PendingToolApprovalState pending)
     {
-        // Refactor (issue1414/cluster-004):
-        //   Old pattern: pending approval Metadata could rebuild caller, routing, and channel control.
-        //   New principle: pending approval control must already be present in typed ToolContext.
-        return pending.ToolContext != null
-            ? AgentToolExecutionContextMapper.FromPayload(pending.ToolContext) with
+        // Refactor (issue1487/first-slice): Old pattern: pending approval Metadata remained the primary resume context. New principle: pending ToolContext is authoritative, with metadata only as old-state fallback.
+        var context = pending.ToolContext != null
+            ? AgentToolExecutionContextMapper.FromPayload(pending.ToolContext)
+            : AgentToolExecutionContext.Empty with
             {
-                Credentials = AgentToolCredentials.Empty,
-            }
-            : AgentToolExecutionContext.Empty;
+                ExternalMetadata = ScrubPendingApprovalMetadata(pending.Metadata),
+            };
+
+        return context with
+        {
+            Credentials = AgentToolCredentials.Empty,
+            ExternalMetadata = ScrubPendingApprovalMetadata(context.ExternalMetadata),
+        };
     }
 
     private static string? NormalizeToolContextValue(string? value) =>
