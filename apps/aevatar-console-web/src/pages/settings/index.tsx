@@ -488,13 +488,7 @@ const SettingsPage: React.FC = () => {
   const backendSavedRouteLabel = trimConversationValue(
     userLlmSettingsQuery.data?.savedRouteLabel,
   );
-  /**
-   * Refactor (issue1525): Old pattern: settings summaries recalculated saved
-   * and effective route labels from local route options even for unchanged
-   * loaded settings.
-   * New principle: unchanged settings display backend typed labels, while dirty
-   * drafts continue to use the current local route selection.
-   */
+  // Refactor (issue1525): Old pattern: settings summaries recalculated saved and effective route labels from local route options even for unchanged loaded settings。New principle: unchanged settings display backend typed labels, while dirty drafts continue to use the current local route selection。
   const routeSummaryLabel =
     draftMatchesLoaded && backendEffectiveRouteLabel
       ? backendEffectiveRouteLabel
