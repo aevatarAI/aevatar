@@ -4,7 +4,6 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
@@ -129,7 +128,8 @@ public static class ScopeServiceEndpoints
                 SessionId: request.SessionId,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
-                LlmControl: await BuildScopedLlmControlAsync(http, ct));
+                LlmControl: await BuildScopedLlmControlAsync(http, ct),
+                ConnectorHttpAuthorization: ExtractConnectorHttpAuthorization(http));
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -1503,6 +1503,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 normalizedPrompt,
                 scopedHeaders,
+                ExtractConnectorHttpAuthorization(http),
                 request.RevisionId,
                 appId);
             var target = await resolutionService.ResolveAsync(invocationRequest, ct);
@@ -2821,6 +2822,7 @@ const response = await fetch("{{invokePath}}", {
         string endpointId,
         string prompt,
         IReadOnlyDictionary<string, string>? headers,
+        string? connectorHttpAuthorization,
         string? revisionId,
         string? appId = null)
     {
@@ -2828,6 +2830,7 @@ const response = await fetch("{{invokePath}}", {
         {
             Prompt = prompt,
             ScopeId = scopeId,
+            ConnectorHttpAuthorization = connectorHttpAuthorization ?? string.Empty,
         };
         if (headers != null)
         {
@@ -2880,7 +2883,7 @@ const response = await fetch("{{invokePath}}", {
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        InjectBearerToken(http, scopedHeaders);
+        // Refactor (issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses typed workflow command/proto fields.
         return scopedHeaders;
     }
 
@@ -2951,16 +2954,16 @@ const response = await fetch("{{invokePath}}", {
         return control == LLMControlContext.Empty ? null : control;
     }
 
-    private static void InjectBearerToken(HttpContext? http, Dictionary<string, string> metadata)
+    private static string? ExtractConnectorHttpAuthorization(HttpContext? http)
     {
         if (http == null)
-            return;
+            return null;
         var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            var bearerToken = auth["Bearer ".Length..].Trim();
-            metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-        }
+        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var bearerToken = auth["Bearer ".Length..].Trim();
+        return string.IsNullOrWhiteSpace(bearerToken) ? null : $"Bearer {bearerToken}";
     }
 
     private static string? ExtractBearerToken(HttpContext http)

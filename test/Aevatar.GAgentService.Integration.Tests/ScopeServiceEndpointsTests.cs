@@ -1940,6 +1940,7 @@ public sealed class ScopeServiceEndpointsTests
             "hello",
             new Dictionary<string, string>(),
             null,
+            null,
             null);
 
         FluentActions.Invoking(() => InvokePrivateStaticVoid("EnsureWorkflowStreamTarget", target, request))
@@ -3897,7 +3898,7 @@ public sealed class ScopeServiceEndpointsTests
         scopedHeaders[LLMRequestMetadataKeys.ModelOverride].Should().Be("existing-model");
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer token-123");
+        scopedHeaders.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
 
         var scopedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",
@@ -4143,13 +4144,16 @@ public sealed class ScopeServiceEndpointsTests
             " chat ",
             "prompt",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
+            "Bearer connector-token",
             " rev-1 ",
             " app-x ");
         invocation.Identity.AppId.Should().Be("app-x");
         invocation.Identity.ServiceId.Should().Be("orders");
         invocation.EndpointId.Should().Be("chat");
         invocation.RevisionId.Should().Be("rev-1");
-        invocation.Payload!.Unpack<ChatRequestEvent>().Metadata["trace-id"].Should().Be("abc");
+        var payload = invocation.Payload!.Unpack<ChatRequestEvent>();
+        payload.Metadata["trace-id"].Should().Be("abc");
+        payload.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");
 
         InvokePrivateStatic<string>("ResolveDefaultScopeServiceId", options).Should().Be("default");
     }

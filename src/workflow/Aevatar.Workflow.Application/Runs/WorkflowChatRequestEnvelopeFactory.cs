@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 
@@ -32,6 +33,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             chatRequest.ToolContext = ToDurableToolContextPayload(command.ToolContext);
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToDurableLlmControlPayload(command.LlmControl);
+        chatRequest.ConnectorHttpAuthorization = Normalize(command.ConnectorHttpAuthorization);
 
         var envelope = new EventEnvelope
         {
@@ -87,16 +89,23 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
             if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
                 continue;
-            if (IsScopeMetadataKey(normalizedKey))
+            if (IsReservedMetadataKey(normalizedKey))
                 continue;
 
             destination[normalizedKey] = normalizedValue;
         }
     }
 
+    private static bool IsReservedMetadataKey(string key) =>
+        IsScopeMetadataKey(key) ||
+        string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal);
+
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
+
+    private static string Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 
     // Refactor (iter159/cluster-613-first):
     //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.

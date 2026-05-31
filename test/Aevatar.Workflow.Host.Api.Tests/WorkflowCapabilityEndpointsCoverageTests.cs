@@ -3,6 +3,7 @@ using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -798,6 +799,34 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Metadata.Should().NotContainKey("scope_id");
         result.Request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         result.Request.Metadata.Should().Contain("trace", "trace-1");
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldScrubConnectorAuthorizationMetadata_AndUseTrustedTypedCarrier()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Metadata = new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer untrusted",
+                ["trace"] = "trace-1",
+            },
+        };
+        var defaultMetadata = new Dictionary<string, string>
+        {
+            [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer default",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            defaultMetadata: defaultMetadata,
+            trustedConnectorHttpAuthorization: " Bearer trusted ");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ConnectorHttpAuthorization.Should().Be("Bearer trusted");
+        result.Request.Metadata.Should().Contain("trace", "trace-1");
+        result.Request.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]

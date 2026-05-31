@@ -128,7 +128,9 @@ public sealed record WorkflowChatRunRequest(
     string? ScopeId = null,
     LLMControlContext? LlmControl = null,
     // Refactor (issue1332): Old pattern: workflow chat commands could only carry tool controls through metadata/LlmControl. New principle: reuse typed AgentToolExecutionContext as the workflow ToolContext control surface.
-    AgentToolExecutionContext? ToolContext = null);
+    AgentToolExecutionContext? ToolContext = null,
+    // Refactor (issue1551): Old pattern: trusted connector bearer was smuggled through Metadata. New principle: Host/Application pass connector HTTP authorization as a typed command scalar.
+    string? ConnectorHttpAuthorization = null);
 
 public enum WorkflowChatRunStartError
 {

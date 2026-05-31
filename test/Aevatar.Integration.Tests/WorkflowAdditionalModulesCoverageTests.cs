@@ -2197,12 +2197,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var connector = new RecordingConnector("runtime-auth");
         var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
         var ctx = CreateContext();
-        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
-            new Dictionary<string, string>
-            {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer token-123 ",
-            });
+            " Bearer token-123 ");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent

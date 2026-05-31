@@ -94,6 +94,7 @@ public sealed class AIAbstractionsProtoCoverageTests
             Headers = { ["correlation_id"] = "c-1" },
             TimeoutMs = 2500,
             ScopeId = "scope-1",
+            ConnectorHttpAuthorization = "Bearer connector-token",
             LlmControl = new LLMControlContextPayload
             {
                 NyxIdAccessToken = "access-token",
@@ -118,6 +119,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         request.Headers["correlation_id"].Should().Be("c-1");
         request.TimeoutMs.Should().Be(2500);
         request.ScopeId.Should().Be("scope-1");
+        request.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");
         request.LlmControl.ModelOverride.Should().Be("model-a");
         request.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/llm");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(7);

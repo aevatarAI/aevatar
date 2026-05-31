@@ -16,7 +16,6 @@ using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Hosting;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
@@ -1259,8 +1258,8 @@ internal static class StudioEndpoints
 
         var llmControl = LLMControlContext.Empty;
 
-        // Forward caller's Bearer token through typed LLM control. Metadata
-        // keeps only connector/tool authorization.
+        // Refactor (issue1551): Old pattern: Studio wrote connector auth into metadata. New principle: preview metadata remains annotations; workflow connector auth uses typed chat-run carriers.
+        // Forward caller's Bearer token through typed LLM control only.
         var bearerToken = ExtractBearerToken(http);
         if (!string.IsNullOrWhiteSpace(bearerToken))
         {
@@ -1269,7 +1268,6 @@ internal static class StudioEndpoints
                 NyxIdAccessToken = bearerToken,
                 NyxIdOrgToken = bearerToken,
             };
-            metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
         }
 
         // Forward the user's preferred model from their config.

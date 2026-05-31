@@ -269,7 +269,8 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        var metadataDelta = WorkflowRunExecutionContextStateAccess.BuildRequestMetadataDelta(request.Metadata);
+        // Refactor (issue1551): Old pattern: connector auth was promoted from request.Metadata. New principle: connector auth is carried by ChatRequestEvent.ConnectorHttpAuthorization.
+        var connectorAuthorizationDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(request.ConnectorHttpAuthorization);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
@@ -280,7 +281,7 @@ public sealed class WorkflowRunGAgent
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var executionContextDelta = MergeExecutionContextDeltas(metadataDelta, toolContextDelta);
+        var executionContextDelta = MergeExecutionContextDeltas(connectorAuthorizationDelta, toolContextDelta);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,

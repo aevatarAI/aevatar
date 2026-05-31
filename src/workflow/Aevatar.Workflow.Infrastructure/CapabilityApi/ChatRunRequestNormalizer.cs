@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Connectors;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -29,7 +30,8 @@ internal static class ChatRunRequestNormalizer
 
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
-        IReadOnlyDictionary<string, string>? defaultMetadata = null)
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        string? trustedConnectorHttpAuthorization = null)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
@@ -60,7 +62,8 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
-                ToolContext: input.ToolContext));
+                ToolContext: input.ToolContext,
+                ConnectorHttpAuthorization: NormalizeOptional(trustedConnectorHttpAuthorization)));
     }
 
     private static LLMControlContext? NormalizeLlmControl(ChatLlmControlInput? source)
@@ -316,11 +319,16 @@ internal static class ChatRunRequestNormalizer
         if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
             return;
 
-        if (IsScopeMetadataKey(normalizedKey))
+        if (IsReservedMetadataKey(normalizedKey))
             return;
 
         metadata[normalizedKey] = normalizedValue;
     }
+
+    // Refactor (issue1551): Old pattern: public metadata could carry connector authorization. New principle: only trusted adapter code can set the typed ConnectorHttpAuthorization command field.
+    private static bool IsReservedMetadataKey(string key) =>
+        IsScopeMetadataKey(key) ||
+        string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal);
 
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.OrdinalIgnoreCase) ||
