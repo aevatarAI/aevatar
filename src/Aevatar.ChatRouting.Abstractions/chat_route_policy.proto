@@ -77,7 +77,7 @@ message ChatRouteInput {
   // output. Empty for ChatSourceKind=DIRECT / NYX_RESPONSES when caller
   // didn't supply a hint.
   string channel = 3;
-  // Optional command name (slash command / template name like "/daily").
+  // Optional command name (slash command / template name like "/invoice").
   // Empty when message is free-form.
   string command_name = 4;
   // Bounded content classifier output (e.g. detected intent label,

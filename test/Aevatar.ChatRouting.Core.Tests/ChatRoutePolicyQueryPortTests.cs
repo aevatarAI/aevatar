@@ -31,10 +31,10 @@ public sealed class ChatRoutePolicyQueryPortTests
         };
         document.Rules.Add(new ChatRouteRule
         {
-            RuleId = "lark-daily",
+            RuleId = "lark-invoice",
             Priority = 10,
-            Match = new ChatRouteMatch { Channel = "lark", CommandName = "/daily" },
-            Action = ChatRouteResolverTests.ForwardToModelAction("daily-model"),
+            Match = new ChatRouteMatch { Channel = "lark", CommandName = "/invoice" },
+            Action = ChatRouteResolverTests.ForwardToModelAction("invoice-model"),
         });
         var port = new ChatRoutePolicyQueryPort(new FakePolicyReader([document]));
         var resolver = new ChatRouteResolver(new StaticFallbackProvider("fallback-model"));
@@ -43,13 +43,13 @@ public sealed class ChatRoutePolicyQueryPortTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput
         {
             Channel = "lark",
-            CommandName = "/daily",
+            CommandName = "/invoice",
         });
 
         snapshot.Should().NotBeNull();
         decision.UsedFallback.Should().BeFalse();
-        decision.MatchedRuleId.Should().Be("lark-daily");
-        decision.Action.ForwardToModel.ModelName.Should().Be("daily-model");
+        decision.MatchedRuleId.Should().Be("lark-invoice");
+        decision.Action.ForwardToModel.ModelName.Should().Be("invoice-model");
     }
 
     [Fact]

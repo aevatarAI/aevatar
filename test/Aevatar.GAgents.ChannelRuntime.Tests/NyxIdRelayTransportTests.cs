@@ -477,7 +477,7 @@ public sealed class NyxIdRelayTransportTests
               "agent": { "api_key_id": "api-key-1" },
               "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
               "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
-              "content": { "type": "text", "text": "/daily" },
+              "content": { "type": "text", "text": "/invoice" },
               "raw_platform_data": {
                 "schema": "2.0",
                 "header": { "event_type": "im.message.receive_v1" },
@@ -594,7 +594,7 @@ public sealed class NyxIdRelayTransportTests
               "agent": { "api_key_id": "api-key-1" },
               "conversation": { "id": "conv-3", "platform_id": "oc_chat_3", "type": "private" },
               "sender": { "platform_id": "ou_user_3", "display_name": "User Three" },
-              "content": { "type": "text", "text": "/daily" }
+              "content": { "type": "text", "text": "/invoice" }
             }
             """;
 

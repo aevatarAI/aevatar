@@ -70,7 +70,7 @@ public sealed class ConversationReplyGeneratorTests
         var systemPrompt = providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
-        systemPrompt.Should().Contain("chrono-ai-daily");
+        systemPrompt.Should().NotContain("chrono-ai-daily");
         systemPrompt.Should().Contain("When you are following a loaded skill and you hit a missing capability");
         systemPrompt.Should().Contain("ornn_search_skills");
     }
@@ -307,7 +307,7 @@ public sealed class ConversationReplyGeneratorTests
             {
                 Id = "msg-tool-preamble",
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-tool-preamble" },
-                Content = new MessageContent { Text = "/daily eanzhao" },
+                Content = new MessageContent { Text = "/invoice eanzhao" },
             },
             new Dictionary<string, string>(),
             sink,
@@ -320,7 +320,7 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[1].Messages.Any(message =>
             message.Role == "assistant" &&
-            message.Content == "开始执行 chrono-ai-daily，先查目录结构。" &&
+            message.Content == "开始执行匹配的 Ornn skill，先查目录结构。" &&
             message.ToolCalls is { Count: 1 }).Should().BeTrue();
     }
 
@@ -834,7 +834,7 @@ public sealed class ConversationReplyGeneratorTests
                 yield break;
             }
 
-            yield return new LLMStreamChunk { DeltaContent = "开始执行 chrono-ai-daily，先查目录结构。" };
+            yield return new LLMStreamChunk { DeltaContent = "开始执行匹配的 Ornn skill，先查目录结构。" };
             yield return new LLMStreamChunk
             {
                 DeltaToolCall = new ToolCall

@@ -900,13 +900,13 @@ public sealed class ConversationGAgentDedupTests
             [
                 new ChatRouteRule
                 {
-                    RuleId = "daily",
+                    RuleId = "invoice",
                     Priority = 100,
                     Match = new ChatRouteMatch
                     {
                         SourceKind = ChatSourceKind.NyxRelay,
                         Channel = "lark",
-                        CommandName = "/daily",
+                        CommandName = "/invoice",
                     },
                     Action = GAgentToolHint("target-gagent-1"),
                 },
@@ -923,7 +923,7 @@ public sealed class ConversationGAgentDedupTests
         inboundActivity.ChannelId = new ChannelId { Value = "lark" };
         inboundActivity.Bot = new BotInstanceId { Value = "owner-scope" };
         inboundActivity.From = new ParticipantRef { CanonicalId = "sender-1" };
-        inboundActivity.Content = new MessageContent { Text = "/daily status" };
+        inboundActivity.Content = new MessageContent { Text = "/invoice status" };
         inboundActivity.TransportExtras = new TransportExtras
         {
             NyxPlatform = "lark",

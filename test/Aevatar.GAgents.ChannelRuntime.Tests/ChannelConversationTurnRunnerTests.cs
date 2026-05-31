@@ -924,7 +924,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldRouteDailySlashCommandToChronoAiDailySkill()
+    public async Task RunInboundAsync_ShouldRouteDailySlashCommandThroughGenericSkillDiscovery()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -937,7 +937,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var result = await runner.RunInboundAsync(
             BuildInboundActivity(
                 "/daily alice",
-                "msg-daily-missing-token-1",
+                "msg-generic-daily-1",
                 ConversationScope.DirectMessage,
                 "oc_p2p_chat_1",
                 new OutboundDeliveryContext
@@ -958,10 +958,13 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-daily-1");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("chrono-ai-daily");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ornn_search_skills");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("daily");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("alice");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/daily alice");
+        result.LlmReplyRequest.Activity.Content.Text.Should().NotContain("chrono-ai-daily");
         adapter.Replies.Should().BeEmpty();
         relayHandler.Requests.Should().BeEmpty();
     }
@@ -1275,7 +1278,7 @@ public sealed class ChannelConversationTurnRunnerTests
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
     // non-slash text path unchanged (owner-LLM chat fallback).
     [Fact]
-    public async Task RunInboundAsync_ShouldGateDailySlashCommandToInit_WhenSenderUnbound()
+    public async Task RunInboundAsync_ShouldGateInvoiceSlashCommandToInit_WhenSenderUnbound()
     {
         var broker = new InMemoryCapabilityBroker();
         var services = new ServiceCollection()
@@ -1287,7 +1290,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter, services);
 
         var result = await runner.RunInboundAsync(
-            BuildInboundActivity("/daily alice", "msg-unbound-daily", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            BuildInboundActivity("/invoice alice", "msg-unbound-invoice", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
