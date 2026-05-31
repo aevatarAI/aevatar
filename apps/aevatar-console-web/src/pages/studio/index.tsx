@@ -10166,6 +10166,9 @@ const StudioPage: React.FC = () => {
     />
   );
 
+  // Refactor (iter2/cluster-1515): Old: the standalone ScriptsWorkbenchPage
+  // carried a separate Scripts Studio editing surface. New: the Studio Scripts
+  // tab is the single Script Build path through the integrated panel below.
   const scriptBuildContent = appContextQuery.data?.features.scripts ? (
     <StudioScriptBuildPanel
       scopeId={resolvedStudioScopeId || undefined}
