@@ -2219,7 +2219,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.HttpAuthorization.Should().Be("Bearer token-123");
-        connector.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        connector.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]

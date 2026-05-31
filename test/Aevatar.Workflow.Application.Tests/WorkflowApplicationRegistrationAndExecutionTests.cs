@@ -291,7 +291,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer metadata-secret",
+                ["connector.http.authorization"] = "Bearer metadata-secret",
             },
             ScopeId: "u-1001",
             ConnectorHttpAuthorization: " Bearer typed-secret ");
@@ -311,7 +311,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
-        request.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        request.Metadata.Should().NotContainKey("connector.http.authorization");
         request.Headers.Should().NotContainKey("workflow.command_id");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");

@@ -473,7 +473,7 @@ public class WorkflowGAgentCoverageTests
             ConnectorHttpAuthorization = " Bearer secret ",
             Metadata =
             {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer secret ",
+                ["connector.http.authorization"] = " Bearer secret ",
                 ["trace-id"] = " trace-abc ",
             },
             LlmControl = new LLMControlContext(

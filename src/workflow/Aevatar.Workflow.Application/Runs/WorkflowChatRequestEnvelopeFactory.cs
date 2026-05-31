@@ -3,7 +3,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 
@@ -11,6 +10,8 @@ namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
 {
+    private const string LegacyConnectorHttpAuthorizationMetadataKey = "connector.http.authorization";
+
     public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
         var sessionId = !string.IsNullOrWhiteSpace(command.SessionId)
@@ -98,7 +99,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
 
     private static bool IsReservedMetadataKey(string key) =>
         IsScopeMetadataKey(key) ||
-        string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal);
+        string.Equals(key, LegacyConnectorHttpAuthorizationMetadataKey, StringComparison.Ordinal);
 
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||

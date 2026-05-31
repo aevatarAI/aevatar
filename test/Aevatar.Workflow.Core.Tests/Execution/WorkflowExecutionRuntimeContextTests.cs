@@ -29,7 +29,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = " token ",
                 [LLMRequestMetadataKeys.ModelOverride] = " model ",
                 [LLMRequestMetadataKeys.NyxIdRoutePreference] = " route ",
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer secret ",
+                ["connector.http.authorization"] = " Bearer secret ",
                 [" "] = "ignored",
                 ["empty"] = " ",
             });
@@ -38,7 +38,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         host.ExecutionContextState.Llm.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainKey("trace-id");
         host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
-        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("connector.http.authorization");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
@@ -78,7 +78,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             new Dictionary<string, string>
             {
                 ["trace-id"] = "abc",
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
+                ["connector.http.authorization"] = "Bearer secret",
             });
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
@@ -106,7 +106,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             new Dictionary<string, string>
             {
                 ["trace-id"] = "abc",
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
+                ["connector.http.authorization"] = "Bearer secret",
             });
         await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
             host,
@@ -217,7 +217,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             {
                 ["trace-id"] = "abc",
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
+                ["connector.http.authorization"] = "Bearer secret",
                 ["empty"] = " ",
             });
         var target = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -228,7 +228,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         target.Should().HaveCount(1);
         target["trace-id"].Should().Be("abc");
         target.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        target.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        target.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
