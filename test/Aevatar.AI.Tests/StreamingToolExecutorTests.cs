@@ -428,6 +428,28 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
+    public async Task NullRequestMetadataAndContext_ShouldNotCreateImplicitToolExecutionContext()
+    {
+        AgentToolExecutionContext? capturedContext = AgentToolExecutionContext.Empty;
+        var tools = new ToolManager();
+        tools.Register(new DelegateAgentTool("meta-check", _ =>
+        {
+            capturedContext = AgentToolRequestContext.Current;
+            return "ok";
+        }));
+
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "meta-check", ArgumentsJson = "{}" });
+
+        await foreach (var _ in executor.GetRemainingResultsAsync(executionState, CancellationToken.None)) { }
+
+        capturedContext.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetCompletedResults_ShouldReturnNonBlocking()
     {
         var tools = new ToolManager();

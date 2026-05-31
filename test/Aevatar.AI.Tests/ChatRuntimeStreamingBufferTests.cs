@@ -270,6 +270,39 @@ public sealed class ChatRuntimeStreamingBufferTests
         tool.CapturedContext.Should().NotBeNull();
         tool.CapturedContext!.Request.CallId.Should().Be("tool-1");
         tool.CapturedContext.Request.RequestId.Should().Be("req-123");
+        tool.CapturedContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        tool.CapturedContext.Routing.ModelOverride.Should().Be("model-a");
+        tool.CapturedContext.ExternalMetadata["safe"].Should().Be("tool-context");
+        tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+    }
+
+    [Fact]
+    public async Task ExecuteToolStepAsync_WhenToolContextIsNull_ShouldNotPromoteRequestMetadataToToolControl()
+    {
+        var provider = new RecordingStepProvider();
+        var tool = new CapturingTool();
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = CreateRuntime(provider, tools);
+        var executor = runtime.CreateStepExecutor();
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            [LLMRequestMetadataKeys.ModelOverride] = "metadata-model",
+            [LLMRequestMetadataKeys.CallId] = "metadata-call",
+            ["trace-id"] = "trace-1",
+        };
+
+        var toolResults = await executor.ExecuteToolStepAsync(
+            [new ToolCall { Id = "tool-1", Name = "capture", ArgumentsJson = "{}" }],
+            metadata,
+            toolContext: null,
+            CancellationToken.None);
+
+        toolResults.Should().ContainSingle();
+        tool.CapturedContext.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]
