@@ -1525,7 +1525,7 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 |---|---|---|
 | `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action") |
 | `converge:round-N:<question>` | — | 派 r-N+1 三 solver(把 convergence question prepend prompt) |
-| `split:<first-slice>:<later-slice>` | no-new-core first slice + later design slice | close 当前 issue + open 2 sub-issue；first 进 implement，later 进 design-pending |
+| `split:<first-slice>:<later-slice>` | no-new-core first slice + later design slice | close 当前 issue + open 2 sub-issue；**两个 sub-issue 都进 Phase 9 标准链路**(label `auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进`)。**禁止**给 later-slice 自动加 `👤 human:需-maintainer-决策` / `⏸️ phase:blocked`——later-slice 仍可由 3 solver + meta-judge 自动收敛,不预设需要人;per Auric 2026-05-31 "一堆需要 human 决策,实际上并不需要"。only reflector `META_RESOLVED:escalate-human` 才允许 label 人。 |
 | `escalate:philosophy:<...>` | architecture-philosophy hardcoded trigger | **直接** label `🆘 human:卡死` + `auto-loop-stuck` + PushNotification |
 | `escalate:stalled:<...>` | 3+ round 无 maintainer input 且 solver verdict 无变化 | **必须先派 reflector codex**(走 meta-layer reflect 节);**禁止**直接 label 人 |
 | `escalate:<其他 category>` | conflict / budget-exhausted 等 | 派 reflector + 同时 PushNotification |
