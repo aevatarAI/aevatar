@@ -192,6 +192,70 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         return DispatchRoomEnvelopeAsync(roomId, envelope, cancellationToken);
     }
 
+    public Task SubmitParticipantsResolvedAsync(
+        StreamingProxyRoomParticipantsResolvedCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        // Refactor (issue1549): Old pattern: participant service/coordinator owned resolved participant sets as method state. New principle: resolved participants enter the room actor as typed progression input.
+        ArgumentNullException.ThrowIfNull(command);
+
+        var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
+        var envelope = BuildRoomEnvelope(
+            roomId,
+            new StreamingProxyChatParticipantsResolvedRequested
+            {
+                SessionId = NormalizeRequiredValue(command.SessionId, nameof(command.SessionId)),
+                Participants = { command.Participants },
+            });
+
+        return DispatchRoomEnvelopeAsync(roomId, envelope, cancellationToken);
+    }
+
+    public Task SubmitParticipantReplyObservedAsync(
+        StreamingProxyRoomParticipantReplyObservedCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        // Refactor (issue1549): Old pattern: coordinator posted messages and incremented success counters itself. New principle: successful reply observation is reconciled by the room actor.
+        ArgumentNullException.ThrowIfNull(command);
+
+        var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
+        var envelope = BuildRoomEnvelope(
+            roomId,
+            new StreamingProxyChatParticipantReplyObservedRequested
+            {
+                SessionId = NormalizeRequiredValue(command.SessionId, nameof(command.SessionId)),
+                ParticipantId = NormalizeRequiredValue(command.ParticipantId, nameof(command.ParticipantId)),
+                Round = command.Round,
+                ParticipantIndex = command.ParticipantIndex,
+                Content = NormalizeRequiredValue(command.Content, nameof(command.Content)),
+            });
+
+        return DispatchRoomEnvelopeAsync(roomId, envelope, cancellationToken);
+    }
+
+    public Task SubmitParticipantReplyFailedAsync(
+        StreamingProxyRoomParticipantReplyFailedCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        // Refactor (issue1549): Old pattern: coordinator pruned failed participants and decided when no replies meant failure. New principle: failure observations are actor-owned progression facts.
+        ArgumentNullException.ThrowIfNull(command);
+
+        var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
+        var envelope = BuildRoomEnvelope(
+            roomId,
+            new StreamingProxyChatParticipantReplyFailedRequested
+            {
+                SessionId = NormalizeRequiredValue(command.SessionId, nameof(command.SessionId)),
+                ParticipantId = NormalizeRequiredValue(command.ParticipantId, nameof(command.ParticipantId)),
+                Round = command.Round,
+                ParticipantIndex = command.ParticipantIndex,
+                FailureKind = command.FailureKind,
+                ErrorMessage = command.ErrorMessage ?? string.Empty,
+            });
+
+        return DispatchRoomEnvelopeAsync(roomId, envelope, cancellationToken);
+    }
+
     private static string NormalizeRequiredScopeId(string? scopeId)
     {
         var normalized = scopeId?.Trim();

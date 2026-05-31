@@ -24,6 +24,18 @@ public interface IStreamingProxyRoomCommandService
     Task PublishTerminalStateAsync(
         StreamingProxyRoomTerminalStateCommand command,
         CancellationToken cancellationToken = default);
+
+    Task SubmitParticipantsResolvedAsync(
+        StreamingProxyRoomParticipantsResolvedCommand command,
+        CancellationToken cancellationToken = default);
+
+    Task SubmitParticipantReplyObservedAsync(
+        StreamingProxyRoomParticipantReplyObservedCommand command,
+        CancellationToken cancellationToken = default);
+
+    Task SubmitParticipantReplyFailedAsync(
+        StreamingProxyRoomParticipantReplyFailedCommand command,
+        CancellationToken cancellationToken = default);
 }
 
 // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
@@ -67,6 +79,29 @@ public sealed record StreamingProxyRoomTerminalStateCommand(
     string RoomId,
     string SessionId,
     StreamingProxyChatSessionTerminalStatus Status,
+    string? ErrorMessage);
+
+// Refactor (issue1549): Old pattern: runner/coordinator held participant progression and terminal counters. New principle: room actor receives typed observations and owns lifecycle cursor/terminal facts.
+public sealed record StreamingProxyRoomParticipantsResolvedCommand(
+    string RoomId,
+    string SessionId,
+    IReadOnlyList<StreamingProxyChatLifecycleParticipant> Participants);
+
+public sealed record StreamingProxyRoomParticipantReplyObservedCommand(
+    string RoomId,
+    string SessionId,
+    string ParticipantId,
+    int Round,
+    int ParticipantIndex,
+    string Content);
+
+public sealed record StreamingProxyRoomParticipantReplyFailedCommand(
+    string RoomId,
+    string SessionId,
+    string ParticipantId,
+    int Round,
+    int ParticipantIndex,
+    StreamingProxyChatParticipantReplyFailureKind FailureKind,
     string? ErrorMessage);
 
 public sealed record StreamingProxyRoomCreateResult(

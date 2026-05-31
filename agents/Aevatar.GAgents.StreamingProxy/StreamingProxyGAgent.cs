@@ -58,6 +58,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             lifecycleEvent.PreferredRoute = toolContext.Routing.NyxIdRoutePreference;
         if (!string.IsNullOrWhiteSpace(toolContext.Routing.ModelOverride))
             lifecycleEvent.DefaultModel = toolContext.Routing.ModelOverride;
+        lifecycleEvent.Prompt = prompt;
 
         var topicEvent = new GroupChatTopicEvent
         {
@@ -137,6 +138,100 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             Content = request.Content,
             SessionId = request.SessionId,
         });
+    }
+
+    [EventHandler(EndpointName = "resolveChatParticipants")]
+    public async Task HandleChatParticipantsResolvedRequested(StreamingProxyChatParticipantsResolvedRequested request)
+    {
+        // Refactor (issue1549): Old pattern: runner/coordinator owned active participants and round count in local collections. New principle: resolved participant progression is committed by the room actor.
+        ArgumentNullException.ThrowIfNull(request);
+        if (!State.ChatLifecycles.TryGetValue(request.SessionId, out var lifecycle))
+            return;
+
+        var participants = NormalizeLifecycleParticipants(request.Participants);
+        var maxRounds = participants.Count > 1 ? StreamingProxyDefaults.MaxDiscussionRounds : participants.Count == 1 ? 1 : 0;
+        await PersistDomainEventAsync(new StreamingProxyChatLifecycleParticipantsResolvedEvent
+        {
+            SessionId = request.SessionId,
+            MaxRounds = maxRounds,
+            Participants = { participants },
+        });
+
+        if (participants.Count == 0)
+        {
+            await CommitParticipantTerminalAsync(request.SessionId, 0);
+            return;
+        }
+
+        await SendNextParticipantReplyRequestAsync(State.ChatLifecycles[request.SessionId]);
+    }
+
+    [EventHandler(EndpointName = "observeParticipantReply")]
+    public async Task HandleParticipantReplyObservedRequested(StreamingProxyChatParticipantReplyObservedRequested request)
+    {
+        // Refactor (issue1549): Old pattern: coordinator posted committed messages and counted successes. New principle: actor validates round/index and records reply progression before deciding next step.
+        ArgumentNullException.ThrowIfNull(request);
+        if (!State.ChatLifecycles.TryGetValue(request.SessionId, out var lifecycle) ||
+            !IsCurrentParticipant(lifecycle, request.ParticipantId, request.Round, request.ParticipantIndex, out var participant) ||
+            string.IsNullOrWhiteSpace(request.Content))
+        {
+            return;
+        }
+
+        var messageSequence = State.NextSequence + 1;
+        await PersistDomainEventAsync(new StreamingProxyChatParticipantReplyRecordedEvent
+        {
+            SessionId = request.SessionId,
+            ParticipantId = request.ParticipantId,
+            Round = request.Round,
+            ParticipantIndex = request.ParticipantIndex,
+            Content = request.Content.Trim(),
+            MessageSequence = messageSequence,
+        });
+
+        var messageEvent = new GroupChatMessageEvent
+        {
+            AgentId = participant.ParticipantId,
+            AgentName = string.IsNullOrWhiteSpace(participant.DisplayName) ? participant.ParticipantId : participant.DisplayName,
+            Content = request.Content.Trim(),
+            SessionId = request.SessionId,
+        };
+        await PersistDomainEventAsync(messageEvent);
+
+        await PublishAsync(messageEvent, TopologyAudience.Parent);
+        await ContinueOrCompleteLifecycleAsync(request.SessionId);
+    }
+
+    [EventHandler(EndpointName = "observeParticipantReplyFailed")]
+    public async Task HandleParticipantReplyFailedRequested(StreamingProxyChatParticipantReplyFailedRequested request)
+    {
+        // Refactor (issue1549): Old pattern: coordinator pruned failed participants and inferred terminal state from local counters. New principle: failure outcome is a typed actor event and terminal remains single-sourced in terminal_sessions.
+        ArgumentNullException.ThrowIfNull(request);
+        if (!State.ChatLifecycles.TryGetValue(request.SessionId, out var lifecycle) ||
+            !IsCurrentParticipant(lifecycle, request.ParticipantId, request.Round, request.ParticipantIndex, out _))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(new StreamingProxyChatParticipantReplyFailedEvent
+        {
+            SessionId = request.SessionId,
+            ParticipantId = request.ParticipantId,
+            Round = request.Round,
+            ParticipantIndex = request.ParticipantIndex,
+            FailureKind = request.FailureKind,
+            ErrorMessage = request.ErrorMessage ?? string.Empty,
+        });
+
+        if (HasParticipant(request.ParticipantId))
+        {
+            await HandleGroupChatParticipantLeft(new GroupChatParticipantLeftEvent
+            {
+                AgentId = request.ParticipantId,
+            });
+        }
+
+        await ContinueOrCompleteLifecycleAsync(request.SessionId);
     }
 
     [EventHandler(EndpointName = "joinRoom")]
@@ -244,6 +339,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             .On<GroupChatParticipantJoinedEvent>(ApplyParticipantJoined)
             .On<GroupChatParticipantLeftEvent>(ApplyParticipantLeft)
             .On<StreamingProxyChatLifecycleAcceptedEvent>(ApplyLifecycleAccepted)
+            .On<StreamingProxyChatLifecycleParticipantsResolvedEvent>(ApplyLifecycleParticipantsResolved)
+            .On<StreamingProxyChatParticipantReplyRecordedEvent>(ApplyParticipantReplyRecorded)
+            .On<StreamingProxyChatParticipantReplyFailedEvent>(ApplyParticipantReplyFailed)
             .On<StreamingProxyChatSessionTerminalStateChanged>(ApplyTerminalStateChanged)
             .OrCurrent();
 
@@ -357,6 +455,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             TerminalAt = evt.TerminalAt,
             ErrorMessage = evt.ErrorMessage ?? string.Empty,
         };
+        next.ChatLifecycles.Remove(evt.SessionId);
         return next;
     }
 
@@ -375,13 +474,237 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             AccessToken = evt.AccessToken,
             PreferredRoute = evt.PreferredRoute,
             DefaultModel = evt.DefaultModel,
+            Prompt = evt.Prompt,
         };
         return next;
     }
 
-    internal static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
-        int successfulReplies) =>
-        successfulReplies > 0
-            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
-            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
+    private async Task ContinueOrCompleteLifecycleAsync(string sessionId)
+    {
+        if (!State.ChatLifecycles.TryGetValue(sessionId, out var lifecycle))
+            return;
+
+        if (TryGetCurrentActiveParticipant(lifecycle, out _))
+        {
+            await SendNextParticipantReplyRequestAsync(lifecycle);
+            return;
+        }
+
+        await CommitParticipantTerminalAsync(sessionId, lifecycle.SuccessfulReplyCount);
+    }
+
+    private async Task CommitParticipantTerminalAsync(string sessionId, int successfulReplyCount)
+    {
+        var terminalStatus = successfulReplyCount > 0
+            ? StreamingProxyChatSessionTerminalStatus.Completed
+            : StreamingProxyChatSessionTerminalStatus.Failed;
+        var errorMessage = successfulReplyCount > 0
+            ? string.Empty
+            : "StreamingProxy chat completed without any participant replies.";
+
+        await HandleChatSessionTerminalStateChanged(new StreamingProxyChatSessionTerminalStateChanged
+        {
+            SessionId = sessionId,
+            Status = terminalStatus,
+            TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ErrorMessage = errorMessage,
+        });
+    }
+
+    private Task SendNextParticipantReplyRequestAsync(StreamingProxyChatLifecycleRecord lifecycle)
+    {
+        if (!TryGetCurrentActiveParticipant(lifecycle, out var participant))
+            return Task.CompletedTask;
+
+        var transcript = State.Messages
+            .Where(message => !message.IsTopic)
+            .Select(message => new StreamingProxyChatTranscriptEntry
+            {
+                Speaker = message.SenderName,
+                Content = message.Content,
+            })
+            .ToList();
+        var activeParticipants = lifecycle.Participants
+            .Where(candidate => candidate.Status == StreamingProxyChatLifecycleParticipantStatus.Active)
+            .Select(candidate => candidate.Clone())
+            .ToList();
+
+        return SendToAsync(
+            ChatLifecycleContinuationRunnerStreamId,
+            new StreamingProxyChatParticipantReplyRequested
+            {
+                RoomId = Id,
+                SessionId = lifecycle.SessionId,
+                ParticipantId = participant.ParticipantId,
+                DisplayName = participant.DisplayName,
+                RoutePreference = participant.RoutePreference,
+                Model = participant.Model,
+                Round = lifecycle.CurrentRound,
+                ParticipantIndex = lifecycle.NextParticipantIndex,
+                Prompt = lifecycle.Prompt,
+                AccessToken = lifecycle.AccessToken,
+                PreferredRoute = lifecycle.PreferredRoute,
+                DefaultModel = lifecycle.DefaultModel,
+                MaxRounds = lifecycle.MaxRounds,
+                ActiveParticipants = { activeParticipants },
+                Transcript = { transcript },
+            });
+    }
+
+    private static bool IsCurrentParticipant(
+        StreamingProxyChatLifecycleRecord lifecycle,
+        string participantId,
+        int round,
+        int participantIndex,
+        out StreamingProxyChatLifecycleParticipant participant)
+    {
+        participant = new StreamingProxyChatLifecycleParticipant();
+        if (round != lifecycle.CurrentRound ||
+            participantIndex != lifecycle.NextParticipantIndex ||
+            participantIndex < 0 ||
+            participantIndex >= lifecycle.Participants.Count)
+        {
+            return false;
+        }
+
+        var candidate = lifecycle.Participants[participantIndex];
+        if (candidate.Status != StreamingProxyChatLifecycleParticipantStatus.Active ||
+            !string.Equals(candidate.ParticipantId, participantId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        participant = candidate;
+        return true;
+    }
+
+    private static bool TryGetCurrentActiveParticipant(
+        StreamingProxyChatLifecycleRecord lifecycle,
+        out StreamingProxyChatLifecycleParticipant participant)
+    {
+        participant = new StreamingProxyChatLifecycleParticipant();
+        if (lifecycle.MaxRounds == 0 ||
+            lifecycle.CurrentRound > lifecycle.MaxRounds ||
+            lifecycle.NextParticipantIndex < 0)
+        {
+            return false;
+        }
+
+        for (var i = lifecycle.NextParticipantIndex; i < lifecycle.Participants.Count; i++)
+        {
+            if (lifecycle.Participants[i].Status == StreamingProxyChatLifecycleParticipantStatus.Active)
+            {
+                participant = lifecycle.Participants[i];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<StreamingProxyChatLifecycleParticipant> NormalizeLifecycleParticipants(
+        IEnumerable<StreamingProxyChatLifecycleParticipant> participants)
+    {
+        var result = new List<StreamingProxyChatLifecycleParticipant>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var participant in participants)
+        {
+            var participantId = participant.ParticipantId?.Trim();
+            if (string.IsNullOrWhiteSpace(participantId) ||
+                !seen.Add(participantId))
+            {
+                continue;
+            }
+
+            result.Add(new StreamingProxyChatLifecycleParticipant
+            {
+                ParticipantId = participantId,
+                DisplayName = string.IsNullOrWhiteSpace(participant.DisplayName)
+                    ? participantId
+                    : participant.DisplayName.Trim(),
+                RoutePreference = participant.RoutePreference?.Trim() ?? string.Empty,
+                Model = participant.Model?.Trim() ?? string.Empty,
+                Status = StreamingProxyChatLifecycleParticipantStatus.Active,
+            });
+        }
+
+        return result;
+    }
+
+    private static StreamingProxyGAgentState ApplyLifecycleParticipantsResolved(
+        StreamingProxyGAgentState current,
+        StreamingProxyChatLifecycleParticipantsResolvedEvent evt)
+    {
+        var next = current.Clone();
+        if (!next.ChatLifecycles.TryGetValue(evt.SessionId, out var lifecycle))
+            return next;
+
+        lifecycle.Participants.Clear();
+        lifecycle.Participants.Add(evt.Participants);
+        lifecycle.MaxRounds = evt.MaxRounds;
+        lifecycle.CurrentRound = evt.Participants.Count == 0 ? 0 : 1;
+        lifecycle.NextParticipantIndex = 0;
+        lifecycle.SuccessfulReplyCount = 0;
+        lifecycle.TranscriptWatermark = 0;
+        return next;
+    }
+
+    private static StreamingProxyGAgentState ApplyParticipantReplyRecorded(
+        StreamingProxyGAgentState current,
+        StreamingProxyChatParticipantReplyRecordedEvent evt)
+    {
+        var next = current.Clone();
+        if (!next.ChatLifecycles.TryGetValue(evt.SessionId, out var lifecycle))
+            return next;
+
+        lifecycle.SuccessfulReplyCount++;
+        lifecycle.TranscriptWatermark = evt.MessageSequence;
+        AdvanceLifecycleCursor(lifecycle);
+        return next;
+    }
+
+    private static StreamingProxyGAgentState ApplyParticipantReplyFailed(
+        StreamingProxyGAgentState current,
+        StreamingProxyChatParticipantReplyFailedEvent evt)
+    {
+        var next = current.Clone();
+        if (!next.ChatLifecycles.TryGetValue(evt.SessionId, out var lifecycle))
+            return next;
+
+        var participant = lifecycle.Participants.FirstOrDefault(candidate =>
+            string.Equals(candidate.ParticipantId, evt.ParticipantId, StringComparison.OrdinalIgnoreCase));
+        if (participant != null)
+        {
+            participant.Status = StreamingProxyChatLifecycleParticipantStatus.Failed;
+            participant.FailedRound = evt.Round;
+            participant.FailureReason = evt.ErrorMessage ?? string.Empty;
+        }
+
+        AdvanceLifecycleCursor(lifecycle);
+        return next;
+    }
+
+    private static void AdvanceLifecycleCursor(StreamingProxyChatLifecycleRecord lifecycle)
+    {
+        if (lifecycle.Participants.Count == 0)
+            return;
+
+        lifecycle.NextParticipantIndex++;
+        while (lifecycle.NextParticipantIndex < lifecycle.Participants.Count &&
+               lifecycle.Participants[lifecycle.NextParticipantIndex].Status != StreamingProxyChatLifecycleParticipantStatus.Active)
+        {
+            lifecycle.NextParticipantIndex++;
+        }
+
+        if (lifecycle.NextParticipantIndex < lifecycle.Participants.Count)
+            return;
+
+        lifecycle.CurrentRound++;
+        lifecycle.NextParticipantIndex = 0;
+        while (lifecycle.NextParticipantIndex < lifecycle.Participants.Count &&
+               lifecycle.Participants[lifecycle.NextParticipantIndex].Status != StreamingProxyChatLifecycleParticipantStatus.Active)
+        {
+            lifecycle.NextParticipantIndex++;
+        }
+    }
 }
