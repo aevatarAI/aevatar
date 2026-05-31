@@ -136,6 +136,62 @@ public class ToolCallLoopTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenMetadataHasOwnedKeys_ShouldKeepOnlyExternalAnnotationsForToolExecution()
+    {
+        string? capturedToken = null;
+        string? capturedScope = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tool-call-1",
+                        Name = "capture",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("capture", _ =>
+        {
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedScope = AgentToolRequestContext.ScopeId;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
+            capturedCallId = AgentToolRequestContext.CallId;
+            return "{}";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+                [LLMRequestMetadataKeys.ScopeId] = "metadata-scope",
+                [LLMRequestMetadataKeys.CallId] = "metadata-call",
+                ["trace-id"] = "trace-1",
+            },
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        capturedToken.Should().BeNull();
+        capturedScope.Should().BeNull();
+        capturedExternal.Should().Be("trace-1");
+        capturedCallId.Should().Be("tool-call-1");
+        messages.Should().ContainSingle(m => m.Role == "tool" && m.ToolCallId == "tool-call-1");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldExposeStableRequestIdAndPerCallIdToLlmMiddlewareMetadata()
     {
         var provider = new QueueLLMProvider(

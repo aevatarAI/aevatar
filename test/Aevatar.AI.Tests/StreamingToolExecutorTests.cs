@@ -367,14 +367,17 @@ public class StreamingToolExecutorTests
             return "ok";
         }));
 
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        var toolContext = AgentToolExecutionContext.Empty with
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "typed-secret",
-            ["auth_token"] = "secret-123",
+            Credentials = new AgentToolCredentials("typed-secret", null, null),
+            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["auth_token"] = "secret-123",
+            },
         };
 
         var executor = new StreamingToolExecutor(
-            tools, requestMetadata: metadata);
+            tools, toolContext: toolContext);
         using var executionState = executor.CreateExecutionState();
 
         executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "meta-check", ArgumentsJson = "{}" });
@@ -382,6 +385,43 @@ public class StreamingToolExecutorTests
         await foreach (var _ in executor.GetRemainingResultsAsync(executionState, CancellationToken.None)) { }
 
         capturedToken.Should().Be("typed-secret");
+        capturedExternal.Should().Be("secret-123");
+        capturedCallId.Should().Be("tc-1");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RequestMetadata_ShouldNotPromoteOwnedControlKeysDuringToolExecution()
+    {
+        string? capturedToken = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
+        var tools = new ToolManager();
+        tools.Register(new DelegateAgentTool("meta-check", _ =>
+        {
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("auth_token");
+            capturedCallId = AgentToolRequestContext.CallId;
+            return "ok";
+        }));
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-secret",
+            [LLMRequestMetadataKeys.CallId] = "metadata-call",
+            ["auth_token"] = "secret-123",
+        };
+
+        var executor = new StreamingToolExecutor(
+            tools,
+            requestMetadata: metadata);
+        using var executionState = executor.CreateExecutionState();
+
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "meta-check", ArgumentsJson = "{}" });
+
+        await foreach (var _ in executor.GetRemainingResultsAsync(executionState, CancellationToken.None)) { }
+
+        capturedToken.Should().BeNull();
         capturedExternal.Should().Be("secret-123");
         capturedCallId.Should().Be("tc-1");
         AgentToolRequestContext.Current.Should().BeNull();

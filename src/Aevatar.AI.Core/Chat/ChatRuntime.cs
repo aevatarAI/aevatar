@@ -320,7 +320,6 @@ public sealed class ChatRuntime
 
             var streamingExecutor = new StreamingToolExecutor(
                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                requestMetadata: baseRequest.Metadata,
                 toolContext: baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest));
             using var streamingToolState = streamingExecutor.CreateExecutionState();
 
@@ -459,7 +458,6 @@ public sealed class ChatRuntime
 
                         var textToolExecutor = new StreamingToolExecutor(
                             _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                            requestMetadata: baseRequest.Metadata,
                             toolContext: AgentToolExecutionContextMapper.FromRequest(roundRequest));
                         using var textToolState = textToolExecutor.CreateExecutionState();
                         foreach (var tc in parsed.ToolCalls)
@@ -584,7 +582,6 @@ public sealed class ChatRuntime
 
                 var finalToolExecutor = new StreamingToolExecutor(
                     _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                    requestMetadata: baseRequest.Metadata,
                     toolContext: finalRequest.ToolContext);
                 using var finalToolState = finalToolExecutor.CreateExecutionState();
                 foreach (var tc in finalParsed.ToolCalls)
@@ -823,7 +820,6 @@ public sealed class ChatRuntime
 
     internal async Task<IReadOnlyList<ToolExecutionResult>> ExecuteSingleToolStepAsync(
         IReadOnlyList<ToolCall> toolCalls,
-        IReadOnlyDictionary<string, string>? requestMetadata,
         AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
@@ -831,7 +827,6 @@ public sealed class ChatRuntime
             _toolLoop.Tools,
             _hooks,
             _toolLoop.ToolMiddlewares,
-            requestMetadata: requestMetadata,
             toolContext: toolContext);
         using var toolState = executor.CreateExecutionState();
         foreach (var toolCall in toolCalls)
