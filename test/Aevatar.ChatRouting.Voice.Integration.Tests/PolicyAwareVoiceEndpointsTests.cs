@@ -9,6 +9,7 @@ using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -210,6 +211,27 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
+    public async Task PolicyAwareVoice_WhenForwardToModelHasOnlyPrefilledVoiceTarget_ShouldReturn501BeforeUpgrade()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToModelWithPrefilledVoiceTarget(), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
+        var resolver = RecordingVoiceSessionResolver.Attached(CreateInitializedSession());
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented);
+        (await ReadBodyAsync(context)).Should().Be("Voice ForwardToModel is not supported in v1.");
+        wsFeature.AcceptCalls.Should().Be(0);
+        catalog.Requests.Should().BeEmpty();
+        resolver.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PolicyAwareVoice_WhenPolicyRejects_ShouldReturnForbiddenBeforeUpgrade()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(Reject("voice denied"), []));
@@ -249,6 +271,26 @@ public sealed class PolicyAwareVoiceEndpointsTests
         new()
         {
             ForwardToModel = new ForwardToModel { ModelName = modelName },
+        };
+
+    private static ChatRouteAction ForwardToModelWithPrefilledVoiceTarget() =>
+        new()
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = "aevatar_invoke_gagent",
+                    PrefilledArguments = new Struct
+                    {
+                        Fields =
+                        {
+                            ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString("voice-agent-lark"),
+                            ["voice_module_name"] = Google.Protobuf.WellKnownTypes.Value.ForString("voice_presence_openai"),
+                        },
+                    },
+                },
+            },
         };
 
     private static ChatRouteAction Reject(string reason) =>
