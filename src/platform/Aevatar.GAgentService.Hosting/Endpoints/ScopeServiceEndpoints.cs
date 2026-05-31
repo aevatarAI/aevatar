@@ -1525,7 +1525,14 @@ public static class ScopeServiceEndpoints
                         {
                             Prompt = normalizedPrompt,
                             InputParts = MapInputParts(request.InputParts),
-                            AgentId = target.Service.PrimaryActorId,
+                            Source = new WorkflowChatSourceInput
+                            {
+                                Kind = "definition_actor",
+                                DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                                {
+                                    ActorId = target.Service.PrimaryActorId,
+                                },
+                            },
                             SessionId = request.SessionId,
                             ScopeId = scopeId,
                             Metadata = scopedHeaders,

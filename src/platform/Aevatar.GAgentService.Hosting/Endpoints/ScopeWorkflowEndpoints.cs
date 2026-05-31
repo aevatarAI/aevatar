@@ -319,7 +319,14 @@ public static class ScopeWorkflowEndpoints
                 new ChatInput
                 {
                     Prompt = prompt,
-                    AgentId = workflow.ActorId,
+                    Source = new WorkflowChatSourceInput
+                    {
+                        Kind = "definition_actor",
+                        DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                        {
+                            ActorId = workflow.ActorId,
+                        },
+                    },
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
                     Metadata = scopedHeaders,

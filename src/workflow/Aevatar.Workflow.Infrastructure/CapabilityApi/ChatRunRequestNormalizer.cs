@@ -98,11 +98,13 @@ internal static class ChatRunRequestNormalizer
 
     private static SourceNormalizationResult NormalizeSource(ChatInput input)
     {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: legacy workflow inputs could smuggle actor authority through top-level agentId.
+        //   New principle: legacy name/YAML aliases resolve only workflow content; actor authority must be in typed source variants.
         if (input.Source != null)
             return NormalizeTypedSource(input.Source);
 
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
-        var normalizedAgentId = NormalizeAgentId(input.AgentId);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         var legacyWorkflowYaml = input.WorkflowYaml;
         var hasLegacyWorkflowYaml = legacyWorkflowYaml != null;
@@ -120,12 +122,7 @@ internal static class ChatRunRequestNormalizer
             return SourceNormalizationResult.Success(ToInlineYamlBundleSource(
                 string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
                 inlineWorkflowYamls,
-                string.IsNullOrWhiteSpace(normalizedAgentId) ? null : normalizedAgentId));
-
-        if (!string.IsNullOrWhiteSpace(normalizedAgentId))
-            return SourceNormalizationResult.Success(WorkflowChatSource.DefinitionActor(
-                normalizedAgentId,
-                string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName));
+                actorId: null));
 
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
             return SourceNormalizationResult.Success(WorkflowChatSource.CatalogWorkflow(requestedWorkflowName));
@@ -207,11 +204,14 @@ internal static class ChatRunRequestNormalizer
 
     private static string ResolveTypedActorId(WorkflowChatSourceInput source, WorkflowChatSourceKind kind)
     {
+        // Refactor (phase9/cluster-349):
+        //   Old pattern: source.actorId was a catch-all fallback for definition actor, inline bundle, and direct source.
+        //   New principle: each source kind reads only its typed actor-id slot; direct/catalog sources stay address-free.
         var value = kind switch
         {
-            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActor?.ActorId ?? source.ActorId,
-            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.ActorId ?? source.ActorId,
-            _ => source.ActorId,
+            WorkflowChatSourceKind.DefinitionActor => source.DefinitionActor?.ActorId,
+            WorkflowChatSourceKind.InlineYamlBundle => source.InlineBundle?.ActorId,
+            _ => null,
         };
         return NormalizeActorId(value);
     }
@@ -337,9 +337,6 @@ internal static class ChatRunRequestNormalizer
 
     private static string? NormalizeScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId) ? null : scopeId.Trim();
-
-    private static string? NormalizeAgentId(string? agentId) =>
-        string.IsNullOrWhiteSpace(agentId) ? null : agentId.Trim();
 
     private static string NormalizeActorId(string? actorId) =>
         string.IsNullOrWhiteSpace(actorId) ? string.Empty : actorId.Trim();

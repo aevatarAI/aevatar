@@ -72,23 +72,26 @@ public class ChatWebSocketCommandParserTests
     [Fact]
     public void TryParse_ValidCommand_ShouldReturnEnvelope()
     {
-        var frame = TextFrame("""{"type":"chat.command","requestId":"req-9","payload":{"prompt":"hello","workflow":"direct","workflowYamls":["name: direct"],"agentId":"a-1"}}""");
+        var frame = TextFrame(
+            """{"type":"chat.command","requestId":"req-9","payload":{"prompt":"hello","source":{"kind":"definition_actor","definitionActor":{"actorId":"a-1","workflowName":"direct"}}}}""");
 
         var ok = ChatWebSocketCommandParser.TryParse(frame, out var envelope, out _);
 
         ok.Should().BeTrue();
         envelope.RequestId.Should().Be("req-9");
         envelope.Input.Prompt.Should().Be("hello");
-        envelope.Input.Workflow.Should().Be("direct");
-        envelope.Input.WorkflowYamls.Should().NotBeNull();
-        envelope.Input.WorkflowYamls![0].Should().Be("name: direct");
-        envelope.Input.AgentId.Should().Be("a-1");
+        envelope.Input.Source.Should().NotBeNull();
+        envelope.Input.Source!.DefinitionActor.Should().Be(new WorkflowChatDefinitionActorSourceInput
+        {
+            ActorId = "a-1",
+            WorkflowName = "direct",
+        });
     }
 
     [Fact]
     public void TryParse_LegacyWorkflowYamlAlias_ShouldPopulateChatInput()
     {
-        var frame = TextFrame("""{"type":"chat.command","requestId":"req-legacy","payload":{"prompt":"hello","workflowYaml":"name: direct","agentId":"a-1"}}""");
+        var frame = TextFrame("""{"type":"chat.command","requestId":"req-legacy","payload":{"prompt":"hello","workflowYaml":"name: direct"}}""");
 
         var ok = ChatWebSocketCommandParser.TryParse(frame, out var envelope, out _);
 
@@ -96,7 +99,20 @@ public class ChatWebSocketCommandParserTests
         envelope.RequestId.Should().Be("req-legacy");
         envelope.Input.WorkflowYaml.Should().Be("name: direct");
         envelope.Input.WorkflowYamls.Should().BeNull();
-        envelope.Input.AgentId.Should().Be("a-1");
+    }
+
+    [Theory]
+    [InlineData("""{"type":"chat.command","payload":{"prompt":"hello","agentId":"a-1"}}""")]
+    [InlineData("""{"type":"chat.command","payload":{"prompt":"hello","source":{"kind":"actor","actorId":"a-1"}}}""")]
+    public void TryParse_DeletedActorAuthorityFields_ShouldReturnInvalidCommand(string json)
+    {
+        var frame = TextFrame(json);
+
+        var ok = ChatWebSocketCommandParser.TryParse(frame, out _, out var error);
+
+        ok.Should().BeFalse();
+        error.Code.Should().Be("INVALID_COMMAND");
+        error.Message.Should().NotContain("agentId");
     }
 
     [Fact]
