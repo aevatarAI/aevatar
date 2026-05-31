@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -312,7 +311,7 @@ public static class ScopeWorkflowEndpoints
 
         if (resolvedEventFormat == ScopeWorkflowStreamEventFormat.Workflow)
         {
-            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, headers, http, ct);
+            var scopedHeaders = BuildScopedHeaders(scopeId, headers);
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
@@ -329,7 +328,7 @@ public static class ScopeWorkflowEndpoints
             return;
         }
 
-        var aguiHeaders = await BuildScopedHeadersAsync(scopeId, headers, http, ct);
+        var aguiHeaders = BuildScopedHeaders(scopeId, headers);
         await HandleAguiStreamAsync(
             http,
             scopeId,
@@ -338,6 +337,7 @@ public static class ScopeWorkflowEndpoints
             sessionId,
             aguiHeaders,
             await BuildScopedLlmControlAsync(http, ct),
+            ExtractConnectorHttpAuthorization(http),
             chatRunService,
             ct);
     }
@@ -425,6 +425,7 @@ public static class ScopeWorkflowEndpoints
         string? sessionId,
         IReadOnlyDictionary<string, string>? headers,
         LLMControlContext? llmControl,
+        string? connectorHttpAuthorization,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct)
     {
@@ -437,7 +438,8 @@ public static class ScopeWorkflowEndpoints
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
-                LlmControl: llmControl),
+                LlmControl: llmControl,
+                ConnectorHttpAuthorization: connectorHttpAuthorization),
             chatRunService,
             ct);
     }
@@ -537,27 +539,15 @@ public static class ScopeWorkflowEndpoints
         return false;
     }
 
-    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
+    private static Dictionary<string, string> BuildScopedHeaders(
         string scopeId,
-        IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null,
-        CancellationToken cancellationToken = default)
+        IReadOnlyDictionary<string, string>? headers)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        if (http != null)
-        {
-            var auth = http.Request.Headers.Authorization.FirstOrDefault();
-            if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            {
-                var bearerToken = auth["Bearer ".Length..].Trim();
-                scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-            }
-        }
-
         return scopedHeaders;
     }
 
@@ -636,6 +626,14 @@ public static class ScopeWorkflowEndpoints
 
         var bearerToken = auth["Bearer ".Length..].Trim();
         return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
+    }
+
+    private static string? ExtractConnectorHttpAuthorization(HttpContext http)
+    {
+        var bearerToken = ExtractBearerToken(http);
+        return string.IsNullOrWhiteSpace(bearerToken)
+            ? null
+            : $"Bearer {bearerToken.Trim()}";
     }
 
     internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)

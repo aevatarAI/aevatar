@@ -4,7 +4,6 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
@@ -111,7 +110,7 @@ public static class ScopeServiceEndpoints
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
 
-            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
+            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
             {
                 await WriteJsonErrorResponseAsync(
@@ -129,7 +128,8 @@ public static class ScopeServiceEndpoints
                 SessionId: request.SessionId,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
-                LlmControl: await BuildScopedLlmControlAsync(http, ct));
+                LlmControl: await BuildScopedLlmControlAsync(http, ct),
+                ConnectorHttpAuthorization: ExtractConnectorHttpAuthorization(http));
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -1495,7 +1495,7 @@ public static class ScopeServiceEndpoints
                 return;
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
-            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
+            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers);
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -2869,18 +2869,15 @@ const response = await fetch("{{invokePath}}", {
             throw new InvalidOperationException("Workflow service has no active definition actor.");
     }
 
-    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
+    private static Dictionary<string, string> BuildScopedHeaders(
         string scopeId,
-        IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null,
-        CancellationToken cancellationToken = default)
+        IReadOnlyDictionary<string, string>? headers)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        InjectBearerToken(http, scopedHeaders);
         return scopedHeaders;
     }
 
@@ -2951,18 +2948,6 @@ const response = await fetch("{{invokePath}}", {
         return control == LLMControlContext.Empty ? null : control;
     }
 
-    private static void InjectBearerToken(HttpContext? http, Dictionary<string, string> metadata)
-    {
-        if (http == null)
-            return;
-        var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            var bearerToken = auth["Bearer ".Length..].Trim();
-            metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-        }
-    }
-
     private static string? ExtractBearerToken(HttpContext http)
     {
         var auth = http.Request.Headers.Authorization.FirstOrDefault();
@@ -2971,6 +2956,14 @@ const response = await fetch("{{invokePath}}", {
 
         var bearerToken = auth["Bearer ".Length..].Trim();
         return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
+    }
+
+    private static string? ExtractConnectorHttpAuthorization(HttpContext http)
+    {
+        var bearerToken = ExtractBearerToken(http);
+        return string.IsNullOrWhiteSpace(bearerToken)
+            ? null
+            : $"Bearer {bearerToken.Trim()}";
     }
 
     private static void CopyHeaders(

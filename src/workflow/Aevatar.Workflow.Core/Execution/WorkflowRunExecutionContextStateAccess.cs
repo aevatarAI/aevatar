@@ -60,15 +60,27 @@ internal static class WorkflowRunExecutionContextStateAccess
                 continue;
 
             if (string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal))
-            {
-                delta.Connector = new WorkflowRunConnectorExecutionContextDelta
-                {
-                    HttpAuthorization = value,
-                };
                 continue;
-            }
         }
 
+        return delta;
+    }
+
+    public static WorkflowRunExecutionContextDelta BuildConnectorAuthorizationDelta(string? authorization)
+    {
+        var delta = new WorkflowRunExecutionContextDelta
+        {
+            ClearConnector = true,
+        };
+        var normalizedAuthorization = Normalize(authorization);
+        if (string.IsNullOrWhiteSpace(normalizedAuthorization))
+            return delta;
+
+        // Refactor (issue1559): Old pattern: Metadata promoted connector HTTP auth into actor state. New principle: only the typed ChatRequestEvent connector auth field can update connector execution context.
+        delta.Connector = new WorkflowRunConnectorExecutionContextDelta
+        {
+            HttpAuthorization = normalizedAuthorization,
+        };
         return delta;
     }
 

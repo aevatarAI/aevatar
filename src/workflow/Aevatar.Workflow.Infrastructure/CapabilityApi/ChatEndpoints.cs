@@ -51,7 +51,8 @@ public static class WorkflowCapabilityEndpoints
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
-                defaultMetadata);
+                defaultMetadata,
+                connectorHttpAuthorization: ExtractConnectorHttpAuthorization(http));
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -114,12 +115,16 @@ public static class WorkflowCapabilityEndpoints
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? defaultMetadata = null)
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        string? connectorHttpAuthorization = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(
+            input,
+            defaultMetadata: defaultMetadata,
+            connectorHttpAuthorization: connectorHttpAuthorization);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -549,7 +554,8 @@ public static class WorkflowCapabilityEndpoints
                 chatRunService,
                 scope,
                 ct,
-                defaultMetadata);
+                defaultMetadata,
+                connectorHttpAuthorization: ExtractConnectorHttpAuthorization(http));
         }
         catch (OperationCanceledException)
         {
@@ -628,6 +634,26 @@ public static class WorkflowCapabilityEndpoints
         return rawKey
             .Trim()
             .Replace(':', '.');
+    }
+
+    private static string? ExtractConnectorHttpAuthorization(HttpContext http)
+    {
+        var bearerToken = ExtractBearerToken(http);
+        return string.IsNullOrWhiteSpace(bearerToken)
+            ? null
+            : $"Bearer {bearerToken.Trim()}";
+    }
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var auth = http.Request.Headers.Authorization.FirstOrDefault();
+        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var bearerToken = auth["Bearer ".Length..].Trim();
+        return string.IsNullOrWhiteSpace(bearerToken)
+            ? null
+            : bearerToken;
     }
 
 }

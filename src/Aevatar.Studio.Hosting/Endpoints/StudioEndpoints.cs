@@ -1259,8 +1259,7 @@ internal static class StudioEndpoints
 
         var llmControl = LLMControlContext.Empty;
 
-        // Forward caller's Bearer token through typed LLM control. Metadata
-        // keeps only connector/tool authorization.
+        // Forward caller's Bearer token through typed LLM control.
         var bearerToken = ExtractBearerToken(http);
         if (!string.IsNullOrWhiteSpace(bearerToken))
         {
@@ -1269,7 +1268,6 @@ internal static class StudioEndpoints
                 NyxIdAccessToken = bearerToken,
                 NyxIdOrgToken = bearerToken,
             };
-            metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
         }
 
         // Forward the user's preferred model from their config.

@@ -17,7 +17,7 @@ namespace Aevatar.Workflow.Core.Tests.Execution;
 public sealed class WorkflowExecutionRuntimeContextTests
 {
     [Fact]
-    public async Task SetRequestMetadata_ShouldPromoteControlValuesToTypedState_AndGuardPassthrough()
+    public async Task SetRequestMetadata_ShouldScrubControlValuesWithoutPromotingConnectorAuthorization()
     {
         var host = new RecordingStateHost();
 
@@ -34,7 +34,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ["empty"] = " ",
             });
 
-        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        host.ExecutionContextState.Connector.Should().BeNull();
         host.ExecutionContextState.Llm.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainKey("trace-id");
         host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
@@ -42,6 +42,19 @@ public sealed class WorkflowExecutionRuntimeContextTests
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+    }
+
+    [Fact]
+    public void BuildConnectorAuthorizationDelta_ShouldUseTypedAuthorizationOnly()
+    {
+        var delta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(" Bearer secret ");
+
+        delta.ClearConnector.Should().BeTrue();
+        delta.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+
+        var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(" ");
+        emptyDelta.ClearConnector.Should().BeTrue();
+        emptyDelta.Connector.Should().BeNull();
     }
 
     [Fact]
@@ -73,12 +86,12 @@ public sealed class WorkflowExecutionRuntimeContextTests
     public async Task SetRequestMetadata_ShouldClearTypedConnectorAndPassthroughWhenMetadataIsNullEmptyOrInvalid()
     {
         var host = new RecordingStateHost();
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer secret");
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
             {
                 ["trace-id"] = "abc",
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
             });
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
@@ -101,12 +114,12 @@ public sealed class WorkflowExecutionRuntimeContextTests
     public async Task RemoveRequestMetadata_ShouldValidateAndClearTypedExecutionContext()
     {
         var host = new RecordingStateHost();
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer secret");
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
             {
                 ["trace-id"] = "abc",
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
             });
         await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
             host,

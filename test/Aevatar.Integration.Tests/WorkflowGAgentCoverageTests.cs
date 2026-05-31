@@ -470,9 +470,9 @@ public class WorkflowGAgentCoverageTests
         {
             Prompt = "hello",
             SessionId = "s1",
+            ConnectorHttpAuthorization = " Bearer secret ",
             Metadata =
             {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer secret ",
                 ["trace-id"] = " trace-abc ",
             },
             LlmControl = new LLMControlContext(
@@ -521,12 +521,9 @@ public class WorkflowGAgentCoverageTests
             "wf_redaction",
             runId: "run-redaction");
 
-        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(
             agent,
-            new Dictionary<string, string>
-            {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
-            });
+            "Bearer secret");
         await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
             agent,
             AgentToolExecutionContext.Empty with

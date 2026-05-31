@@ -8,6 +8,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
@@ -415,6 +416,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             {
                 [WorkflowRunCommandMetadataKeys.ScopeId] = "evil-scope",
                 ["scope_id"] = "evil-legacy-scope",
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer legacy-secret",
                 ["client-note"] = "open-extension",
             },
             ScopeId: "scope-typed",
@@ -436,7 +438,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     MaxToolRoundsOverride = 5,
                     UserMemoryPrompt = "memory",
                 },
-            });
+            },
+            ConnectorHttpAuthorization: " Bearer typed-secret ");
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -452,9 +455,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.ModelOverride.Should().Be("model-a");
         request.LlmControl.NyxIdRoutePreference.Should().Be("route-a");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
+        request.ConnectorHttpAuthorization.Should().Be("Bearer typed-secret");
         request.Metadata.Should().Contain("client-note", "open-extension");
         request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Metadata.Should().NotContainKey("scope_id");
+        request.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]

@@ -3885,19 +3885,20 @@ public sealed class ScopeServiceEndpointsTests
         };
         successContext.Request.Headers.Authorization = "Bearer token-123";
 
-        var scopedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
-            "BuildScopedHeadersAsync",
+        var scopedHeaders = InvokePrivateStatic<Dictionary<string, string>>(
+            "BuildScopedHeaders",
             "scope-a",
-            explicitHeaders,
-            successContext,
-            CancellationToken.None);
+            explicitHeaders);
 
         scopedHeaders.Should().NotContainKey("scope_id");
         scopedHeaders.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         scopedHeaders[LLMRequestMetadataKeys.ModelOverride].Should().Be("existing-model");
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer token-123");
+        scopedHeaders.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        InvokePrivateStatic<string?>("ExtractConnectorHttpAuthorization", successContext)
+            .Should()
+            .Be("Bearer token-123");
 
         var scopedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",
@@ -3918,12 +3919,10 @@ public sealed class ScopeServiceEndpointsTests
                 .AddSingleton<IUserConfigQueryPort>(new ThrowingUserConfigStore())
                 .BuildServiceProvider(),
         };
-        var failedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
-            "BuildScopedHeadersAsync",
+        var failedHeaders = InvokePrivateStatic<Dictionary<string, string>>(
+            "BuildScopedHeaders",
             "scope-a",
-            null,
-            failingContext,
-            CancellationToken.None);
+            null);
         failedHeaders.Should().BeEmpty();
         var failedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",

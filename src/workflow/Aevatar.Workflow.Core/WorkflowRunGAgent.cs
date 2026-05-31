@@ -270,6 +270,8 @@ public sealed class WorkflowRunGAgent
         }
 
         var metadataDelta = WorkflowRunExecutionContextStateAccess.BuildRequestMetadataDelta(request.Metadata);
+        var connectorAuthorizationDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(
+            request.ConnectorHttpAuthorization);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
@@ -280,7 +282,7 @@ public sealed class WorkflowRunGAgent
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var executionContextDelta = MergeExecutionContextDeltas(metadataDelta, toolContextDelta);
+        var executionContextDelta = MergeExecutionContextDeltas(metadataDelta, connectorAuthorizationDelta, toolContextDelta);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,

@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Connectors;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -29,7 +30,8 @@ internal static class ChatRunRequestNormalizer
 
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
-        IReadOnlyDictionary<string, string>? defaultMetadata = null)
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        string? connectorHttpAuthorization = null)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
@@ -60,7 +62,8 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
-                ToolContext: input.ToolContext));
+                ToolContext: input.ToolContext,
+                ConnectorHttpAuthorization: NormalizeOptional(connectorHttpAuthorization)));
     }
 
     private static LLMControlContext? NormalizeLlmControl(ChatLlmControlInput? source)
@@ -318,6 +321,8 @@ internal static class ChatRunRequestNormalizer
 
         if (IsScopeMetadataKey(normalizedKey))
             return;
+        if (IsConnectorAuthorizationMetadataKey(normalizedKey))
+            return;
 
         metadata[normalizedKey] = normalizedValue;
     }
@@ -325,6 +330,9 @@ internal static class ChatRunRequestNormalizer
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsConnectorAuthorizationMetadataKey(string key) =>
+        string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.OrdinalIgnoreCase);
 
     private static string? NormalizeScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId) ? null : scopeId.Trim();

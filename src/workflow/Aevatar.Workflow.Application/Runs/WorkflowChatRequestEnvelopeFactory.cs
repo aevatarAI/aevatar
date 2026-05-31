@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 
@@ -21,6 +22,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Prompt = command.Prompt,
             SessionId = sessionId,
             ScopeId = command.ScopeId ?? string.Empty,
+            ConnectorHttpAuthorization = NormalizeOptional(command.ConnectorHttpAuthorization) ?? string.Empty,
         };
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
@@ -89,6 +91,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 continue;
             if (IsScopeMetadataKey(normalizedKey))
                 continue;
+            if (IsConnectorAuthorizationMetadataKey(normalizedKey))
+                continue;
 
             destination[normalizedKey] = normalizedValue;
         }
@@ -97,6 +101,12 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
+
+    private static bool IsConnectorAuthorizationMetadataKey(string key) =>
+        string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal);
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     // Refactor (iter159/cluster-613-first):
     //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
