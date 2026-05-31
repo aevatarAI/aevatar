@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Builder;
@@ -241,6 +242,55 @@ public class DeviceEventEndpointsTests
     }
 
     [Fact]
+    public async Task HandleDeviceCallbackAsync_known_event_type_dispatches_typed_inbound_without_raw_payload()
+    {
+        DeviceCallbackDispatchCommand? capturedCommand = null;
+        var queryPort = Substitute.For<IDeviceRegistrationQueryPort>();
+        var callbackService = Substitute.For<IDeviceCallbackCommandService>();
+        queryPort.GetAsync("reg-known", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<DeviceRegistrationEntry?>(MakeRegistration()));
+        callbackService.DispatchCallbackAsync(
+                Arg.Do<DeviceCallbackDispatchCommand>(command => capturedCommand = command),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(
+                CommandDispatchResult<DeviceCommandAcceptedReceipt, DeviceCallbackCommandStartError>.Success(
+                    new DeviceCommandAcceptedReceipt(
+                        "household-reg-known",
+                        "cmd-known",
+                        "corr-known",
+                        "reg-known"))));
+
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-known",
+            source = "temperature-sensor",
+            event_type = "temperature_change",
+            temperature = 23.5,
+            humidity = 44.0,
+            light_level = 18.0,
+        });
+        var context = CreateJsonHttpContext(EncodeCallbackPayload(innerEvent, senderPlatformId: "sensor-1"));
+
+        var result = await InvokeHandleDeviceCallbackAsync(
+            context,
+            "reg-known",
+            queryPort,
+            callbackService);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status202Accepted);
+        body.Should().Contain("accepted");
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.RegistrationId.Should().Be("reg-known");
+        capturedCommand.Inbound.DeviceId.Should().Be("sensor-1");
+        capturedCommand.Inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Sensor);
+        capturedCommand.Inbound.Sensor.Temperature.Should().Be(23.5);
+        Aevatar.GAgents.Household.DeviceInbound.Descriptor.FindFieldByName("payload_json").Should().BeNull();
+        await callbackService.Received(1)
+            .DispatchCallbackAsync(Arg.Any<DeviceCallbackDispatchCommand>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleDeviceCallbackAsync_unknown_event_type_returns_reject_status_and_does_not_dispatch()
     {
         var queryPort = Substitute.For<IDeviceRegistrationQueryPort>();
@@ -333,6 +383,27 @@ public class DeviceEventEndpointsTests
         var act = () => DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
 
         act.Should().Throw<Exception>();
+    }
+
+    [Fact]
+    public void DeviceCallbackCommandFacade_ShouldPackDeviceInboundOnceInSingleEventEnvelopePayload()
+    {
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../agents/Aevatar.GAgents.Device/DeviceCommandFacades.cs"));
+        var source = File.ReadAllText(sourcePath);
+        var callbackFactoryStart = source.IndexOf("internal sealed class DeviceCallbackCommandEnvelopeFactory", StringComparison.Ordinal);
+        callbackFactoryStart.Should().BeGreaterThanOrEqualTo(0);
+        var callbackReceiptFactoryStart = source.IndexOf("internal sealed class DeviceCallbackCommandReceiptFactory", callbackFactoryStart, StringComparison.Ordinal);
+        callbackReceiptFactoryStart.Should().BeGreaterThan(callbackFactoryStart);
+        var callbackFactorySource = source[callbackFactoryStart..callbackReceiptFactoryStart];
+
+        callbackFactorySource.Should().Contain("new EventEnvelope");
+        callbackFactorySource.Should().Contain("Payload = Any.Pack(command.Inbound)");
+        callbackFactorySource.Should().NotContain("Payload = Any.Pack(command)");
+        callbackFactorySource.Should().NotContain("new DeviceCallbackEnvelope");
+        callbackFactorySource.Should().Contain("EnvelopeRouteSemantics.CreateDirect(PublisherActorId, context.TargetId)");
+        callbackFactorySource.Should().Contain("Refactor (issue1485/first-slice): Old pattern:");
     }
 
     // ─── HMAC Verification Tests ───

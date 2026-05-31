@@ -58,16 +58,20 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     public override async Task DeactivateAsync(CancellationToken ct = default)
     {
         var eventSourcing = EnsureEventSourcingConfigured();
-        await OnDeactivateAsync(ct);
         try
         {
+            await OnDeactivateAsync(ct);
             try
             {
                 await eventSourcing.ConfirmEventsAsync(ct);
             }
             catch (EventStoreOptimisticConcurrencyException)
             {
-                // Refactor (iter713/cluster-gagentbase-deactivation-occ-flush-containment): Old pattern: deactivation OCC escaped with stale pending events and could block base lifecycle. New principle: deactivation-only OCC containment drains stale pending events, skips snapshot, and still runs base shutdown.
+                // Refactor (iter713/cluster-gagentbase-deactivation-occ-flush-containment):
+                // Old pattern: deactivation OCC escaped with stale pending events and could
+                // block base lifecycle cleanup. New principle: deactivation-only OCC
+                // containment drains stale pending events, skips snapshot, and still runs
+                // base shutdown.
                 eventSourcing.DiscardPendingEvents();
                 return;
             }
@@ -76,6 +80,12 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         }
         finally
         {
+            // Refactor (iter713/cluster-gagentbase-deactivation-occ-flush-containment):
+            // Old pattern: event-sourcing flush or snapshot failure skipped base lifecycle cleanup.
+            // New principle: base cleanup always runs. When cleanup succeeds, the original
+            // hook/confirm/snapshot failure propagates. When cleanup itself fails, callers
+            // observe the base cleanup exception semantics (for example, AggregateException
+            // pinned by AgentLifecycleBddTests:167).
             await base.DeactivateAsync(ct);
         }
     }
