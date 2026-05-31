@@ -6,6 +6,10 @@ import {
   readTeamDetailRouteState,
 } from "./teamRoutes";
 
+// Refactor (iter2/cluster-issue1593): Old pattern: route tests named retired
+// connectors/events/topology Team tabs as explicit compatibility cases. New principle:
+// unknown Team tabs are covered by one neutral fallback case so tests do not preserve
+// removed Team topology vocabulary as a product contract.
 describe("teamRoutes", () => {
   it("builds a canonical team detail href and trims empty values", () => {
     expect(
@@ -122,27 +126,6 @@ describe("teamRoutes", () => {
       teamId: "t-alpha",
     });
   });
-
-  it.each(["connectors", "events", "topology"])(
-    "falls back legacy %s deep links to the overview tab",
-    (tab) => {
-      expect(
-        readTeamDetailRouteState(
-          `?workflowId=wf-1&tab=${tab}`,
-          "/teams/scope-alpha",
-        ),
-      ).toEqual({
-        memberId: "",
-        runId: "",
-        scopeId: "scope-alpha",
-        serviceId: "",
-        tab: "overview",
-        teamId: "",
-        testTeam: false,
-        workflowId: "wf-1",
-      });
-    },
-  );
 
   it("defaults canonical team routes to the overview tab", () => {
     expect(
