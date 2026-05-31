@@ -313,6 +313,8 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.queryByRole('button', { name: 'Open Runs' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Activate' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retire' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '设为入口并测试 Team' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '测试 Team' })).toBeNull();
     expect(screen.queryByText('Need auth for a smoke test?')).toBeNull();
     expect(screen.getAllByText('Authorization').length).toBeGreaterThan(0);
     await waitFor(() => {

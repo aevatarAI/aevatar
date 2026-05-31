@@ -5363,6 +5363,27 @@ describe("StudioPage", () => {
     });
   });
 
+  it("does not expose post-bind Team entry or Team test actions from Studio bind", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "设为入口并测试 Team" })
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "测试 Team" })).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByText("service:default")).toBeTruthy()
+    );
+    expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/studio");
+    expect(new URLSearchParams(window.location.search).get("testTeam")).toBeNull();
+    expect(message.warning).not.toHaveBeenCalledWith(
+      expect.stringContaining("读模型还没有确认新入口成员"),
+    );
+  });
+
   it("keeps pending member binding from promoting the bind selection", async () => {
     mockScopeRuntimeApi.listServices.mockReset();
     mockScopeRuntimeApi.listServices
