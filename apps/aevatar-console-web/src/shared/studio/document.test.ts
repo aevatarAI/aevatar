@@ -125,6 +125,76 @@ describe('studio document helpers', () => {
     ]);
   });
 
+  it('normalizes llm_call prompt parameters to prompt_prefix on apply', () => {
+    const document: StudioWorkflowDocument = {
+      name: 'workspace-demo',
+      roles: [],
+      steps: [
+        {
+          id: 'draft_step',
+          type: 'llm_call',
+          targetRole: 'assistant',
+          parameters: {
+            prompt: 'Legacy prompt field',
+          },
+          next: null,
+          branches: {},
+        },
+      ],
+    };
+
+    const result = applyStepInspectorDraft(document, 'draft_step', {
+      kind: 'step',
+      id: 'draft_step',
+      type: 'llm_call',
+      targetRole: 'assistant',
+      next: '',
+      branchesText: '{}',
+      parametersText: JSON.stringify({
+        prompt: 'Translate the input to Japanese.',
+      }),
+    });
+
+    expect(result.document.steps?.[0]?.parameters).toEqual({
+      prompt_prefix: 'Translate the input to Japanese.',
+    });
+  });
+
+  it('keeps human prompt parameters unchanged on apply', () => {
+    const document: StudioWorkflowDocument = {
+      name: 'workspace-demo',
+      roles: [],
+      steps: [
+        {
+          id: 'approval_step',
+          type: 'human_approval',
+          targetRole: null,
+          parameters: {
+            prompt: 'Approve this?',
+          },
+          next: null,
+          branches: {},
+        },
+      ],
+    };
+
+    const result = applyStepInspectorDraft(document, 'approval_step', {
+      kind: 'step',
+      id: 'approval_step',
+      type: 'human_approval',
+      targetRole: '',
+      next: '',
+      branchesText: '{}',
+      parametersText: JSON.stringify({
+        prompt: 'Approve the generated response?',
+      }),
+    });
+
+    expect(result.document.steps?.[0]?.parameters).toEqual({
+      prompt: 'Approve the generated response?',
+    });
+  });
+
   it('rejects non-object step parameters', () => {
     expect(() => parseInspectorParameters('["nope"]')).toThrow(
       'Step parameters must be a JSON object.',
