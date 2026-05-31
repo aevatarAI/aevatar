@@ -85,7 +85,6 @@ check_directory_build_version_guard
 check_channel_inbound_no_runtime_credential() {
   local proto_file="agents/Aevatar.GAgents.Channel.Runtime/protos/channel_bot_registration.proto"
   local runner_file="agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs"
-  local canon_doc="docs/canon/daily-command-pipeline.md"
 
   if ! awk '
     /message ChannelInboundEvent[[:space:]]*\{/ { in_msg = 1 }
@@ -113,10 +112,6 @@ check_channel_inbound_no_runtime_credential() {
     exit 1
   fi
 
-  if rg -n "registration_token" "${canon_doc}"; then
-    echo "Canonical channel inbound durable facts docs must not list registration_token."
-    exit 1
-  fi
 }
 
 check_channel_inbound_no_runtime_credential

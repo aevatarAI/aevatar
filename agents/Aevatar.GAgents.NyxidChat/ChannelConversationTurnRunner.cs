@@ -26,7 +26,6 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 {
-    private const string DailySkillName = "chrono-ai-daily";
     private static readonly HashSet<string> LocalSlashCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "approve",
@@ -1624,29 +1623,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return false;
         }
 
-        if (string.Equals(commandName, "daily", StringComparison.OrdinalIgnoreCase))
-            return TryBuildDailySkillInvocationPrompt(text, argumentText, out prompt);
-
+        // Refactor (issue1553): Old pattern: hardcoded /daily skill name. New principle: generic skill discovery, no skill-name in routing logic.
         return TryBuildSlashSkillDiscoveryPrompt(text, commandName, argumentText, out prompt);
-    }
-
-    private static bool TryBuildDailySkillInvocationPrompt(
-        string? text,
-        string argumentText,
-        out string prompt)
-    {
-        var argsJson = JsonSerializer.Serialize(argumentText);
-        var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
-        prompt =
-            "The user invoked the Lark `/daily` shortcut.\n" +
-            $"This is a deterministic command execution, not an open-ended chat answer. Route this turn through the Ornn skill `{DailySkillName}`.\n" +
-            $"First call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}. Do not search for this skill first.\n" +
-            "After the skill is loaded, follow its instructions exactly and continue using tools until the final daily report is ready.\n" +
-            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
-            "If the loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
-            "The only final user-visible answer should be the completed daily report or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
-            $"Original command: {originalJson}";
-        return true;
     }
 
     private bool TryBuildSlashSkillDiscoveryPrompt(

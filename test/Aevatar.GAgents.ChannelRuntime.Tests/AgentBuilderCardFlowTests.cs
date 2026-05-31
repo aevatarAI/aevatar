@@ -289,9 +289,9 @@ public sealed class AgentBuilderCardFlowTests
     [Theory]
     [InlineData("/foobar")]
     [InlineData("/goal draft Q2 launch")]
-    [InlineData("/daily")]
-    [InlineData("/daily alice")]
-    [InlineData("/DAILY alice schedule_time=09:00")]
+    [InlineData("/invoice")]
+    [InlineData("/invoice alice")]
+    [InlineData("/INVOICE alice schedule_time=09:00")]
     public async Task TryResolveAsync_UnknownAndOrnnSlashCommands_FallThrough(string text)
     {
         var inbound = new ChannelInboundEvent

@@ -341,7 +341,7 @@ public class SkillRunnerToolFailureSafetyNetTests
     [InlineData(null)]
     public void RequiresProxySuccessByTemplate_AlwaysReturnsFalse(string? templateName)
     {
-        // Issue #598: with /daily migrated to Ornn, no template name carries an auto-opt-in
+        // Issue #598: with skill execution migrated to Ornn, no template name carries an auto-opt-in
         // semantic anymore. Skills now own their own success criteria; the legacy
         // template-name-derived default is reserved for future templates and currently
         // returns false for every input.
