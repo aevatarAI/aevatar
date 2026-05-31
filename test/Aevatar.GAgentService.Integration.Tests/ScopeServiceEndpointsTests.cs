@@ -1372,7 +1372,7 @@ public sealed class ScopeServiceEndpointsTests
                 eventFormat = "agui",
                 headers = new Dictionary<string, string>
                 {
-                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer stale-metadata-token",
+                    ["connector.http.authorization"] = "Bearer stale-metadata-token",
                 },
             }),
         };
@@ -1386,7 +1386,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(1);
         host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
-        host.InteractionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
@@ -1503,7 +1503,7 @@ public sealed class ScopeServiceEndpointsTests
                 headers = new Dictionary<string, string>
                 {
                     ["source"] = "tests",
-                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer stale-metadata-token",
+                    ["connector.http.authorization"] = "Bearer stale-metadata-token",
                 },
             }),
         };
@@ -1518,7 +1518,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
-        host.InteractionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         // Service-run registry receives the actual workflow run actor id as the run id, so
         // /runs/{runId} can resolve the same id the SSE RunStarted frame carries.
         host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle();
@@ -2180,7 +2180,7 @@ public sealed class ScopeServiceEndpointsTests
                 headers = new Dictionary<string, string>
                 {
                     ["channel"] = "tests",
-                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer stale-metadata-token",
+                    ["connector.http.authorization"] = "Bearer stale-metadata-token",
                 },
             }),
         };
@@ -2195,7 +2195,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-orders");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
-        host.InteractionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
@@ -3928,7 +3928,7 @@ public sealed class ScopeServiceEndpointsTests
         scopedHeaders[LLMRequestMetadataKeys.ModelOverride].Should().Be("existing-model");
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        scopedHeaders.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        scopedHeaders.Should().NotContainKey("connector.http.authorization");
 
         var scopedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",

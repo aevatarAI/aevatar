@@ -809,13 +809,13 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             Prompt = "hello",
             Metadata = new Dictionary<string, string>
             {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer untrusted",
+                ["connector.http.authorization"] = "Bearer untrusted",
                 ["trace"] = "trace-1",
             },
         };
         var defaultMetadata = new Dictionary<string, string>
         {
-            [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer default",
+            ["connector.http.authorization"] = "Bearer default",
         };
 
         var result = ChatRunRequestNormalizer.Normalize(
@@ -826,7 +826,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Succeeded.Should().BeTrue();
         result.Request!.ConnectorHttpAuthorization.Should().Be("Bearer trusted");
         result.Request.Metadata.Should().Contain("trace", "trace-1");
-        result.Request.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        result.Request.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]

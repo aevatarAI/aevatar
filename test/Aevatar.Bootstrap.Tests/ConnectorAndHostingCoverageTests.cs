@@ -134,7 +134,7 @@ public class ConnectorAndHostingCoverageTests
             HttpAuthorization = " Bearer typed-token ",
             Metadata = new Dictionary<string, string>
             {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer legacy-token",
+                ["connector.http.authorization"] = "Bearer legacy-token",
             },
             Parameters = new Dictionary<string, string> { ["method"] = "POST" },
         });
@@ -167,7 +167,7 @@ public class ConnectorAndHostingCoverageTests
             Operation = "/invoke",
             Metadata = new Dictionary<string, string>
             {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer legacy-token",
+                ["connector.http.authorization"] = "Bearer legacy-token",
             },
             Parameters = new Dictionary<string, string> { ["method"] = "POST" },
         });

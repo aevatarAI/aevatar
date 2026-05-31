@@ -413,7 +413,7 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
-        interactionService.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        interactionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]

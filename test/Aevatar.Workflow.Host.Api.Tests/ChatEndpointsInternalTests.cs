@@ -349,7 +349,7 @@ public sealed class ChatEndpointsInternalTests
                 Prompt = "hello",
                 Metadata = new Dictionary<string, string>
                 {
-                    [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer untrusted",
+                    ["connector.http.authorization"] = "Bearer untrusted",
                 },
             },
             interactionService,
@@ -357,7 +357,7 @@ public sealed class ChatEndpointsInternalTests
 
         capturedCommand.Should().NotBeNull();
         capturedCommand!.ConnectorHttpAuthorization.Should().Be("Bearer trusted-token");
-        capturedCommand.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
