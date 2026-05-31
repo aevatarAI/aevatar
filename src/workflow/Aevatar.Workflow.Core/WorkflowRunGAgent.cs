@@ -269,7 +269,7 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        // Refactor (issue1551): Old pattern: connector auth was promoted from request.Metadata. New principle: connector auth is carried by ChatRequestEvent.ConnectorHttpAuthorization.
+        // Refactor (iter169/cluster-issue1551): Old pattern: connector auth was promoted from request.Metadata. New principle: connector auth is carried by ChatRequestEvent.ConnectorHttpAuthorization.
         var connectorAuthorizationDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(request.ConnectorHttpAuthorization);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);

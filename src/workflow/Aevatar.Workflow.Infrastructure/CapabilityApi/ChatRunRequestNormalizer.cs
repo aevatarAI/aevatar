@@ -325,7 +325,7 @@ internal static class ChatRunRequestNormalizer
         metadata[normalizedKey] = normalizedValue;
     }
 
-    // Refactor (issue1551): Old pattern: public metadata could carry connector authorization. New principle: only trusted adapter code can set the typed ConnectorHttpAuthorization command field.
+    // Refactor (iter169/cluster-issue1551): Old pattern: public metadata could carry connector authorization. New principle: only trusted adapter code can set the typed ConnectorHttpAuthorization command field.
     private static bool IsReservedMetadataKey(string key) =>
         IsScopeMetadataKey(key) ||
         string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal);

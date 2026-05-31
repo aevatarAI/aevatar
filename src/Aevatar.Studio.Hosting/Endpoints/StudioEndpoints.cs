@@ -1258,7 +1258,7 @@ internal static class StudioEndpoints
 
         var llmControl = LLMControlContext.Empty;
 
-        // Refactor (issue1551): Old pattern: Studio wrote connector auth into metadata. New principle: preview metadata remains annotations; workflow connector auth uses typed chat-run carriers.
+        // Refactor (iter169/cluster-issue1551): Old pattern: Studio wrote connector auth into metadata. New principle: preview metadata remains annotations; workflow connector auth uses typed chat-run carriers.
         // Forward caller's Bearer token through typed LLM control only.
         var bearerToken = ExtractBearerToken(http);
         if (!string.IsNullOrWhiteSpace(bearerToken))

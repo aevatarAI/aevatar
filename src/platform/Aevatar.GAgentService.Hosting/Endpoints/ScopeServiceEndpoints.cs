@@ -4,6 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
@@ -110,7 +111,7 @@ public static class ScopeServiceEndpoints
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
 
-            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
+            var scopedHeaders = BuildScopedHeaders(request.Headers);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
             {
                 await WriteJsonErrorResponseAsync(
@@ -129,7 +130,7 @@ public static class ScopeServiceEndpoints
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
                 LlmControl: await BuildScopedLlmControlAsync(http, ct),
-                ConnectorHttpAuthorization: ExtractConnectorHttpAuthorization(http));
+                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http));
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -1495,7 +1496,7 @@ public static class ScopeServiceEndpoints
                 return;
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
-            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
+            var scopedHeaders = BuildScopedHeaders(request.Headers);
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -1503,7 +1504,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 normalizedPrompt,
                 scopedHeaders,
-                ExtractConnectorHttpAuthorization(http),
+                ConnectorHttpAuthorizationExtractor.Extract(http),
                 request.RevisionId,
                 appId);
             var target = await resolutionService.ResolveAsync(invocationRequest, ct);
@@ -2872,18 +2873,16 @@ const response = await fetch("{{invokePath}}", {
             throw new InvalidOperationException("Workflow service has no active definition actor.");
     }
 
-    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
-        string scopeId,
-        IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null,
-        CancellationToken cancellationToken = default)
+    private static Dictionary<string, string> BuildScopedHeaders(
+        IReadOnlyDictionary<string, string>? headers)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        // Refactor (issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses typed workflow command/proto fields.
+        scopedHeaders.Remove(ConnectorRequest.HttpAuthorizationMetadataKey);
+        // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses typed workflow command/proto fields.
         return scopedHeaders;
     }
 
@@ -2952,18 +2951,6 @@ const response = await fetch("{{invokePath}}", {
         }
 
         return control == LLMControlContext.Empty ? null : control;
-    }
-
-    private static string? ExtractConnectorHttpAuthorization(HttpContext? http)
-    {
-        if (http == null)
-            return null;
-        var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var bearerToken = auth["Bearer ".Length..].Trim();
-        return string.IsNullOrWhiteSpace(bearerToken) ? null : $"Bearer {bearerToken}";
     }
 
     private static string? ExtractBearerToken(HttpContext http)

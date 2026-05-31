@@ -45,7 +45,7 @@ internal static class WorkflowRunExecutionContextStateAccess
     public static WorkflowRunExecutionContextDelta BuildRequestMetadataDelta(
         IReadOnlyDictionary<string, string>? metadata)
     {
-        // Refactor (issue1551): Old pattern: Metadata["connector.http.authorization"] was promoted into connector state. New principle: request metadata is passthrough-only; connector auth uses BuildConnectorAuthorizationDelta.
+        // Refactor (iter169/cluster-issue1551): Old pattern: Metadata["connector.http.authorization"] was promoted into connector state. New principle: request metadata is passthrough-only; connector auth uses BuildConnectorAuthorizationDelta.
         var delta = new WorkflowRunExecutionContextDelta
         {
             ClearConnector = true,

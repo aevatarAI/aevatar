@@ -49,7 +49,7 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var connectorAuthorization = ExtractConnectorHttpAuthorization(http);
+            var connectorAuthorization = ConnectorHttpAuthorizationExtractor.Extract(http);
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
                 defaultMetadata,
@@ -597,16 +597,6 @@ public static class WorkflowCapabilityEndpoints
             logger?.LogDebug(ex, "Failed to resolve workflow runtime default metadata from configuration.");
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }
-    }
-
-    private static string? ExtractConnectorHttpAuthorization(HttpContext http)
-    {
-        var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var bearerToken = auth["Bearer ".Length..].Trim();
-        return string.IsNullOrWhiteSpace(bearerToken) ? null : $"Bearer {bearerToken}";
     }
 
     private static IReadOnlyDictionary<string, string> ParseRuntimeDefaultMetadata(IConfiguration? configuration)
