@@ -1239,14 +1239,13 @@ if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevata
 fi
 
 tool_context_metadata_hits="$(
-  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()" src agents \
-    -g '*.cs' \
-    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolRequestContext.cs' || true
+  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()|\\.ToLegacyMetadata\\(|HttpAuthorizationMetadataKey" src agents \
+    -g '*.cs' || true
 )"
 
 if [ -n "${tool_context_metadata_hits}" ]; then
   echo "${tool_context_metadata_hits}"
-  echo "Agent tool control facts must use typed AgentToolExecutionContext accessors. CurrentMetadata/TryGet are legacy mapper shims only."
+  echo "Public legacy metadata control shims are forbidden. Use typed context fields and local scrub-only blocked keys."
   exit 1
 fi
 

@@ -41,7 +41,7 @@ public static class ScopeServiceEndpoints
     private const string DefaultScopeServiceSmokePrompt = "Hello from Studio Bind.";
     private const string StreamFrameFormatWorkflow = "workflow-run-event";
     private const string StreamFrameFormatAgui = "agui";
-    private const string LegacyConnectorHttpAuthorizationMetadataKey = "connector.http.authorization";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
     private static readonly JsonSerializerOptions PrettyJsonSerializerOptions = new()
     {
         WriteIndented = true,
@@ -2888,7 +2888,7 @@ const response = await fetch("{{invokePath}}", {
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        scopedHeaders.Remove(LegacyConnectorHttpAuthorizationMetadataKey);
+        scopedHeaders.Remove(LegacyConnectorHttpAuthorizationBlockedKey);
         // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses typed workflow command/proto fields.
         return scopedHeaders;
     }

@@ -10,7 +10,7 @@ namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
 {
-    private const string LegacyConnectorHttpAuthorizationMetadataKey = "connector.http.authorization";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
 
     public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
@@ -99,7 +99,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
 
     private static bool IsReservedMetadataKey(string key) =>
         IsScopeMetadataKey(key) ||
-        string.Equals(key, LegacyConnectorHttpAuthorizationMetadataKey, StringComparison.Ordinal);
+        string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal);
 
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
