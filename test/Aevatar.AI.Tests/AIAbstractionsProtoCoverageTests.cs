@@ -285,11 +285,6 @@ public sealed class AIAbstractionsProtoCoverageTests
                     {
                         ["trace-id"] = "trace-from-context",
                     }).ToPayload(),
-                Metadata =
-                {
-                    ["trace-id"] = "trace-1",
-                    ["open-annotation"] = "annotation-1",
-                },
             },
             VoicePresence =
             {
@@ -356,7 +351,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.PendingApproval.ToolContext.Should().NotBeNull();
         state.PendingApproval.RemoteStatusCheckAttempt.Should().Be(2);
         state.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(123456);
-        state.PendingApproval.Metadata.Should().ContainKey("open-annotation").WhoseValue.Should().Be("annotation-1");
         state.PendingApproval.ToolContext.Should().NotBeNull();
         var pendingContext = AgentToolExecutionContextMapper.FromPayload(state.PendingApproval.ToolContext);
         pendingContext.Request.RequestId.Should().Be("req-1");
@@ -374,7 +368,7 @@ public sealed class AIAbstractionsProtoCoverageTests
     }
 
     [Fact]
-    public void PendingToolApprovalState_ShouldRoundTripTypedToolContext_AndLegacyAnnotations()
+    public void PendingToolApprovalState_ShouldRoundTripTypedToolContextAndRemoteBinding()
     {
         var pending = RoundTrip(new PendingToolApprovalState
         {
@@ -383,6 +377,9 @@ public sealed class AIAbstractionsProtoCoverageTests
             ToolName = "dangerous_tool",
             ToolCallId = "call-typed",
             ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-typed",
+            RemoteStatusCheckAttempt = 2,
+            RemoteApprovalExpiresAtUnixMs = 123_456,
             ToolContext = (AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
@@ -397,10 +394,6 @@ public sealed class AIAbstractionsProtoCoverageTests
                     ["trace-id"] = "trace-typed",
                 },
             }).ToPayload(),
-            Metadata =
-            {
-                ["annotation"] = "value",
-            },
         }, PendingToolApprovalState.Parser);
 
         pending.ToolContext.Should().NotBeNull();
@@ -411,7 +404,9 @@ public sealed class AIAbstractionsProtoCoverageTests
         pending.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         pending.ToolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
         pending.ToolContext.ExternalMetadata["trace-id"].Should().Be("trace-typed");
-        pending.Metadata["annotation"].Should().Be("value");
+        pending.RemoteApprovalId.Should().Be("remote-typed");
+        pending.RemoteStatusCheckAttempt.Should().Be(2);
+        pending.RemoteApprovalExpiresAtUnixMs.Should().Be(123_456);
     }
 
     [Fact]

@@ -10,7 +10,7 @@ namespace Aevatar.AI.Core.Tests;
 public class RoleGAgentTests
 {
     [Fact]
-    public void PendingApprovalMetadataControlKeys_DoNotPopulateToolRequestContext()
+    public void PendingApprovalToolContext_ShouldScrubCredentialsAndOwnedExternalControlKeys()
     {
         var previous = AgentToolRequestContext.Current;
         AgentToolRequestContext.Current = null;
@@ -24,30 +24,35 @@ public class RoleGAgentTests
                 ToolCallId = "tool-call-1",
                 ArgumentsJson = "{}",
                 IsDestructive = true,
+                ToolContext = (AgentToolExecutionContext.Empty with
+                {
+                    Request = new AgentToolRequestIdentity("approval-1", "tool-call-1"),
+                    Credentials = new AgentToolCredentials("typed-token", "typed-org", "typed-sender"),
+                    Caller = new AgentToolCallerContext("scope-1", "owner-1", "response-1"),
+                    Routing = new LLMRequestRoutingContext("model-1", "route-1", 3, "memory-1"),
+                    ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        [LLMRequestMetadataKeys.RequestId] = "metadata-request",
+                        [LLMRequestMetadataKeys.CallId] = "metadata-call",
+                        [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+                        ["trace-id"] = "trace-1",
+                    },
+                }).ToPayload(),
             };
-            pending.Metadata.Add(LLMRequestMetadataKeys.RequestId, "metadata-request");
-            pending.Metadata.Add(LLMRequestMetadataKeys.CallId, "metadata-call");
-            pending.Metadata.Add(LLMRequestMetadataKeys.ScopeId, "metadata-scope");
-            pending.Metadata.Add(LLMRequestMetadataKeys.OwnerSubject, "metadata-owner");
-            pending.Metadata.Add(LLMRequestMetadataKeys.ResponseId, "metadata-response");
-            pending.Metadata.Add(LLMRequestMetadataKeys.NyxIdAccessToken, "metadata-token");
-            pending.Metadata.Add(LLMRequestMetadataKeys.ModelOverride, "metadata-model");
-            pending.Metadata.Add("channel.platform", "metadata-platform");
-            pending.Metadata.Add("channel.sender_id", "metadata-sender");
 
             var context = ResolvePendingToolContext(pending);
             using (AgentToolContextScope.Push(context))
             {
                 AgentToolRequestContext.Current.Should().NotBeNull();
-                AgentToolRequestContext.RequestId.Should().BeNull();
-                AgentToolRequestContext.CallId.Should().BeNull();
-                AgentToolRequestContext.ScopeId.Should().BeNull();
-                AgentToolRequestContext.OwnerSubject.Should().BeNull();
-                AgentToolRequestContext.ResponseId.Should().BeNull();
+                AgentToolRequestContext.RequestId.Should().Be("approval-1");
+                AgentToolRequestContext.CallId.Should().Be("tool-call-1");
+                AgentToolRequestContext.ScopeId.Should().Be("scope-1");
+                AgentToolRequestContext.OwnerSubject.Should().Be("owner-1");
+                AgentToolRequestContext.ResponseId.Should().Be("response-1");
                 AgentToolRequestContext.NyxIdAccessToken.Should().BeNull();
-                AgentToolRequestContext.ModelOverride.Should().BeNull();
-                AgentToolRequestContext.ChannelPlatform.Should().BeNull();
-                AgentToolRequestContext.ChannelSenderId.Should().BeNull();
+                AgentToolRequestContext.ModelOverride.Should().Be("model-1");
+                AgentToolRequestContext.Current!.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
+                AgentToolRequestContext.Current.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
             }
         }
         finally

@@ -264,10 +264,8 @@ message PendingToolApprovalState {
   //   Old pattern: Durable approval continuation restored typed context from metadata.
   //   New principle: Typed pending approval context is the durable control surface.
   AgentToolExecutionContextPayload tool_context = 14;
-  // Refactor (issue1253-first):
-  //   Old pattern: Metadata carried approval control keys.
-  //   New principle: Metadata is open annotations plus old-state legacy fallback only.
-  map<string, string> metadata = 9;
+  reserved 9;
+  reserved "metadata";
   string remote_approval_id = 10;
   reserved 11;
   reserved "remote_status_check_callback_id";
