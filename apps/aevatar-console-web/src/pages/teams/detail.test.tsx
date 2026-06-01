@@ -856,6 +856,103 @@ describe("TeamDetailPage", () => {
     expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
   });
 
+  it.each([
+    {
+      expectedText: "等待 Team先等待 Team summary 同步",
+      name: "Team summary is not visible",
+      setup: () => {
+        (studioApi.getTeam as jest.Mock).mockRejectedValueOnce(
+          new Error("Team summary failed"),
+        );
+      },
+    },
+    {
+      expectedText: "已归档观察历史 Run",
+      name: "Team is archived",
+      setup: () => {
+        (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+          ...mockCreateTeamSummary(),
+          lifecycleStage: "archived",
+        });
+      },
+    },
+    {
+      expectedText: "同步成员等待 roster 后设置入口成员",
+      name: "Team roster is still syncing",
+      setup: () => {
+        (studioApi.listTeamMembers as jest.Mock).mockRejectedValueOnce(
+          createStudioApiStatusError("Not Found", 404),
+        );
+      },
+    },
+    {
+      expectedText: "Step 1创建 Team 成员",
+      name: "Team has no roster members",
+      setup: () => {
+        (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+          scopeId: "scope-1",
+          members: [],
+          nextPageToken: null,
+        });
+      },
+    },
+    {
+      expectedText: "Step 2Build / Bind 成员",
+      name: "Team has no invokable member",
+      setup: () => {
+        (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+          ...mockCreateTeamMembersCatalog(),
+          members: [
+            {
+              ...mockCreateTeamMembersCatalog().members[0],
+              lifecycleStage: "draft",
+              publishedServiceId: "",
+            },
+          ],
+        });
+      },
+    },
+    {
+      expectedText: "Step 3设置入口成员",
+      name: "Team has invokable members but no entry member",
+      setup: () => {
+        (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+          ...mockCreateTeamSummary(),
+          entryMemberId: null,
+        });
+      },
+    },
+    {
+      expectedText: "Step 4发起 Team 测试",
+      name: "Team has an entry member but no visible run",
+      setup: () => {
+        (scopeRuntimeApi.listMemberRuns as jest.Mock).mockResolvedValueOnce({
+          ...mockCreateRunsCatalog(),
+          runs: [],
+        });
+        (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+          ...mockCreateRunsCatalog(),
+          runs: [],
+        });
+      },
+    },
+    {
+      expectedText: "Step 5观察 Run 结果",
+      name: "Team already has a visible run",
+      setup: () => undefined,
+    },
+  ])("renders next-step guidance when $name", async ({ expectedText, setup }) => {
+    setup();
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("team-next-step-band")).toHaveTextContent(
+        expectedText,
+      );
+    });
+  });
+
   it("keeps compare diagnostics out of the overview when no successful baseline exists", async () => {
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
       ...mockCreateRunsCatalog(),

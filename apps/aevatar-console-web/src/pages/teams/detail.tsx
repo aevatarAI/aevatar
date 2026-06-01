@@ -982,6 +982,10 @@ const TeamDetailPage: React.FC = () => {
   const isTeamArchived =
     normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
   const hasInvokableTeamMember = teamRosterRows.some((row) => row.canInvokeAsEntry);
+  // Refactor (iter164/issue1636-first-slice):
+  //   Old pattern: one shared app flow guide explained every setup route globally.
+  //   New principle: each Team surface exposes its immediate next action in-place,
+  //   while lower-level transport and payload details stay inside the relevant panel.
   const teamNextStep = React.useMemo(() => {
     if (!teamSummaryQuery.data) {
       return {
