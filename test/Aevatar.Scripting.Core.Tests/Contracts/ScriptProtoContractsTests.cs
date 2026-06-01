@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Contracts;
@@ -74,6 +75,63 @@ public class ScriptProtoContractsTests
         state.ReadModelSchemaHash.Should().Be("schema-hash-1");
         state.LastRunId.Should().Be("run-1");
         state.StateRoot.Should().BeNull();
+    }
+
+    [Fact]
+    public void ScriptRunOutcomeRecordedEvent_ShouldRoundTripTypedOutcomeFields()
+    {
+        var outcome = new ScriptRunOutcomeRecordedEvent
+        {
+            ActorId = "script-runtime:scope-1:script-1",
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            ScriptRevision = "rev-1",
+            ScriptRunId = "run-1",
+            CommandId = "command-1",
+            CorrelationId = "correlation-1",
+            ScopeId = "scope-1",
+            Status = ScriptRunOutcomeStatus.Succeeded,
+            CommittedFactCount = 2,
+            StateVersion = 7,
+            OccurredAtUnixTimeMs = 123456,
+            Result = Any.Pack(new StringValue { Value = "ok" }),
+        };
+
+        var parsed = ScriptRunOutcomeRecordedEvent.Parser.ParseFrom(outcome.ToByteArray());
+
+        parsed.ActorId.Should().Be("script-runtime:scope-1:script-1");
+        parsed.ScriptRunId.Should().Be("run-1");
+        parsed.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+        parsed.CommittedFactCount.Should().Be(2);
+        parsed.StateVersion.Should().Be(7);
+        parsed.OccurredAtUnixTimeMs.Should().Be(123456);
+        parsed.Result.Unpack<StringValue>().Value.Should().Be("ok");
+    }
+
+    [Fact]
+    public void ScriptBehaviorState_ShouldRoundTripLastRunOutcome()
+    {
+        var state = new ScriptBehaviorState
+        {
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            LastRunOutcome = new ScriptRunOutcomeRecordedEvent
+            {
+                ScriptRunId = "run-1",
+                CommandId = "command-1",
+                Status = ScriptRunOutcomeStatus.Failed,
+                Error = "failed",
+            },
+        };
+
+        var parsed = ScriptBehaviorState.Parser.ParseFrom(state.ToByteArray());
+
+        parsed.LastRunOutcome.Should().NotBeNull();
+        parsed.LastRunOutcome.ScriptRunId.Should().Be("run-1");
+        parsed.LastRunOutcome.CommandId.Should().Be("command-1");
+        parsed.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+        parsed.LastRunOutcome.Error.Should().Be("failed");
     }
 
     [Fact]

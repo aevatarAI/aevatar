@@ -56,7 +56,8 @@ internal static partial class MessagesApiEndpoints
                 commandRequest.ErrorMessage ?? "Invalid request.");
         }
 
-        var result = await commandFacade.CreateAsync(commandRequest.Request!, bearerToken, ct);
+        var callerScopeContext = ResponsesApiEndpoints.BuildCallerScopeResolutionContext(http, bearerToken);
+        var result = await commandFacade.CreateAsync(commandRequest.Request!, callerScopeContext, ct);
         if (result.Error is not null)
             return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 

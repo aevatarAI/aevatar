@@ -53,7 +53,8 @@ public sealed class RunSessionTrackerTests
         resume.ActorId.Should().Be("actor-1");
         resume.RunId.Should().Be("run-1");
         resume.StepId.Should().Be("wait-1");
-        resume.CommandId.Should().Be("cmd-1");
+        // Refactor (issue1326): Session tracking keeps the start command id for observation, but does not reuse it for resume.
+        resume.CommandId.Should().BeNull();
         resume.EditedContent.Should().Be("approved draft");
         resume.Feedback.Should().Be("ship it");
 
@@ -64,7 +65,45 @@ public sealed class RunSessionTrackerTests
         signal.RunId.Should().Be("run-1");
         signal.SignalName.Should().Be("ops_window_open");
         signal.StepId.Should().Be("wait-1");
-        signal.CommandId.Should().Be("cmd-1");
+        signal.CommandId.Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResumeAndSignalRequest_ShouldUseExplicitCommandIdOnly()
+    {
+        var tracker = new RunSessionTracker();
+
+        tracker.Track(CustomFrame("aevatar.run.context", new WorkflowRunContextPayload
+        {
+            ActorId = "actor-1",
+            WorkflowName = "auto",
+            CommandId = "start-cmd",
+        }));
+        tracker.Track(CustomFrame("aevatar.human_input.request", new WorkflowHumanInputRequestCustomPayload
+        {
+            RunId = "run-1",
+            StepId = "approval-1",
+        }));
+        tracker.Track(CustomFrame("aevatar.workflow.waiting_signal", new WorkflowWaitingSignalCustomPayload
+        {
+            RunId = "run-1",
+            StepId = "wait-1",
+            SignalName = "ops_window_open",
+        }));
+
+        var resume = tracker.CreateResumeRequest(
+            "scope-a",
+            approved: true,
+            commandId: "resume-cmd",
+            serviceId: "orders");
+        var signal = tracker.CreateSignalRequest(
+            "scope-a",
+            commandId: "signal-cmd",
+            serviceId: "orders");
+
+        // Refactor (issue1326): Explicit control command ids remain caller owned; tracked start id is never a fallback.
+        resume.CommandId.Should().Be("resume-cmd");
+        signal.CommandId.Should().Be("signal-cmd");
     }
 
     [Fact]

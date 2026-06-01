@@ -328,12 +328,6 @@ public sealed partial class ResponsesAgentToolStateCurrentStateReadModel
         set => ServiceProjectionReadModelSupport.ReplaceCollection(TodoItemEntries, value);
     }
 
-    public IList<ResponsesTaskTraceReadModel> Tasks
-    {
-        get => TaskTraceEntries;
-        set => ServiceProjectionReadModelSupport.ReplaceCollection(TaskTraceEntries, value);
-    }
-
     public IList<ResponsesWebTraceReadModel> WebTraces
     {
         get => WebTraceEntries;
@@ -348,21 +342,6 @@ public sealed partial class ResponsesAgentToolStateCurrentStateReadModel
 }
 
 public sealed partial class ResponsesTodoItemReadModel
-{
-    public DateTimeOffset CreatedAt
-    {
-        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
-        set => CreatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
-    }
-
-    public DateTimeOffset UpdatedAt
-    {
-        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
-        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
-    }
-}
-
-public sealed partial class ResponsesTaskTraceReadModel
 {
     public DateTimeOffset CreatedAt
     {

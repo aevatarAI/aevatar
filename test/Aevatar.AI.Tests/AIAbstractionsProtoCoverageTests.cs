@@ -271,9 +271,22 @@ public sealed class AIAbstractionsProtoCoverageTests
                 RemoteApprovalId = "remote-1",
                 RemoteStatusCheckAttempt = 2,
                 RemoteApprovalExpiresAtUnixMs = 123456,
+                ToolContext = new AgentToolExecutionContext(
+                    new AgentToolRequestIdentity("req-1", "call-1"),
+                    AgentToolCredentials.Empty,
+                    new AgentToolCallerContext("scope-a", "owner-a", "response-a"),
+                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a"),
+                    new AgentToolSenderBindingContext("binding-a"),
+                    new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
+                    new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["trace-id"] = "trace-from-context",
+                    }).ToPayload(),
                 Metadata =
                 {
                     ["trace-id"] = "trace-1",
+                    ["open-annotation"] = "annotation-1",
                 },
             },
             VoicePresence =
@@ -338,10 +351,65 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
         state.PendingApproval.Should().NotBeNull();
         state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
+        state.PendingApproval.ToolContext.Should().NotBeNull();
         state.PendingApproval.RemoteStatusCheckAttempt.Should().Be(2);
         state.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(123456);
+        state.PendingApproval.Metadata.Should().ContainKey("open-annotation").WhoseValue.Should().Be("annotation-1");
+        state.PendingApproval.ToolContext.Should().NotBeNull();
+        var pendingContext = AgentToolExecutionContextMapper.FromPayload(state.PendingApproval.ToolContext);
+        pendingContext.Request.RequestId.Should().Be("req-1");
+        pendingContext.Request.CallId.Should().Be("call-1");
+        pendingContext.Credentials.Should().Be(AgentToolCredentials.Empty);
+        pendingContext.Caller.ScopeId.Should().Be("scope-a");
+        pendingContext.Channel.SenderId.Should().Be("sender-a");
+        pendingContext.SenderBinding.BindingId.Should().Be("binding-a");
+        pendingContext.Routing.ModelOverride.Should().Be("model-a");
+        pendingContext.Routing.MaxToolRoundsOverride.Should().Be(4);
+        pendingContext.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
+        pendingContext.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-from-context");
         state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
         state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
+    }
+
+    [Fact]
+    public void PendingToolApprovalState_ShouldRoundTripTypedToolContext_AndLegacyAnnotations()
+    {
+        var pending = RoundTrip(new PendingToolApprovalState
+        {
+            RequestId = "req-typed",
+            SessionId = "session-typed",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-typed",
+            ArgumentsJson = "{}",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
+                Credentials = new AgentToolCredentials("token-should-only-appear-in-this-explicit-roundtrip", null, null),
+                Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
+                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1"),
+                SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+                Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
+                ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["trace-id"] = "trace-typed",
+                },
+            }).ToPayload(),
+            Metadata =
+            {
+                ["annotation"] = "value",
+            },
+        }, PendingToolApprovalState.Parser);
+
+        pending.ToolContext.Should().NotBeNull();
+        pending.ToolContext.Request.RequestId.Should().Be("req-typed");
+        pending.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
+        pending.ToolContext.Channel.Platform.Should().Be("lark");
+        pending.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
+        pending.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
+        pending.ToolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
+        pending.ToolContext.ExternalMetadata["trace-id"].Should().Be("trace-typed");
+        pending.Metadata["annotation"].Should().Be("value");
     }
 
     [Fact]

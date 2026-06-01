@@ -110,6 +110,9 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <Space wrap size={8}>
               <Typography.Text strong style={{ fontSize: 16 }}>
+                当前态势
+              </Typography.Text>
+              <Typography.Text type="secondary">
                 启动状态
               </Typography.Text>
               <DetailPill

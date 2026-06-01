@@ -31,12 +31,9 @@ public sealed class WorkflowExecutionRunEventProjector
         EventEnvelope envelope)
     {
         // Keep streaming pinned to the projection session command id.
-        // Resume/signal events may arrive without (or with a different) correlation id,
-        // but they still belong to the same live run session.
-        var commandId = string.IsNullOrWhiteSpace(context.SessionId)
-            ? envelope.Propagation?.CorrelationId
-            : context.SessionId;
-        if (string.IsNullOrWhiteSpace(commandId))
+        // Missing session identity is fail-closed: trace correlation is not a stream key.
+        var streamCommandId = context.SessionId;
+        if (string.IsNullOrWhiteSpace(streamCommandId))
             return EmptyEntries;
 
         IReadOnlyList<WorkflowRunEventEnvelope> runEvents = _mapper.Map(envelope);
@@ -54,7 +51,7 @@ public sealed class WorkflowExecutionRunEventProjector
         {
             entries.Add(new ProjectionSessionEventEntry<WorkflowRunEventEnvelope>(
                 context.RootActorId,
-                commandId,
+                streamCommandId,
                 runEvent));
         }
 

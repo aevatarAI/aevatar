@@ -35,13 +35,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
     private sealed record EffectiveReplyPlan(
         IReadOnlyDictionary<string, string> Primary,
         LLMControlContext PrimaryControl,
         AgentToolExecutionContext? PrimaryToolContext,
         IReadOnlyDictionary<string, string>? OwnerFallback,
         LLMControlContext? OwnerFallbackControl,
-        AgentToolExecutionContext? OwnerFallbackToolContext);
+        AgentToolExecutionContext? OwnerFallbackToolContext,
+        bool DisableTools);
 
     private sealed record SenderPreferenceApplication(bool AnyApplied, bool RouteApplied);
 
@@ -107,7 +112,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
-        var primaryTools = await BuildTurnToolsAsync(ct);
+        var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, ct);
 
         try
         {
@@ -132,7 +137,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 "Sender LLM route failed; retrying with bot owner LLM config. activity={ActivityId}",
                 activity.Id);
 
-            var fallbackTools = await BuildTurnToolsAsync(ct);
+            var fallbackTools = await BuildTurnToolsAsync(disableTools: true, ct);
             return await GenerateWithMetadataAsync(
                     activity,
                     replyPlan.OwnerFallback,
@@ -150,13 +155,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyDictionary<string, string> metadata,
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
+        bool forceDisableTools,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
         ArgumentNullException.ThrowIfNull(metadata);
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
-        var tools = await BuildTurnToolsAsync(ct);
+        var disableTools = forceDisableTools || replyPlan.DisableTools;
+        var tools = await BuildTurnToolsAsync(disableTools, ct);
         var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
             replyPlan.PrimaryToolContext ?? AgentToolExecutionContextMapper.FromMetadata(replyPlan.Primary));
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
@@ -179,7 +186,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.PrimaryControl,
             effectiveToolContext,
             initialMessages,
-            ResolveMaxToolRounds(replyPlan.PrimaryControl));
+            ResolveMaxToolRounds(replyPlan.PrimaryControl),
+            disableTools);
     }
 
     /// <summary>
@@ -215,9 +223,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                || lowered.Contains("proxy", StringComparison.Ordinal);
     }
 
-    private async Task<ToolManager> BuildTurnToolsAsync(CancellationToken ct)
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    private async Task<ToolManager> BuildTurnToolsAsync(bool disableTools, CancellationToken ct)
     {
         var tools = new ToolManager();
+        if (disableTools)
+            return tools;
+
         foreach (var tool in await DiscoverToolsAsync(ct))
             tools.Register(tool);
 
@@ -388,6 +403,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // the bot owner's route from the upstream-pinned metadata. If a
         // sender-owned attempt fails, we retry once with this owner snapshot.
         var senderBindingId = toolContext?.SenderBinding.BindingId?.Trim();
+        var disableTools = IsChannelTurn(effective) && string.IsNullOrWhiteSpace(senderBindingId);
         if (_preferencesStore is not null && !string.IsNullOrWhiteSpace(senderBindingId))
         {
             var ownerSnapshot = CreateOwnerFallbackSnapshot(effective);
@@ -455,7 +471,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             effectiveToolContext,
             ownerFallback,
             ownerFallbackControl,
-            ownerFallbackToolContext);
+            ownerFallbackToolContext,
+            disableTools);
     }
 
     /// <summary>
@@ -514,6 +531,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         context == null
             ? null
             : context with { SenderBinding = AgentToolSenderBindingContext.Empty };
+
+    private static bool IsChannelTurn(IReadOnlyDictionary<string, string> metadata) =>
+        metadata.ContainsKey(ChannelMetadataKeys.Platform) &&
+        metadata.ContainsKey(ChannelMetadataKeys.SenderId) &&
+        metadata.ContainsKey(ChannelMetadataKeys.MessageId);
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)
     {

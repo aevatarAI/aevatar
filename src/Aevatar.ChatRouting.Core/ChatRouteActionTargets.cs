@@ -1,61 +1,49 @@
 using Aevatar.ChatRouting.Abstractions;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.ChatRouting.Core;
 
+// Refactor (iter367/cluster-issue674): Old pattern: voice attach routing encoded
+// actor_id and voice_module_name inside ForwardToModel.ToolChoiceHint.PrefilledArguments.
+// New principle: typed ChatRouteVoiceAttachTarget is the only voice attach target
+// contract; ForwardToModel without it remains ordinary model forwarding.
 public static class ChatRouteActionTargets
 {
-    private const string InvokeGAgentToolName = "aevatar_invoke_gagent";
-    private const string ActorIdArgument = "actor_id";
-    private const string VoiceModuleNameArgument = "voice_module_name";
+    private const string DefaultToolSetName = "workspace.default";
 
-    public static bool TryGetGAgentActorTarget(
-        ChatRouteDecision? decision,
-        out ChatRouteGAgentToolTarget target)
+    public static ChatRouteAction ForwardToVoiceAttachTarget(
+        string actorId,
+        string voiceModuleName = "",
+        string toolSetName = DefaultToolSetName)
     {
-        target = default;
-        if (TryGetGAgentActorTarget(decision?.OriginalAction, out target))
-            return true;
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
 
-        return TryGetGAgentActorTarget(decision?.Action, out target);
+        return new ChatRouteAction
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    VoiceAttachTarget = new ChatRouteVoiceAttachTarget
+                    {
+                        ActorId = actorId.Trim(),
+                        VoiceModuleName = voiceModuleName.Trim(),
+                    },
+                },
+            },
+        };
     }
 
-    public static bool TryGetGAgentActorTarget(
+    public static bool TryGetVoiceAttachTarget(
         ChatRouteAction? action,
-        out ChatRouteGAgentToolTarget target)
+        out ChatRouteVoiceAttachTarget target)
     {
-        target = default;
-        if (action is null)
+        target = new ChatRouteVoiceAttachTarget();
+        var candidate = action?.ForwardToModel?.ToolChoiceHint?.VoiceAttachTarget;
+        if (candidate is null || string.IsNullOrWhiteSpace(candidate.ActorId))
             return false;
 
-        if (action.ForwardToModel?.ToolChoiceHint is not { } hint ||
-            !string.Equals(hint.ToolName, InvokeGAgentToolName, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var actorId = ReadString(hint.PrefilledArguments, ActorIdArgument);
-        if (string.IsNullOrWhiteSpace(actorId))
-            return false;
-
-        target = new ChatRouteGAgentToolTarget(
-            actorId,
-            ReadString(hint.PrefilledArguments, VoiceModuleNameArgument));
+        target = candidate;
         return true;
     }
-
-    private static string ReadString(Struct? arguments, string key)
-    {
-        if (arguments?.Fields.TryGetValue(key, out var value) != true ||
-            value.KindCase != Value.KindOneofCase.StringValue)
-        {
-            return string.Empty;
-        }
-
-        return value.StringValue?.Trim() ?? string.Empty;
-    }
 }
-
-public readonly record struct ChatRouteGAgentToolTarget(
-    string ActorId,
-    string VoiceModuleName);

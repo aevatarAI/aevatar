@@ -56,7 +56,7 @@ public sealed class WorkflowRunFinalizeEmitter
     {
         try
         {
-            return await _currentStateQueryPort.GetActorSnapshotAsync(actorId, ct);
+            return await _currentStateQueryPort.GetWorkflowActorCurrentStateAsync(actorId, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -72,7 +72,7 @@ public sealed class WorkflowRunFinalizeEmitter
     {
         try
         {
-            return await _currentStateQueryPort.GetActorProjectionStateAsync(actorId, ct);
+            return await _currentStateQueryPort.GetWorkflowActorProjectionStateAsync(actorId, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

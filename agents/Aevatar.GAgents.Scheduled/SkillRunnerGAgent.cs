@@ -26,6 +26,7 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
+    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly IClock _clock;
     private readonly ITimeZoneResolver _timeZoneResolver;
@@ -48,7 +49,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         IToolApprovalHandler? approvalHandler = null,
         IClock? clock = null,
-        ITimeZoneResolver? timeZoneResolver = null)
+        ITimeZoneResolver? timeZoneResolver = null,
+        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -60,7 +62,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ownerLlmConfigSource,
             approvalHandler,
             clock,
-            timeZoneResolver)
+            timeZoneResolver,
+            larkOutboundDispatcher)
     {
     }
 
@@ -75,7 +78,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IOwnerLlmConfigSource? ownerLlmConfigSource,
         IToolApprovalHandler? approvalHandler,
         IClock? clock,
-        ITimeZoneResolver? timeZoneResolver)
+        ITimeZoneResolver? timeZoneResolver,
+        ILarkOutboundDispatcher? larkOutboundDispatcher)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -86,6 +90,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             approvalHandler)
     {
         _nyxIdApiClient = nyxIdApiClient;
+        _larkOutboundDispatcher = larkOutboundDispatcher;
         _ownerLlmConfigSource = ownerLlmConfigSource;
         _clock = clock ?? new SystemClock();
         _timeZoneResolver = timeZoneResolver ?? new TimeZoneResolver();
@@ -480,20 +485,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             State.OutboundConfig.LarkReceiveIdType,
             State.OutboundConfig.ConversationId);
 
-        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
-        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
-        LarkReceiveTarget? fallback = null;
-        if (!string.IsNullOrEmpty(fallbackId) && !string.IsNullOrEmpty(fallbackType))
-            fallback = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-
         return new SkillRunnerStreamingReplySink(
-            client,
-            State.OutboundConfig.NyxApiKey,
-            State.OutboundConfig.NyxProviderSlug,
-            primary,
-            fallback,
+            ResolveLarkOutboundDispatcher(client),
+            new LarkSendNewMessageRequest(
+                State.OutboundConfig.NyxApiKey,
+                State.OutboundConfig.NyxProviderSlug,
+                MessageType: "text",
+                ContentJson: string.Empty,
+                PrimaryTarget: primary,
+                FallbackTarget: ResolveFallbackTarget()),
             BuildLarkRejectionMessage,
-            Logger);
+            Logger,
+            client);
     }
 
     /// <summary>
@@ -670,7 +673,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 deliveryTarget.ReceiveIdType);
         }
 
-        var outcome = await TrySendWithFallbackAsync(client, output, slug, deliveryTarget, ct);
+        var outcome = await ResolveLarkOutboundDispatcher(client).SendNewMessageAsync(
+            new LarkSendNewMessageRequest(
+                State.OutboundConfig.NyxApiKey,
+                slug,
+                MessageType: "text",
+                ContentJson: JsonSerializer.Serialize(new { text = output }),
+                PrimaryTarget: deliveryTarget,
+                FallbackTarget: ResolveFallbackTarget()),
+            ct);
 
         if (!outcome.Succeeded)
         {
@@ -685,76 +696,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
-    private readonly record struct SendOutcome(bool Succeeded, int? LarkCode, string Detail)
+    private LarkReceiveTarget? ResolveFallbackTarget()
     {
-        public static SendOutcome Success() => new(true, null, string.Empty);
-        public static SendOutcome Failed(int? larkCode, string detail) => new(false, larkCode, detail);
-    }
-
-    /// <summary>
-    /// Sends the outbound text via the typed primary delivery target, then on a Lark
-    /// <c>230002 bot not in chat</c> rejection retries once with the fallback target if one
-    /// was captured at agent-create time. The fallback covers cross-app same-tenant
-    /// deployments where the outbound app is not a member of the inbound DM chat — without
-    /// it, the chat_id-first priority would regress those deployments. Returns success vs.
-    /// failure (with Lark code+detail) so the caller can throw cleanly without re-parsing
-    /// the response.
-    /// </summary>
-    private async Task<SendOutcome> TrySendWithFallbackAsync(
-        NyxIdApiClient client,
-        string output,
-        string slug,
-        LarkReceiveTarget primary,
-        CancellationToken ct)
-    {
-        var primaryResponse = await SendOutboundAsync(client, output, slug, primary, ct);
-        if (!LarkProxyResponse.TryGetError(primaryResponse, out var larkCode, out var detail))
-            return SendOutcome.Success();
-
-        // Only Lark `bot not in chat` triggers the fallback. Nyx envelope errors (no Lark
-        // code) and other Lark business errors propagate directly so the user sees actionable
-        // recovery guidance for the actual failure mode.
-        if (larkCode != LarkBotErrorCodes.BotNotInChat)
-            return SendOutcome.Failed(larkCode, detail);
-
         var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
         var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
-        if (string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType))
-            return SendOutcome.Failed(larkCode, detail);
-
-        Logger.LogInformation(
-            "Skill runner {ActorId} primary delivery target rejected as `bot not in chat` (code 230002); retrying with fallback typed pair (receive_id_type={FallbackType})",
-            Id,
-            fallbackType);
-
-        var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-        var fallbackResponse = await SendOutboundAsync(client, output, slug, fallbackTarget, ct);
-        if (!LarkProxyResponse.TryGetError(fallbackResponse, out var fallbackCode, out var fallbackDetail))
-            return SendOutcome.Success();
-
-        return SendOutcome.Failed(fallbackCode, fallbackDetail);
+        return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
+            ? null
+            : new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
     }
 
-    private async Task<string> SendOutboundAsync(
-        NyxIdApiClient client,
-        string output,
-        string slug,
-        LarkReceiveTarget target,
-        CancellationToken ct)
-    {
-        var body = JsonSerializer.Serialize(new
-        {
-            receive_id = target.ReceiveId,
-            msg_type = "text",
-            content = JsonSerializer.Serialize(new { text = output }),
-        });
-
-        return await client.ProxyRequestAsync(
-            State.OutboundConfig.NyxApiKey,
-            slug,
-            $"open-apis/im/v1/messages?receive_id_type={target.ReceiveIdType}",
-            "POST", body, null, ct);
-    }
+    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher(NyxIdApiClient client) =>
+        _larkOutboundDispatcher ?? Services.GetService<ILarkOutboundDispatcher>() ?? new LarkOutboundDispatcher(client, Logger);
 
     private static string BuildLarkRejectionMessage(int? larkCode, string detail)
     {

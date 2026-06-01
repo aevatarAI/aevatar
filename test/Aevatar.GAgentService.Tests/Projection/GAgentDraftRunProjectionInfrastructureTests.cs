@@ -69,7 +69,7 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         await port.DetachLiveSinkAsync(attachment.LiveSinkLease, CancellationToken.None);
         await port.ReleaseActorProjectionAsync(lease, CancellationToken.None);
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("actor-1");
+        hub.LastRootActorId.Should().Be("actor-1");
         hub.LastSessionId.Should().Be("cmd-1");
         sink.Events.Should().ContainSingle();
         release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
@@ -103,7 +103,7 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         lease.ActorId.Should().Be("actor-1");
         lease.CommandId.Should().Be("cmd-1");
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("actor-1");
+        hub.LastRootActorId.Should().Be("actor-1");
         hub.LastSessionId.Should().Be("cmd-1");
 
         await hub.Handler!(new AGUIEvent
@@ -195,26 +195,26 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
     private sealed class RecordingSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
     {
         public int SubscribeCalls { get; private set; }
-        public string? LastScopeId { get; private set; }
+        public string? LastRootActorId { get; private set; }
         public string? LastSessionId { get; private set; }
         public Func<AGUIEvent, ValueTask>? Handler { get; private set; }
 
-        public Task PublishAsync(string scopeId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
+        public Task PublishAsync(string rootActorId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
         {
-            _ = scopeId;
+            _ = rootActorId;
             _ = sessionId;
             _ = evt;
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<AGUIEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
             SubscribeCalls++;
-            LastScopeId = scopeId;
+            LastRootActorId = rootActorId;
             LastSessionId = sessionId;
             Handler = handler;
             return Task.FromResult<IAsyncDisposable>(new NoopSubscription());

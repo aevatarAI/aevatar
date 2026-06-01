@@ -56,10 +56,13 @@ public sealed class ScopeServiceEndpointsTests
         {
             implementationKind = "workflow",
             displayName = "Orders App",
-            workflowYamls = new[]
+            workflow = new
             {
-                "name: main\nsteps:\n  - run: echo hello",
-                "name: child\nsteps:\n  - run: echo child",
+                workflowYamls = new[]
+                {
+                    "name: main\nsteps:\n  - run: echo hello",
+                    "name: child\nsteps:\n  - run: echo child",
+                },
             },
         });
 
@@ -74,6 +77,26 @@ public sealed class ScopeServiceEndpointsTests
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
         host.ScopeBindingPort.LastRequest.Workflow.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest.Workflow!.WorkflowYamls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldIgnoreTopLevelWorkflowYamlsFallback()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/binding", new
+        {
+            implementationKind = "workflow",
+            displayName = "Orders App",
+            workflowYamls = new[]
+            {
+                "name: legacy\nsteps:\n  - run: echo legacy",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.ScopeBindingPort.LastRequest.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest!.Workflow.Should().BeNull();
     }
 
     [Fact]
@@ -5414,7 +5437,7 @@ public sealed class ScopeServiceEndpointsTests
 
     private sealed class FakeWorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
 
         public Dictionary<string, WorkflowActorSnapshot> SnapshotsByActorId { get; } = new(StringComparer.Ordinal);
 
@@ -5438,7 +5461,7 @@ public sealed class ScopeServiceEndpointsTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             SnapshotCalls.Add(actorId);
             SnapshotsByActorId.TryGetValue(actorId, out var snapshot);

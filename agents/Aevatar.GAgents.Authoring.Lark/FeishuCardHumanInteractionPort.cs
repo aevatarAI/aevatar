@@ -20,6 +20,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 {
     private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
     private readonly NyxIdApiClient _nyxIdApiClient;
+    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly LarkMessageComposer _composer;
     private readonly ILogger<FeishuCardHumanInteractionPort> _logger;
 
@@ -27,10 +28,12 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         IUserAgentDeliveryTargetReader deliveryTargetReader,
         NyxIdApiClient nyxIdApiClient,
         LarkMessageComposer composer,
-        ILogger<FeishuCardHumanInteractionPort> logger)
+        ILogger<FeishuCardHumanInteractionPort> logger,
+        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
     {
         _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
         _nyxIdApiClient = nyxIdApiClient ?? throw new ArgumentNullException(nameof(nyxIdApiClient));
+        _larkOutboundDispatcher = larkOutboundDispatcher;
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -335,19 +338,11 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         }
     }
 
-    private readonly record struct SendOutcome(bool Succeeded, int? LarkCode, string Detail)
-    {
-        public static SendOutcome Success() => new(true, null, string.Empty);
-        public static SendOutcome Failed(int? larkCode, string detail) => new(false, larkCode, detail);
-    }
-
     /// <summary>
-    /// Mirrors <c>SkillRunnerGAgent.TrySendWithFallbackAsync</c>: tries the typed primary
-    /// delivery target, then on a Lark <c>230002 bot not in chat</c> rejection retries once
-    /// with the fallback target persisted on <see cref="UserAgentCatalogEntry.LarkReceiveIdFallback"/>.
-    /// Returns success vs. failure (with Lark code+detail) so the caller can throw cleanly.
+    /// Sends via the shared Lark new-message dispatcher so proactive human-interaction cards
+    /// keep the same primary, fallback, and parser semantics as SkillRunner output.
     /// </summary>
-    private async Task<SendOutcome> TrySendWithFallbackAsync(
+    private async Task<LarkSendNewMessageResult> TrySendWithFallbackAsync(
         UserAgentDeliveryTarget target,
         string messageType,
         string contentJson,
@@ -355,57 +350,33 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         string emptyResponseMessage,
         CancellationToken cancellationToken)
     {
-        var primaryResult = await SendOutboundAsync(target, messageType, contentJson, primary, cancellationToken);
-        if (string.IsNullOrWhiteSpace(primaryResult))
+        var result = await ResolveLarkOutboundDispatcher().SendNewMessageAsync(
+            new LarkSendNewMessageRequest(
+                target.NyxApiKey,
+                target.NyxProviderSlug,
+                messageType,
+                contentJson,
+                primary,
+                ResolveFallbackTarget(target)),
+            cancellationToken);
+
+        if (!result.Succeeded && string.IsNullOrWhiteSpace(result.Detail))
             throw new InvalidOperationException(emptyResponseMessage);
-        if (!LarkProxyResponse.TryGetError(primaryResult, out var larkCode, out var detail))
-            return SendOutcome.Success();
 
-        if (larkCode != LarkBotErrorCodes.BotNotInChat)
-            return SendOutcome.Failed(larkCode, detail);
+        return result;
+    }
 
+    private static LarkReceiveTarget? ResolveFallbackTarget(UserAgentDeliveryTarget target)
+    {
         var fallbackId = target.LarkReceiveIdFallback?.Trim();
         var fallbackType = target.LarkReceiveIdTypeFallback?.Trim();
-        if (string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType))
-            return SendOutcome.Failed(larkCode, detail);
-
-        _logger.LogInformation(
-            "Feishu human interaction port primary delivery target rejected as `bot not in chat` (code 230002); retrying with fallback typed pair: agent={AgentId}, fallbackType={FallbackType}",
-            target.AgentId,
-            fallbackType);
-
-        var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-        var fallbackResult = await SendOutboundAsync(target, messageType, contentJson, fallbackTarget, cancellationToken);
-        if (string.IsNullOrWhiteSpace(fallbackResult))
-            throw new InvalidOperationException(emptyResponseMessage);
-        if (!LarkProxyResponse.TryGetError(fallbackResult, out var fallbackCode, out var fallbackDetail))
-            return SendOutcome.Success();
-        return SendOutcome.Failed(fallbackCode, fallbackDetail);
+        return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
+            ? null
+            : new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
     }
 
-    private async Task<string> SendOutboundAsync(
-        UserAgentDeliveryTarget target,
-        string messageType,
-        string contentJson,
-        LarkReceiveTarget receiveTarget,
-        CancellationToken cancellationToken)
-    {
-        var body = JsonSerializer.Serialize(new
-        {
-            receive_id = receiveTarget.ReceiveId,
-            msg_type = messageType,
-            content = contentJson,
-        });
-
-        return await _nyxIdApiClient.ProxyRequestAsync(
-            target.NyxApiKey,
-            target.NyxProviderSlug,
-            $"open-apis/im/v1/messages?receive_id_type={receiveTarget.ReceiveIdType}",
-            "POST",
-            body,
-            extraHeaders: null,
-            cancellationToken);
-    }
+    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher() =>
+        _larkOutboundDispatcher ?? new LarkOutboundDispatcher(_nyxIdApiClient, _logger);
 
     private static string BuildLarkRejectionMessage(string failurePrefix, int? larkCode, string detail)
     {

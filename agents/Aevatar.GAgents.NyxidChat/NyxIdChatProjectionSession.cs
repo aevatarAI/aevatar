@@ -50,10 +50,13 @@ public sealed class NyxIdChatSessionProjectionContext : IProjectionSessionContex
 /// Runtime lease for NyxID chat Projection Pipeline sessions. It carries the
 /// EventEnvelope projector scope and typed AGUIEvent session identity.
 /// </summary>
+// Refactor (issue-377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
+// Refactor (issue-377): Old pattern: ScopeId was a RootActorId alias on the lease.
+// Refactor (issue-377): New principle: NyxID chat session context owns RootActorId + SessionId.
+// Refactor (issue-377): New principle: lifecycle attach reads the typed context directly.
 public sealed class NyxIdChatSessionRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<AGUIEvent>,
       INyxIdChatSessionProjectionLease,
-      IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<NyxIdChatSessionProjectionContext>
 {
     public NyxIdChatSessionRuntimeLease(NyxIdChatSessionProjectionContext context)
@@ -66,7 +69,6 @@ public sealed class NyxIdChatSessionRuntimeLease
     public string ActorId => RootEntityId;
     public string SessionId { get; }
     public NyxIdChatSessionProjectionContext Context { get; }
-    public string ScopeId => RootEntityId;
 }
 
 /// <summary>

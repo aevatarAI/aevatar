@@ -6,9 +6,6 @@ namespace Aevatar.Workflow.Projection.Workflows;
 // Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
 //   Old pattern: ClosedWorldBlocked flag retained as always-false compatibility field
 //   New principle: Removed dead capability flag; output describes available primitives only
-// Refactor (iter94/cluster-094b):
-//   Old: workflow capabilities was a current-state document with fake StateVersion = 1 and LastEventId = startup-materialization.
-//   New: workflow capabilities is a startup artifact with honest GeneratedAtUtc and SchemaVersion watermarks, without fake authoritative version fields.
 public sealed class WorkflowCatalogReadModelMapper
 {
     public WorkflowCatalogItem ToCatalogItem(WorkflowCatalogCurrentStateDocument document) =>
@@ -52,29 +49,6 @@ public sealed class WorkflowCatalogReadModelMapper
             }).ToList(),
         };
 
-    public WorkflowCapabilitiesDocument ToCapabilitiesDocument(
-        WorkflowCapabilitiesStartupArtifact capabilities,
-        IReadOnlyList<WorkflowCatalogCurrentStateDocument> workflows)
-    {
-        var workflowWatermark = workflows.Count == 0
-            ? default
-            : workflows.Max(workflow => workflow.UpdatedAt);
-        return new WorkflowCapabilitiesDocument
-        {
-            SchemaVersion = string.IsNullOrWhiteSpace(capabilities.SchemaVersion)
-                ? "capabilities.v1"
-                : capabilities.SchemaVersion,
-            GeneratedAtUtc = capabilities.GeneratedAtUtc,
-            ProjectionWatermark = Max(capabilities.GeneratedAtUtc, workflowWatermark),
-            Primitives = capabilities.Primitives.Select(ToPrimitiveCapability).ToList(),
-            Connectors = capabilities.Connectors.Select(ToConnectorCapability).ToList(),
-            Workflows = workflows
-                .OrderBy(workflow => workflow.WorkflowName, StringComparer.OrdinalIgnoreCase)
-                .Select(ToCapabilityWorkflow)
-                .ToList(),
-        };
-    }
-
     private static WorkflowCatalogRole ToCatalogRole(WorkflowCatalogRoleReadModel role) =>
         new()
         {
@@ -109,7 +83,7 @@ public sealed class WorkflowCatalogReadModelMapper
             }).ToList(),
         };
 
-    private static WorkflowCapabilityWorkflow ToCapabilityWorkflow(WorkflowCatalogCurrentStateDocument workflow) =>
+    public WorkflowCapabilityWorkflow ToCapabilityWorkflow(WorkflowCatalogCurrentStateDocument workflow) =>
         new()
         {
             Name = workflow.WorkflowName,
@@ -130,38 +104,4 @@ public sealed class WorkflowCatalogReadModelMapper
             ProjectionWatermark = workflow.UpdatedAt,
         };
 
-    private static WorkflowPrimitiveCapability ToPrimitiveCapability(WorkflowPrimitiveCapabilityReadModel primitive) =>
-        new()
-        {
-            Name = primitive.Name,
-            Aliases = primitive.Aliases.ToList(),
-            Category = primitive.Category,
-            Description = primitive.Description,
-            RuntimeModule = primitive.RuntimeModule,
-            Parameters = primitive.Parameters.Select(parameter => new WorkflowPrimitiveParameterCapability
-            {
-                Name = parameter.Name,
-                Type = parameter.Type,
-                Required = parameter.Required,
-                Description = parameter.Description,
-                Default = parameter.DefaultValue,
-                Enum = parameter.Enum.ToList(),
-            }).ToList(),
-        };
-
-    private static WorkflowConnectorCapability ToConnectorCapability(WorkflowConnectorCapabilityReadModel connector) =>
-        new()
-        {
-            Name = connector.Name,
-            Type = connector.Type,
-            Enabled = connector.Enabled,
-            TimeoutMs = connector.TimeoutMs,
-            Retry = connector.Retry,
-            AllowedInputKeys = connector.AllowedInputKeys.ToList(),
-            AllowedOperations = connector.AllowedOperations.ToList(),
-            FixedArguments = connector.FixedArguments.ToList(),
-        };
-
-    private static DateTimeOffset Max(DateTimeOffset left, DateTimeOffset right) =>
-        left >= right ? left : right;
 }

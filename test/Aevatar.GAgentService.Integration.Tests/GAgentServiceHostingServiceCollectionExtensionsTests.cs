@@ -255,16 +255,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
             .Should()
             .NotBeNull();
-        app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact>>()
-            .Should()
-            .NotBeNull();
-        var capabilitiesReader = app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string>>();
-        var capabilities = await capabilitiesReader.GetAsync(
-            "workflow-capabilities",
-            CancellationToken.None);
-
-        capabilities.Should().NotBeNull();
-        capabilities!.Id.Should().Be("workflow-capabilities");
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(builder.Services);
     }
 
     [Fact]
@@ -336,7 +327,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string>>().Should().NotBeNull();
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
         services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
     }
 
@@ -388,9 +379,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCapabilitiesStartupArtifact>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentReader<WorkflowCapabilitiesStartupArtifact, string>>().Should().NotBeNull();
+        AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
     }
 
     [Fact]
@@ -517,5 +507,24 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         nullServicesAct.Should().Throw<ArgumentNullException>();
         nullConfigurationAct.Should().Throw<ArgumentNullException>();
+    }
+
+    private static bool ServiceTypeContains(Type serviceType, string typeName)
+    {
+        if (serviceType.Name.Contains(typeName, StringComparison.Ordinal))
+            return true;
+
+        return serviceType.IsGenericType &&
+               serviceType.GenericTypeArguments.Any(argument =>
+                   argument.Name.Contains(typeName, StringComparison.Ordinal));
+    }
+
+    private static void AssertNoWorkflowCapabilitiesStartupArtifactServices(IServiceCollection services)
+    {
+        // Refactor (iter161-cluster-001 #1257-first):
+        //   Old pattern: DI tests referenced the obsolete WorkflowCapabilitiesStartupArtifact type through nameof.
+        //   New principle: tests protect against service registration by symbol name without keeping the deleted type alive.
+        services.Should().NotContain(service =>
+            ServiceTypeContains(service.ServiceType, "WorkflowCapabilitiesStartupArtifact"));
     }
 }

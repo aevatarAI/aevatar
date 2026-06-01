@@ -103,6 +103,9 @@ function pickMeaningfulLabel(
   return "";
 }
 
+// Refactor (v1/issue1444-first):
+//   Old: workflow run status labels leaked raw runtime terms directly into the teams UI.
+//   New: run status mapping keeps UI display labels stable while preserving the underlying status semantics.
 function formatRunStatusLabel(status: string | null | undefined): string {
   switch (trimOptional(status).toLowerCase()) {
     case "waiting":
@@ -113,7 +116,7 @@ function formatRunStatusLabel(status: string | null | undefined): string {
     case "error":
       return "异常";
     case "completed":
-      return "稳定";
+      return "已完成";
     default:
       return trimOptional(status) || "未知";
   }
