@@ -7,6 +7,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Execution;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -43,12 +44,14 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         if (request.StepType != "tool_call") return;
 
         var toolName = request.Parameters.GetValueOrDefault("tool", "").Trim();
+        var callId = ComposeWorkflowToolCallId(request);
         if (string.IsNullOrEmpty(toolName))
         {
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = false, Error = "tool_call 缺少 tool 参数",
             }, TopologyAudience.Self, ct);
             return;
@@ -62,7 +65,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         {
             ToolName = toolName,
             ArgumentsJson = argumentsJson,
-            CallId = request.StepId,
+            CallId = callId,
         }, TopologyAudience.Self, ct);
 
         var toolIndex = await GetOrDiscoverAsync(ct);
@@ -75,11 +78,16 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var result = await tool.ExecuteAsync(argumentsJson, ct);
+            var toolContext = BuildToolContext(ctx, callId);
+            string result;
+            using (AgentToolContextScope.Push(toolContext))
+            {
+                result = await tool.ExecuteAsync(argumentsJson, ct);
+            }
 
             await ctx.PublishAsync(new ToolResultEvent
             {
-                CallId = request.StepId,
+                CallId = callId,
                 Success = true,
                 ResultJson = result,
             }, TopologyAudience.Self, ct);
@@ -88,6 +96,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = true,
                 Output = result,
             }, TopologyAudience.Self, ct);
@@ -98,6 +107,40 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ctx.Logger.LogWarning(ex, "ToolCall: step={StepId} tool={Tool} execution failed", request.StepId, toolName);
         }
     }
+
+    private static AgentToolExecutionContext BuildToolContext(
+        IWorkflowExecutionContext ctx,
+        string callId)
+    {
+        var existing = WorkflowToolExecutionRuntimeContextAccess.GetToolContext(ctx)
+                       ?? AgentToolExecutionContext.Empty;
+
+        return existing with
+        {
+            Request = existing.Request with
+            {
+                CallId = callId
+            }
+        };
+    }
+
+    private static string ComposeWorkflowToolCallId(StepRequestEvent request)
+    {
+        var runId = Normalize(request.RunId);
+        var stepId = Normalize(request.StepId);
+        var executionId = Normalize(request.ExecutionId);
+
+        if (runId != null && stepId != null && executionId != null)
+            return $"workflow:{runId}:{stepId}:{executionId}";
+
+        if (runId != null && stepId != null)
+            return $"workflow:{runId}:{stepId}";
+
+        return stepId ?? executionId ?? runId ?? string.Empty;
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)
     {
@@ -182,7 +225,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         await ctx.PublishAsync(new ToolResultEvent
         {
-            CallId = request.StepId,
+            CallId = ComposeWorkflowToolCallId(request),
             Success = false,
             Error = errorMessage,
         }, TopologyAudience.Self, ct);
@@ -191,6 +234,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = false,
             Error = errorMessage,
         }, TopologyAudience.Self, ct);

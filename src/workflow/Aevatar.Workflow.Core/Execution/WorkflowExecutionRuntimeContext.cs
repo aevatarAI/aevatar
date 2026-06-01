@@ -30,12 +30,15 @@ internal sealed class WorkflowExecutionRuntimeContext
 
     public CapturedSecureInputs CapturedSecureInputs { get; } = new();
 
+    public AgentToolExecutionContext? ToolContext { get; private set; }
+
     public void Clear()
     {
         LlmOverrides.Clear();
         Connector.Clear();
         RequestPassthroughMetadata.Clear();
         CapturedSecureInputs.Clear();
+        ToolContext = null;
     }
 
     public void ApplyRequestMetadata(IReadOnlyDictionary<string, string>? metadata)
@@ -68,6 +71,7 @@ internal sealed class WorkflowExecutionRuntimeContext
 
     public void ApplyToolContext(AgentToolExecutionContext? context)
     {
+        ToolContext = context;
         LlmOverrides.Clear();
 
         if (context == null)

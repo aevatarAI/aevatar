@@ -50,25 +50,68 @@ public sealed class WorkflowExecutionRuntimeContextTests
     public void SetToolContext_ShouldPromoteLlmRuntimeValuesFromTypedContext()
     {
         var host = new RecordingStateHost();
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = " token ",
+                NyxIdOrgToken = " org-token ",
+            },
+            Routing = LLMRequestRoutingContext.Empty with
+            {
+                ModelOverride = " model ",
+                NyxIdRoutePreference = " route ",
+            },
+        };
 
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
+            host,
+            toolContext);
+
+        host.RuntimeContext.ToolContext.Should().BeSameAs(toolContext);
+        host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().Be("token");
+        host.RuntimeContext.LlmOverrides.ModelOverride.Should().Be("model");
+        host.RuntimeContext.LlmOverrides.NyxIdRoutePreference.Should().Be("route");
+    }
+
+    [Fact]
+    public void SetToolContext_WithNull_ShouldClearStoredToolContext()
+    {
+        var host = new RecordingStateHost();
+        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
             host,
             AgentToolExecutionContext.Empty with
             {
                 Credentials = AgentToolCredentials.Empty with
                 {
-                    NyxIdAccessToken = " token ",
-                },
-                Routing = LLMRequestRoutingContext.Empty with
-                {
-                    ModelOverride = " model ",
-                    NyxIdRoutePreference = " route ",
+                    NyxIdAccessToken = "token",
                 },
             });
 
-        host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().Be("token");
-        host.RuntimeContext.LlmOverrides.ModelOverride.Should().Be("model");
-        host.RuntimeContext.LlmOverrides.NyxIdRoutePreference.Should().Be("route");
+        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(host, null);
+
+        host.RuntimeContext.ToolContext.Should().BeNull();
+        host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().BeNull();
+    }
+
+    [Fact]
+    public void GetToolContext_ShouldReadOnlyFromRuntimeAccessor()
+    {
+        var context = new RecordingWorkflowExecutionContext();
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "token",
+            },
+        };
+        context.RuntimeContext.ApplyToolContext(toolContext);
+
+        WorkflowToolExecutionRuntimeContextAccess.GetToolContext(context).Should().BeSameAs(toolContext);
+        WorkflowToolExecutionRuntimeContextAccess.GetToolContext(new ContextWithoutRuntimeAccessor()).Should().BeNull();
+        FluentActions.Invoking(() => WorkflowToolExecutionRuntimeContextAccess.GetToolContext(null!))
+            .Should()
+            .Throw<ArgumentNullException>();
     }
 
     [Fact]

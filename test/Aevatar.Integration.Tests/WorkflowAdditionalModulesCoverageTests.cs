@@ -2008,7 +2008,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             {
                 ["trace-id"] = " trace-abc ",
             });
-        WorkflowRequestMetadataRuntimeContextAccess.SetToolContext(
+        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
             (IWorkflowExecutionStateHost)ctx.Agent,
             AgentToolExecutionContext.Empty with
             {
