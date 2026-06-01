@@ -225,6 +225,63 @@ function renderRouteMiniCard(
   );
 }
 
+function resolveRunTargetSummary(input: {
+  activeEndpointId: string;
+  activeEndpointKind: RunEndpointKind;
+  actorId?: string;
+  draftMode: boolean;
+  initialFormValues: RunFormValues;
+  selectedRouteRecord?: SelectedRouteRecord;
+}): {
+  description: string;
+  mode: string;
+  required: string;
+  target: string;
+} {
+  const workspaceId = input.initialFormValues.scopeId || "Workspace not set";
+  const routeLabel =
+    input.selectedRouteRecord?.routeName ||
+    input.initialFormValues.routeName ||
+    "";
+  const endpointLabel = resolveRunEndpointId(
+    input.activeEndpointKind,
+    input.activeEndpointId || input.initialFormValues.endpointId,
+  );
+  const target = routeLabel || endpointLabel || "chat";
+
+  if (input.draftMode) {
+    return {
+      description: `${workspaceId} will run the bundled Studio draft before it is published.`,
+      mode: "Studio draft",
+      required: "Workspace, draft bundle, prompt",
+      target,
+    };
+  }
+
+  if (input.actorId) {
+    return {
+      description: `Continue actor ${input.actorId} in ${workspaceId}.`,
+      mode: "Existing actor",
+      required: "Workspace, actor, prompt",
+      target,
+    };
+  }
+
+  const isChatEndpoint = input.activeEndpointKind === "chat";
+
+  return {
+    description:
+      isChatEndpoint
+        ? `${workspaceId} will stream through the selected chat route or workspace default binding.`
+        : `${workspaceId} will invoke the selected command endpoint with the current payload.`,
+    mode: isChatEndpoint ? "Chat stream" : "Command invoke",
+    required: isChatEndpoint
+      ? "Workspace, route/default binding, prompt"
+      : "Workspace, endpoint, prompt or payload",
+    target,
+  };
+}
+
 function renderRecentRunCards(
   recentRunRows: RecentRunTableRow[],
   onClearRecentRuns: () => void,
@@ -396,6 +453,14 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
 }) => {
   const isChatEndpoint = activeEndpointKind === "chat";
   const isChatVariant = variant === "chat";
+  const runTargetSummary = resolveRunTargetSummary({
+    activeEndpointId,
+    activeEndpointKind,
+    actorId,
+    draftMode,
+    initialFormValues,
+    selectedRouteRecord,
+  });
 
   return (
     <ProCard
@@ -408,36 +473,38 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
       <div style={workbenchScrollableBodyStyle}>
         <div style={compactStackStyle}>
           {!isChatVariant ? (
-            <div style={quickGridStyle}>
-              <div style={quickMetricStyle}>
-                <Typography.Text style={quickMetricLabelStyle}>Endpoint</Typography.Text>
-                <Typography.Text style={quickMetricValueStyle}>
-                  {activeEndpointId || "chat"}
-                </Typography.Text>
-              </div>
-              <div style={quickMetricStyle}>
-                <Typography.Text style={quickMetricLabelStyle}>Execution</Typography.Text>
-                <Typography.Text style={quickMetricValueStyle}>
-                  {isChatEndpoint ? "STREAM" : "INVOKE"}
-                </Typography.Text>
-              </div>
-              <div style={quickMetricStyle}>
-                <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
-                <Typography.Text style={quickMetricValueStyle}>
-                  {draftMode
-                    ? isChatEndpoint
-                      ? "Draft run"
-                      : "Prepared invoke"
-                    : actorId
-                      ? "Continue actor"
-                      : "Endpoint invoke"}
-                </Typography.Text>
-              </div>
-              <div style={quickMetricStyle}>
-                <Typography.Text style={quickMetricLabelStyle}>Presets</Typography.Text>
-                <Typography.Text style={quickMetricValueStyle}>
-                  {visiblePresets.length}
-                </Typography.Text>
+            <div style={compactStackStyle}>
+              <Alert
+                showIcon
+                type="info"
+                message={`Target: ${runTargetSummary.target}`}
+                description={runTargetSummary.description}
+              />
+              <div style={quickGridStyle}>
+                <div style={quickMetricStyle}>
+                  <Typography.Text style={quickMetricLabelStyle}>Required</Typography.Text>
+                  <Typography.Text style={quickMetricValueStyle}>
+                    {runTargetSummary.required}
+                  </Typography.Text>
+                </div>
+                <div style={quickMetricStyle}>
+                  <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
+                  <Typography.Text style={quickMetricValueStyle}>
+                    {runTargetSummary.mode}
+                  </Typography.Text>
+                </div>
+                <div style={quickMetricStyle}>
+                  <Typography.Text style={quickMetricLabelStyle}>Endpoint</Typography.Text>
+                  <Typography.Text style={quickMetricValueStyle}>
+                    {activeEndpointId || "chat"}
+                  </Typography.Text>
+                </div>
+                <div style={quickMetricStyle}>
+                  <Typography.Text style={quickMetricLabelStyle}>Presets</Typography.Text>
+                  <Typography.Text style={quickMetricValueStyle}>
+                    {visiblePresets.length}
+                  </Typography.Text>
+                </div>
               </div>
             </div>
           ) : null}
@@ -691,51 +758,62 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         ]}
                       />
                     ) : (
-                      <>
-                        <ProFormText
-                          name="endpointId"
-                          label="Endpoint"
-                          placeholder={
-                            isChatEndpoint
-                              ? "chat (or a custom chat endpoint id)"
-                              : "endpoint-id"
-                          }
-                          disabled={draftMode}
-                          rules={[
-                            {
-                              required: !draftMode && !isChatEndpoint,
-                              message: "Endpoint ID is required for command invokes.",
-                            },
-                          ]}
-                        />
-                        {!draftMode ? (
-                          <ProFormText
-                            name="serviceOverrideId"
-                            label="Binding override (optional)"
-                            placeholder="Leave empty to use the workspace default binding."
-                          />
-                        ) : null}
-                        {isChatEndpoint ? (
-                          <ProFormText
-                            name="actorId"
-                            label="Existing actor ID"
-                            placeholder="Actor:..."
-                            disabled={draftMode}
-                          />
-                        ) : null}
-                        <ProFormText
-                          name="payloadTypeUrl"
-                          label="Payload type URL"
-                          placeholder="type.googleapis.com/google.protobuf.StringValue"
-                          extra="When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand."
-                        />
-                        <ProFormTextArea
-                          name="payloadBase64"
-                          label="Payload base64 (advanced)"
-                          fieldProps={{ rows: 3 }}
-                          placeholder="Required for custom payload types; leave empty only for StringValue or AppScriptCommand."
-                        />
-                      </>
+                      <Collapse
+                        ghost
+                        items={[
+                          {
+                            key: "advanced",
+                            label: "Advanced endpoint and payload options",
+                            children: (
+                              <div style={compactStackStyle}>
+                                <ProFormText
+                                  name="endpointId"
+                                  label="Endpoint"
+                                  placeholder={
+                                    isChatEndpoint
+                                      ? "chat (or a custom chat endpoint id)"
+                                      : "endpoint-id"
+                                  }
+                                  disabled={draftMode}
+                                  rules={[
+                                    {
+                                      required: !draftMode && !isChatEndpoint,
+                                      message: "Endpoint ID is required for command invokes.",
+                                    },
+                                  ]}
+                                />
+                                {!draftMode ? (
+                                  <ProFormText
+                                    name="serviceOverrideId"
+                                    label="Binding override (optional)"
+                                    placeholder="Leave empty to use the workspace default binding."
+                                  />
+                                ) : null}
+                                {isChatEndpoint ? (
+                                  <ProFormText
+                                    name="actorId"
+                                    label="Existing actor ID"
+                                    placeholder="Actor:..."
+                                    disabled={draftMode}
+                                  />
+                                ) : null}
+                                <ProFormText
+                                  name="payloadTypeUrl"
+                                  label="Payload type URL"
+                                  placeholder="type.googleapis.com/google.protobuf.StringValue"
+                                  extra="When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand."
+                                />
+                                <ProFormTextArea
+                                  name="payloadBase64"
+                                  label="Payload base64 (advanced)"
+                                  fieldProps={{ rows: 3 }}
+                                  placeholder="Required for custom payload types; leave empty only for StringValue or AppScriptCommand."
+                                />
+                              </div>
+                            ),
+                          },
+                        ]}
+                      />
                     )}
                   </ProForm>
                 </div>
