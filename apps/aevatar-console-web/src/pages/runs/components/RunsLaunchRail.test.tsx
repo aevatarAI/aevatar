@@ -60,7 +60,7 @@ describe("RunsLaunchRail", () => {
     );
 
     expect(screen.getByText("Target: direct")).toBeInTheDocument();
-    expect(screen.getByText("Workspace, route, prompt")).toBeInTheDocument();
+    expect(screen.getByText("Workspace, route/default binding, prompt")).toBeInTheDocument();
     expect(
       screen.getByLabelText("Chat route (optional)")
     ).toBeInTheDocument();
@@ -178,6 +178,7 @@ describe("RunsLaunchRail", () => {
 
     expect(screen.getByText("Target: submit")).toBeInTheDocument();
     expect(screen.getAllByText("Command invoke").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Workspace, endpoint, prompt or payload")).toBeInTheDocument();
     expect(screen.queryByLabelText("Payload base64 (advanced)")).toBeNull();
 
     fireEvent.click(screen.getByText("Advanced endpoint and payload options"));

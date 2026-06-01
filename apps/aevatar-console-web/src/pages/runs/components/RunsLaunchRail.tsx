@@ -235,6 +235,7 @@ function resolveRunTargetSummary(input: {
 }): {
   description: string;
   mode: string;
+  required: string;
   target: string;
 } {
   const workspaceId = input.initialFormValues.scopeId || "Workspace not set";
@@ -252,6 +253,7 @@ function resolveRunTargetSummary(input: {
     return {
       description: `${workspaceId} will run the bundled Studio draft before it is published.`,
       mode: "Studio draft",
+      required: "Workspace, draft bundle, prompt",
       target,
     };
   }
@@ -260,16 +262,22 @@ function resolveRunTargetSummary(input: {
     return {
       description: `Continue actor ${input.actorId} in ${workspaceId}.`,
       mode: "Existing actor",
+      required: "Workspace, actor, prompt",
       target,
     };
   }
 
+  const isChatEndpoint = input.activeEndpointKind === "chat";
+
   return {
     description:
-      input.activeEndpointKind === "chat"
+      isChatEndpoint
         ? `${workspaceId} will stream through the selected chat route or workspace default binding.`
         : `${workspaceId} will invoke the selected command endpoint with the current payload.`,
-    mode: input.activeEndpointKind === "chat" ? "Chat stream" : "Command invoke",
+    mode: isChatEndpoint ? "Chat stream" : "Command invoke",
+    required: isChatEndpoint
+      ? "Workspace, route/default binding, prompt"
+      : "Workspace, endpoint, prompt or payload",
     target,
   };
 }
@@ -476,7 +484,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                 <div style={quickMetricStyle}>
                   <Typography.Text style={quickMetricLabelStyle}>Required</Typography.Text>
                   <Typography.Text style={quickMetricValueStyle}>
-                    Workspace, route, prompt
+                    {runTargetSummary.required}
                   </Typography.Text>
                 </div>
                 <div style={quickMetricStyle}>
