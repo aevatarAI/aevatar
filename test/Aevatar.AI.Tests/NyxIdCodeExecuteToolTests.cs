@@ -107,7 +107,7 @@ public class NyxIdCodeExecuteToolTests
         };
         if (servicesContext is not null)
             metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = servicesContext;
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
     }
 
     private static void ClearMetadata()

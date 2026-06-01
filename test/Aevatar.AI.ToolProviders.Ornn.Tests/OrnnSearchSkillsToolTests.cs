@@ -46,7 +46,7 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
             });
@@ -76,7 +76,7 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
             });
@@ -101,7 +101,7 @@ public sealed class OrnnSearchSkillsToolTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
             });

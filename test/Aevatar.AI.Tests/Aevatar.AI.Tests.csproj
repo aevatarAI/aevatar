@@ -44,6 +44,7 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\TestAgentToolContexts.cs" Link="TestAgentToolContexts.cs" />
     <Compile Include="..\Shared\ProjectionActivationPlanProviderTestBase.cs" Link="Shared\ProjectionActivationPlanProviderTestBase.cs" />
   </ItemGroup>
 </Project>

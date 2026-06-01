@@ -542,7 +542,7 @@ public class NyxIdSshExecToolTests
 
     private static void SetMetadata(string token)
     {
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
         });

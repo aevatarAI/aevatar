@@ -357,7 +357,7 @@ public sealed class MainnetResponsesEndpointsTests
             "token");
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
             var substituteTools = await provider.GetSubstituteToolsAsync(context);
             var todoTool = substituteTools.Single(x => x.Name == "TodoWrite");
             var todoResult = await todoTool.ExecuteAsync(
@@ -404,7 +404,7 @@ public sealed class MainnetResponsesEndpointsTests
             "token");
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
             var fetchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebFetch");
             var result = await fetchTool.ExecuteAsync("""{"url":"https://example.com/docs"}""");
 
@@ -444,7 +444,7 @@ public sealed class MainnetResponsesEndpointsTests
             "token");
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
             var searchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebSearch");
             var result = await searchTool.ExecuteAsync("""{"query":"aevatar docs","max_results":3}""");
 
