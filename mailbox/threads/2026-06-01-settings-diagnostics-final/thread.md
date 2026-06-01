@@ -6,7 +6,7 @@ field kind string issue
 field created string 1780301812
 field state string open
 field closed_reason string 
-field phase string implementing
+field phase string blocked
 field human string auto
 field cluster string 2026-06-01-settings-diagnostics-final
 field branch string chore/2026-06-01_fkst-candidate-20260601-2026-06-01-settings-diagnostics-final-r3_from_auto-frontend-dev
