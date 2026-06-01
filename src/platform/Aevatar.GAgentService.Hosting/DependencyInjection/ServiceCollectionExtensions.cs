@@ -66,8 +66,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
-        services.TryAddSingleton<IChatRunActorPort, ChatRunActorAdapter>();
-        services.TryAddSingleton<ChatRunToolCompletionCoordinator>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();

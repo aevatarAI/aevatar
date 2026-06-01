@@ -83,13 +83,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
     // local tool calls; eight rounds matches the bound observed in similar
     // multi-round agent loops in this repo (e.g. SkillRunnerGAgent).
     private const int MaxToolRounds = 8;
-    private readonly ChatRunToolCompletionCoordinator? _chatRunToolCompletionCoordinator;
-
-    public ResponsesCompletionApplicationService(
-        ChatRunToolCompletionCoordinator? chatRunToolCompletionCoordinator = null)
-    {
-        _chatRunToolCompletionCoordinator = chatRunToolCompletionCoordinator;
-    }
 
     public async Task<ResponsesCompletionResult> CollectAsync(
         ILLMProvider provider,
@@ -134,7 +127,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 localToolCalls,
                 messages,
                 round + 1,
-                _chatRunToolCompletionCoordinator,
                 ct);
         }
 
@@ -207,7 +199,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 localToolCalls,
                 messages,
                 round + 1,
-                _chatRunToolCompletionCoordinator,
                 ct);
         }
 
@@ -273,7 +264,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         IReadOnlyList<ToolCall> toolCalls,
         List<ChatMessage> messages,
         int llmRound,
-        ChatRunToolCompletionCoordinator? chatRunToolCompletionCoordinator,
         CancellationToken ct)
     {
         if (request.Tools is not { Count: > 0 })
@@ -300,16 +290,7 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                     var callToolContext = toolContext.WithCallId(toolCall.Id);
                     using (AgentToolContextScope.Push(callToolContext))
                     {
-                        result = ChatRunToolCompletionCoordinator.IsWaitCompleteInvocationTool(toolCall) &&
-                             chatRunToolCompletionCoordinator != null
-                            ? await chatRunToolCompletionCoordinator.ExecuteAsync(
-                                request,
-                                toolCall,
-                                argumentsJson,
-                                (completionRequest, token) => ExecuteChatRunToolAsync(tool, completionRequest, token),
-                                llmRound,
-                                ct)
-                            : await tool.ExecuteAsync(argumentsJson, ct);
+                        result = await ExecuteToolAsync(request, tool, toolCall, argumentsJson, llmRound, ct);
                     }
                 }
                 else
@@ -326,18 +307,14 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         }
     }
 
-    // Refactor (iter290/cluster001): Old pattern: completion orchestration treated every tool as ResultJson-only. New principle: chat-run-aware tools may return typed control fields alongside boundary JSON.
-    private static async Task<ChatRunToolCompletionRequest> ExecuteChatRunToolAsync(
+    private static Task<string> ExecuteToolAsync(
+        LLMRequest request,
         IAgentTool tool,
-        ChatRunToolCompletionRequest request,
-        CancellationToken ct)
-    {
-        if (tool is IChatRunToolCompletionControlExecutor typedExecutor)
-            return await typedExecutor.ExecuteForChatRunAsync(request, ct);
-
-        var resultJson = await tool.ExecuteAsync(request.ArgumentsJson, ct);
-        return request with { ToolExecutionResultJson = resultJson };
-    }
+        ToolCall toolCall,
+        string argumentsJson,
+        int llmRound,
+        CancellationToken ct) =>
+        tool.ExecuteAsync(argumentsJson, ct);
 
     private static async Task<(string Text, TokenUsage? Usage, IReadOnlyList<ToolCall> ToolCalls)> CollectStreamCompletionAsync(
         ILLMProvider provider,

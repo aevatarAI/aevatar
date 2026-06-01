@@ -15,8 +15,11 @@ reserved only. The `ForwardToModel.tool_set_ref + tool_choice_hint` fields
 express tool availability, tool prefill, and the typed voice attach target.
 Tool prefilled arguments must not be interpreted as actor addressing.
 
-D5/D6 describe the later session-owned execution topology. `ChatRunActor` and
-`VoiceSessionActor` are not implemented by this ADR slice. Until that topology
+D5/D6 describe the later session-owned execution topology. `ChatRunActor` is
+not implemented in the current v1 slice; `/v1/responses` `wait=complete`
+therefore returns the accepted/streaming invocation receipt and clients observe
+terminal completion through `aevatar_observe_run` or `aevatar_query_readmodel`.
+`VoiceSessionActor` is also not implemented by this ADR slice. Until that topology
 exists, ordinary `/ws/voice` supports only typed
 `tool_choice_hint.voice_attach_target` attachment; pure model forwarding
 remains fail-closed.
@@ -135,7 +138,7 @@ synchronous await across actor boundaries.
 
 ### D5 — `ChatRunActor` and `VoiceSessionActor` own session state as actors
 
-Two new session-scoped actors are introduced:
+The later topology would introduce session-scoped actors:
 
 - **`ChatRunActor`** for `/v1/responses` and `/v1/messages` SSE sessions.
 - **`VoiceSessionActor`** for `/ws/voice` Realtime sessions.
@@ -242,7 +245,7 @@ Static checks (CI guards):
   Phase 4. A guard script asserts `NeedsLlmReplyEvent.TargetActorId` is no
   longer mutated outside the actor that owns the field's authoritative
   state.
-- `ChatRunActor` and `VoiceSessionActor` substate that tracks sub-run IDs
+- later `ChatRunActor` and `VoiceSessionActor` substate that tracks sub-run IDs
   is a typed proto `repeated` field on actor State, not a
   `Dictionary<,>` field. Existing middleware-state guard (`tools/ci/`)
   scope extends to the new actors.
@@ -282,7 +285,7 @@ Stage 1's tool sources are merged.
 | Stage | Scope | Breaking? |
 |---|---|---|
 | **1** | Implement `aevatar_invoke_gagent` / `_team` / `_workflow` / `_observe_run` / `_query_readmodel` as `IAgentToolSource`. Wire into existing ToolCallLoop. Verify Lark outbound user-scoped path (D7 prerequisite). | No |
-| **2** | Extend `ForwardToModel` proto with `tool_set_ref` + `tool_choice_hint`. Policy authors express GAgent, team, and workflow targets directly as tool-first `ForwardToModel` actions. `ChatRunActor` introduced for SSE sessions. | No |
+| **2** | Extend `ForwardToModel` proto with `tool_set_ref` + `tool_choice_hint`. Policy authors express GAgent, team, and workflow targets directly as tool-first `ForwardToModel` actions. ChatRun-owned SSE session continuation remains deferred. | No |
 | **3** | Delete legacy wire actions and migration path. Reserve old proto tags/names for `ForwardToGAgent`, `ForwardToTeam`, `ForwardToWorkflow`, and `Bypass`; no new policy writer may emit them. | Yes (clients still using legacy actions) |
 | **4** | Remove code paths: `ResponsesEndpoints.cs:779-927`, `AgentRunGAgent.cs:1108-1141`, resolver branches for legacy actions. `/v1/messages` 501 fallback for these actions deleted. | Yes (clients still using legacy actions) |
 | **5** | `VoiceSessionActor` implementation. `/ws/voice` switches from typed attach target to session-owned `ForwardToModel + tool_set_ref` execution. `/ws/voice/{actorId}` dev bypass unaffected. **Blocked by:** VoicePresence.OpenAI GA migration. | Yes (voice clients) |
