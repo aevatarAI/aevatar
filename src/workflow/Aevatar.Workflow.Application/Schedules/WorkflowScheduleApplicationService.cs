@@ -7,13 +7,16 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
     private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-";
     private readonly IWorkflowScheduleActorPort _actorPort;
     private readonly IWorkflowScheduleQueryPort _queryPort;
+    private readonly IWorkflowScheduledDispatchPreparationService _dispatchPreparationService;
 
     public WorkflowScheduleApplicationService(
         IWorkflowScheduleActorPort actorPort,
-        IWorkflowScheduleQueryPort queryPort)
+        IWorkflowScheduleQueryPort queryPort,
+        IWorkflowScheduledDispatchPreparationService dispatchPreparationService)
     {
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+        _dispatchPreparationService = dispatchPreparationService ?? throw new ArgumentNullException(nameof(dispatchPreparationService));
     }
 
     public async Task<WorkflowScheduleMutationReceipt> CreateAsync(
@@ -23,8 +26,13 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         var normalized = NormalizeConfiguration(configuration, requireScheduleId: false);
         ValidateSchedule(normalized);
 
+        var dispatch = await _dispatchPreparationService.PrepareAsync(
+            normalized,
+            BuildScheduleCommandId(normalized.ScheduleId),
+            BuildScheduleCorrelationId(normalized.ScheduleId),
+            ct);
         var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
-        await _actorPort.DispatchConfigureAsync(actorId, normalized, ct);
+        await _actorPort.DispatchConfigureAsync(actorId, normalized, dispatch, ct);
         return new WorkflowScheduleMutationReceipt(normalized.ScheduleId, actorId, Accepted: true);
     }
 
@@ -39,8 +47,13 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             requireScheduleId: true);
         ValidateSchedule(normalized);
 
+        var dispatch = await _dispatchPreparationService.PrepareAsync(
+            normalized,
+            BuildScheduleCommandId(normalized.ScheduleId),
+            BuildScheduleCorrelationId(normalized.ScheduleId),
+            ct);
         var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
-        await _actorPort.DispatchConfigureAsync(actorId, normalized, ct);
+        await _actorPort.DispatchConfigureAsync(actorId, normalized, dispatch, ct);
         return new WorkflowScheduleMutationReceipt(normalized.ScheduleId, actorId, Accepted: true);
     }
 
@@ -158,7 +171,9 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             Prompt = NormalizeRequired(configuration.Prompt, nameof(configuration.Prompt)),
             CronExpression = NormalizeRequired(configuration.CronExpression, nameof(configuration.CronExpression)),
             Timezone = WorkflowScheduleCalculator.NormalizeTimezone(configuration.Timezone),
-            Headers = NormalizeHeaders(configuration.Headers),
+            Headers = AddWorkflowAdapterHeaders(
+                NormalizeHeaders(configuration.Headers),
+                configuration),
             ScopeId = NormalizeNullable(configuration.ScopeId),
             ActorId = NormalizeNullable(configuration.ActorId),
         };
@@ -170,6 +185,12 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         if (!validation.Succeeded)
             throw new ArgumentException(validation.Error, nameof(configuration));
     }
+
+    private static string BuildScheduleCommandId(string scheduleId) =>
+        $"schedule-{scheduleId}-trigger";
+
+    private static string BuildScheduleCorrelationId(string scheduleId) =>
+        $"schedule-{scheduleId}";
 
     private static string NormalizeScheduleId(string? scheduleId)
     {
@@ -212,9 +233,32 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             var normalizedValue = NormalizeOptional(value);
             if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
                 continue;
+            if (WorkflowScheduleAdapterHeaderKeys.IsAdapterKey(normalizedKey))
+                continue;
 
             normalized[normalizedKey] = normalizedValue;
         }
+
+        return normalized;
+    }
+
+    private static IReadOnlyDictionary<string, string> AddWorkflowAdapterHeaders(
+        IReadOnlyDictionary<string, string> headers,
+        WorkflowScheduleConfiguration configuration)
+    {
+        var normalized = new Dictionary<string, string>(headers, StringComparer.Ordinal)
+        {
+            [WorkflowScheduleAdapterHeaderKeys.WorkflowName] = NormalizeRequired(configuration.WorkflowName, nameof(configuration.WorkflowName)),
+            [WorkflowScheduleAdapterHeaderKeys.Prompt] = NormalizeRequired(configuration.Prompt, nameof(configuration.Prompt)),
+        };
+
+        var scopeId = NormalizeNullable(configuration.ScopeId);
+        if (scopeId != null)
+            normalized[WorkflowScheduleAdapterHeaderKeys.ScopeId] = scopeId;
+
+        var sourceActorId = NormalizeNullable(configuration.ActorId);
+        if (sourceActorId != null)
+            normalized[WorkflowScheduleAdapterHeaderKeys.SourceActorId] = sourceActorId;
 
         return normalized;
     }

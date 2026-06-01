@@ -1,6 +1,6 @@
 namespace Aevatar.Workflow.Infrastructure.Schedules;
 
-internal static class WorkflowScheduleActorId
+internal static class ScheduledDispatchActorId
 {
     public static string Format(string scheduleId)
     {
@@ -11,6 +11,6 @@ internal static class WorkflowScheduleActorId
         if (!normalized.All(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or ':' or '.'))
             throw new ArgumentException("Schedule id may only contain letters, digits, '.', '_', ':', and '-'.", nameof(scheduleId));
 
-        return $"workflow-schedule:{normalized}";
+        return $"scheduled-dispatch:{normalized}";
     }
 }

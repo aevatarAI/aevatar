@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
 
         // Replace the Noop fallback from Application layer with the real file export adapter.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());
+        services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
         services.TryAddSingleton<IWorkflowScheduleActorPort, WorkflowScheduleActorPort>();
         services.TryAddSingleton<WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionProvisioningPort>(sp =>

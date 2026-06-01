@@ -1,8 +1,8 @@
-using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -10,16 +10,15 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core;
 
-public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
+public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 {
-    private const string NextFireCallbackId = "workflow-schedule-next-fire";
+    private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
-    private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> _workflowRunService;
+    private readonly IActorDispatchPort _dispatchPort;
 
-    public WorkflowScheduleGAgent(
-        ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> workflowRunService)
+    public ScheduledDispatchGAgent(IActorDispatchPort dispatchPort)
     {
-        _workflowRunService = workflowRunService ?? throw new ArgumentNullException(nameof(workflowRunService));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -33,40 +32,39 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
     {
         var scheduleId = string.IsNullOrWhiteSpace(State.ScheduleId) ? Id : State.ScheduleId;
         var status = State.Enabled ? "enabled" : "disabled";
-        return Task.FromResult($"WorkflowScheduleGAgent[{scheduleId}] {status}");
+        return Task.FromResult($"ScheduledDispatchGAgent[{scheduleId}] {status}");
     }
 
-    protected override WorkflowScheduleState TransitionState(WorkflowScheduleState current, IMessage evt) =>
+    protected override ScheduledDispatchState TransitionState(ScheduledDispatchState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<WorkflowScheduleConfiguredEvent>(ApplyConfigured)
-            .On<WorkflowScheduleEnabledEvent>(ApplyEnabled)
-            .On<WorkflowScheduleDisabledEvent>(ApplyDisabled)
-            .On<WorkflowScheduleNextFireScheduledEvent>(ApplyNextFireScheduled)
-            .On<WorkflowScheduleFireStartedEvent>(ApplyFireStarted)
-            .On<WorkflowScheduleFireDispatchedEvent>(ApplyFireDispatched)
-            .On<WorkflowScheduleFireFailedEvent>(ApplyFireFailed)
+            .On<ScheduledDispatchConfiguredEvent>(ApplyConfigured)
+            .On<ScheduledDispatchEnabledEvent>(ApplyEnabled)
+            .On<ScheduledDispatchDisabledEvent>(ApplyDisabled)
+            .On<ScheduledDispatchNextFireScheduledEvent>(ApplyNextFireScheduled)
+            .On<ScheduledDispatchFireStartedEvent>(ApplyFireStarted)
+            .On<ScheduledDispatchFireDispatchedEvent>(ApplyFireDispatched)
+            .On<ScheduledDispatchFireFailedEvent>(ApplyFireFailed)
             .OrCurrent();
 
     [EventHandler]
-    public async Task HandleConfigureAsync(WorkflowScheduleConfigureCommand command)
+    public async Task HandleConfigureAsync(ScheduledDispatchConfigureCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        EnsureValidDefinition(command.WorkflowName, command.Prompt, command.CronExpression, command.Timezone);
+        EnsureValidDefinition(command.TargetActorId, command.TriggerEnvelope, command.CronExpression, command.Timezone);
 
         var now = DateTimeOffset.UtcNow;
-        var configured = new WorkflowScheduleConfiguredEvent
+        var configured = new ScheduledDispatchConfiguredEvent
         {
             ScheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId)),
             DisplayName = NormalizeOptional(command.DisplayName),
-            WorkflowName = NormalizeRequired(command.WorkflowName, nameof(command.WorkflowName)),
-            Prompt = NormalizeRequired(command.Prompt, nameof(command.Prompt)),
+            TargetActorId = NormalizeRequired(command.TargetActorId, nameof(command.TargetActorId)),
+            TriggerEnvelope = command.TriggerEnvelope.Clone(),
             CronExpression = NormalizeRequired(command.CronExpression, nameof(command.CronExpression)),
-            Timezone = WorkflowScheduleCalculator.NormalizeTimezone(command.Timezone),
+            Timezone = ScheduledDispatchCalculator.NormalizeTimezone(command.Timezone),
             Enabled = command.Enabled,
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
-            ScopeId = NormalizeOptional(command.ScopeId),
-            ActorId = NormalizeOptional(command.ActorId),
+            PayloadTypeUrl = ResolvePayloadTypeUrl(command.TriggerEnvelope),
         };
         foreach (var (key, value) in NormalizeHeaders(command.Headers))
             configured.Headers[key] = value;
@@ -81,17 +79,18 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
     }
 
     [EventHandler]
-    public async Task HandleEnableAsync(WorkflowScheduleEnableCommand command)
+    public async Task HandleEnableAsync(ScheduledDispatchEnableCommand command)
     {
-        if (string.IsNullOrWhiteSpace(State.WorkflowName) ||
-            string.IsNullOrWhiteSpace(State.Prompt) ||
+        if (string.IsNullOrWhiteSpace(State.TargetActorId) ||
+            State.TriggerEnvelope == null ||
+            State.TriggerEnvelope.Payload == null ||
             string.IsNullOrWhiteSpace(State.CronExpression))
         {
-            Logger.LogWarning("Workflow schedule {ActorId} enable ignored because it is not configured.", Id);
+            Logger.LogWarning("Scheduled dispatch {ActorId} enable ignored because it is not configured.", Id);
             return;
         }
 
-        await PersistDomainEventAsync(new WorkflowScheduleEnabledEvent
+        await PersistDomainEventAsync(new ScheduledDispatchEnabledEvent
         {
             Reason = NormalizeOptional(command.Reason),
             EnabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -100,10 +99,10 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
     }
 
     [EventHandler]
-    public async Task HandleDisableAsync(WorkflowScheduleDisableCommand command)
+    public async Task HandleDisableAsync(ScheduledDispatchDisableCommand command)
     {
         await CancelNextFireLeaseAsync(CancellationToken.None);
-        await PersistDomainEventAsync(new WorkflowScheduleDisabledEvent
+        await PersistDomainEventAsync(new ScheduledDispatchDisabledEvent
         {
             Reason = NormalizeOptional(command.Reason),
             DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -111,33 +110,33 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
     }
 
     [EventHandler(AllowSelfHandling = true)]
-    public Task HandleFireAsync(WorkflowScheduleFireCommand command) =>
+    public Task HandleFireAsync(ScheduledDispatchFireCommand command) =>
         HandleFireAsync(command, ActiveInboundEnvelope, CancellationToken.None);
 
     internal async Task HandleFireAsync(
-        WorkflowScheduleFireCommand command,
+        ScheduledDispatchFireCommand command,
         EventEnvelope? inboundEnvelope,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(command);
         if (!command.Manual && !State.Enabled)
         {
-            Logger.LogInformation("Workflow schedule {ActorId} ignored fire because it is disabled.", Id);
+            Logger.LogInformation("Scheduled dispatch {ActorId} ignored fire because it is disabled.", Id);
             return;
         }
 
         if (!command.Manual && !MatchesNextFireLease(inboundEnvelope))
         {
-            Logger.LogInformation("Workflow schedule {ActorId} ignored stale fire callback.", Id);
+            Logger.LogInformation("Scheduled dispatch {ActorId} ignored stale fire callback.", Id);
             return;
         }
 
         var scheduledFireAt = ResolveScheduledFireAt(command);
-        var idempotencyKey = WorkflowScheduleCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
         if (State.FireRecords.ContainsKey(idempotencyKey))
         {
             Logger.LogInformation(
-                "Workflow schedule {ActorId} ignored duplicate fire {IdempotencyKey}.",
+                "Scheduled dispatch {ActorId} ignored duplicate fire {IdempotencyKey}.",
                 Id,
                 idempotencyKey);
             if (!command.Manual)
@@ -145,7 +144,7 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
             return;
         }
 
-        await PersistDomainEventAsync(new WorkflowScheduleFireStartedEvent
+        await PersistDomainEventAsync(new ScheduledDispatchFireStartedEvent
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             StartedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -155,33 +154,34 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
 
         try
         {
-            var dispatch = await _workflowRunService.DispatchAsync(BuildWorkflowRunRequest(scheduledFireAt, idempotencyKey), ct);
-            if (!dispatch.Succeeded || dispatch.Receipt == null)
+            var envelope = BuildDispatchEnvelope(scheduledFireAt, idempotencyKey);
+            var admission = await _dispatchPort.DispatchAsync(State.TargetActorId, envelope, ct);
+            if (!admission.Accepted)
             {
                 await PersistFireFailedAsync(
                     scheduledFireAt,
                     idempotencyKey,
-                    $"Workflow dispatch failed with start error '{dispatch.Error}'.",
+                    "Scheduled dispatch was not accepted.",
                     command.Manual,
                     ct);
             }
             else
             {
-                await PersistDomainEventAsync(new WorkflowScheduleFireDispatchedEvent
+                await PersistDomainEventAsync(new ScheduledDispatchFireDispatchedEvent
                 {
                     ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
                     DispatchedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     IdempotencyKey = idempotencyKey,
-                    RunActorId = dispatch.Receipt.ActorId,
-                    CommandId = dispatch.Receipt.CommandId,
-                    CorrelationId = dispatch.Receipt.CorrelationId,
+                    TargetActorId = admission.ActorId,
+                    CommandId = admission.CommandId,
+                    CorrelationId = admission.CorrelationId,
                     Manual = command.Manual,
                 }, ct);
             }
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Workflow schedule {ActorId} dispatch failed.", Id);
+            Logger.LogWarning(ex, "Scheduled dispatch {ActorId} dispatch failed.", Id);
             await PersistFireFailedAsync(scheduledFireAt, idempotencyKey, ex.Message, command.Manual, CancellationToken.None);
         }
 
@@ -196,33 +196,47 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         bool manual,
         CancellationToken ct)
     {
-        await PersistDomainEventAsync(new WorkflowScheduleFireFailedEvent
+        await PersistDomainEventAsync(new ScheduledDispatchFireFailedEvent
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             FailedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             IdempotencyKey = idempotencyKey,
-            Error = string.IsNullOrWhiteSpace(error) ? "Workflow dispatch failed." : error.Trim(),
+            Error = string.IsNullOrWhiteSpace(error) ? "Scheduled dispatch failed." : error.Trim(),
             Manual = manual,
         }, ct);
     }
 
-    private WorkflowChatRunRequest BuildWorkflowRunRequest(DateTimeOffset scheduledFireAtUtc, string idempotencyKey)
+    private EventEnvelope BuildDispatchEnvelope(DateTimeOffset scheduledFireAtUtc, string idempotencyKey)
     {
+        var envelope = State.TriggerEnvelope?.Clone()
+            ?? throw new InvalidOperationException("Scheduled dispatch trigger envelope is not configured.");
+        if (envelope.Payload == null)
+            throw new InvalidOperationException("Scheduled dispatch trigger envelope payload is not configured.");
+
+        envelope.Id = idempotencyKey;
+        envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
+        envelope.Route = EnvelopeRouteSemantics.CreateDirect(ResolveScheduleId(), State.TargetActorId);
+        envelope.Runtime = null;
+        var propagation = envelope.EnsurePropagation();
+        if (string.IsNullOrWhiteSpace(propagation.CorrelationId))
+            propagation.CorrelationId = idempotencyKey;
+
         var headers = new Dictionary<string, string>(State.Headers, StringComparer.Ordinal)
         {
-            [WorkflowRunCommandMetadataKeys.IdempotencyKey] = idempotencyKey,
-            ["workflow.schedule_id"] = ResolveScheduleId(),
-            ["workflow.scheduled_fire_at_utc"] = scheduledFireAtUtc.ToUniversalTime().ToString("O"),
+            [ScheduledDispatchMetadataKeys.ScheduleId] = ResolveScheduleId(),
+            [ScheduledDispatchMetadataKeys.FireAtUtc] = scheduledFireAtUtc.ToUniversalTime().ToString("O"),
+            [ScheduledDispatchMetadataKeys.IdempotencyKey] = idempotencyKey,
         };
 
-        return new WorkflowChatRunRequest(
-            Prompt: State.Prompt ?? string.Empty,
-            Source: string.IsNullOrWhiteSpace(State.ActorId)
-                ? WorkflowChatSource.CatalogWorkflow(State.WorkflowName)
-                : WorkflowChatSource.DefinitionActor(State.ActorId, State.WorkflowName),
-            SessionId: idempotencyKey,
-            Metadata: headers,
-            ScopeId: string.IsNullOrWhiteSpace(State.ScopeId) ? null : State.ScopeId);
+        if (envelope.Payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
+        {
+            chatRequest.SessionId = idempotencyKey;
+            foreach (var (key, value) in headers)
+                chatRequest.Metadata[key] = value;
+            envelope.Payload = Any.Pack(chatRequest);
+        }
+
+        return envelope;
     }
 
     private async Task EnsureNextFireScheduledAsync(DateTimeOffset fromUtc, CancellationToken ct)
@@ -230,39 +244,39 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         if (!State.Enabled || string.IsNullOrWhiteSpace(State.CronExpression))
             return;
 
-        if (!WorkflowScheduleCalculator.TryGetNextOccurrence(
+        if (!ScheduledDispatchCalculator.TryGetNextOccurrence(
                 State.CronExpression,
                 State.Timezone,
                 fromUtc,
                 out var nextFireAtUtc,
                 out var error))
         {
-            Logger.LogWarning("Workflow schedule {ActorId} could not compute next fire: {Error}", Id, error);
+            Logger.LogWarning("Scheduled dispatch {ActorId} could not compute next fire: {Error}", Id, error);
             return;
         }
 
         await CancelNextFireLeaseAsync(ct);
-        var dueTime = WorkflowScheduleCalculator.ComputeDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
+        var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
         var lease = await ScheduleSelfDurableTimeoutAsync(
             NextFireCallbackId,
             dueTime,
-            new WorkflowScheduleFireCommand
+            new ScheduledDispatchFireCommand
             {
                 ScheduledFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
                 Manual = false,
             },
             ct: ct);
 
-        await PersistDomainEventAsync(new WorkflowScheduleNextFireScheduledEvent
+        await PersistDomainEventAsync(new ScheduledDispatchNextFireScheduledEvent
         {
             NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
-            Lease = WorkflowScheduleRuntimeCallbackLeaseStateCodec.ToState(lease),
+            Lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToState(lease),
         }, ct);
     }
 
     private async Task CancelNextFireLeaseAsync(CancellationToken ct)
     {
-        var lease = WorkflowScheduleRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         if (lease == null)
             return;
 
@@ -274,11 +288,11 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         if (envelope == null)
             return false;
 
-        var lease = WorkflowScheduleRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
     }
 
-    private DateTimeOffset ResolveScheduledFireAt(WorkflowScheduleFireCommand command)
+    private DateTimeOffset ResolveScheduledFireAt(ScheduledDispatchFireCommand command)
     {
         if (command.ScheduledFireAt != null)
             return command.ScheduledFireAt.ToDateTimeOffset().ToUniversalTime();
@@ -290,16 +304,17 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         string.IsNullOrWhiteSpace(State.ScheduleId) ? Id : State.ScheduleId;
 
     private static void EnsureValidDefinition(
-        string workflowName,
-        string prompt,
+        string targetActorId,
+        EventEnvelope? triggerEnvelope,
         string cronExpression,
         string timezone)
     {
-        _ = NormalizeRequired(workflowName, nameof(workflowName));
-        _ = NormalizeRequired(prompt, nameof(prompt));
+        _ = NormalizeRequired(targetActorId, nameof(targetActorId));
+        if (triggerEnvelope == null || triggerEnvelope.Payload == null)
+            throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
         _ = NormalizeRequired(cronExpression, nameof(cronExpression));
 
-        if (!WorkflowScheduleCalculator.TryGetNextOccurrence(
+        if (!ScheduledDispatchCalculator.TryGetNextOccurrence(
                 cronExpression,
                 timezone,
                 DateTimeOffset.UtcNow,
@@ -310,9 +325,9 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         }
     }
 
-    private WorkflowScheduleState ApplyConfigured(
-        WorkflowScheduleState current,
-        WorkflowScheduleConfiguredEvent evt)
+    private ScheduledDispatchState ApplyConfigured(
+        ScheduledDispatchState current,
+        ScheduledDispatchConfiguredEvent evt)
     {
         var next = current.Clone();
         var configuredAt = evt.ConfiguredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
@@ -325,17 +340,16 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
 
         next.ScheduleId = scheduleId;
         next.DisplayName = evt.DisplayName ?? string.Empty;
-        next.WorkflowName = evt.WorkflowName ?? string.Empty;
-        next.Prompt = evt.Prompt ?? string.Empty;
+        next.TargetActorId = evt.TargetActorId ?? string.Empty;
+        next.TriggerEnvelope = evt.TriggerEnvelope?.Clone();
         next.CronExpression = evt.CronExpression ?? string.Empty;
-        next.Timezone = WorkflowScheduleCalculator.NormalizeTimezone(evt.Timezone);
+        next.Timezone = ScheduledDispatchCalculator.NormalizeTimezone(evt.Timezone);
         next.Enabled = evt.Enabled;
         next.UpdatedAt = configuredAt;
+        next.PayloadTypeUrl = evt.PayloadTypeUrl ?? ResolvePayloadTypeUrl(evt.TriggerEnvelope);
         next.Headers.Clear();
         foreach (var (key, value) in NormalizeHeaders(evt.Headers))
             next.Headers[key] = value;
-        next.ScopeId = evt.ScopeId ?? string.Empty;
-        next.ActorId = evt.ActorId ?? string.Empty;
         if (!next.Enabled)
         {
             next.NextFireAt = null;
@@ -345,7 +359,7 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         return next;
     }
 
-    private WorkflowScheduleState ApplyEnabled(WorkflowScheduleState current, WorkflowScheduleEnabledEvent evt)
+    private ScheduledDispatchState ApplyEnabled(ScheduledDispatchState current, ScheduledDispatchEnabledEvent evt)
     {
         var next = current.Clone();
         next.Enabled = true;
@@ -353,7 +367,7 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         return next;
     }
 
-    private WorkflowScheduleState ApplyDisabled(WorkflowScheduleState current, WorkflowScheduleDisabledEvent evt)
+    private ScheduledDispatchState ApplyDisabled(ScheduledDispatchState current, ScheduledDispatchDisabledEvent evt)
     {
         var next = current.Clone();
         next.Enabled = false;
@@ -363,9 +377,9 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         return next;
     }
 
-    private static WorkflowScheduleState ApplyNextFireScheduled(
-        WorkflowScheduleState current,
-        WorkflowScheduleNextFireScheduledEvent evt)
+    private static ScheduledDispatchState ApplyNextFireScheduled(
+        ScheduledDispatchState current,
+        ScheduledDispatchNextFireScheduledEvent evt)
     {
         var next = current.Clone();
         next.NextFireAt = evt.NextFireAt?.ToDateTimeOffset();
@@ -374,54 +388,55 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         return next;
     }
 
-    private WorkflowScheduleState ApplyFireStarted(
-        WorkflowScheduleState current,
-        WorkflowScheduleFireStartedEvent evt)
+    private ScheduledDispatchState ApplyFireStarted(
+        ScheduledDispatchState current,
+        ScheduledDispatchFireStartedEvent evt)
     {
         var next = current.Clone();
         next.LastFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
         next.LastError = string.Empty;
         next.UpdatedAt = evt.StartedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
-        UpsertFireRecord(next, evt.IdempotencyKey, new WorkflowScheduleFireRecordState
+        UpsertFireRecord(next, evt.IdempotencyKey, new ScheduledDispatchFireRecordState
         {
             ScheduledFireAt = evt.ScheduledFireAt?.Clone(),
             CompletedAt = evt.StartedAt?.Clone(),
             IdempotencyKey = evt.IdempotencyKey ?? string.Empty,
             Manual = evt.Manual,
-            Status = WorkflowScheduleFireStatusState.Started,
+            Status = ScheduledDispatchFireStatusState.Started,
         });
         return next;
     }
 
-    private WorkflowScheduleState ApplyFireDispatched(
-        WorkflowScheduleState current,
-        WorkflowScheduleFireDispatchedEvent evt)
+    private ScheduledDispatchState ApplyFireDispatched(
+        ScheduledDispatchState current,
+        ScheduledDispatchFireDispatchedEvent evt)
     {
         var next = current.Clone();
         next.LastFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
-        next.LastRunActorId = evt.RunActorId ?? string.Empty;
+        next.LastTargetActorId = evt.TargetActorId ?? string.Empty;
+        next.LastAdmissionActorId = evt.TargetActorId ?? string.Empty;
         next.LastCommandId = evt.CommandId ?? string.Empty;
         next.LastCorrelationId = evt.CorrelationId ?? string.Empty;
         next.LastError = string.Empty;
         next.FireCount++;
         next.UpdatedAt = evt.DispatchedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
-        UpsertFireRecord(next, evt.IdempotencyKey, new WorkflowScheduleFireRecordState
+        UpsertFireRecord(next, evt.IdempotencyKey, new ScheduledDispatchFireRecordState
         {
             ScheduledFireAt = evt.ScheduledFireAt?.Clone(),
             CompletedAt = evt.DispatchedAt?.Clone(),
             IdempotencyKey = evt.IdempotencyKey ?? string.Empty,
-            RunActorId = evt.RunActorId ?? string.Empty,
+            TargetActorId = evt.TargetActorId ?? string.Empty,
             CommandId = evt.CommandId ?? string.Empty,
             CorrelationId = evt.CorrelationId ?? string.Empty,
             Manual = evt.Manual,
-            Status = WorkflowScheduleFireStatusState.Dispatched,
+            Status = ScheduledDispatchFireStatusState.Dispatched,
         });
         return next;
     }
 
-    private WorkflowScheduleState ApplyFireFailed(
-        WorkflowScheduleState current,
-        WorkflowScheduleFireFailedEvent evt)
+    private ScheduledDispatchState ApplyFireFailed(
+        ScheduledDispatchState current,
+        ScheduledDispatchFireFailedEvent evt)
     {
         var next = current.Clone();
         next.LastFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
@@ -429,22 +444,22 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         next.FireCount++;
         next.FailureCount++;
         next.UpdatedAt = evt.FailedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
-        UpsertFireRecord(next, evt.IdempotencyKey, new WorkflowScheduleFireRecordState
+        UpsertFireRecord(next, evt.IdempotencyKey, new ScheduledDispatchFireRecordState
         {
             ScheduledFireAt = evt.ScheduledFireAt?.Clone(),
             CompletedAt = evt.FailedAt?.Clone(),
             IdempotencyKey = evt.IdempotencyKey ?? string.Empty,
             Error = evt.Error ?? string.Empty,
             Manual = evt.Manual,
-            Status = WorkflowScheduleFireStatusState.Failed,
+            Status = ScheduledDispatchFireStatusState.Failed,
         });
         return next;
     }
 
     private static void UpsertFireRecord(
-        WorkflowScheduleState state,
+        ScheduledDispatchState state,
         string idempotencyKey,
-        WorkflowScheduleFireRecordState record)
+        ScheduledDispatchFireRecordState record)
     {
         if (string.IsNullOrWhiteSpace(idempotencyKey))
             return;
@@ -491,4 +506,7 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
 
         return normalized;
     }
+
+    private static string ResolvePayloadTypeUrl(EventEnvelope? envelope) =>
+        envelope?.Payload?.TypeUrl ?? string.Empty;
 }

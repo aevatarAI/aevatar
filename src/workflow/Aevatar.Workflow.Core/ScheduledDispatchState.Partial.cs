@@ -3,7 +3,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core;
 
-public sealed partial class WorkflowScheduleState
+public sealed partial class ScheduledDispatchState
 {
     public DateTimeOffset CreatedAt
     {
@@ -36,25 +36,25 @@ public sealed partial class WorkflowScheduleState
         value == null ? default : value.ToDateTimeOffset();
 }
 
-internal static class WorkflowScheduleRuntimeCallbackLeaseStateCodec
+internal static class ScheduledDispatchRuntimeCallbackLeaseStateCodec
 {
-    public static WorkflowScheduleRuntimeCallbackLeaseState? ToState(RuntimeCallbackLease? lease)
+    public static ScheduledDispatchRuntimeCallbackLeaseState? ToState(RuntimeCallbackLease? lease)
     {
         if (lease == null)
             return null;
 
-        return new WorkflowScheduleRuntimeCallbackLeaseState
+        return new ScheduledDispatchRuntimeCallbackLeaseState
         {
             ActorId = lease.ActorId,
             CallbackId = lease.CallbackId,
             Generation = lease.Generation,
             Backend = lease.Backend == RuntimeCallbackBackend.Dedicated
-                ? WorkflowScheduleRuntimeCallbackBackendState.Dedicated
-                : WorkflowScheduleRuntimeCallbackBackendState.InMemory,
+                ? ScheduledDispatchRuntimeCallbackBackendState.Dedicated
+                : ScheduledDispatchRuntimeCallbackBackendState.InMemory,
         };
     }
 
-    public static RuntimeCallbackLease? ToRuntime(WorkflowScheduleRuntimeCallbackLeaseState? state)
+    public static RuntimeCallbackLease? ToRuntime(ScheduledDispatchRuntimeCallbackLeaseState? state)
     {
         if (state == null || string.IsNullOrWhiteSpace(state.ActorId) || string.IsNullOrWhiteSpace(state.CallbackId))
             return null;
@@ -63,7 +63,7 @@ internal static class WorkflowScheduleRuntimeCallbackLeaseStateCodec
             state.ActorId,
             state.CallbackId,
             state.Generation,
-            state.Backend == WorkflowScheduleRuntimeCallbackBackendState.Dedicated
+            state.Backend == ScheduledDispatchRuntimeCallbackBackendState.Dedicated
                 ? RuntimeCallbackBackend.Dedicated
                 : RuntimeCallbackBackend.InMemory);
     }

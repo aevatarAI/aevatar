@@ -3,13 +3,14 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Core";
 
 import "google/protobuf/timestamp.proto";
+import "agent_messages.proto";
 
-message WorkflowScheduleState
+message ScheduledDispatchState
 {
   string schedule_id = 1;
   string display_name = 2;
-  string workflow_name = 3;
-  string prompt = 4;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
   string cron_expression = 5;
   string timezone = 6;
   bool enabled = 7;
@@ -17,97 +18,95 @@ message WorkflowScheduleState
   google.protobuf.Timestamp updated_at_utc_value = 9;
   google.protobuf.Timestamp next_fire_at_utc_value = 10;
   google.protobuf.Timestamp last_fire_at_utc_value = 11;
-  string last_run_actor_id = 12;
+  string last_target_actor_id = 12;
   string last_command_id = 13;
   string last_correlation_id = 14;
   string last_error = 15;
   int32 fire_count = 16;
   int32 failure_count = 17;
   map<string, string> headers = 18;
-  string scope_id = 19;
-  string actor_id = 20;
-  WorkflowScheduleRuntimeCallbackLeaseState next_fire_lease = 21;
-  map<string, WorkflowScheduleFireRecordState> fire_records = 22;
+  string payload_type_url = 19;
+  string last_admission_actor_id = 20;
+  ScheduledDispatchRuntimeCallbackLeaseState next_fire_lease = 21;
+  map<string, ScheduledDispatchFireRecordState> fire_records = 22;
 }
 
-enum WorkflowScheduleRuntimeCallbackBackendState
+enum ScheduledDispatchRuntimeCallbackBackendState
 {
-  WORKFLOW_SCHEDULE_RUNTIME_CALLBACK_BACKEND_STATE_IN_MEMORY = 0;
-  WORKFLOW_SCHEDULE_RUNTIME_CALLBACK_BACKEND_STATE_DEDICATED = 1;
+  SCHEDULED_DISPATCH_RUNTIME_CALLBACK_BACKEND_STATE_IN_MEMORY = 0;
+  SCHEDULED_DISPATCH_RUNTIME_CALLBACK_BACKEND_STATE_DEDICATED = 1;
 }
 
-message WorkflowScheduleRuntimeCallbackLeaseState
+message ScheduledDispatchRuntimeCallbackLeaseState
 {
   string actor_id = 1;
   string callback_id = 2;
   int64 generation = 3;
-  WorkflowScheduleRuntimeCallbackBackendState backend = 4;
+  ScheduledDispatchRuntimeCallbackBackendState backend = 4;
 }
 
-message WorkflowScheduleConfigureCommand
+message ScheduledDispatchConfigureCommand
 {
   string schedule_id = 1;
   string display_name = 2;
-  string workflow_name = 3;
-  string prompt = 4;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
   string cron_expression = 5;
   string timezone = 6;
   bool enabled = 7;
   map<string, string> headers = 8;
-  string scope_id = 9;
-  string actor_id = 10;
+  string payload_type_url = 9;
 }
 
-message WorkflowScheduleConfiguredEvent
+message ScheduledDispatchConfiguredEvent
 {
   string schedule_id = 1;
   string display_name = 2;
-  string workflow_name = 3;
-  string prompt = 4;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
   string cron_expression = 5;
   string timezone = 6;
   bool enabled = 7;
   google.protobuf.Timestamp configured_at = 8;
   map<string, string> headers = 9;
-  string scope_id = 10;
-  string actor_id = 11;
+  string payload_type_url = 10;
 }
 
-message WorkflowScheduleEnableCommand
+message ScheduledDispatchEnableCommand
 {
   string reason = 1;
 }
 
-message WorkflowScheduleDisableCommand
+message ScheduledDispatchDisableCommand
 {
   string reason = 1;
 }
 
-message WorkflowScheduleEnabledEvent
+message ScheduledDispatchEnabledEvent
 {
   string reason = 1;
   google.protobuf.Timestamp enabled_at = 2;
 }
 
-message WorkflowScheduleDisabledEvent
+message ScheduledDispatchDisabledEvent
 {
   string reason = 1;
   google.protobuf.Timestamp disabled_at = 2;
 }
 
-message WorkflowScheduleNextFireScheduledEvent
+message ScheduledDispatchNextFireScheduledEvent
 {
   google.protobuf.Timestamp next_fire_at = 1;
-  WorkflowScheduleRuntimeCallbackLeaseState lease = 2;
+  ScheduledDispatchRuntimeCallbackLeaseState lease = 2;
 }
 
-message WorkflowScheduleFireCommand
+message ScheduledDispatchFireCommand
 {
   google.protobuf.Timestamp scheduled_fire_at = 1;
   bool manual = 2;
 }
 
-message WorkflowScheduleFireStartedEvent
+message ScheduledDispatchFireStartedEvent
 {
   google.protobuf.Timestamp scheduled_fire_at = 1;
   google.protobuf.Timestamp started_at = 2;
@@ -115,18 +114,18 @@ message WorkflowScheduleFireStartedEvent
   bool manual = 4;
 }
 
-message WorkflowScheduleFireDispatchedEvent
+message ScheduledDispatchFireDispatchedEvent
 {
   google.protobuf.Timestamp scheduled_fire_at = 1;
   google.protobuf.Timestamp dispatched_at = 2;
   string idempotency_key = 3;
-  string run_actor_id = 4;
+  string target_actor_id = 4;
   string command_id = 5;
   string correlation_id = 6;
   bool manual = 7;
 }
 
-message WorkflowScheduleFireFailedEvent
+message ScheduledDispatchFireFailedEvent
 {
   google.protobuf.Timestamp scheduled_fire_at = 1;
   google.protobuf.Timestamp failed_at = 2;
@@ -135,22 +134,22 @@ message WorkflowScheduleFireFailedEvent
   bool manual = 5;
 }
 
-message WorkflowScheduleFireRecordState
+message ScheduledDispatchFireRecordState
 {
   google.protobuf.Timestamp scheduled_fire_at = 1;
   google.protobuf.Timestamp completed_at = 2;
   string idempotency_key = 3;
-  string run_actor_id = 4;
+  string target_actor_id = 4;
   string command_id = 5;
   string correlation_id = 6;
   string error = 7;
   bool manual = 8;
-  WorkflowScheduleFireStatusState status = 9;
+  ScheduledDispatchFireStatusState status = 9;
 }
 
-enum WorkflowScheduleFireStatusState
+enum ScheduledDispatchFireStatusState
 {
-  WORKFLOW_SCHEDULE_FIRE_STATUS_STATE_STARTED = 0;
-  WORKFLOW_SCHEDULE_FIRE_STATUS_STATE_DISPATCHED = 1;
-  WORKFLOW_SCHEDULE_FIRE_STATUS_STATE_FAILED = 2;
+  SCHEDULED_DISPATCH_FIRE_STATUS_STATE_STARTED = 0;
+  SCHEDULED_DISPATCH_FIRE_STATUS_STATE_DISPATCHED = 1;
+  SCHEDULED_DISPATCH_FIRE_STATUS_STATE_FAILED = 2;
 }

@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Projection.Projectors;
@@ -23,7 +24,7 @@ public sealed class WorkflowScheduleCurrentStateProjector
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        if (!CommittedStateEventEnvelope.TryUnpackState<WorkflowScheduleState>(
+        if (!CommittedStateEventEnvelope.TryUnpackState<ScheduledDispatchState>(
                 envelope,
                 out _,
                 out var stateEvent,
@@ -43,7 +44,7 @@ public sealed class WorkflowScheduleCurrentStateProjector
         WorkflowExecutionMaterializationContext context,
         EventEnvelope envelope,
         StateEvent stateEvent,
-        WorkflowScheduleState state)
+        ScheduledDispatchState state)
     {
         var document = new WorkflowScheduleDocument
         {
@@ -51,19 +52,19 @@ public sealed class WorkflowScheduleCurrentStateProjector
             ActorId = context.RootActorId,
             ScheduleId = string.IsNullOrWhiteSpace(state.ScheduleId) ? context.RootActorId : state.ScheduleId,
             DisplayName = state.DisplayName ?? string.Empty,
-            WorkflowName = state.WorkflowName ?? string.Empty,
-            Prompt = state.Prompt ?? string.Empty,
+            WorkflowName = GetHeader(state, WorkflowScheduleAdapterHeaderKeys.WorkflowName),
+            Prompt = GetHeader(state, WorkflowScheduleAdapterHeaderKeys.Prompt),
             CronExpression = state.CronExpression ?? string.Empty,
             Timezone = state.Timezone ?? string.Empty,
             Enabled = state.Enabled,
-            LastRunActorId = state.LastRunActorId ?? string.Empty,
+            LastRunActorId = state.LastTargetActorId ?? string.Empty,
             LastCommandId = state.LastCommandId ?? string.Empty,
             LastCorrelationId = state.LastCorrelationId ?? string.Empty,
             LastError = state.LastError ?? string.Empty,
             FireCount = state.FireCount,
             FailureCount = state.FailureCount,
-            ScopeId = state.ScopeId ?? string.Empty,
-            TargetActorId = state.ActorId ?? string.Empty,
+            ScopeId = GetHeader(state, WorkflowScheduleAdapterHeaderKeys.ScopeId),
+            TargetActorId = state.TargetActorId ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
@@ -73,12 +74,17 @@ public sealed class WorkflowScheduleCurrentStateProjector
         document.UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         document.NextFireAt = state.NextFireAt;
         document.LastFireAt = state.LastFireAt;
-        document.Headers = state.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+        document.Headers = state.Headers
+            .Where(static x => !WorkflowScheduleAdapterHeaderKeys.IsAdapterKey(x.Key))
+            .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;
     }
 
-    private static WorkflowScheduleFireRecordDocument[] CreateFireRecords(WorkflowScheduleState state) =>
+    private static string GetHeader(ScheduledDispatchState state, string key) =>
+        state.Headers.TryGetValue(key, out var value) ? value ?? string.Empty : string.Empty;
+
+    private static WorkflowScheduleFireRecordDocument[] CreateFireRecords(ScheduledDispatchState state) =>
         state.FireRecords.Values
             .OrderByDescending(static x => x.CompletedAt?.Seconds ?? 0)
             .ThenByDescending(static x => x.CompletedAt?.Nanos ?? 0)
@@ -87,7 +93,7 @@ public sealed class WorkflowScheduleCurrentStateProjector
                 ScheduledFireAtUtcValue = x.ScheduledFireAt?.Clone(),
                 CompletedAtUtcValue = x.CompletedAt?.Clone(),
                 IdempotencyKey = x.IdempotencyKey ?? string.Empty,
-                RunActorId = x.RunActorId ?? string.Empty,
+                RunActorId = x.TargetActorId ?? string.Empty,
                 CommandId = x.CommandId ?? string.Empty,
                 CorrelationId = x.CorrelationId ?? string.Empty,
                 Error = x.Error ?? string.Empty,

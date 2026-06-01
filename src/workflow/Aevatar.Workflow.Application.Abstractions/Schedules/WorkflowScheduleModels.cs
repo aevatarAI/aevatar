@@ -1,4 +1,4 @@
-using Cronos;
+using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.Workflow.Application.Abstractions.Schedules;
 
@@ -13,6 +13,36 @@ public sealed record WorkflowScheduleConfiguration(
     IReadOnlyDictionary<string, string> Headers,
     string? ScopeId = null,
     string? ActorId = null);
+
+public sealed record ScheduledDispatchConfiguration(
+    string ScheduleId,
+    string DisplayName,
+    string TargetActorId,
+    EventEnvelope TriggerEnvelope,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    IReadOnlyDictionary<string, string> Headers,
+    string PayloadTypeUrl);
+
+public sealed record ScheduledDispatchPreparation(
+    string TargetActorId,
+    EventEnvelope TriggerEnvelope,
+    string PayloadTypeUrl);
+
+public static class WorkflowScheduleAdapterHeaderKeys
+{
+    public const string WorkflowName = "workflow.schedule.workflow_name";
+    public const string Prompt = "workflow.schedule.prompt";
+    public const string ScopeId = "workflow.schedule.scope_id";
+    public const string SourceActorId = "workflow.schedule.source_actor_id";
+
+    public static bool IsAdapterKey(string key) =>
+        string.Equals(key, WorkflowName, StringComparison.Ordinal) ||
+        string.Equals(key, Prompt, StringComparison.Ordinal) ||
+        string.Equals(key, ScopeId, StringComparison.Ordinal) ||
+        string.Equals(key, SourceActorId, StringComparison.Ordinal);
+}
 
 public sealed record WorkflowScheduleSummary(
     string ScheduleId,
@@ -90,6 +120,34 @@ public interface IWorkflowScheduleActorPort
     Task DispatchConfigureAsync(
         string actorId,
         WorkflowScheduleConfiguration configuration,
+        ScheduledDispatchPreparation dispatch,
+        CancellationToken ct = default);
+
+    Task DispatchEnableAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task DispatchDisableAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task DispatchRunNowAsync(
+        string actorId,
+        DateTimeOffset scheduledFireAt,
+        CancellationToken ct = default);
+}
+
+public interface IScheduledDispatchActorPort
+{
+    Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default);
+
+    Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default);
+
+    Task DispatchConfigureAsync(
+        string actorId,
+        ScheduledDispatchConfiguration configuration,
         CancellationToken ct = default);
 
     Task DispatchEnableAsync(
@@ -191,138 +249,51 @@ public sealed class WorkflowScheduleConflictException : WorkflowScheduleApplicat
 
 public static class WorkflowScheduleCalculator
 {
-    public const string DefaultTimezone = "UTC";
+    public const string DefaultTimezone = ScheduledDispatchCalculator.DefaultTimezone;
 
     public static bool TryGetNextOccurrence(
         string cronExpression,
         string? timeZoneId,
         DateTimeOffset fromUtc,
         out DateTimeOffset nextFireAtUtc,
-        out string? error)
-    {
-        nextFireAtUtc = default;
-        error = null;
-
-        if (string.IsNullOrWhiteSpace(cronExpression))
-        {
-            error = "Cron expression is required.";
-            return false;
-        }
-
-        if (!TryResolveTimeZone(timeZoneId, out var timeZone, out error))
-            return false;
-
-        CronExpression expression;
-        try
-        {
-            expression = CronExpression.Parse(cronExpression.Trim(), CronFormat.Standard);
-        }
-        catch (CronFormatException ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-
-        var nextUtc = expression.GetNextOccurrence(fromUtc.UtcDateTime, timeZone, inclusive: false);
-        if (!nextUtc.HasValue)
-        {
-            error = "Cron expression does not yield a future occurrence.";
-            return false;
-        }
-
-        nextFireAtUtc = new DateTimeOffset(DateTime.SpecifyKind(nextUtc.Value, DateTimeKind.Utc), TimeSpan.Zero);
-        return true;
-    }
+        out string? error) =>
+        ScheduledDispatchCalculator.TryGetNextOccurrence(
+            cronExpression,
+            timeZoneId,
+            fromUtc,
+            out nextFireAtUtc,
+            out error);
 
     public static WorkflowScheduleValidationResult Validate(
         string cronExpression,
         string? timezone,
         DateTimeOffset? fromUtc = null)
     {
-        return TryGetNextOccurrence(
-                cronExpression,
-                timezone,
-                fromUtc ?? DateTimeOffset.UtcNow,
-                out _,
-                out var error)
+        var validation = ScheduledDispatchCalculator.Validate(cronExpression, timezone, fromUtc);
+        return validation.Succeeded
             ? WorkflowScheduleValidationResult.Success()
-            : WorkflowScheduleValidationResult.Failed(error ?? "Schedule is invalid.");
+            : WorkflowScheduleValidationResult.Failed(validation.Error);
     }
 
     public static IReadOnlyList<DateTimeOffset> GetNextOccurrences(
         string cronExpression,
         string? timeZoneId,
         DateTimeOffset fromUtc,
-        int count)
-    {
-        var boundedCount = Math.Clamp(count, 1, 100);
-        if (!TryResolveTimeZone(timeZoneId, out var timeZone, out var timeZoneError))
-            throw new ArgumentException(timeZoneError ?? "Timezone is invalid.", nameof(timeZoneId));
-
-        CronExpression expression;
-        try
-        {
-            expression = CronExpression.Parse(cronExpression.Trim(), CronFormat.Standard);
-        }
-        catch (CronFormatException ex)
-        {
-            throw new ArgumentException(ex.Message, nameof(cronExpression), ex);
-        }
-
-        var values = new List<DateTimeOffset>(boundedCount);
-        var cursor = fromUtc.UtcDateTime;
-        for (var i = 0; i < boundedCount; i++)
-        {
-            var nextUtc = expression.GetNextOccurrence(cursor, timeZone, inclusive: false);
-            if (!nextUtc.HasValue)
-                break;
-
-            var next = new DateTimeOffset(DateTime.SpecifyKind(nextUtc.Value, DateTimeKind.Utc), TimeSpan.Zero);
-            values.Add(next);
-            cursor = next.UtcDateTime;
-        }
-
-        return values;
-    }
+        int count) =>
+        ScheduledDispatchCalculator.GetNextOccurrences(cronExpression, timeZoneId, fromUtc, count);
 
     public static bool TryResolveTimeZone(
         string? timeZoneId,
         out TimeZoneInfo timeZone,
-        out string? error)
-    {
-        error = null;
-        var normalized = NormalizeTimezone(timeZoneId);
+        out string? error) =>
+        ScheduledDispatchCalculator.TryResolveTimeZone(timeZoneId, out timeZone, out error);
 
-        try
-        {
-            timeZone = TimeZoneInfo.FindSystemTimeZoneById(normalized);
-            return true;
-        }
-        catch (TimeZoneNotFoundException ex)
-        {
-            timeZone = TimeZoneInfo.Utc;
-            error = ex.Message;
-            return false;
-        }
-        catch (InvalidTimeZoneException ex)
-        {
-            timeZone = TimeZoneInfo.Utc;
-            error = ex.Message;
-            return false;
-        }
-    }
-
-    public static TimeSpan ComputeDueTime(DateTimeOffset nextFireAtUtc, DateTimeOffset nowUtc)
-    {
-        var delta = nextFireAtUtc - nowUtc;
-        return delta <= TimeSpan.Zero ? TimeSpan.FromSeconds(1) : delta;
-    }
+    public static TimeSpan ComputeDueTime(DateTimeOffset nextFireAtUtc, DateTimeOffset nowUtc) =>
+        ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, nowUtc);
 
     public static string NormalizeTimezone(string? timeZoneId) =>
-        string.IsNullOrWhiteSpace(timeZoneId)
-            ? DefaultTimezone
-            : timeZoneId.Trim();
+        ScheduledDispatchCalculator.NormalizeTimezone(timeZoneId);
 
     public static string BuildIdempotencyKey(string scheduleId, DateTimeOffset scheduledFireAtUtc) =>
-        $"schedule:{scheduleId}:fire:{scheduledFireAtUtc.ToUniversalTime():O}";
+        ScheduledDispatchCalculator.BuildIdempotencyKey(scheduleId, scheduledFireAtUtc);
 }

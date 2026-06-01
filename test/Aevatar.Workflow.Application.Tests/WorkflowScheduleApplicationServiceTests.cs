@@ -1,6 +1,9 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Schedules;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -10,7 +13,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
     public async Task CreateAsync_ShouldNormalizeConfigurationAndDispatchConfigure()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
-        var service = new WorkflowScheduleApplicationService(actorPort, new FakeWorkflowScheduleQueryPort());
+        var preparation = new FakeWorkflowScheduledDispatchPreparationService();
+        var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort(), preparation);
 
         var receipt = await service.CreateAsync(new WorkflowScheduleConfiguration(
             ScheduleId: " daily-report ",
@@ -41,16 +45,21 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configured.Configuration.Timezone.Should().Be("UTC");
         configured.Configuration.ScopeId.Should().Be("scope-1");
         configured.Configuration.ActorId.Should().Be("actor-1");
-        configured.Configuration.Headers.Should().ContainSingle()
-            .Which.Should().Be(new KeyValuePair<string, string>("trace", "enabled"));
+        configured.Configuration.Headers.Should().Contain(
+            new KeyValuePair<string, string>("trace", "enabled"));
+        configured.Configuration.Headers[WorkflowScheduleAdapterHeaderKeys.WorkflowName].Should().Be("direct");
+        configured.Configuration.Headers[WorkflowScheduleAdapterHeaderKeys.Prompt].Should().Be("summarize status");
+        configured.Configuration.Headers[WorkflowScheduleAdapterHeaderKeys.ScopeId].Should().Be("scope-1");
+        configured.Configuration.Headers[WorkflowScheduleAdapterHeaderKeys.SourceActorId].Should().Be("actor-1");
+        configured.Dispatch.TargetActorId.Should().Be("target:daily-report");
+        preparation.Configurations.Should().ContainSingle()
+            .Which.ScheduleId.Should().Be("daily-report");
     }
 
     [Fact]
     public async Task CreateAsync_ShouldRejectInvalidCron()
     {
-        var service = new WorkflowScheduleApplicationService(
-            new FakeWorkflowScheduleActorPort(),
-            new FakeWorkflowScheduleQueryPort());
+        var service = CreateService();
 
         var act = () => service.CreateAsync(new WorkflowScheduleConfiguration(
             ScheduleId: "invalid",
@@ -71,9 +80,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [InlineData("tenant%report")]
     public async Task CreateAsync_ShouldRejectRouteUnsafeScheduleId(string scheduleId)
     {
-        var service = new WorkflowScheduleApplicationService(
-            new FakeWorkflowScheduleActorPort(),
-            new FakeWorkflowScheduleQueryPort());
+        var service = CreateService();
 
         var act = () => service.CreateAsync(CreateConfiguration(scheduleId));
 
@@ -84,9 +91,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task PreviewAsync_ShouldReturnBoundedUtcOccurrences()
     {
-        var service = new WorkflowScheduleApplicationService(
-            new FakeWorkflowScheduleActorPort(),
-            new FakeWorkflowScheduleQueryPort());
+        var service = CreateService();
 
         var preview = await service.PreviewAsync(
             "0 9 * * *",
@@ -108,7 +113,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var actorPort = new FakeWorkflowScheduleActorPort();
         var queryPort = new FakeWorkflowScheduleQueryPort();
         queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
-        var service = new WorkflowScheduleApplicationService(actorPort, queryPort);
+        var service = CreateService(actorPort, queryPort);
 
         var receipt = await service.RunNowAsync("schedule-1");
 
@@ -128,7 +133,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     public async Task DisableAsync_ShouldReturnNotFound_WhenScheduleReadModelDoesNotExist()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
-        var service = new WorkflowScheduleApplicationService(actorPort, new FakeWorkflowScheduleQueryPort());
+        var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort());
 
         var act = () => service.DisableAsync("missing", string.Empty);
 
@@ -143,7 +148,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var actorPort = new FakeWorkflowScheduleActorPort();
         var queryPort = new FakeWorkflowScheduleQueryPort();
         queryPort.Details["schedule-1"] = CreateDetail("schedule-1", workflowName: string.Empty);
-        var service = new WorkflowScheduleApplicationService(actorPort, queryPort);
+        var service = CreateService(actorPort, queryPort);
 
         var act = () => service.RunNowAsync("schedule-1");
 
@@ -156,9 +161,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     public async Task ListAsync_ShouldClampTakeBeforeQueryingReadModel()
     {
         var queryPort = new FakeWorkflowScheduleQueryPort();
-        var service = new WorkflowScheduleApplicationService(
-            new FakeWorkflowScheduleActorPort(),
-            queryPort);
+        var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
 
         await service.ListAsync(500, "cursor", includeTotalCount: true);
 
@@ -171,7 +174,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     {
         public List<string> EnsureScheduleIds { get; } = [];
         public List<string> ResolveScheduleIds { get; } = [];
-        public List<(string ActorId, WorkflowScheduleConfiguration Configuration)> Configured { get; } = [];
+        public List<(string ActorId, WorkflowScheduleConfiguration Configuration, ScheduledDispatchPreparation Dispatch)> Configured { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
@@ -191,9 +194,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public Task DispatchConfigureAsync(
             string actorId,
             WorkflowScheduleConfiguration configuration,
+            ScheduledDispatchPreparation dispatch,
             CancellationToken ct = default)
         {
-            Configured.Add((actorId, configuration));
+            Configured.Add((actorId, configuration, dispatch));
             return Task.CompletedTask;
         }
 
@@ -224,6 +228,44 @@ public sealed class WorkflowScheduleApplicationServiceTests
             return Task.CompletedTask;
         }
     }
+
+    private sealed class FakeWorkflowScheduledDispatchPreparationService : IWorkflowScheduledDispatchPreparationService
+    {
+        public List<WorkflowScheduleConfiguration> Configurations { get; } = [];
+
+        public Task<ScheduledDispatchPreparation> PrepareAsync(
+            WorkflowScheduleConfiguration configuration,
+            string commandId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            Configurations.Add(configuration);
+            var targetActorId = $"target:{configuration.ScheduleId}";
+            return Task.FromResult(new ScheduledDispatchPreparation(
+                targetActorId,
+                new EventEnvelope
+                {
+                    Id = commandId,
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Payload = Any.Pack(new Empty()),
+                    Route = EnvelopeRouteSemantics.CreateDirect("test", targetActorId),
+                    Propagation = new EnvelopePropagation
+                    {
+                        CorrelationId = correlationId,
+                    },
+                },
+                Any.Pack(new Empty()).TypeUrl));
+        }
+    }
+
+    private static WorkflowScheduleApplicationService CreateService(
+        FakeWorkflowScheduleActorPort? actorPort = null,
+        FakeWorkflowScheduleQueryPort? queryPort = null,
+        FakeWorkflowScheduledDispatchPreparationService? preparation = null) =>
+        new(
+            actorPort ?? new FakeWorkflowScheduleActorPort(),
+            queryPort ?? new FakeWorkflowScheduleQueryPort(),
+            preparation ?? new FakeWorkflowScheduledDispatchPreparationService());
 
     private sealed class FakeWorkflowScheduleQueryPort : IWorkflowScheduleQueryPort
     {

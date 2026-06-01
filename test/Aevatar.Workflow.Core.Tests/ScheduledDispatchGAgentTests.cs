@@ -1,5 +1,5 @@
 using System.Reflection;
-using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -15,64 +15,48 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Tests;
 
-public sealed class WorkflowScheduleGAgentTests
+public sealed class ScheduledDispatchGAgentTests
 {
-    private const string ScheduleActorId = "workflow-schedule:schedule-1";
-    private const string NextFireCallbackId = "workflow-schedule-next-fire";
+    private const string ScheduleActorId = "scheduled-dispatch:schedule-1";
+    private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
 
     [Fact]
     public async Task HandleFireAsync_ShouldSuppressDuplicateDispatchAfterStartedRecordIsDurable()
     {
         var eventStore = new TestEventStore();
-        var dispatch = new RecordingWorkflowRunDispatchService();
+        var dispatch = new RecordingActorDispatchPort();
         var agent = CreateAgent(eventStore, dispatch);
         await agent.ActivateAsync();
-        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
-        {
-            ScheduleId = "schedule-1",
-            WorkflowName = "direct",
-            Prompt = "hello",
-            CronExpression = "*/15 * * * *",
-            Timezone = "UTC",
-            Enabled = false,
-        });
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
 
         var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
-        await agent.HandleFireAsync(new WorkflowScheduleFireCommand
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
         });
-        await agent.HandleFireAsync(new WorkflowScheduleFireCommand
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
         });
 
-        dispatch.Commands.Should().ContainSingle();
-        var idempotencyKey = WorkflowScheduleCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        dispatch.Dispatches.Should().ContainSingle();
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
         agent.State.FireRecords.Should().ContainKey(idempotencyKey);
-        agent.State.FireRecords[idempotencyKey].Status.Should().Be(WorkflowScheduleFireStatusState.Dispatched);
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
     }
 
     [Fact]
     public async Task HandleConfigureAsync_WhenEnabled_ShouldRegisterDurableNextFireCallback()
     {
         var eventStore = new TestEventStore();
-        var dispatch = new RecordingWorkflowRunDispatchService();
+        var dispatch = new RecordingActorDispatchPort();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var agent = CreateAgent(eventStore, dispatch, scheduler);
         await agent.ActivateAsync();
 
-        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
-        {
-            ScheduleId = "schedule-1",
-            WorkflowName = "direct",
-            Prompt = "hello",
-            CronExpression = "* * * * *",
-            Timezone = "UTC",
-            Enabled = true,
-        });
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
 
         scheduler.TimeoutRequests.Should().ContainSingle();
         var request = scheduler.TimeoutRequests[0];
@@ -82,7 +66,7 @@ public sealed class WorkflowScheduleGAgentTests
         request.DueTime.Should().BePositive();
         request.DueTime.Should().BeLessThan(TimeSpan.FromSeconds(70));
 
-        var fireCommand = request.TriggerEnvelope.Payload.Unpack<WorkflowScheduleFireCommand>();
+        var fireCommand = request.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
         fireCommand.Manual.Should().BeFalse();
         fireCommand.ScheduledFireAt.Should().NotBeNull();
         var scheduledFireAt = fireCommand.ScheduledFireAt.ToDateTimeOffset();
@@ -92,28 +76,20 @@ public sealed class WorkflowScheduleGAgentTests
         agent.State.NextFireLease!.ActorId.Should().Be(ScheduleActorId);
         agent.State.NextFireLease.CallbackId.Should().Be(NextFireCallbackId);
         agent.State.NextFireLease.Generation.Should().Be(1);
-        agent.State.NextFireLease.Backend.Should().Be(WorkflowScheduleRuntimeCallbackBackendState.Dedicated);
+        agent.State.NextFireLease.Backend.Should().Be(ScheduledDispatchRuntimeCallbackBackendState.Dedicated);
     }
 
     [Fact]
     public async Task HandleDisableAsync_ShouldCancelExistingLeaseBeforeDisabledStateClearsIt()
     {
         var eventStore = new TestEventStore();
-        var dispatch = new RecordingWorkflowRunDispatchService();
+        var dispatch = new RecordingActorDispatchPort();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var agent = CreateAgent(eventStore, dispatch, scheduler);
         await agent.ActivateAsync();
-        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
-        {
-            ScheduleId = "schedule-1",
-            WorkflowName = "direct",
-            Prompt = "hello",
-            CronExpression = "* * * * *",
-            Timezone = "UTC",
-            Enabled = true,
-        });
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
 
-        await agent.HandleDisableAsync(new WorkflowScheduleDisableCommand
+        await agent.HandleDisableAsync(new ScheduledDispatchDisableCommand
         {
             Reason = "pause",
         });
@@ -131,29 +107,16 @@ public sealed class WorkflowScheduleGAgentTests
     public async Task HandleConfigureAsync_WhenUpdatingToDisabled_ShouldCancelExistingLeaseBeforeConfiguredStateClearsIt()
     {
         var eventStore = new TestEventStore();
-        var dispatch = new RecordingWorkflowRunDispatchService();
+        var dispatch = new RecordingActorDispatchPort();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var agent = CreateAgent(eventStore, dispatch, scheduler);
         await agent.ActivateAsync();
-        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
-        {
-            ScheduleId = "schedule-1",
-            WorkflowName = "direct",
-            Prompt = "hello",
-            CronExpression = "* * * * *",
-            Timezone = "UTC",
-            Enabled = true,
-        });
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
 
-        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
-        {
-            ScheduleId = "schedule-1",
-            WorkflowName = "direct",
-            Prompt = "updated",
-            CronExpression = "*/5 * * * *",
-            Timezone = "UTC",
-            Enabled = false,
-        });
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            targetActorId: "target-actor-updated",
+            cronExpression: "*/5 * * * *",
+            enabled: false));
 
         scheduler.Canceled.Should().ContainSingle();
         scheduler.Canceled[0].ActorId.Should().Be(ScheduleActorId);
@@ -161,7 +124,7 @@ public sealed class WorkflowScheduleGAgentTests
         scheduler.Canceled[0].Generation.Should().Be(1);
         scheduler.TimeoutRequests.Should().ContainSingle();
         agent.State.Enabled.Should().BeFalse();
-        agent.State.Prompt.Should().Be("updated");
+        agent.State.TargetActorId.Should().Be("target-actor-updated");
         agent.State.NextFireAt.Should().BeNull();
         agent.State.NextFireLease.Should().BeNull();
     }
@@ -170,41 +133,39 @@ public sealed class WorkflowScheduleGAgentTests
     public async Task HandleEventAsync_WhenDueCallbackArrives_ShouldDispatchNonManualFireAndScheduleNext()
     {
         var eventStore = new TestEventStore();
-        var dispatch = new RecordingWorkflowRunDispatchService();
+        var dispatch = new RecordingActorDispatchPort();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var agent = CreateAgent(eventStore, dispatch, scheduler);
         await agent.ActivateAsync();
-        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
-        {
-            ScheduleId = "schedule-1",
-            WorkflowName = "direct",
-            Prompt = "hello",
-            CronExpression = "* * * * *",
-            Timezone = "UTC",
-            Enabled = true,
-        });
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
 
         var firstRequest = scheduler.TimeoutRequests.Single();
-        var firstFireCommand = firstRequest.TriggerEnvelope.Payload.Unpack<WorkflowScheduleFireCommand>();
+        var firstFireCommand = firstRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
         var firstScheduledFireAt = firstFireCommand.ScheduledFireAt.ToDateTimeOffset();
 
         await agent.HandleEventAsync(CreateFiredCallbackEnvelope(firstRequest, generation: 1, fireIndex: 1));
 
-        dispatch.Commands.Should().ContainSingle();
-        var dispatched = dispatch.Commands[0];
-        dispatched.Metadata.Should().NotBeNull();
-        dispatched.Metadata!["workflow.schedule_id"].Should().Be("schedule-1");
-        dispatched.Metadata["workflow.scheduled_fire_at_utc"].Should().Be(firstScheduledFireAt.ToUniversalTime().ToString("O"));
-
-        var idempotencyKey = WorkflowScheduleCalculator.BuildIdempotencyKey("schedule-1", firstScheduledFireAt);
-        dispatched.SessionId.Should().Be(idempotencyKey);
-        dispatched.Metadata[WorkflowRunCommandMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstScheduledFireAt);
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("target-actor-1");
+        dispatched.Envelope.Id.Should().Be(idempotencyKey);
+        dispatched.Envelope.Route.GetTargetActorId().Should().Be("target-actor-1");
+        var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.SessionId.Should().Be(idempotencyKey);
+        chatRequest.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.SessionId);
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(firstScheduledFireAt.ToUniversalTime().ToString("O"));
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
+        chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
+        chatRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.IdempotencyKey);
 
         agent.State.FireCount.Should().Be(1);
         agent.State.FireRecords.Should().ContainKey(idempotencyKey);
         var fireRecord = agent.State.FireRecords[idempotencyKey];
         fireRecord.Manual.Should().BeFalse();
-        fireRecord.Status.Should().Be(WorkflowScheduleFireStatusState.Dispatched);
+        fireRecord.Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
 
         scheduler.Canceled.Should().ContainSingle();
         scheduler.Canceled[0].ActorId.Should().Be(ScheduleActorId);
@@ -213,21 +174,94 @@ public sealed class WorkflowScheduleGAgentTests
 
         scheduler.TimeoutRequests.Should().HaveCount(2);
         var nextRequest = scheduler.TimeoutRequests[1];
-        var nextFireCommand = nextRequest.TriggerEnvelope.Payload.Unpack<WorkflowScheduleFireCommand>();
+        var nextFireCommand = nextRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
         nextFireCommand.Manual.Should().BeFalse();
         nextFireCommand.ScheduledFireAt.ToDateTimeOffset().Should().BeAfter(firstScheduledFireAt);
         agent.State.NextFireLease!.Generation.Should().Be(2);
     }
 
-    private static WorkflowScheduleGAgent CreateAgent(
+    [Fact]
+    public async Task HandleFireAsync_ShouldPreserveWorkflowAdapterMetadataWithoutCoreWorkflowLeak()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            triggerEnvelope: CreateTriggerEnvelope("target-actor-1", new ChatRequestEvent
+            {
+                Prompt = "hello",
+                Metadata =
+                {
+                    ["workflow.schedule_id"] = "schedule-1",
+                },
+            }),
+            enabled: false));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 10, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var chatRequest = dispatch.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Metadata["workflow.schedule_id"].Should().Be("schedule-1");
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
+        chatRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ShouldDispatchStoredEnvelopeToConfiguredNonWorkflowTarget()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            targetActorId: "generic-agent-1",
+            triggerEnvelope: CreateTriggerEnvelope("generic-agent-1", new ChatRequestEvent
+            {
+                Prompt = "generic scheduled prompt",
+            }),
+            enabled: false));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 10, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("generic-agent-1");
+        dispatched.Envelope.Route.GetTargetActorId().Should().Be("generic-agent-1");
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        dispatched.Envelope.Id.Should().Be(idempotencyKey);
+        var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
+        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
+        chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
+        chatRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.IdempotencyKey);
+        agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("generic-agent-1");
+    }
+
+    private static ScheduledDispatchGAgent CreateAgent(
         IEventStore eventStore,
-        RecordingWorkflowRunDispatchService dispatch,
+        RecordingActorDispatchPort dispatch,
         RecordingRuntimeCallbackScheduler? callbackScheduler = null)
     {
-        var agent = new WorkflowScheduleGAgent(dispatch)
+        var agent = new ScheduledDispatchGAgent(dispatch)
         {
             Services = new TestServiceProvider(callbackScheduler),
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowScheduleState>(eventStore),
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(eventStore),
         };
         SetAgentId(agent, ScheduleActorId);
         return agent;
@@ -258,19 +292,53 @@ public sealed class WorkflowScheduleGAgentTests
         setIdMethod!.Invoke(agent, [agentId]);
     }
 
-    private sealed class RecordingWorkflowRunDispatchService
-        : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+    private static ScheduledDispatchConfigureCommand CreateConfigureCommand(
+        string scheduleId = "schedule-1",
+        string targetActorId = "target-actor-1",
+        string cronExpression = "*/15 * * * *",
+        bool enabled = false,
+        EventEnvelope? triggerEnvelope = null)
     {
-        public List<WorkflowChatRunRequest> Commands { get; } = [];
+        return new ScheduledDispatchConfigureCommand
+        {
+            ScheduleId = scheduleId,
+            DisplayName = "Test schedule",
+            TargetActorId = targetActorId,
+            TriggerEnvelope = triggerEnvelope ?? CreateTriggerEnvelope(targetActorId, new ChatRequestEvent
+            {
+                Prompt = "hello",
+                SessionId = "template-session",
+            }),
+            CronExpression = cronExpression,
+            Timezone = "UTC",
+            Enabled = enabled,
+        };
+    }
 
-        public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
-            WorkflowChatRunRequest command,
+    private static EventEnvelope CreateTriggerEnvelope(string targetActorId, IMessage payload) =>
+        new()
+        {
+            Id = "template-command",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect("schedule-template", targetActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "template-correlation",
+            },
+        };
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
             CancellationToken ct = default)
         {
-            Commands.Add(command);
-            return Task.FromResult(
-                CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
-                    new WorkflowChatRunAcceptedReceipt("run-actor-1", "direct", "cmd-1", "corr-1")));
+            Dispatches.Add((actorId, envelope.Clone()));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -310,7 +378,7 @@ public sealed class WorkflowScheduleGAgentTests
             RuntimeCallbackTimerRequest request,
             CancellationToken ct = default)
         {
-            throw new NotSupportedException("Workflow schedule tests only use one-shot durable timeouts.");
+            throw new NotSupportedException("Scheduled dispatch tests only use one-shot durable timeouts.");
         }
 
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
