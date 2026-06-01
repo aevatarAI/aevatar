@@ -45,9 +45,9 @@ merge_pr() {
     echo "merge_pr: missing pr number" >&2
     return 1
   fi
-  # Auto-extract Closes #N if linked_issue not provided
+  # Auto-extract Closes/Fixes/Resolves #N (case-insensitive — 2026-06-01 PR1643 lowercase "closes #1507" 漏 close 修复)
   if [ -z "$linked_issue" ]; then
-    linked_issue=$(gh pr view "$pr" --json body --jq '.body' 2>/dev/null | grep -oE "Closes #[0-9]+" | head -1 | grep -oE "[0-9]+")
+    linked_issue=$(gh pr view "$pr" --json body --jq '.body' 2>/dev/null | grep -oiE "(closes|fixes|resolves) #[0-9]+" | head -1 | grep -oE "[0-9]+")
   fi
   # gh pr ready 转出 draft 状态(per Auric 2026-06-01 "提pr都提草稿");忽略已是 ready 的 idempotent error
   gh pr ready "$pr" 2>&1 | tail -1
