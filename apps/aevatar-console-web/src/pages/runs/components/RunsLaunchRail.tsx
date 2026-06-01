@@ -174,7 +174,7 @@ const readinessHeaderStyle: React.CSSProperties = {
 const readinessGridStyle: React.CSSProperties = {
   display: "grid",
   gap: 8,
-  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))",
 };
 
 const readinessItemStyle: React.CSSProperties = {
@@ -259,6 +259,9 @@ function renderReadinessSummary(
                   ? "Required"
                   : "Context"}
             </Tag>
+            <Typography.Paragraph style={readinessHelperStyle}>
+              {item.helper}
+            </Typography.Paragraph>
           </div>
         ))}
       </div>

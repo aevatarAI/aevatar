@@ -150,6 +150,7 @@ describe("RunsLaunchRail", () => {
     expect(screen.getByText("Send readiness")).toBeInTheDocument();
     expect(screen.getByText("Blocked")).toBeInTheDocument();
     expect(screen.getByText("Workspace is required before the prompt can be sent.")).toBeInTheDocument();
+    expect(screen.getByText("Add a workspace ID to unlock Send.")).toBeInTheDocument();
     expect(screen.getAllByText("Required").length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("Endpoint")).toBeNull();
     expect(screen.queryByText("Requests go through /api/scopes/{scopeId}/invoke/chat:stream")).toBeNull();
@@ -233,6 +234,7 @@ describe("RunsLaunchRail", () => {
     expect(screen.getByText("Prompt runs will use this workspace context.")).toBeInTheDocument();
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
     expect(screen.getByText("scope-1")).toBeInTheDocument();
+    expect(screen.getByText("Run requests are scoped to this workspace.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Endpoint")).toBeNull();
   });
 });
