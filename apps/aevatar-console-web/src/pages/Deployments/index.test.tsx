@@ -348,6 +348,17 @@ describe("DeploymentsPage", () => {
     expect(await screen.findByRole("tab", { name: "Rollout" })).toBeInTheDocument();
   });
 
+  it("opens the selected deployment from a governance handoff URL", async () => {
+    renderDeploymentsPage(
+      "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent&deploymentId=dep-1",
+    );
+
+    expect(await screen.findByText("发布摘要")).toBeInTheDocument();
+    expect(await screen.findByText("Deployment 数")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "部署候选版本" })).toBeInTheDocument();
+    expect(screen.getAllByText("dep-1").length).toBeGreaterThan(0);
+  });
+
   it("opens the service deployment drawer from the service list row", async () => {
     renderDeploymentsPage(
       "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market",

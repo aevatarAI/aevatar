@@ -1,4 +1,4 @@
-import { Tag, Typography } from 'antd';
+import { Space, Tag, Typography } from 'antd';
 import React from 'react';
 import {
   cardStackStyle,
@@ -31,6 +31,7 @@ export type GovernanceSummaryMetric = {
 
 type GovernanceSummaryPanelProps = {
   title: string;
+  actions?: React.ReactNode;
   description?: string;
   draft: GovernanceDraft;
   revisionId?: string;
@@ -42,6 +43,7 @@ type GovernanceSummaryPanelProps = {
 
 type GovernanceSelectionNoticeProps = {
   title: string;
+  actions?: React.ReactNode;
   description?: string;
   highlights?: Array<{
     key?: string;
@@ -150,26 +152,41 @@ export function formatGovernanceTimestamp(value: string | undefined): string {
 
 export const GovernanceSelectionNotice: React.FC<
   GovernanceSelectionNoticeProps
-> = ({ title, description, highlights = [] }) => (
+> = ({ title, actions, description, highlights = [] }) => (
   <div style={governanceSurfaceStyle}>
     <div style={cardStackStyle}>
-      <div style={governanceHeaderStackStyle}>
-        <Typography.Text
-          strong
-          style={{ color: 'var(--ant-color-text-heading)', fontSize: 16 }}
-        >
-          {title}
-        </Typography.Text>
-        {description ? (
-          <span
-            style={{
-              color: 'var(--ant-color-text-secondary)',
-              fontSize: 14,
-              lineHeight: 1.6,
-            }}
+      <div
+        style={{
+          alignItems: 'flex-start',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          justifyContent: 'space-between',
+        }}
+      >
+        <div style={governanceHeaderStackStyle}>
+          <Typography.Text
+            strong
+            style={{ color: 'var(--ant-color-text-heading)', fontSize: 16 }}
           >
-            {description}
-          </span>
+            {title}
+          </Typography.Text>
+          {description ? (
+            <span
+              style={{
+                color: 'var(--ant-color-text-secondary)',
+                fontSize: 14,
+                lineHeight: 1.6,
+              }}
+            >
+              {description}
+            </span>
+          ) : null}
+        </div>
+        {actions ? (
+          <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+            {actions}
+          </Space>
         ) : null}
       </div>
       {highlights.length > 0 ? (
@@ -206,6 +223,7 @@ export const GovernanceSelectionNotice: React.FC<
 
 export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
   title,
+  actions,
   description,
   draft,
   revisionId,
@@ -283,6 +301,11 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
             >
               {status.label}
             </Tag>
+          ) : null}
+          {actions ? (
+            <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+              {actions}
+            </Space>
           ) : null}
         </div>
 

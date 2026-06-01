@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import GovernanceIndexPage from './index';
@@ -91,6 +91,36 @@ describe('GovernanceIndexPage', () => {
 
     expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
     expect(screen.getAllByText('Governance').length).toBeGreaterThan(0);
+  });
+
+  it('hands off a governed service to Deployments with service and deployment focus', async () => {
+    renderWithQueryClient(React.createElement(GovernanceIndexPage));
+
+    fireEvent.click(await screen.findByRole('button', { name: '打开 Deployments' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/deployments');
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('tenantId')).toBe('tenant-a');
+    expect(params.get('appId')).toBe('app-a');
+    expect(params.get('namespace')).toBe('default');
+    expect(params.get('serviceId')).toBe('service-alpha');
+    expect(params.get('deploymentId')).toBe('deploy-1');
+  });
+
+  it('keeps create actions while showing a secondary deployments handoff in catalog views', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/governance?tenantId=tenant-a&appId=app-a&namespace=default&serviceId=service-alpha&view=bindings',
+    );
+
+    renderWithQueryClient(React.createElement(GovernanceIndexPage));
+
+    expect(await screen.findByRole('button', { name: '新建绑定' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开 Deployments' })).toBeTruthy();
   });
 
   it('does not auto-select the first service when service context is missing', async () => {

@@ -18,6 +18,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { governanceApi } from "@/shared/api/governanceApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { history } from "@/shared/navigation/history";
+import { buildPlatformDeploymentsHref } from "@/shared/navigation/platformRoutes";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
 import { studioApi } from "@/shared/studio/api";
 import type {
@@ -825,6 +826,31 @@ const GovernanceWorkbench: React.FC = () => {
     [activeDraft],
   );
 
+  const openDeploymentsHandoff = useCallback(() => {
+    history.push(
+      buildPlatformDeploymentsHref({
+        appId: activeDraft.appId,
+        deploymentId: selectedService?.deploymentId || undefined,
+        namespace: activeDraft.namespace,
+        serviceId: activeDraft.serviceId,
+        tenantId: activeDraft.tenantId,
+      }),
+    );
+  }, [activeDraft, selectedService?.deploymentId]);
+
+  const releaseHandoffAction = useMemo(
+    () =>
+      hasSelectedServiceContext ? (
+        <Button icon={<DeploymentUnitOutlined />} onClick={openDeploymentsHandoff}>
+          打开 Deployments
+        </Button>
+      ) : null,
+    [hasSelectedServiceContext, openDeploymentsHandoff],
+  );
+
+  const headerReleaseHandoffAction =
+    view === "overview" || view === "activation" ? null : releaseHandoffAction;
+
   const governanceViewActions = useMemo<
     Partial<Record<GovernanceWorkbenchView, GovernanceViewActionConfig>>
   >(
@@ -1448,6 +1474,7 @@ const GovernanceWorkbench: React.FC = () => {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <GovernanceSummaryPanel
+            actions={releaseHandoffAction}
             draft={activeDraft}
             includeDefaultFields={false}
             extraFields={[
@@ -1536,6 +1563,7 @@ const GovernanceWorkbench: React.FC = () => {
               ]}
             />
             <GovernanceSelectionNotice
+              actions={releaseHandoffAction}
               title="下一步建议"
               highlights={[
                 {
@@ -1709,6 +1737,7 @@ const GovernanceWorkbench: React.FC = () => {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <GovernanceSummaryPanel
+          actions={releaseHandoffAction}
           draft={activeDraft}
           includeDefaultFields={false}
           metrics={[
@@ -1816,6 +1845,7 @@ const GovernanceWorkbench: React.FC = () => {
     policiesQuery.data,
     policiesQuery.isLoading,
     publicEndpoints,
+    releaseHandoffAction,
     selectedService?.serviceKey,
     bindingTableColumns,
     endpointTableColumns,
@@ -1952,15 +1982,18 @@ const GovernanceWorkbench: React.FC = () => {
                           minWidth: 172,
                         }}
                       >
-                        {activeAction ? (
-                          <Button
-                            icon={activeAction.icon}
-                            onClick={activeAction.onClick}
-                            type={activeAction.type}
-                          >
-                            {activeAction.label}
-                          </Button>
-                        ) : null}
+                        <Space wrap size={[8, 8]} style={{ justifyContent: "flex-end" }}>
+                          {headerReleaseHandoffAction}
+                          {activeAction ? (
+                            <Button
+                              icon={activeAction.icon}
+                              onClick={activeAction.onClick}
+                              type={activeAction.type}
+                            >
+                              {activeAction.label}
+                            </Button>
+                          ) : null}
+                        </Space>
                       </div>
                     </div>
                     <Tabs
