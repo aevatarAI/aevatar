@@ -638,6 +638,30 @@ export function formatRunRouteLabel(
     : normalizedEndpointId;
 }
 
+export function describeRunReturnTarget(returnTo?: string | null): string {
+  const normalized = trimOptional(returnTo);
+  if (!normalized) {
+    return "返回团队高级编辑";
+  }
+
+  const pathname = normalized.split("#")[0].split("?")[0];
+  if (pathname === "/teams" || pathname.startsWith("/teams/")) {
+    return "返回团队高级编辑";
+  }
+
+  switch (pathname) {
+    case "/runtime/workflows":
+      return "返回 Workflow Library";
+    case "/studio":
+      return "返回 Studio";
+    case "/runtime/explorer":
+    case "/runtime/explorer/detail":
+      return "返回 Actor explorer";
+    default:
+      return "返回上一页";
+  }
+}
+
 export function formatElapsedDuration(totalMilliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(totalMilliseconds / 1000));
   const hours = Math.floor(totalSeconds / 3600);
