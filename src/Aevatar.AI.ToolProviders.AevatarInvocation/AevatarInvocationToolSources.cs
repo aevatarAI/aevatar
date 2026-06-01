@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions.Responses;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -67,7 +68,7 @@ public sealed class QueryReadModelToolSource : IAgentToolSource
         Task.FromResult<IReadOnlyList<IAgentTool>>([new QueryReadModelTool(_dispatcher)]);
 }
 
-internal sealed class InvokeGAgentTool : IAevatarInvocationTool
+internal sealed class InvokeGAgentTool : IAevatarInvocationChatRunTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -85,9 +86,14 @@ internal sealed class InvokeGAgentTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeGAgentAsync(argumentsJson, ct);
+
+    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct = default) =>
+        _dispatcher.InvokeGAgentForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
-internal sealed class InvokeTeamTool : IAevatarInvocationTool
+internal sealed class InvokeTeamTool : IAevatarInvocationChatRunTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -105,9 +111,14 @@ internal sealed class InvokeTeamTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeTeamAsync(argumentsJson, ct);
+
+    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct = default) =>
+        _dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
-internal sealed class StartWorkflowTool : IAevatarInvocationTool
+internal sealed class StartWorkflowTool : IAevatarInvocationChatRunTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -119,12 +130,18 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
     public string Name => "aevatar_start_workflow";
 
     public string Description =>
-        "Start an Aevatar workflow by workflow_id with typed inputs.";
+        "Start an Aevatar workflow by workflow_id with typed inputs. " +
+        "When use_skill returns inline workflow_yamls, pass that bundle in workflow_yamls instead of treating the YAMLs as ordinary text.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.StartWorkflow;
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.StartWorkflowAsync(argumentsJson, ct);
+
+    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
+        ChatRunToolCompletionRequest request,
+        CancellationToken ct = default) =>
+        _dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
 internal sealed class ObserveRunTool : IAevatarInvocationTool

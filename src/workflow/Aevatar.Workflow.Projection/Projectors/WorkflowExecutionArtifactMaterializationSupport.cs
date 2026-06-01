@@ -278,9 +278,9 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
         step.RequestedVariableName = evt.VariableName ?? string.Empty;
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
-        // Refactor (iter79/cluster-079-secure-input-suspension-metadata-bag):
-        //   Old pattern: WorkflowSuspendedEvent.Metadata string bag for secure/input_mode/redacted_output/variable
-        //   New principle (delete framing): typed bool secure + string redacted_output + reuse variable_name; Metadata open extension only; reserved keys read-only fallback
+        // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
+        //   New principle: typed suspension fields are the single source; Metadata is open extension data only.
         var timelineMetadata = BuildWorkflowSuspendedTimelineMetadata(evt);
         AddTimeline(
             readModel.Timeline,
@@ -297,18 +297,9 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
     private static Dictionary<string, string> BuildWorkflowSuspendedTimelineMetadata(WorkflowSuspendedEvent evt)
     {
         var metadata = FilterOpenExtensionMetadata(evt.Metadata);
-        var variableName = !string.IsNullOrWhiteSpace(evt.VariableName)
-            ? evt.VariableName
-            : evt.Metadata.TryGetValue("variable", out var legacyVariable) ? legacyVariable : string.Empty;
-        var secure = evt.Secure ||
-                     (evt.Metadata.TryGetValue("secure", out var legacySecure) &&
-                      bool.TryParse(legacySecure, out var parsedSecure) &&
-                      parsedSecure);
-        var redactedOutput = !string.IsNullOrWhiteSpace(evt.RedactedOutput)
-            ? evt.RedactedOutput
-            : evt.Metadata.TryGetValue("redacted_output", out var legacyRedactedOutput)
-                ? legacyRedactedOutput
-                : string.Empty;
+        var variableName = !string.IsNullOrWhiteSpace(evt.VariableName) ? evt.VariableName : string.Empty;
+        var secure = evt.Secure;
+        var redactedOutput = !string.IsNullOrWhiteSpace(evt.RedactedOutput) ? evt.RedactedOutput : string.Empty;
 
         if (!string.IsNullOrWhiteSpace(variableName))
             metadata["variable"] = variableName;

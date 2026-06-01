@@ -64,7 +64,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldFallbackLegacySecureInputMetadata()
+    public async Task ProjectAsync_ShouldIgnoreLegacySecureInputMetadataReservedKeys()
     {
         var port = new RecordingHumanInteractionPort();
         var projector = new WorkflowHumanInteractionProjector(port);
@@ -97,9 +97,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
         port.Calls.Should().ContainSingle();
         var annotations = port.Calls[0].request.Annotations;
         annotations.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
-        annotations.Should().ContainKey("variable").WhoseValue.Should().Be("api_key");
-        annotations.Should().ContainKey("secure").WhoseValue.Should().Be("true");
-        annotations.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[legacy captured]");
+        annotations.Should().NotContainKey("variable");
+        annotations.Should().NotContainKey("secure");
+        annotations.Should().NotContainKey("redacted_output");
         annotations.Should().NotContainKey("input_mode");
     }
 

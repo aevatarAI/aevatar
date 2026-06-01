@@ -14,6 +14,7 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 //   New principle: Command service dispatches accepted-only write commands; readmodel activation is owned by scripting committed-state projection activation plan provider.
 public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
 {
+    // Refactor (iter149/cluster-1133): Old pattern: scripting execution projection tests covered only domain facts.  New principle: actor-owned run outcome events activate the same execution projection path.
     [Fact]
     public void GetPlans_ShouldRejectNullContext()
     {
@@ -86,6 +87,30 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
                 ActorId = "script-runtime:scope-1:my-script",
                 ScriptId = "my-script",
                 Revision = "rev-1",
+            },
+            "script-runtime:scope-1:my-script")).ToArray();
+
+        plans.Should().ContainSingle();
+        plans[0].LeaseType.Should().Be(typeof(ScriptExecutionMaterializationRuntimeLease));
+        plans[0].StartRequest.RootActorId.Should().Be("script-runtime:scope-1:my-script");
+        plans[0].StartRequest.ProjectionKind.Should().Be("script-execution-read-model");
+        plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+    }
+
+    [Fact]
+    public void GetPlans_ShouldMapScriptRunOutcomeRecordedToExecutionMaterializationScope()
+    {
+        var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
+
+        var plans = provider.GetPlans(BuildContext(
+            typeof(ScriptBehaviorGAgent),
+            new ScriptRunOutcomeRecordedEvent
+            {
+                ActorId = "script-runtime:scope-1:my-script",
+                ScriptId = "my-script",
+                ScriptRevision = "rev-1",
+                ScriptRunId = "run-1",
+                Status = ScriptRunOutcomeStatus.Succeeded,
             },
             "script-runtime:scope-1:my-script")).ToArray();
 

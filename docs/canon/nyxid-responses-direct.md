@@ -122,9 +122,10 @@ llm-anthropic/claude-haiku-4-5
 | 工具名 | 说明 |
 |---|---|
 | `TodoWrite` | 持久化 agent-scoped todo state |
-| `Task` / `task` | 记录 sub-agent task topology trace |
 | `WebFetch` / `web_fetch` | 通过 Aevatar 抓取 URL，记录 trace/cache |
 | `WebSearch` / `web_search` | 通过 Aevatar 执行 web search，记录 trace/cache |
+
+旧 `Task` / `task` trace 契约暂留为 dead surface，当前 Mainnet 不再注册 fake Task substitute。需要执行 GAgent、team 或 workflow 时使用下方 workspace additive tools。
 
 当前 additive tools 包括：
 

@@ -51,6 +51,9 @@ import {
 } from '@/shared/studio/scriptPackage';
 import {
   createStepInspectorDraft,
+  readStepParameterValue,
+  resolveStepParameterName,
+  normalizeStepParametersForType,
   parseInspectorParameters,
   type StudioStepInspectorDraft,
 } from '@/shared/studio/document';
@@ -574,6 +577,109 @@ function tryParseStepParameters(
   }
 }
 
+function normalizePrimitiveParameterDescriptor(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): WorkflowPrimitiveDescriptor['parameters'][number] {
+  const resolvedName = resolveStepParameterName(stepType, parameter.name);
+  if (resolvedName === parameter.name) {
+    return parameter;
+  }
+
+  return {
+    ...parameter,
+    name: resolvedName,
+  };
+}
+
+function isLLMPromptInstructionParameter(
+  stepType: string,
+  parameterName: string,
+): boolean {
+  return (
+    stepType.trim().toLowerCase() === 'llm_call' &&
+    resolveStepParameterName(stepType, parameterName) === 'prompt_prefix'
+  );
+}
+
+function getParameterDisplayLabel(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  return isLLMPromptInstructionParameter(stepType, parameter.name)
+    ? 'Prompt instruction'
+    : parameter.name;
+}
+
+function getParameterDisplayDescription(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
+    return 'Instruction added before each workflow run input reaches the LLM.';
+  }
+
+  return parameter.description || `Type: ${parameter.type}`;
+}
+
+function getParameterPlaceholder(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): string {
+  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
+    return 'e.g. Translate the user input to Japanese';
+  }
+
+  return parameter.default || parameter.type || 'Value';
+}
+
+function shouldUseParameterDefault(
+  stepType: string,
+  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
+): boolean {
+  return !isLLMPromptInstructionParameter(stepType, parameter.name);
+}
+
+function normalizeParameterEditorSourceValue(
+  stepType: string,
+  parameterName: string,
+  value: unknown,
+): unknown {
+  if (
+    isLLMPromptInstructionParameter(stepType, parameterName) &&
+    value !== null &&
+    typeof value === 'object'
+  ) {
+    return '';
+  }
+
+  return value;
+}
+
+function normalizePrimitiveParameterDescriptors(
+  stepType: string,
+  parameters: readonly WorkflowPrimitiveDescriptor['parameters'][number][],
+): WorkflowPrimitiveDescriptor['parameters'][number][] {
+  const nextParameters: WorkflowPrimitiveDescriptor['parameters'][number][] = [];
+  const seenParameterNames = new Set<string>();
+
+  for (const parameter of parameters) {
+    const normalizedParameter = normalizePrimitiveParameterDescriptor(
+      stepType,
+      parameter,
+    );
+    const normalizedName = normalizedParameter.name.trim().toLowerCase();
+    if (!normalizedName || seenParameterNames.has(normalizedName)) {
+      continue;
+    }
+
+    seenParameterNames.add(normalizedName);
+    nextParameters.push(normalizedParameter);
+  }
+
+  return nextParameters;
+}
+
 function formatParameterEditorValue(value: unknown): string {
   if (value === null || value === undefined) {
     return '';
@@ -647,19 +753,44 @@ function updateStepDraftParameterValue(
   parameterType: string,
   rawValue: string,
 ): StudioStepInspectorDraft {
-  const nextParameters = tryParseStepParameters(draft.parametersText) ?? {};
+  const resolvedParameterName = resolveStepParameterName(draft.type, parameterName);
+  const nextParameters = normalizeStepParametersForType(
+    draft.type,
+    tryParseStepParameters(draft.parametersText) ?? {},
+  );
   const trimmed = rawValue.trim();
 
   if (!trimmed) {
-    delete nextParameters[parameterName];
+    delete nextParameters[resolvedParameterName];
   } else {
-    nextParameters[parameterName] = coerceParameterEditorValue(rawValue, parameterType);
+    nextParameters[resolvedParameterName] = coerceParameterEditorValue(
+      rawValue,
+      parameterType,
+    );
   }
 
   return {
     ...draft,
     parametersText: JSON.stringify(nextParameters, null, 2),
   };
+}
+
+function areStepInspectorDraftsEqual(
+  left: StudioStepInspectorDraft | null,
+  right: StudioStepInspectorDraft | null,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.id === right.id &&
+    left.type === right.type &&
+    left.targetRole === right.targetRole &&
+    left.next === right.next &&
+    left.parametersText === right.parametersText &&
+    left.branchesText === right.branchesText
+  );
 }
 
 async function consumeAguiDraftRun(
@@ -854,7 +985,12 @@ function ScriptLeaveDialog(props: {
 export type StudioWorkflowBuildPanelProps = {
   readonly draftYaml: string;
   readonly onSetDraftYaml: (value: string) => void;
-  readonly onSaveDraft: () => void;
+  readonly onSaveDraft: (
+    draft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ) => void;
   readonly savePending: boolean;
   readonly canSaveWorkflow: boolean;
   readonly saveNotice?: { readonly type: 'success' | 'error'; readonly message: string } | null;
@@ -870,7 +1006,12 @@ export type StudioWorkflowBuildPanelProps = {
   readonly workflowName: string;
   readonly runPrompt: string;
   readonly onRunPromptChange: (value: string) => void;
-  readonly buildWorkflowYamls: () => Promise<string[]>;
+  readonly buildWorkflowYamls: (
+    draft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ) => Promise<string[]>;
   readonly runMetadata?: Record<string, string>;
   readonly dryRunRouteLabel?: string;
   readonly dryRunModelLabel?: string;
@@ -952,14 +1093,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             current: StudioStepInspectorDraft | null,
           ) => StudioStepInspectorDraft | null),
     ) => {
-      setStepDraft((current) => {
-        const nextDraft =
-          typeof updater === 'function'
-            ? updater(current)
-            : updater;
-        stepDraftRef.current = nextDraft;
-        return nextDraft;
-      });
+      const nextDraft =
+        typeof updater === 'function'
+          ? updater(stepDraftRef.current)
+          : updater;
+      stepDraftRef.current = nextDraft;
+      setStepDraft(nextDraft);
     },
     [],
   );
@@ -1049,6 +1188,14 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       }) ?? null,
     [runtimePrimitives, selectedStep?.type, stepDraft?.type],
   );
+  const selectedPrimitiveParameters = React.useMemo(
+    () =>
+      normalizePrimitiveParameterDescriptors(
+        stepDraft?.type || selectedStep?.type || '',
+        selectedPrimitiveDescriptor?.parameters ?? [],
+      ),
+    [selectedPrimitiveDescriptor, selectedStep?.type, stepDraft?.type],
+  );
   const parsedStepParameters = React.useMemo(
     () =>
       stepDraft
@@ -1090,6 +1237,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       return;
     }
 
+    const currentStepDraft = stepDraftRef.current;
+
     if (!scopeId) {
       const visibleMessage = 'Resolve the current workspace before running the workflow draft.';
       setWorkflowRunError(visibleMessage);
@@ -1127,7 +1276,16 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         {
           metadata: runMetadata,
           prompt: runPrompt,
-          workflowYamls: await buildWorkflowYamls(),
+          workflowYamls: await buildWorkflowYamls(
+            currentStepDraft &&
+              selectedStepDraftSeed &&
+              !areStepInspectorDraftsEqual(currentStepDraft, selectedStepDraftSeed)
+              ? {
+                  stepId: selectedStepId,
+                  draft: currentStepDraft,
+                }
+              : null,
+          ),
         },
         controller.signal,
       );
@@ -1173,6 +1331,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     runMetadata,
     runPrompt,
     scopeId,
+    selectedStepDraftSeed,
+    selectedStepId,
   ]);
 
   const handleInsertStep = React.useCallback(async (stepType: string) => {
@@ -1216,6 +1376,20 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       setStepMutationPending('');
     }
   }, [onApplyStepDraft]);
+
+  const handleSaveDraft = React.useCallback(() => {
+    const currentStepDraft = stepDraftRef.current;
+    onSaveDraft(
+      currentStepDraft &&
+        selectedStepDraftSeed &&
+        !areStepInspectorDraftsEqual(currentStepDraft, selectedStepDraftSeed)
+        ? {
+            stepId: selectedStepId,
+            draft: currentStepDraft,
+          }
+        : null,
+    );
+  }, [onSaveDraft, selectedStepDraftSeed, selectedStepId]);
 
   const handleRemoveStep = React.useCallback(async () => {
     if (stepMutationPendingRef.current) {
@@ -1316,7 +1490,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               disabled={!canSaveWorkflow}
               loading={savePending}
-              onClick={onSaveDraft}
+              onClick={handleSaveDraft}
             >
               Save draft
             </Button>
@@ -1592,12 +1766,36 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 </div>
                 <div style={{ ...workflowFieldStyle, gridColumn: '1 / -1' }}>
                   <div style={workflowSectionHeadingStyle}>Parameters</div>
-                  {selectedPrimitiveDescriptor?.parameters.length ? (
+                  {selectedPrimitiveParameters.length ? (
                     <div style={{ display: 'grid', gap: 10 }}>
-                      {selectedPrimitiveDescriptor.parameters.map((parameter) => {
+                      {selectedPrimitiveParameters.map((parameter) => {
+                        const parameterDisplayLabel = getParameterDisplayLabel(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterAriaLabel = `Parameter ${parameterDisplayLabel}`;
+                        const parameterPlaceholder = getParameterPlaceholder(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterDescription = getParameterDisplayDescription(
+                          stepDraft.type,
+                          parameter,
+                        );
+                        const parameterValue = normalizeParameterEditorSourceValue(
+                          stepDraft.type,
+                          parameter.name,
+                          readStepParameterValue(
+                            parsedStepParameters,
+                            stepDraft.type,
+                            parameter.name,
+                          ),
+                        );
                         const currentValue = formatParameterEditorValue(
-                          parsedStepParameters?.[parameter.name] ??
-                            parameter.default,
+                          parameterValue ??
+                            (shouldUseParameterDefault(stepDraft.type, parameter)
+                              ? parameter.default
+                              : ''),
                         );
 
                         return (
@@ -1609,19 +1807,19 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               htmlFor={`workflow-step-parameter-${parameter.name}`}
                               style={workflowFieldLabelStyle}
                             >
-                              {parameter.name}
+                              {parameterDisplayLabel}
                               {parameter.required ? ' *' : ''}
                             </label>
                             {parameter.enumValues.length > 0 ? (
                               <Select
                                 allowClear={!parameter.required}
-                                aria-label={`Parameter ${parameter.name}`}
+                                aria-label={parameterAriaLabel}
                                 id={`workflow-step-parameter-${parameter.name}`}
                                 options={parameter.enumValues.map((value) => ({
                                   label: value,
                                   value,
                                 }))}
-                                placeholder={parameter.default || 'Select value'}
+                                placeholder={parameterPlaceholder}
                                 value={currentValue || undefined}
                                 onChange={(value) =>
                                   updateStepDraft((current) =>
@@ -1638,9 +1836,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             ) : (
                               <Input
-                                aria-label={`Parameter ${parameter.name}`}
+                                aria-label={parameterAriaLabel}
                                 id={`workflow-step-parameter-${parameter.name}`}
-                                placeholder={parameter.default || parameter.type || 'Value'}
+                                placeholder={parameterPlaceholder}
                                 value={currentValue}
                                 onChange={(event) =>
                                   updateStepDraft((current) =>
@@ -1657,7 +1855,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             )}
                             <div style={workflowInlineMetaStyle}>
-                              {parameter.description || `Type: ${parameter.type}`}
+                              {parameterDescription}
                             </div>
                           </div>
                         );
@@ -1759,7 +1957,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             <Typography.Text strong>Workflow draft run</Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-            seeded fixture
+            Draft input
           </span>
         </div>
         <div style={{ display: 'grid', gap: 8 }}>
@@ -1824,7 +2022,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               )
             }
           >
-            Load fixture
+            Load sample input
           </Button>
         </Space>
         {workflowRunError ? (
@@ -3048,7 +3246,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             <Typography.Text strong>Script draft run</Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#fffbe6', color: '#ad6800' }}>
-            seeded fixture
+            Draft input
           </span>
         </div>
         <div style={sectionDescriptionStyle}>
@@ -3088,7 +3286,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               )
             }
           >
-            Load fixture
+            Load sample input
           </Button>
         </Space>
         <div>
@@ -3489,7 +3687,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             <Typography.Text strong>GAgent draft run</Typography.Text>
           </div>
           <span style={{ ...statusTagStyle, background: '#f6ffed', color: '#237804' }}>
-            seeded fixture
+            Draft input
           </span>
         </div>
         <div style={sectionDescriptionStyle}>
@@ -3517,7 +3715,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
               setRunPrompt('Classify this support ticket, keep the member state, and decide whether to escalate.')
             }
           >
-            Load fixture
+            Load sample input
           </Button>
         </Space>
         <div>

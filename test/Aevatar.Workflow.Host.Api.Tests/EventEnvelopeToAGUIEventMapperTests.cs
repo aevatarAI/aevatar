@@ -360,7 +360,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void WorkflowSuspended_ShouldFallbackLegacySecureInputMetadataToTypedPayload()
+    public void WorkflowSuspended_ShouldIgnoreLegacySecureInputMetadataReservedKeys()
     {
         var suspended = CreateMapper().Map(WrapCommitted(new WorkflowSuspendedEvent
         {
@@ -380,9 +380,9 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
 
         suspended.Should().ContainSingle();
         var request = suspended[0].Custom.Payload.Unpack<WorkflowHumanInputRequestCustomPayload>();
-        request.VariableName.Should().Be("api_key");
-        request.Secure.Should().BeTrue();
-        request.RedactedOutput.Should().Be("[legacy captured]");
+        request.VariableName.Should().BeEmpty();
+        request.Secure.Should().BeFalse();
+        request.RedactedOutput.Should().BeEmpty();
         request.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
         request.Metadata.Should().NotContainKey("variable");
         request.Metadata.Should().NotContainKey("secure");
@@ -391,9 +391,9 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void WaitingForSignalEvent_WhenRunIdMissing_ShouldFallbackToCorrelationId()
+    public void WaitingForSignalEvent_WhenTypedRunIdMissing_ShouldNotMap()
     {
-        var envelope = WrapCommitted(new WaitingForSignalEvent
+        var envelope = WrapObserved(new WaitingForSignalEvent
         {
             StepId = "wait_gate",
             SignalName = "ops_window_open",
@@ -403,10 +403,12 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             CorrelationId = "corr-wait",
         };
 
-        var events = CreateMapper().Map(envelope);
+        var handler = new WorkflowWaitingSignalRunEventEnvelopeMappingHandler();
+        var mapped = CreateMapper().Map(envelope);
 
-        events.Should().ContainSingle();
-        events[0].Custom.Payload.Unpack<WorkflowWaitingSignalCustomPayload>().RunId.Should().Be("corr-wait");
+        handler.TryMap(envelope, out var events).Should().BeTrue();
+        events.Should().BeEmpty();
+        mapped.Should().BeEmpty();
     }
 
     [Fact]
@@ -509,7 +511,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void PublicMappingPaths_ShouldCoverHelperFallbackBranches()
+    public void PublicMappingPaths_ShouldCoverRemainingHelperFallbackBranches()
     {
         var startEnvelope = new EventEnvelope
         {
@@ -540,8 +542,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
                 includeStateEventTimestamp: false).Payload,
         };
         var waitingEvents = CreateMapper().Map(waitingEnvelope);
-        waitingEvents.Should().ContainSingle();
-        waitingEvents[0].Custom.Payload.Unpack<WorkflowWaitingSignalCustomPayload>().RunId.Should().BeEmpty();
+        waitingEvents.Should().BeEmpty();
 
         var reasoningEnvelope = WrapCommitted(new TextMessageReasoningEvent
         {

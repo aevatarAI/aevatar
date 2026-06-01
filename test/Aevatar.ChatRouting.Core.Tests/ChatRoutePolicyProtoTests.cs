@@ -8,6 +8,29 @@ namespace Aevatar.ChatRouting.Core.Tests;
 public sealed class ChatRoutePolicyProtoTests
 {
     [Fact]
+    public void ChatRouteActionDescriptor_ShouldExposeOnlyCurrentActionFields()
+    {
+        var actionOneof = ChatRouteAction.Descriptor.Oneofs
+            .Single(oneof => oneof.Name == "action");
+
+        var actionFieldNames = actionOneof.Fields
+            .Select(field => field.Name)
+            .ToArray();
+
+        actionFieldNames.Should().BeEquivalentTo("forward_to_model", "reject");
+        ChatRouteAction.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => field.Name)
+            .Should()
+            .NotContain(new[]
+            {
+                "forward_to_gagent",
+                "forward_to_team",
+                "forward_to_workflow",
+                "bypass",
+            });
+    }
+
+    [Fact]
     public void ForwardToModel_ShouldRoundTripToolSetRefAndToolChoiceHint()
     {
         var action = new ChatRouteAction
@@ -19,6 +42,11 @@ public sealed class ChatRoutePolicyProtoTests
                 ToolChoiceHint = new ChatRouteToolChoiceHint
                 {
                     ToolName = "aevatar_invoke_gagent",
+                    VoiceAttachTarget = new ChatRouteVoiceAttachTarget
+                    {
+                        ActorId = "voice-agent-1",
+                        VoiceModuleName = "voice_presence_openai",
+                    },
                     PrefilledArguments = new Struct
                     {
                         Fields =
@@ -40,5 +68,7 @@ public sealed class ChatRoutePolicyProtoTests
         parsed.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"].StringValue
             .Should()
             .Be("actor-1");
+        parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be("voice-agent-1");
+        parsed.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.VoiceModuleName.Should().Be("voice_presence_openai");
     }
 }

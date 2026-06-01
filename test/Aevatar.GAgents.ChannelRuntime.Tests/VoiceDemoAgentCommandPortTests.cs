@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.NyxidChat;
@@ -23,7 +21,7 @@ public sealed class VoiceDemoAgentCommandPortTests
         var dispatchPort = new RecordingActorDispatchPort();
         using var provider = CreateProvider(actorRuntime, dispatchPort);
         var commandPort = provider.GetRequiredService<IVoiceDemoAgentCommandPort>();
-        var expectedActorId = BuildExpectedDemoActorId("scope-1");
+        var expectedActorId = NyxIdChatServiceDefaults.BuildVoiceDemoActorId("scope-1");
 
         var receipt = await commandPort.EnsureAsync(" scope-1 ", " voice_presence_openai ");
 
@@ -72,11 +70,28 @@ public sealed class VoiceDemoAgentCommandPortTests
             .WithParameterName(expectedParameterName);
     }
 
-    private static string BuildExpectedDemoActorId(string scopeId)
+    [Fact]
+    public void BuildVoiceDemoActorId_ShouldTrimScopeAndReturnDeterministicNyxIdChatActorId()
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim()));
-        var hash = Convert.ToHexString(bytes)[..16].ToLowerInvariant();
-        return $"{NyxIdChatServiceDefaults.ActorIdPrefix}-voice-demo-{hash}";
+        var first = NyxIdChatServiceDefaults.BuildVoiceDemoActorId(" scope-1 ");
+        var second = NyxIdChatServiceDefaults.BuildVoiceDemoActorId("scope-1");
+
+        first.Should().Be(second);
+        first.Should().StartWith($"{NyxIdChatServiceDefaults.ActorIdPrefix}-voice-demo-");
+        first.Should().HaveLength($"{NyxIdChatServiceDefaults.ActorIdPrefix}-voice-demo-".Length + 16);
+        first.Should().MatchRegex("^nyxid-chat-voice-demo-[0-9a-f]{16}$");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void BuildVoiceDemoActorId_ShouldRejectMissingScope(string? scopeId)
+    {
+        var act = () => NyxIdChatServiceDefaults.BuildVoiceDemoActorId(scopeId!);
+
+        act.Should().Throw<ArgumentException>()
+            .WithParameterName("scopeId");
     }
 
     private static ServiceProvider CreateProvider(

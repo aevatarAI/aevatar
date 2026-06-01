@@ -29,7 +29,7 @@ public class ScriptBehaviorGAgentReplayContractTests
         harness.Agent.State.ScriptId.Should().Be("script-1");
         harness.Agent.State.Revision.Should().Be("rev-1");
         harness.Agent.State.LastRunId.Should().Be("run-1");
-        harness.Agent.State.LastAppliedEventVersion.Should().Be(2);
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(3);
         harness.Agent.State.StateRoot.Should().NotBeNull();
         harness.Agent.State.StateRoot.Unpack<ScriptProfileState>().CommandCount.Should().Be(1);
         harness.Agent.State.LastEventId.Should().Be(Any.Pack(new ScriptProfileUpdated()).TypeUrl);
@@ -45,7 +45,7 @@ public class ScriptBehaviorGAgentReplayContractTests
         await RunAsync(harness.Agent, "run-2", "rev-1", "runtime.requested");
 
         harness.Agent.State.LastRunId.Should().Be("run-2");
-        harness.Agent.State.LastAppliedEventVersion.Should().Be(3);
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(5);
         harness.Agent.State.StateRoot.Should().NotBeNull();
         harness.Agent.State.StateRoot.Unpack<ScriptProfileState>().CommandCount.Should().Be(2);
     }

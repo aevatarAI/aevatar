@@ -127,14 +127,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 "[{Role}] Tool approval APPROVED. Executing tool={Tool} request={RequestId}",
                 RoleName, pending.ToolName, pending.RequestId);
 
-            // Restore typed context (NyxID access token etc.) so tool execution can
-            // read AgentToolRequestContext typed accessors.
+            // Refactor (issue1414/cluster-004):
+            //   Old pattern: pending approval state could rehydrate stable tool/caller context from metadata.
+            //   New principle: typed ToolContext/LlmControl are the only tool control authority; metadata carries annotations only.
             try
             {
-                using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
-                           pending.Metadata.Count > 0
-                               ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
-                               : null)))
+                // Refactor (issue1253-first):
+                //   Old pattern: Approval resume rebuilt control context from pending.Metadata.
+                //   New principle: Use typed pending.ToolContext only; metadata is never a control source.
+                var pendingToolContext = ResolvePendingToolContext(pending);
+                using (AgentToolContextScope.Push(pendingToolContext))
                 {
                     // Execute the yielded tool call
                     var toolResult = await Tools.ExecuteToolCallAsync(
@@ -166,8 +168,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         Prompt = continuation,
                         SessionId = Guid.NewGuid().ToString("N"),
                         ScopeId = pending.SessionId,
+                        ToolContext = pendingToolContext.ToPayload(),
                     };
-                    foreach (var kv in pending.Metadata)
+                    foreach (var kv in ScrubPendingApprovalMetadata(pending.Metadata))
                         continuationRequest.Metadata[kv.Key] = kv.Value;
 
                     await SendToAsync(Id, continuationRequest);
@@ -238,7 +241,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.ArgumentsJson,
                     ToolApprovalMode.Auto,
                     pending.IsDestructive,
-                    new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)),
+                    // Refactor (issue1253-first):
+                    //   Old pattern: Remote approval received scrubbed durable metadata that could include legacy control keys.
+                    //   New principle: Remote approval only receives open annotations.
+                    new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
                 CancellationToken.None);
 
             var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, submission.RemoteApprovalId, 1);
@@ -301,7 +307,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 new RemoteToolApprovalStatusQuery(
                     pending.RequestId,
                     pending.RemoteApprovalId,
-                    new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)),
+                    // Refactor (issue1253-first):
+                    //   Old pattern: Status checks forwarded pending.Metadata as a control surface.
+                    //   New principle: Status checks forward annotations only.
+                    new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
                 CancellationToken.None);
         }
         catch (Exception ex)
@@ -423,9 +432,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     ToolCallId = toolCallId,
                     ArgumentsJson = args,
                     IsDestructive = true,
+                    ToolContext = ResolveToolContext(request, requestId, toolCallId).ToPayload(),
                 };
-                // Preserve metadata (NyxID access token etc.) for continuation
-                foreach (var kv in request.Metadata)
+                foreach (var kv in ScrubPendingApprovalMetadata(request.Metadata))
                     pending.Metadata[kv.Key] = kv.Value;
 
                 return pending;
@@ -536,6 +545,54 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                "Please continue with the original task based on this result.";
     }
 
+    private static IReadOnlyDictionary<string, string> ScrubPendingApprovalMetadata(
+        IReadOnlyDictionary<string, string>? metadata) =>
+        AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata);
+
+    private static AgentToolExecutionContext ResolveToolContext(
+        ChatRequestEvent request,
+        string requestId,
+        string toolCallId)
+    {
+        // Refactor (issue1414/cluster-004):
+        //   Old pattern: active ChatRequestEvent.Metadata could be promoted into tool execution control.
+        //   New principle: active request control comes only from typed ToolContext/LlmControl fields.
+        var context = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+
+        context = LLMControlContextMapper.FromPayload(request.LlmControl).ToToolContext(context);
+        context = context with
+        {
+            Request = new AgentToolRequestIdentity(
+                NormalizeToolContextValue(requestId) ?? context.Request.RequestId,
+                NormalizeToolContextValue(toolCallId) ?? context.Request.CallId),
+            Credentials = AgentToolCredentials.Empty,
+            ExternalMetadata = ScrubPendingApprovalMetadata(context.ExternalMetadata),
+        };
+
+        return context;
+    }
+
+    private static AgentToolExecutionContext ResolvePendingToolContext(PendingToolApprovalState pending)
+    {
+        // Refactor (iter290/cluster-002-invocation-trusted-context-metadata-bag):
+        //   Old pattern: pending approval Metadata remained the primary resume context.
+        //   New principle: pending ToolContext is authoritative; metadata is only a scrubbed old-state annotation fallback.
+        var context = pending.ToolContext != null
+            ? AgentToolExecutionContextMapper.FromPayload(pending.ToolContext)
+            : AgentToolExecutionContext.Empty with
+            {
+                ExternalMetadata = ScrubPendingApprovalMetadata(pending.Metadata),
+            };
+
+        return context with
+        {
+            Credentials = AgentToolCredentials.Empty,
+            ExternalMetadata = ScrubPendingApprovalMetadata(context.ExternalMetadata),
+        };
+    }
+
+    private static string? NormalizeToolContextValue(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     // ─── Pending approval state transitions ───
 
     private static RoleGAgentState ApplyPendingApproval(
@@ -768,23 +825,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             await ScheduleApprovalTimeoutAsync(pendingApproval);
         }
 
+        // Refactor (iter164/cluster-001-role-completion):
+        //   Old pattern: terminal presentation frames were published before
+        //                RoleChatSessionCompletedEvent was committed; commit failure was downgraded to replay-only loss.
+        //   New principle: commit RoleChatSessionCompletedEvent first; publish terminal frames only from that committed fact.
+        await PersistSessionCompletionAsync(request, replayRecord);
         replayRecord = await PublishMissingDisplayContentAsync(request.SessionId, replayRecord);
-
-        // Publish first so consumers (relay, SSE) get the response immediately.
-        // Persist is best-effort: concurrency conflicts must not block the reply.
         await PublishCompletionAsync(request.SessionId, replayRecord.Content);
-
-        try
-        {
-            await PersistSessionCompletionAsync(request, replayRecord);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            Logger.LogWarning(ex,
-                "[{Role}] Failed to persist session completion. session={SessionId}. " +
-                "Response was already published — session replay may be unavailable.",
-                RoleName, request.SessionId);
-        }
     }
 
     private static int ResolveLlmTimeoutMs(ChatRequestEvent request)

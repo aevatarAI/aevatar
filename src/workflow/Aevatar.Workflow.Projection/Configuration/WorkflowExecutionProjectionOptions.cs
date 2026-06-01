@@ -15,9 +15,12 @@ public sealed class WorkflowExecutionProjectionOptions
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Exposes read-side actor query endpoints.
+    /// Exposes workflow actor current-state readmodel query endpoints.
     /// </summary>
-    public bool EnableActorQueryEndpoints { get; set; } = true;
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: current-state query enablement was named EnableActorQueryEndpoints.
+    //   New principle: current-state query enablement is named for workflow-run readmodel semantics.
+    public bool WorkflowActorCurrentStateQueryEnabled { get; set; } = true;
 
     /// <summary>
     /// Exposes workflow artifact/export query endpoints.

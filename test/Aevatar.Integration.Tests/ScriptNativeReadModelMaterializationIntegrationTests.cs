@@ -38,15 +38,6 @@ public sealed class ScriptNativeReadModelMaterializationIntegrationTests
             },
             CancellationToken.None);
 
-        var nativeDocumentStore = provider.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>();
-        var nativeDocument = await nativeDocumentStore.GetAsync(runtimeActorId, CancellationToken.None);
-        nativeDocument.Should().NotBeNull();
-        nativeDocument!.SchemaId.Should().Be("claim_case");
-        nativeDocument.Fields["case_id"].Should().Be("Case-B");
-        nativeDocument.Fields["policy_id"].Should().Be("POLICY-B");
-        nativeDocument.Fields["search"].Should().BeAssignableTo<IDictionary<string, object?>>();
-        nativeDocument.Fields["search"].As<IDictionary<string, object?>>()["lookup_key"].Should().Be("case-b:policy-b");
-
         var subgraph = await ScriptEvolutionIntegrationTestKit.WaitForGraphSubgraphAsync(
             provider,
             scope: "script-native-claim_case",
@@ -58,6 +49,15 @@ public sealed class ScriptNativeReadModelMaterializationIntegrationTests
                     x.ToNodeId == "ref:policy:POLICY-B" &&
                     x.EdgeType == "rel_policy"),
             CancellationToken.None);
+
+        var nativeDocumentStore = provider.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>();
+        var nativeDocument = await nativeDocumentStore.GetAsync(runtimeActorId, CancellationToken.None);
+        nativeDocument.Should().NotBeNull();
+        nativeDocument!.SchemaId.Should().Be("claim_case");
+        nativeDocument.Fields["case_id"].Should().Be("Case-B");
+        nativeDocument.Fields["policy_id"].Should().Be("POLICY-B");
+        nativeDocument.Fields["search"].Should().BeAssignableTo<IDictionary<string, object?>>();
+        nativeDocument.Fields["search"].As<IDictionary<string, object?>>()["lookup_key"].Should().Be("case-b:policy-b");
 
         subgraph.Nodes.Should().Contain(x => x.NodeId == "script:claim_case:claim-native-runtime");
         subgraph.Nodes.Should().Contain(x => x.NodeId == "ref:policy:POLICY-B");

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -16,6 +15,9 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
 
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: ChatRun adapter persisted tool results only as internal_result_json.
+    //   New principle: adapter writes typed Value first and keeps internal_result_json as read fallback.
     public ChatRunActorAdapter(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort)
@@ -58,21 +60,22 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.ToolCall);
 
-        var parsed = ParseObservationTarget(request);
+        var target = ResolveObservationTarget(request);
         var command = new SubmitChatRunToolCallRequested
         {
             ToolCallId = NormalizeRequired(request.ToolCall.Id, nameof(request.ToolCall.Id)),
             ToolName = NormalizeRequired(request.ToolCall.Name, nameof(request.ToolCall.Name)),
             Arguments = ParseStruct(request.ArgumentsJson),
-            ResultJson = request.ToolExecutionResultJson ?? string.Empty,
-            RunId = parsed.RunId,
+            InternalResultJson = request.ToolExecutionResultJson ?? string.Empty,
+            InternalResult = ParseValue(request.ToolExecutionResultJson),
+            RunId = target.RunId,
             TargetKind = ResolveTargetKind(request.ToolCall.Name),
-            TargetId = ResolveTargetId(parsed),
-            WaitMode = parsed.WaitMode,
-            StreamTopic = parsed.StreamTopic,
-            ActorId = parsed.ActorId,
-            ServiceId = parsed.ServiceId,
-            EndpointId = parsed.EndpointId,
+            TargetId = ResolveTargetId(target),
+            WaitMode = target.WaitMode,
+            StreamTopic = target.StreamTopic,
+            ActorId = target.ActorId,
+            ServiceId = target.ServiceId,
+            EndpointId = target.EndpointId,
             LlmRound = request.LlmRound,
             ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
@@ -92,8 +95,8 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.ToolCall);
 
-        var parsed = ParseObservationTarget(request);
-        if (parsed.WaitMode != ChatRunSubRunWaitMode.Complete || string.IsNullOrWhiteSpace(parsed.RunId))
+        var target = ResolveObservationTarget(request);
+        if (target.WaitMode != ChatRunSubRunWaitMode.Complete || string.IsNullOrWhiteSpace(target.RunId))
             return;
 
         var command = new PrepareChatRunSubRunObservationRequested
@@ -101,14 +104,14 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
             ToolCallId = NormalizeRequired(request.ToolCall.Id, nameof(request.ToolCall.Id)),
             ToolName = NormalizeRequired(request.ToolCall.Name, nameof(request.ToolCall.Name)),
             Arguments = ParseStruct(request.ArgumentsJson),
-            RunId = parsed.RunId,
+            RunId = target.RunId,
             TargetKind = ResolveTargetKind(request.ToolCall.Name),
-            TargetId = ResolveTargetId(parsed),
-            WaitMode = parsed.WaitMode,
-            StreamTopic = parsed.StreamTopic,
-            ActorId = parsed.ActorId,
-            ServiceId = parsed.ServiceId,
-            EndpointId = parsed.EndpointId,
+            TargetId = ResolveTargetId(target),
+            WaitMode = target.WaitMode,
+            StreamTopic = target.StreamTopic,
+            ActorId = target.ActorId,
+            ServiceId = target.ServiceId,
+            EndpointId = target.EndpointId,
             LlmRound = request.LlmRound,
             ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
@@ -122,17 +125,17 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
             ct);
     }
 
-    private static ParsedInvocationToolResult ParseObservationTarget(ChatRunToolCompletionRequest request)
+    // Refactor (iter290/cluster001): Old pattern: actor observation target was inferred from ResultJson. New principle: actor observation uses typed run, target, and wait fields before dispatch.
+    private static ChatRunToolCompletionRequest ResolveObservationTarget(ChatRunToolCompletionRequest request)
     {
-        var parsed = ParseInvocationToolResult(request.ToolExecutionResultJson);
-        if (parsed.WaitMode == ChatRunSubRunWaitMode.Complete && !string.IsNullOrWhiteSpace(parsed.RunId))
-            return parsed;
+        if (request.WaitMode == ChatRunSubRunWaitMode.Complete && !string.IsNullOrWhiteSpace(request.RunId))
+            return request;
 
         if (string.Equals(request.ToolCall.Name, "aevatar_invoke_gagent", StringComparison.Ordinal) &&
             !string.IsNullOrWhiteSpace(request.ToolCall.Id) &&
             TryReadString(request.ArgumentsJson, "actor_id", out var actorId))
         {
-            return parsed with
+            return request with
             {
                 RunId = request.ToolCall.Id.Trim(),
                 ActorId = actorId,
@@ -140,7 +143,7 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
             };
         }
 
-        return parsed;
+        return request;
     }
 
     public Task ObserveSubRunTerminalAsync(
@@ -234,30 +237,25 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
         }
     }
 
-    private static ParsedInvocationToolResult ParseInvocationToolResult(string? resultJson)
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: ChatRun boundary adapter forwarded tool results only through internal_result_json.
+    //   New principle: typed Value carries new writes; legacy JSON falls back to parsed Value or string payload.
+    private static Value ParseValue(string? json)
     {
-        if (string.IsNullOrWhiteSpace(resultJson))
-            return ParsedInvocationToolResult.Empty;
+        if (string.IsNullOrWhiteSpace(json))
+            return new Value { StructValue = new Struct() };
 
         try
         {
-            using var document = JsonDocument.Parse(resultJson);
-            var root = document.RootElement;
-            return new ParsedInvocationToolResult(
-                ReadString(root, "run_id"),
-                ReadString(root, "stream_topic"),
-                ReadString(root, "actor_id"),
-                ReadString(root, "service_id"),
-                ReadString(root, "endpoint_id"),
-                ReadWait(root));
+            return JsonParser.Default.Parse<Value>(json);
         }
         catch
         {
-            return ParsedInvocationToolResult.Empty;
+            return Value.ForString(json);
         }
     }
 
-    private static string ResolveTargetId(ParsedInvocationToolResult result) =>
+    private static string ResolveTargetId(ChatRunToolCompletionRequest result) =>
         FirstNonEmpty(result.ActorId, result.ServiceId, result.EndpointId);
 
     private static ChatRunSubRunTargetKind ResolveTargetKind(string toolName) =>
@@ -268,24 +266,6 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
             "aevatar_start_workflow" => ChatRunSubRunTargetKind.Workflow,
             _ => ChatRunSubRunTargetKind.Unspecified,
         };
-
-    private static ChatRunSubRunWaitMode ReadWait(JsonElement root)
-    {
-        var wait = ReadString(root, "wait");
-        return wait switch
-        {
-            "ack" => ChatRunSubRunWaitMode.Ack,
-            "complete" => ChatRunSubRunWaitMode.Complete,
-            _ => ChatRunSubRunWaitMode.Stream,
-        };
-    }
-
-    private static string ReadString(JsonElement root, string propertyName) =>
-        root.ValueKind == JsonValueKind.Object &&
-        root.TryGetProperty(propertyName, out var property) &&
-        property.ValueKind == JsonValueKind.String
-            ? property.GetString()?.Trim() ?? string.Empty
-            : string.Empty;
 
     private static bool TryReadString(
         string? json,
@@ -298,8 +278,13 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
 
         try
         {
-            using var document = JsonDocument.Parse(json);
-            value = ReadString(document.RootElement, propertyName);
+            var arguments = JsonParser.Default.Parse<Struct>(json);
+            if (arguments.Fields.TryGetValue(propertyName, out var property) &&
+                property.KindCase == Value.KindOneofCase.StringValue)
+            {
+                value = property.StringValue?.Trim() ?? string.Empty;
+            }
+
             return !string.IsNullOrWhiteSpace(value);
         }
         catch
@@ -335,21 +320,4 @@ public sealed class ChatRunActorAdapter : IChatRunActorPort
 
     private static string FirstNonEmpty(params string[] values) =>
         values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
-
-    private sealed record ParsedInvocationToolResult(
-        string RunId,
-        string StreamTopic,
-        string ActorId,
-        string ServiceId,
-        string EndpointId,
-        ChatRunSubRunWaitMode WaitMode)
-    {
-        public static ParsedInvocationToolResult Empty { get; } = new(
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            ChatRunSubRunWaitMode.Unspecified);
-    }
 }

@@ -144,15 +144,15 @@ public sealed class ChatQueryEndpointsTests
     }
 
     [Fact]
-    public async Task GetActorSnapshot_ShouldReturnNotFound_WhenSnapshotMissing()
+    public async Task GetWorkflowActorCurrentState_ShouldReturnNotFound_WhenCurrentStateMissing()
     {
         var service = new FakeWorkflowExecutionQueryApplicationService();
 
-        var result = await ChatQueryEndpoints.GetActorSnapshot("actor-1", service, CancellationToken.None);
+        var result = await ChatQueryEndpoints.GetWorkflowActorCurrentState("actor-1", service, CancellationToken.None);
 
         var http = await ExecuteWithContextAsync(result);
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        service.Calls.Should().ContainSingle().Which.Should().Be("GetActorSnapshot:actor-1");
+        service.Calls.Should().ContainSingle().Which.Should().Be("GetWorkflowActorCurrentState:actor-1");
     }
 
     [Fact]
@@ -199,23 +199,18 @@ public sealed class ChatQueryEndpointsTests
     }
 
     [Fact]
-    public async Task GetWorkflowRunGraphExportEnriched_ShouldCombineSnapshotAndSubgraph()
+    public async Task GetWorkflowRunGraphExportEnriched_ShouldReturnSubgraphOnly()
     {
         var service = new FakeWorkflowExecutionQueryApplicationService
         {
-            Snapshot = new WorkflowActorSnapshot
-            {
-                ActorId = "actor-1",
-                WorkflowName = "direct",
-            },
             GraphSubgraph = new WorkflowRunGraphExportSubgraph
             {
-                RootNodeId = "actor-1",
+                RootNodeId = "run-1",
             },
         };
 
         var result = await ChatQueryEndpoints.GetWorkflowRunGraphExportEnriched(
-            "actor-1",
+            "run-1",
             service,
             depth: 4,
             take: 9,
@@ -224,12 +219,9 @@ public sealed class ChatQueryEndpointsTests
             ct: CancellationToken.None);
 
         var body = await ExecuteAsync(result);
-        body.Should().Contain("snapshot");
-        body.Should().Contain("subgraph");
-        body.Should().Contain("actor-1");
-        service.Calls.Should().ContainInOrder(
-            "GetActorSnapshot:actor-1",
-            "GetWorkflowRunGraphExportSubgraph:actor-1:4:9:Inbound:child");
+        body.Should().Contain("run-1");
+        service.Calls.Should().ContainSingle()
+            .Which.Should().Be("GetWorkflowRunGraphExportSubgraph:run-1:4:9:Inbound:child");
     }
 
     [Fact]
@@ -254,7 +246,7 @@ public sealed class ChatQueryEndpointsTests
     }
 
     [Fact]
-    public async Task WorkflowRunExportRoutes_ShouldBindWorkflowRunIdAndQueryParameters()
+    public async Task WorkflowRunExportRoutes_ShouldBindActorIdAndQueryParameters()
     {
         var service = new FakeWorkflowExecutionQueryApplicationService
         {
@@ -320,12 +312,11 @@ public sealed class ChatQueryEndpointsTests
         (await timeline.Content.ReadAsStringAsync()).Should().Contain("step-1");
         (await edges.Content.ReadAsStringAsync()).Should().Contain("edge-1");
         (await subgraph.Content.ReadAsStringAsync()).Should().Contain("run-42");
-        (await enriched.Content.ReadAsStringAsync()).Should().Contain("snapshot");
+        (await enriched.Content.ReadAsStringAsync()).Should().Contain("run-42");
         service.Calls.Should().ContainInOrder(
             "ListWorkflowRunTimelineExport:run-42:7",
             "ListWorkflowRunGraphExportEdges:run-42:8:Outbound:child,sibling",
             "GetWorkflowRunGraphExportSubgraph:run-42:3:9:Inbound:child",
-            "GetActorSnapshot:run-42",
             "GetWorkflowRunGraphExportSubgraph:run-42:4:10:Both:child");
     }
 
@@ -387,7 +378,7 @@ public sealed class ChatQueryEndpointsTests
 
     private sealed class FakeWorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; init; } = [];
         public IReadOnlyList<string> Workflows { get; init; } = [];
         public IReadOnlyList<WorkflowCatalogItem> WorkflowCatalog { get; init; } = [];
@@ -437,9 +428,9 @@ public sealed class ChatQueryEndpointsTests
             return Task.FromResult(Capabilities);
         }
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
-            Calls.Add($"GetActorSnapshot:{actorId}");
+            Calls.Add($"GetWorkflowActorCurrentState:{actorId}");
             return Task.FromResult(Snapshot);
         }
 

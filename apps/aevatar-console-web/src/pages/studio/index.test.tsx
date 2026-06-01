@@ -13,7 +13,7 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
-import StudioPage from "./index";
+import StudioPage, { buildStudioMemberBindingPendingNotice } from "./index";
 
 jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
@@ -114,6 +114,13 @@ function mockBuildWorkflowYaml(document: typeof mockWorkflowDocument): string {
     const lines = [`  - id: ${step.id}`, `    type: ${step.type}`];
     if (step.targetRole) {
       lines.push(`    targetRole: ${step.targetRole}`);
+    }
+    const parameterEntries = Object.entries(step.parameters ?? {});
+    if (parameterEntries.length > 0) {
+      lines.push("    parameters:");
+      for (const [key, value] of parameterEntries) {
+        lines.push(`      ${key}: ${String(value)}`);
+      }
     }
     if (step.next) {
       lines.push(`    next: ${step.next}`);
@@ -387,6 +394,7 @@ let mockConnectorDraftResponse: any;
 let mockRoleCatalog: any;
 let mockRoleDraftResponse: any;
 let mockSettings: any;
+let mockLastWorkflowBuildPanelProps: any;
 const defaultStudioAppContext = {
   mode: "proxy",
   scopeId: null,
@@ -1712,6 +1720,7 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 jest.mock("./components/StudioBuildPanels", () => {
   const mockReact = require("react");
   const StudioWorkflowBuildPanel = (props: any) => {
+    mockLastWorkflowBuildPanelProps = props;
     const [detailsMode, setDetailsMode] = mockReact.useState("step");
     const [addStepType, setAddStepType] = mockReact.useState(
       props.availableStepTypes?.[0] || "llm_call"
@@ -1724,25 +1733,35 @@ jest.mock("./components/StudioBuildPanels", () => {
         null
       );
     }, [props.selectedGraphNodeId, props.workflowGraph?.steps]);
-    const [stepDraft, setStepDraft] = mockReact.useState(() => ({
+    const selectedStepDraftSeed = mockReact.useMemo(() => ({
+      kind: "step",
       id: selectedStep?.id || "",
       type: selectedStep?.type || "llm_call",
       targetRole: selectedStep?.targetRole || "",
       next: selectedStep?.next || "",
       parametersText: JSON.stringify(selectedStep?.parameters || {}, null, 2),
       branchesText: JSON.stringify(selectedStep?.branches || {}, null, 2),
-    }));
+    }), [
+      selectedStep?.id,
+      selectedStep?.type,
+      selectedStep?.targetRole,
+      selectedStep?.next,
+      JSON.stringify(selectedStep?.parameters || {}),
+      JSON.stringify(selectedStep?.branches || {}),
+    ]);
+    const [stepDraft, setStepDraft] = mockReact.useState(() => selectedStepDraftSeed);
+    const stepDraftRef = mockReact.useRef(stepDraft);
+
+    const updateStepDraft = mockReact.useCallback((updater: any) => {
+      const nextDraft =
+        typeof updater === "function" ? updater(stepDraftRef.current) : updater;
+      stepDraftRef.current = nextDraft;
+      setStepDraft(nextDraft);
+    }, []);
 
     mockReact.useEffect(() => {
-      setStepDraft({
-        id: selectedStep?.id || "",
-        type: selectedStep?.type || "llm_call",
-        targetRole: selectedStep?.targetRole || "",
-        next: selectedStep?.next || "",
-        parametersText: JSON.stringify(selectedStep?.parameters || {}, null, 2),
-        branchesText: JSON.stringify(selectedStep?.branches || {}, null, 2),
-      });
-    }, [selectedStep]);
+      updateStepDraft(selectedStepDraftSeed);
+    }, [selectedStepDraftSeed]);
 
     return mockReact.createElement("div", { "data-testid": "studio-workflow-build-panel" }, [
       mockReact.createElement("div", { key: "eyebrow" }, "DAG Canvas"),
@@ -1830,7 +1849,7 @@ jest.mock("./components/StudioBuildPanels", () => {
               "aria-label": "Step ID",
               value: stepDraft.id,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({ ...current, id: event.target.value })),
+                updateStepDraft((current: any) => ({ ...current, id: event.target.value })),
             }),
             mockReact.createElement(
               "select",
@@ -1838,7 +1857,7 @@ jest.mock("./components/StudioBuildPanels", () => {
                 "aria-label": "Step type",
                 value: stepDraft.type,
                 onChange: (event: MockValueEvent) =>
-                  setStepDraft((current: any) => ({ ...current, type: event.target.value })),
+                  updateStepDraft((current: any) => ({ ...current, type: event.target.value })),
               },
               (props.availableStepTypes || ["llm_call"]).map((stepType: string) =>
                 mockReact.createElement("option", { key: stepType, value: stepType }, stepType)
@@ -1848,7 +1867,7 @@ jest.mock("./components/StudioBuildPanels", () => {
               "aria-label": "Target role",
               value: stepDraft.targetRole,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({
+                updateStepDraft((current: any) => ({
                   ...current,
                   targetRole: event.target.value,
                 })),
@@ -1857,13 +1876,13 @@ jest.mock("./components/StudioBuildPanels", () => {
               "aria-label": "Next step",
               value: stepDraft.next,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({ ...current, next: event.target.value })),
+                updateStepDraft((current: any) => ({ ...current, next: event.target.value })),
             }),
             mockReact.createElement("textarea", {
               "aria-label": "Step parameters",
               value: stepDraft.parametersText,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({
+                updateStepDraft((current: any) => ({
                   ...current,
                   parametersText: event.target.value,
                 })),
@@ -1872,7 +1891,7 @@ jest.mock("./components/StudioBuildPanels", () => {
               "aria-label": "Step branches",
               value: stepDraft.branchesText,
               onChange: (event: MockValueEvent) =>
-                setStepDraft((current: any) => ({
+                updateStepDraft((current: any) => ({
                   ...current,
                   branchesText: event.target.value,
                 })),
@@ -1923,7 +1942,40 @@ jest.mock("./components/StudioBuildPanels", () => {
           key: "save",
           type: "button",
           disabled: !props.canSaveWorkflow,
-          onClick: () => props.onSaveDraft?.(),
+          onClick: () => {
+            const currentParametersText =
+              (
+                globalThis.document.querySelector(
+                  'textarea[aria-label="Step parameters"]'
+                ) as HTMLTextAreaElement | null
+              )?.value ?? stepDraftRef.current.parametersText;
+            const currentBranchesText =
+              (
+                globalThis.document.querySelector(
+                  'textarea[aria-label="Step branches"]'
+                ) as HTMLTextAreaElement | null
+              )?.value ?? stepDraftRef.current.branchesText;
+            const currentStepDraft = {
+              ...stepDraftRef.current,
+              parametersText: currentParametersText,
+              branchesText: currentBranchesText,
+            };
+            const currentHasPendingStepDraft =
+              currentStepDraft.id !== selectedStepDraftSeed.id ||
+              currentStepDraft.type !== selectedStepDraftSeed.type ||
+              currentStepDraft.targetRole !== selectedStepDraftSeed.targetRole ||
+              currentStepDraft.next !== selectedStepDraftSeed.next ||
+              currentStepDraft.parametersText !== selectedStepDraftSeed.parametersText ||
+              currentStepDraft.branchesText !== selectedStepDraftSeed.branchesText;
+            props.onSaveDraft?.(
+              currentHasPendingStepDraft
+                ? {
+                    stepId: selectedStep?.id || "",
+                    draft: currentStepDraft,
+                  }
+                : null
+            );
+          },
         },
         "Save draft"
       ),
@@ -4924,6 +4976,83 @@ describe("StudioPage", () => {
     });
   });
 
+  it("saves pending workflow step prompt edits without requiring Apply changes", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    await waitFor(() => {
+      expect(mockLastWorkflowBuildPanelProps?.onSaveDraft).toEqual(expect.any(Function));
+      expect(mockLastWorkflowBuildPanelProps?.canSaveWorkflow).toBe(true);
+    });
+    const staleWorkflowDocument = mockCloneValue(mockWorkflowDocument) as any;
+    staleWorkflowDocument.steps[0].parameters = {};
+    const staleWorkflowResponse = {
+      ...mockWorkflowFile,
+      yaml: mockBuildWorkflowYaml(staleWorkflowDocument),
+      document: staleWorkflowDocument,
+    };
+    (studioApi.saveWorkflow as jest.Mock).mockResolvedValueOnce(staleWorkflowResponse);
+    (studioApi.serializeYaml as jest.Mock).mockClear();
+    await act(async () => {
+      await mockLastWorkflowBuildPanelProps.onSaveDraft({
+        stepId: "draft_step",
+        draft: {
+          kind: "step",
+          id: "draft_step",
+          type: "llm_call",
+          targetRole: "assistant",
+          next: "approve_step",
+          parametersText: JSON.stringify(
+            {
+              prompt_prefix: "Classify the refund request before answering.",
+            },
+            null,
+            2
+          ),
+          branchesText: "{}",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                id: "draft_step",
+                parameters: expect.objectContaining({
+                  prompt_prefix: "Classify the refund request before answering.",
+                }),
+              }),
+            ]),
+          }),
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          yaml: expect.stringContaining(
+            "prompt_prefix: Classify the refund request before answering."
+          ),
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockLastWorkflowBuildPanelProps?.draftYaml).toContain(
+        "prompt_prefix: Classify the refund request before answering."
+      );
+      expect(mockLastWorkflowBuildPanelProps?.workflowGraph.steps[0].parameters).toEqual(
+        expect.objectContaining({
+          prompt_prefix: "Classify the refund request before answering.",
+        })
+      );
+    });
+  });
+
   it("applies workflow step changes without requiring a manual graph selection first", async () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
@@ -5153,6 +5282,24 @@ describe("StudioPage", () => {
   });
 
   it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
+    mockParsedDocument = {
+      ...mockParsedDocument,
+      steps: mockParsedDocument.steps.map((step) =>
+        step.type === "llm_call"
+          ? {
+              ...step,
+              parameters: {
+                prompt: "把用户输入的内容转成日语",
+              },
+            }
+          : step
+      ),
+    } as any;
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      document: mockParsedDocument,
+      yaml: mockBuildWorkflowYaml(mockParsedDocument),
+    };
     mockScopeRuntimeApi.listServices.mockReset();
     mockScopeRuntimeApi.listServices
       .mockResolvedValueOnce([])
@@ -5202,6 +5349,15 @@ describe("StudioPage", () => {
         }),
       );
     });
+    const workflowYamls =
+      (studioApi.bindMemberWorkflow as jest.Mock).mock.calls.at(-1)?.[0]
+        ?.workflowYamls ?? [];
+    expect(workflowYamls.join("\n")).toContain(
+      "prompt_prefix: 把用户输入的内容转成日语"
+    );
+    expect(workflowYamls.join("\n")).not.toContain(
+      "prompt: 把用户输入的内容转成日语"
+    );
     await waitFor(() => {
       expect(screen.getByText("service:default")).toBeTruthy();
       expect(screen.getByText("services:default")).toBeTruthy();
@@ -5370,6 +5526,7 @@ describe("StudioPage", () => {
       scopeId: "scope-1",
       memberId: "workspace-demo",
       status: "platform_binding_pending",
+      stateVersion: 11,
       failure: null,
       updatedAt: "2026-04-27T08:15:01Z",
     });
@@ -5401,6 +5558,54 @@ describe("StudioPage", () => {
 
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("member")).toBe("member:workspace-demo");
+  });
+
+  it("keeps accepted member binding pending when the run readmodel is not visible yet", async () => {
+    mockScopeRuntimeApi.listServices.mockReset();
+    mockScopeRuntimeApi.listServices.mockResolvedValue([]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    const notFoundError = new Error("not found");
+    notFoundError.name = "StudioApiError";
+    Object.assign(notFoundError, { status: 404 });
+    (studioApi.getMemberBindingRun as jest.Mock).mockRejectedValueOnce(notFoundError);
+
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+    });
+
+    await waitFor(() => {
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByText("service:no-service")).toBeTruthy();
+    expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
+  });
+
+  it("includes readmodel freshness in pending member binding notices", () => {
+    expect(
+      buildStudioMemberBindingPendingNotice("workspace-demo", {
+        bindingRunId: "bind-member-workflow-1",
+        scopeId: "scope-1",
+        memberId: "workspace-demo",
+        status: "platform_binding_pending",
+        stateVersion: 11,
+        failure: null,
+        updatedAt: "2026-04-27T08:15:01Z",
+      }).message,
+    ).toContain("Read model observed v11.");
+
+    expect(
+      buildStudioMemberBindingPendingNotice("workspace-demo", null).message,
+    ).toContain("Read model has not materialized this run yet.");
   });
 
   it("normalizes legacy workflow:default links and keeps the bound member contract when switching away and back", async () => {
@@ -5667,10 +5872,8 @@ describe("StudioPage", () => {
     );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.getByText("candidate:draft1")).toBeTruthy();
-      expect(screen.getByText("service:no-service")).toBeTruthy();
-    });
+    expect(await screen.findByText("candidate:draft1")).toBeTruthy();
+    expect(await screen.findByText("service:no-service")).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
@@ -6850,6 +7053,56 @@ describe("StudioPage", () => {
     expect(
       (await screen.findByLabelText("Workflow dry run input")) as HTMLTextAreaElement
     ).toHaveValue("Continue this workflow in Studio");
+  });
+
+  it("runs workflow dry-run with pending step prompt edits", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByText("DAG Canvas")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockLastWorkflowBuildPanelProps?.buildWorkflowYamls).toEqual(
+        expect.any(Function)
+      );
+    });
+    (studioApi.serializeYaml as jest.Mock).mockClear();
+
+    const workflowYamls = await mockLastWorkflowBuildPanelProps.buildWorkflowYamls({
+      stepId: "draft_step",
+      draft: {
+        kind: "step",
+        id: "draft_step",
+        type: "llm_call",
+        targetRole: "assistant",
+        next: "approve_step",
+        parametersText: JSON.stringify(
+          {
+            prompt_prefix: "Translate the input to English.",
+          },
+          null,
+          2
+        ),
+        branchesText: "{}",
+      },
+    });
+
+    expect(workflowYamls).toEqual([
+      expect.stringContaining("prompt_prefix: Translate the input to English."),
+    ]);
+    expect(studioApi.serializeYaml).toHaveBeenCalledTimes(1);
+    expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              id: "draft_step",
+              parameters: expect.objectContaining({
+                prompt_prefix: "Translate the input to English.",
+              }),
+            }),
+          ]),
+        }),
+      })
+    );
   });
 
   it("shows the published template graph in the Studio editor", async () => {
