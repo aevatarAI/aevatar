@@ -1,0 +1,7 @@
+/locks/
+/worktrees/
+/codex-permits/
+/logs/*.log
+/logs/live/
+/logs/process/
+/logs/supervisor/
