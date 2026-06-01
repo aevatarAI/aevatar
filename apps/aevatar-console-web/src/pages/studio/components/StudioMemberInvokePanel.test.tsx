@@ -154,6 +154,8 @@ describe('StudioMemberInvokePanel', () => {
     ).toBeTruthy();
     const targetSummary = screen.getByTestId('studio-invoke-target-summary');
     expect(targetSummary).toHaveTextContent('workspace-demo');
+    expect(targetSummary).toHaveTextContent('Member: default');
+    expect(targetSummary).toHaveTextContent('Service: workspace-demo');
     expect(targetSummary).toHaveTextContent('Endpoint: Submit (submit)');
     expect(targetSummary).toHaveTextContent('Lifecycle: Active');
     expect(targetSummary).toHaveTextContent('Ready');
@@ -168,6 +170,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Events')).toBeTruthy();
     expect(screen.getByText('Metadata')).toBeTruthy();
     expect(screen.getByText('Advanced typed payload')).toBeTruthy();
+    expect(screen.queryByLabelText('Payload base64')).toBeNull();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
     const invokeWorkspace = screen.getByTestId('studio-invoke-workspace');
     const mainDebugArea = screen.getByTestId('studio-invoke-main-debug-area');
@@ -254,6 +257,33 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Run history (0)')).toBeTruthy();
     expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Run failed')).toBeNull();
+  });
+
+  it('shows the missing target reason when a member has no invokable endpoint', async () => {
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'default',
+        scopeId: 'scope-1',
+        selectedMemberLabel: 'Unbound member',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'Unbound service',
+            endpoints: [],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-default',
+            serviceId: 'default',
+          },
+        ],
+      }),
+    );
+
+    expect(await screen.findByTestId('studio-invoke-target-summary')).toHaveTextContent(
+      'Select an endpoint before invoking.',
+    );
+    expect(screen.getAllByText('Select an endpoint before invoking.').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('button', { name: 'Invoke' })).toBeDisabled();
   });
 
   it('prefers final run output over intermediate assistant text for chat invoke results', async () => {
@@ -839,6 +869,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       await screen.findByText('Advanced typed payload'),
     ).toBeTruthy();
+    fireEvent.click(screen.getByText('Advanced typed payload'));
     await waitFor(() => {
       expect(screen.getByLabelText('Payload type URL')).toHaveValue(
         'type.googleapis.com/example.ContractSubmit',
