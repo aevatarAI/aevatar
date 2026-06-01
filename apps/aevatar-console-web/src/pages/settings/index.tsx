@@ -59,6 +59,7 @@ import { describeError } from "@/shared/ui/errorText";
 import { AevatarPanel } from "@/shared/ui/aevatarPageShells";
 import { codeBlockStyle } from "@/shared/ui/proComponents";
 import AccountSettingsContent from "./accountContent";
+import DiagnosticsSettingsContent from "./diagnosticsContent";
 import {
   buildSettingsInsetCardStyle,
   buildSettingsPanelStyle,
@@ -69,7 +70,7 @@ import {
   SummaryMetric,
 } from "./shared";
 
-type SettingsSection = "llm" | "account";
+type SettingsSection = "llm" | "account" | "diagnostics";
 
 type SettingsDraft = {
   readonly defaultModel: string;
@@ -93,6 +94,7 @@ type TechnicalPreviewRow = {
 
 const llmTabKey = "llm";
 const accountTabKey = "account";
+const diagnosticsTabKey = "diagnostics";
 
 const tabBodyStyle: React.CSSProperties = {
   display: "flex",
@@ -189,6 +191,10 @@ function readSettingsSection(snapshot?: string): SettingsSection {
         ? ""
         : window.location.search;
   const section = new URLSearchParams(currentSearch).get("section");
+  if (section === diagnosticsTabKey) {
+    return diagnosticsTabKey;
+  }
+
   return section === accountTabKey ? accountTabKey : llmTabKey;
 }
 
@@ -929,7 +935,11 @@ const SettingsPage: React.FC = () => {
 
   const handleSectionChange = React.useCallback((nextKey: string) => {
     const nextSection: SettingsSection =
-      nextKey === accountTabKey ? accountTabKey : llmTabKey;
+      nextKey === diagnosticsTabKey
+        ? diagnosticsTabKey
+        : nextKey === accountTabKey
+          ? accountTabKey
+          : llmTabKey;
     history.replace(buildSettingsHref(nextSection));
   }, []);
 
@@ -940,6 +950,9 @@ const SettingsPage: React.FC = () => {
           "Failed to load LLM defaults.",
         )
       : null;
+  const diagnosticsRuntimeConfigError = userConfigQuery.isError
+    ? describeError(userConfigQuery.error, "Failed to load runtime settings.")
+    : null;
 
   const headerExtra =
     activeSection === llmTabKey ? (
@@ -966,12 +979,14 @@ const SettingsPage: React.FC = () => {
     (): readonly { key: SettingsSection; label: string }[] => [
       { key: llmTabKey, label: "LLM" },
       { key: accountTabKey, label: "Account" },
+      { key: diagnosticsTabKey, label: "Diagnostics" },
     ],
     [],
   );
   const tabButtonRefs = React.useRef<Record<SettingsSection, HTMLButtonElement | null>>({
     [llmTabKey]: null,
     [accountTabKey]: null,
+    [diagnosticsTabKey]: null,
   });
   const activePanelId = `${activeSection}-panel`;
   const activeTabId = `${activeSection}-tab`;
@@ -1372,13 +1387,35 @@ const SettingsPage: React.FC = () => {
     [draftDirty],
   );
 
+  const diagnosticsSection = React.useMemo(
+    () => (
+      <div style={tabBodyStyle}>
+        <DiagnosticsSettingsContent
+          runtimeBaseUrl={displayedRuntimeBaseUrl}
+          runtimeConfigError={diagnosticsRuntimeConfigError}
+          runtimeConfigLoading={userConfigQuery.isLoading}
+          runtimeModeLabel={runtimeModeLabel}
+        />
+      </div>
+    ),
+    [
+      diagnosticsRuntimeConfigError,
+      displayedRuntimeBaseUrl,
+      runtimeModeLabel,
+      userConfigQuery.isLoading,
+    ],
+  );
+
+  const settingsDescription =
+    activeSection === llmTabKey
+      ? "Personal defaults for Chat and Studio."
+      : activeSection === accountTabKey
+        ? "Identity, session, and access details for this browser."
+        : "Frontend runtime checks for this browser session.";
+
   return (
     <SettingsPageShell
-      content={
-        activeSection === llmTabKey
-          ? "Personal defaults for Chat and Studio."
-          : "Identity, session, and access details for this browser."
-      }
+      content={settingsDescription}
       extra={headerExtra}
       title="Settings"
     >
@@ -1414,7 +1451,11 @@ const SettingsPage: React.FC = () => {
           id={activePanelId}
           role="tabpanel"
         >
-          {activeSection === llmTabKey ? llmSection : accountSection}
+          {activeSection === llmTabKey
+            ? llmSection
+            : activeSection === accountTabKey
+              ? accountSection
+              : diagnosticsSection}
         </div>
       </div>
     </SettingsPageShell>

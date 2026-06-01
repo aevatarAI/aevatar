@@ -148,6 +148,48 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Authentication")).toBeTruthy();
   });
 
+  it("switches to the diagnostics tab and shows runtime checks", async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: "token",
+        tokenType: "Bearer",
+        expiresIn: 3600,
+        expiresAt: Date.now() + 60_000,
+        refreshToken: "refresh-token",
+      },
+      user: {
+        sub: "user-123",
+        email: "ada@example.com",
+        email_verified: true,
+        name: "Ada Lovelace",
+      },
+    });
+    mockStudioApi.getUserConfig.mockResolvedValueOnce({
+      defaultModel: "",
+      preferredLlmRoute: "",
+      runtimeMode: "remote",
+      localRuntimeBaseUrl: "",
+      remoteRuntimeBaseUrl: "https://runtime.example.com",
+      maxToolRounds: 40,
+    });
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Diagnostics" }));
+
+    await waitFor(() => {
+      expect(window.location.search).toBe("?section=diagnostics");
+    });
+    expect(await screen.findByText("Runtime checks")).toBeTruthy();
+    expect(screen.getAllByText("Frontend version").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("6.0.0").length).toBeGreaterThan(0);
+    expect(screen.getByText("Current environment")).toBeTruthy();
+    expect(screen.getAllByText("Remote").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("https://runtime.example.com").length).toBeGreaterThan(0);
+    expect(screen.getByText("Session active")).toBeTruthy();
+    expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+  });
+
   it("shows gateway models from every ready gateway provider", async () => {
     renderWithQueryClient(React.createElement(SettingsPage));
 
