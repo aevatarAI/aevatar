@@ -514,6 +514,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     endpointLabel === selectedEndpointId
       ? endpointLabel
       : `${endpointLabel} (${selectedEndpointId || '—'})`;
+  const disabledReason = !scopeId
+    ? 'Missing scope'
+    : !normalizedMemberId
+      ? 'Missing member'
+      : !selectedService
+        ? 'Select service'
+        : !selectedEndpoint
+          ? 'Select endpoint'
+          : '';
   const currentPublishedContext =
     describeStudioMemberBindingRevisionContext(memberRevision) || '';
   const currentImplementationKind =
@@ -1366,6 +1375,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 <span>{currentImplementationKind}</span>
                 <span>·</span>
                 <span>Lifecycle: {lifecycleLabel}</span>
+                {disabledReason ? (
+                  <>
+                    <span>·</span>
+                    <span>Blocked: {disabledReason}</span>
+                  </>
+                ) : null}
               </div>
             </div>
             <div style={targetPillStyle}>

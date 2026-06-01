@@ -821,6 +821,9 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
     expect(await screen.findByText("运行 · 等待处理")).toBeTruthy();
+    expect(screen.getByTestId("team-next-step-band")).toHaveTextContent(
+      "观察 Run 结果",
+    );
     expect(compositionHeading).toBeTruthy();
     expect(configurationHeading).toBeTruthy();
     expect(screen.queryByLabelText("Team test prompt")).toBeNull();

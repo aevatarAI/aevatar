@@ -481,7 +481,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
             />
           </Space>
           <Typography.Text style={{ fontSize: 13 }} type="secondary">
-            通过入口成员发起一次真实 Team 调用。
+            路径固定为入口成员到 Invoke/Test 到观察 Run，完成后结果会进入测试记录。
           </Typography.Text>
           {showCurrentMemberContext ? (
             <Typography.Text style={{ fontSize: 12 }} type="secondary">

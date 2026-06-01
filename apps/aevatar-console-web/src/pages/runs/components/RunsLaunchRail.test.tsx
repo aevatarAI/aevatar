@@ -61,6 +61,11 @@ describe("RunsLaunchRail", () => {
     expect(
       screen.getByLabelText("Chat route (optional)")
     ).toBeInTheDocument();
+    expect(screen.getByTestId("runs-launch-target-summary")).toHaveTextContent(
+      "Target · Workspace default chat",
+    );
+    expect(screen.queryByLabelText("Endpoint")).toBeNull();
+    fireEvent.click(screen.getByText("Advanced payload and transport"));
     expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
     expect(screen.getByLabelText("Binding override (optional)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Presets (1)" }));
@@ -121,7 +126,7 @@ describe("RunsLaunchRail", () => {
     expect(screen.queryByLabelText("Endpoint")).toBeNull();
     expect(screen.queryByText("Requests go through /api/scopes/{scopeId}/invoke/chat:stream")).toBeNull();
 
-    fireEvent.click(screen.getByText("Advanced options"));
+    fireEvent.click(screen.getByText("Advanced payload and transport"));
 
     expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
     expect(screen.getByLabelText("Binding override (optional)")).toBeInTheDocument();

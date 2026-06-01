@@ -222,7 +222,6 @@ export const StudioMemberInvokeComposerPanel: React.FC<
       {!isChatEndpoint ? (
         <Collapse
           bordered={false}
-          defaultActiveKey={['typed-payload']}
           items={[
             {
               key: 'typed-payload',

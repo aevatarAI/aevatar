@@ -839,6 +839,8 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       await screen.findByText('Advanced typed payload'),
     ).toBeTruthy();
+    expect(screen.queryByLabelText('Payload type URL')).toBeNull();
+    fireEvent.click(screen.getByText('Advanced typed payload'));
     await waitFor(() => {
       expect(screen.getByLabelText('Payload type URL')).toHaveValue(
         'type.googleapis.com/example.ContractSubmit',

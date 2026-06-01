@@ -979,6 +979,81 @@ const TeamDetailPage: React.FC = () => {
       })),
     [compositionDisplayRows, token],
   );
+  const isTeamArchived =
+    normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
+  const hasInvokableTeamMember = teamRosterRows.some((row) => row.canInvokeAsEntry);
+  const teamNextStep = React.useMemo(() => {
+    if (!teamSummaryQuery.data) {
+      return {
+        description: "Team read model 可见后，再选择入口成员并发起测试。",
+        label: "等待 Team",
+        title: "先等待 Team summary 同步",
+      };
+    }
+
+    if (isTeamArchived) {
+      return {
+        description: "归档 Team 不再发起新测试；可以继续查看最近运行和历史结果。",
+        label: "已归档",
+        title: "观察历史 Run",
+      };
+    }
+
+    if (teamMembersQuery.isLoading || isTeamMembersProjectionSyncing) {
+      return {
+        description: "成员清单同步完成后，在团队成员里选择可调用成员作为入口。",
+        label: "同步成员",
+        title: "等待 roster 后设置入口成员",
+      };
+    }
+
+    if (teamRosterRows.length === 0) {
+      return {
+        description: "创建第一个成员，再在 Studio 完成 Build / Bind。",
+        label: "Step 1",
+        title: "创建 Team 成员",
+      };
+    }
+
+    if (!hasInvokableTeamMember) {
+      return {
+        description: "打开 Studio，把成员 Build / Bind 到可调用服务后再回到 Team 测试。",
+        label: "Step 2",
+        title: "Build / Bind 成员",
+      };
+    }
+
+    if (!entryMemberId) {
+      return {
+        description: "在团队成员里把可调用成员设为入口，Team 测试会从它开始。",
+        label: "Step 3",
+        title: "设置入口成员",
+      };
+    }
+
+    if (!activeRunId) {
+      return {
+        description: "点击测试团队，输入问题并创建一次独立 Run。",
+        label: "Step 4",
+        title: "发起 Team 测试",
+      };
+    }
+
+    return {
+      description: "最近 Run 已可见，可继续测试或观察当前 Run 状态。",
+      label: "Step 5",
+      title: "观察 Run 结果",
+    };
+  }, [
+    activeRunId,
+    entryMemberId,
+    hasInvokableTeamMember,
+    isTeamArchived,
+    isTeamMembersProjectionSyncing,
+    teamMembersQuery.isLoading,
+    teamRosterRows.length,
+    teamSummaryQuery.data,
+  ]);
   const tabOptions: TeamTabOption[] = [
     { label: "概览", value: "overview" },
     { label: "团队成员", value: "members" },
@@ -1075,7 +1150,6 @@ const TeamDetailPage: React.FC = () => {
     teamEditorSaving,
     teamSummaryQuery.data,
   ]);
-  const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
   const archiveTeamActionLabel = teamSummaryQuery.data && !isTeamArchived ? "Archive Team" : "";
   const archiveTeamHint = selectedTeamId
     ? "Team summary 读取完成后才能归档。"
@@ -1426,6 +1500,9 @@ const TeamDetailPage: React.FC = () => {
         entryMemberUpdating={entryActionBusyMemberId === entryMemberClearingId}
         latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
         latestVisibleUpdateNote={latestVisibleUpdateNote}
+        nextStepDescription={teamNextStep.description}
+        nextStepLabel={teamNextStep.label}
+        nextStepTitle={teamNextStep.title}
         onClearEntryMember={
           teamSummaryQuery.data && !isTeamArchived && entryMemberId
             ? () => void handleClearEntry()
@@ -1485,12 +1562,12 @@ const TeamDetailPage: React.FC = () => {
           editTeamHint={editTeamHint}
           editTeamLabel={editTeamActionLabel}
           onArchiveTeam={openTeamArchive}
-        onOpenTeamEditor={openTeamEditor}
-        onOpenTeamTest={openTeamTestModal}
-        testTeamDisabled={isTeamArchived}
-        testTeamHint="归档后的 Team 不能继续发起测试。"
-        testTeamLabel="测试团队"
-      />
+          onOpenTeamEditor={openTeamEditor}
+          onOpenTeamTest={openTeamTestModal}
+          testTeamDisabled={isTeamArchived}
+          testTeamHint="归档后的 Team 不能继续发起测试。"
+          testTeamLabel="测试团队"
+        />
       }
       activeTab={activeTab}
       activeTabLabel={formatTeamTabLabel(activeTab)}

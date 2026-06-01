@@ -47,6 +47,9 @@ type TeamOverviewTabProps = {
   readonly entryMemberUpdating?: boolean;
   readonly latestVisibleUpdateLabel: string;
   readonly latestVisibleUpdateNote: string;
+  readonly nextStepDescription: string;
+  readonly nextStepLabel: string;
+  readonly nextStepTitle: string;
   readonly onClearEntryMember?: () => void;
 };
 
@@ -88,6 +91,9 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   entryMemberUpdating = false,
   latestVisibleUpdateLabel,
   latestVisibleUpdateNote,
+  nextStepDescription,
+  nextStepLabel,
+  nextStepTitle,
   onClearEntryMember,
 }) => {
   const { token } = theme.useToken();
@@ -127,6 +133,33 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             />
             <DetailPill style={currentRunPillStyle} text={currentRunPillText} />
           </Space>
+        </div>
+        <div
+          data-testid="team-next-step-band"
+          style={{
+            background: token.colorInfoBg,
+            border: `1px solid ${token.colorInfoBorder}`,
+            borderRadius: 18,
+            display: "grid",
+            gap: 10,
+            gridTemplateColumns: "minmax(96px, max-content) minmax(0, 1fr)",
+            padding: 16,
+          }}
+        >
+          <Typography.Text
+            strong
+            style={{
+              alignSelf: "start",
+              color: token.colorInfo,
+              fontSize: 13,
+            }}
+          >
+            {nextStepLabel}
+          </Typography.Text>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+            <Typography.Text strong>{nextStepTitle}</Typography.Text>
+            <Typography.Text type="secondary">{nextStepDescription}</Typography.Text>
+          </div>
         </div>
         <div
           style={{
