@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
+using System.Text.Json;
 
 namespace Aevatar.AI.Core.Tests.Tools;
 
@@ -78,6 +79,44 @@ public sealed class AgentToolExecutionPortTests
         result.Status.Should().Be(AgentToolExecutionStatus.ApprovalDenied);
         result.ErrorMessage.Should().Contain("approval handler is not configured");
         tool.ExecuteCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task TimedOutApproval_ShouldReturnTimedOutAndSkipTool()
+    {
+        var tool = new CountingAgentTool("danger", ToolApprovalMode.AlwaysRequire);
+        var approval = new ScriptedApprovalHandler(ToolApprovalResult.TimedOut("approval expired"));
+        var port = new AgentToolExecutionPort(
+            ToolCallMiddlewareChainFactory.ForPort([], approval, hooks: null));
+
+        var result = await port.ExecuteAsync(Request(tool), CancellationToken.None);
+
+        result.Status.Should().Be(AgentToolExecutionStatus.ApprovalTimedOut);
+        result.ErrorMessage.Should().Be("approval expired");
+        result.ResultJson.Should().Contain("approval timed out");
+        tool.ExecuteCalls.Should().Be(0);
+        approval.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task YieldedApproval_ShouldReturnPendingAndSkipTool()
+    {
+        var tool = new CountingAgentTool("danger", ToolApprovalMode.AlwaysRequire);
+        var approval = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-request-1"));
+        var port = new AgentToolExecutionPort(
+            ToolCallMiddlewareChainFactory.ForPort([], approval, hooks: null));
+
+        var result = await port.ExecuteAsync(Request(tool), CancellationToken.None);
+
+        result.Status.Should().Be(AgentToolExecutionStatus.ApprovalPending);
+        result.ErrorMessage.Should().Be("approval-request-1");
+        using var payload = JsonDocument.Parse(result.ResultJson!);
+        payload.RootElement.GetProperty("approval_required").GetBoolean().Should().BeTrue();
+        payload.RootElement.GetProperty("tool_name").GetString().Should().Be("danger");
+        payload.RootElement.GetProperty("tool_call_id").GetString().Should().Be("tc-1");
+        payload.RootElement.GetProperty("message").GetString().Should().Contain("requires user approval");
+        tool.ExecuteCalls.Should().Be(0);
+        approval.Requests.Should().ContainSingle();
     }
 
     [Fact]
