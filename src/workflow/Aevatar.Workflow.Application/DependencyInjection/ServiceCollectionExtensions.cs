@@ -7,10 +7,12 @@ using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
+using Aevatar.Workflow.Application.Schedules;
 using Aevatar.Workflow.Application.Orchestration;
 using Aevatar.Workflow.Application.Workflows;
 using Microsoft.Extensions.DependencyInjection;
@@ -116,6 +118,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
+        services.TryAddSingleton<IWorkflowScheduleApplicationService, WorkflowScheduleApplicationService>();
         return services;
     }
 }

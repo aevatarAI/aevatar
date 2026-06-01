@@ -6,6 +6,7 @@ using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
@@ -37,6 +38,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>, WorkflowRunTimelineDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowScheduleDocument>, WorkflowScheduleDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
         services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportGraphMaterializer>();
@@ -75,6 +77,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEventEnvelope>, WorkflowRunEventSessionCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
         services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
+        services.TryAddSingleton<WorkflowScheduleQueryPort>();
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
         services.TryAddSingleton<WorkflowBindingProjectionPort>();
         services.TryAddSingleton<WorkflowExecutionMaterializationPort>();
@@ -101,6 +104,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
         services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionArtifactQueryPort>());
+        services.TryAddSingleton<IWorkflowScheduleQueryPort>(sp =>
+            sp.GetRequiredService<WorkflowScheduleQueryPort>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         services.AddProjectionArtifactMaterializer<
             WorkflowBindingProjectionContext,
@@ -108,6 +113,9 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowExecutionCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            WorkflowExecutionMaterializationContext,
+            WorkflowScheduleCurrentStateProjector>();
         services.AddProjectionArtifactMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowRunInsightReportArtifactProjector>();

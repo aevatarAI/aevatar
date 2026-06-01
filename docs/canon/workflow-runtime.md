@@ -46,6 +46,7 @@ owner: eanzhao
 - workflow 运行主链路建立在 `EventEnvelope` 消息流之上。
 - `EventEnvelope` 在这里是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - `WorkflowRunGAgent` / `WorkflowGAgent` 只有在显式 `PersistDomainEventAsync(...)` 时，才把领域事实写入 EventStore。
+- 定时触发属于 Aevatar workflow runtime 能力；NyxID 只保留 credential/proxy/audit 职责，ORNN 只保留 deterministic skill/payload-builder 职责。
 
 ---
 
@@ -94,6 +95,25 @@ BindWorkflowDefinition(yaml)
 - 两者共享 `EventEnvelope` 与 `IEventContext` 根抽象
 
 模块和静态 `[EventHandler]` 方法一起进入统一事件管线。可以在不改业务代码的情况下替换流程行为。
+
+### Scheduled Trigger API
+
+第一版定时触发只提供 API 配置面，不提供 UI。API 路径为 `/api/workflow-schedules`，支持 create/update/enable/disable/list/get/preview/run-now。
+
+运行边界：
+
+- `WorkflowScheduleGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、target workflow、headers、next fire lease 与 recent fire records。
+- 定时唤醒走 `ScheduleSelfDurableTimeoutAsync`，在 Orleans runtime 下由 durable callback/reminder 机制承载；回调只向 schedule actor 发 fire command，不在中间层保存 schedule 状态。
+- schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 workflow command；workflow 业务语义仍由 `WorkflowRunGAgent` 与 workflow modules 处理。
+- 幂等 key 格式固定为 `schedule:{scheduleId}:fire:{scheduledFireAtUtc:o}`，并写入 workflow command headers。
+- schedule 查询只读取 `WorkflowScheduleDocument` read model；API 不读取 actor state，不在 query path replay event store。
+- projection 使用 committed `WorkflowScheduleState` current-state payload 物化 read model，版本来自权威 actor committed version。
+
+配置边界：
+
+- cron 使用 standard 5-field format。
+- timezone 为空时默认为 `UTC`，非空时必须能被 runtime `TimeZoneInfo` 解析。
+- `Headers` 是 command dispatch headers，不用于承载 schedule 核心语义。
 
 ### WorkflowModuleFactory
 

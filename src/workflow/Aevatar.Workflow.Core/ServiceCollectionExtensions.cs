@@ -25,6 +25,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
         services.TryAddSingleton<IWorkflowConnectorResolver, RegistryBackedWorkflowConnectorResolver>();
         services.TryAddSingleton<WorkflowStepTargetAgentResolver>();
+        services.TryAddTransient<WorkflowScheduleGAgent>();
         return services;
     }
 

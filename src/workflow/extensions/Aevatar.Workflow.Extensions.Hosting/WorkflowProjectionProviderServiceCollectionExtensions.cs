@@ -97,6 +97,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             configuration,
             static document => document.Id);
+        TryAddElasticsearchDocumentStore<WorkflowScheduleDocument>(
+            services,
+            configuration,
+            static document => document.ScheduleId);
     }
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
@@ -117,6 +121,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             static document => document.Id,
             static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<WorkflowScheduleDocument>(
+            services,
+            static document => document.ScheduleId,
+            static document => document.UpdatedAt);
     }
 
     private static bool HasAllWorkflowDocumentReaders(
@@ -126,7 +134,8 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         return HasDocumentReaderForProvider<WorkflowExecutionCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowRunTimelineDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowScheduleDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)

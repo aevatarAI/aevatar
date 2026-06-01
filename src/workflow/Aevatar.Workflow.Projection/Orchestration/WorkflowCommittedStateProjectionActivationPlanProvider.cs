@@ -30,6 +30,14 @@ public sealed class WorkflowCommittedStateProjectionActivationPlanProvider : IPr
             yield break;
         }
 
+        if (context.ActorType == typeof(WorkflowScheduleGAgent))
+        {
+            yield return DurablePlan<WorkflowExecutionMaterializationRuntimeLease>(
+                context.ActorId,
+                WorkflowProjectionKinds.ScheduleMaterialization);
+            yield break;
+        }
+
         if (context.ActorType != typeof(WorkflowRunGAgent))
             yield break;
 

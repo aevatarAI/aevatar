@@ -1,0 +1,156 @@
+syntax = "proto3";
+package aevatar.workflow;
+option csharp_namespace = "Aevatar.Workflow.Core";
+
+import "google/protobuf/timestamp.proto";
+
+message WorkflowScheduleState
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string workflow_name = 3;
+  string prompt = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp created_at_utc_value = 8;
+  google.protobuf.Timestamp updated_at_utc_value = 9;
+  google.protobuf.Timestamp next_fire_at_utc_value = 10;
+  google.protobuf.Timestamp last_fire_at_utc_value = 11;
+  string last_run_actor_id = 12;
+  string last_command_id = 13;
+  string last_correlation_id = 14;
+  string last_error = 15;
+  int32 fire_count = 16;
+  int32 failure_count = 17;
+  map<string, string> headers = 18;
+  string scope_id = 19;
+  string actor_id = 20;
+  WorkflowScheduleRuntimeCallbackLeaseState next_fire_lease = 21;
+  map<string, WorkflowScheduleFireRecordState> fire_records = 22;
+}
+
+enum WorkflowScheduleRuntimeCallbackBackendState
+{
+  WORKFLOW_SCHEDULE_RUNTIME_CALLBACK_BACKEND_STATE_IN_MEMORY = 0;
+  WORKFLOW_SCHEDULE_RUNTIME_CALLBACK_BACKEND_STATE_DEDICATED = 1;
+}
+
+message WorkflowScheduleRuntimeCallbackLeaseState
+{
+  string actor_id = 1;
+  string callback_id = 2;
+  int64 generation = 3;
+  WorkflowScheduleRuntimeCallbackBackendState backend = 4;
+}
+
+message WorkflowScheduleConfigureCommand
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string workflow_name = 3;
+  string prompt = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  map<string, string> headers = 8;
+  string scope_id = 9;
+  string actor_id = 10;
+}
+
+message WorkflowScheduleConfiguredEvent
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string workflow_name = 3;
+  string prompt = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  google.protobuf.Timestamp configured_at = 8;
+  map<string, string> headers = 9;
+  string scope_id = 10;
+  string actor_id = 11;
+}
+
+message WorkflowScheduleEnableCommand
+{
+  string reason = 1;
+}
+
+message WorkflowScheduleDisableCommand
+{
+  string reason = 1;
+}
+
+message WorkflowScheduleEnabledEvent
+{
+  string reason = 1;
+  google.protobuf.Timestamp enabled_at = 2;
+}
+
+message WorkflowScheduleDisabledEvent
+{
+  string reason = 1;
+  google.protobuf.Timestamp disabled_at = 2;
+}
+
+message WorkflowScheduleNextFireScheduledEvent
+{
+  google.protobuf.Timestamp next_fire_at = 1;
+  WorkflowScheduleRuntimeCallbackLeaseState lease = 2;
+}
+
+message WorkflowScheduleFireCommand
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  bool manual = 2;
+}
+
+message WorkflowScheduleFireStartedEvent
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp started_at = 2;
+  string idempotency_key = 3;
+  bool manual = 4;
+}
+
+message WorkflowScheduleFireDispatchedEvent
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp dispatched_at = 2;
+  string idempotency_key = 3;
+  string run_actor_id = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+  bool manual = 7;
+}
+
+message WorkflowScheduleFireFailedEvent
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string idempotency_key = 3;
+  string error = 4;
+  bool manual = 5;
+}
+
+message WorkflowScheduleFireRecordState
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp completed_at = 2;
+  string idempotency_key = 3;
+  string run_actor_id = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+  string error = 7;
+  bool manual = 8;
+  WorkflowScheduleFireStatusState status = 9;
+}
+
+enum WorkflowScheduleFireStatusState
+{
+  WORKFLOW_SCHEDULE_FIRE_STATUS_STATE_STARTED = 0;
+  WORKFLOW_SCHEDULE_FIRE_STATUS_STATE_DISPATCHED = 1;
+  WORKFLOW_SCHEDULE_FIRE_STATUS_STATE_FAILED = 2;
+}

@@ -220,6 +220,55 @@ public sealed partial class WorkflowExecutionSummary
     }
 }
 
+public sealed partial class WorkflowScheduleDocument : IProjectionReadModel<WorkflowScheduleDocument>
+{
+    public DateTimeOffset CreatedAt
+    {
+        get => CreatedAtUtcValue == null ? default : CreatedAtUtcValue.ToDateTimeOffset();
+        set => CreatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
+        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+
+    public DateTimeOffset? NextFireAt
+    {
+        get => NextFireAtUtcValue == null ? null : NextFireAtUtcValue.ToDateTimeOffset();
+        set => NextFireAtUtcValue = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
+    }
+
+    public DateTimeOffset? LastFireAt
+    {
+        get => LastFireAtUtcValue == null ? null : LastFireAtUtcValue.ToDateTimeOffset();
+        set => LastFireAtUtcValue = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
+    }
+
+    public IDictionary<string, string> Headers
+    {
+        get => HeadersMap;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(HeadersMap, value);
+    }
+
+}
+
+public sealed partial class WorkflowScheduleFireRecordDocument
+{
+    public DateTimeOffset ScheduledFireAt
+    {
+        get => ScheduledFireAtUtcValue == null ? default : ScheduledFireAtUtcValue.ToDateTimeOffset();
+        set => ScheduledFireAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+
+    public DateTimeOffset CompletedAt
+    {
+        get => CompletedAtUtcValue == null ? default : CompletedAtUtcValue.ToDateTimeOffset();
+        set => CompletedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+}
+
 public sealed partial class WorkflowExecutionStepTrace
 {
     public DateTimeOffset? RequestedAt
