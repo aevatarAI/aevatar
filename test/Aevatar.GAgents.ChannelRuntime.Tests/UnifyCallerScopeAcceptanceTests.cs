@@ -291,7 +291,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
 
         var resolver = new NyxIdNativeCallerScopeResolver(inner);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "expired-token",
         });
@@ -311,7 +311,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var inner = Substitute.For<INyxIdCurrentUserResolver>();
         var resolver = new ChannelMetadataCallerScopeResolver(inner);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [ChannelMetadataKeys.Platform] = "lark",
             // no sender_id
@@ -333,7 +333,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var inner = Substitute.For<INyxIdCurrentUserResolver>();
         var resolver = new ChannelMetadataCallerScopeResolver(inner);
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
             // no channel.platform

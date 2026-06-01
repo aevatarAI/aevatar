@@ -216,7 +216,7 @@ public class NyxIdChannelBotsToolTests
     {
         var key = Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdAccessToken;
         Aevatar.AI.Abstractions.ToolProviders.AgentToolRequestContext.Current =
-            Aevatar.AI.Abstractions.ToolProviders.AgentToolExecutionContextMapper.FromMetadata(
+            global::TestAgentToolContexts.FromMetadata(
                 new Dictionary<string, string> { [key] = "fake-token" });
     }
 

@@ -464,7 +464,7 @@ public class TelegramToolsTests
                 return;
             }
 
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken,
             });

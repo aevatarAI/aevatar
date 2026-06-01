@@ -20,7 +20,7 @@ public class LarkToolsTests
             SendResponse = """{"code":0,"data":{"message_id":"om_123","chat_id":"oc_456","create_time":"1730000000"}}""",
         };
         var tool = new LarkMessagesSendTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
         });
@@ -692,7 +692,7 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkChatsLookupTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
         });
@@ -786,7 +786,7 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkSheetsAppendRowsTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
         });
@@ -891,7 +891,7 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkApprovalsListTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
         });
@@ -996,7 +996,7 @@ public class LarkToolsTests
     public async Task LarkApprovalsActTool_ValidatesTransferTarget()
     {
         var tool = new LarkApprovalsActTool(new StubLarkNyxClient());
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
         });
@@ -1020,7 +1020,7 @@ public class LarkToolsTests
             ApprovalActionResponse = """{"code":0,"data":{}}""",
         };
         var tool = new LarkApprovalsActTool(client);
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
         });
@@ -1566,7 +1566,7 @@ public class LarkToolsTests
                     metadata[entry.Key] = entry.Value;
             }
 
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(metadata);
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
         }
 
         public void Dispose()

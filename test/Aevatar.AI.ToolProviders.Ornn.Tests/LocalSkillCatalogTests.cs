@@ -210,7 +210,7 @@ public sealed class LocalSkillCatalogTests
     private static IDisposable BeginTokenScope(string token)
     {
         var previous = AgentToolRequestContext.Current;
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
         });

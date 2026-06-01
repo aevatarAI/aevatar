@@ -387,7 +387,7 @@ public sealed class NyxIdApiClientCoverageTests
                 new HttpClient(handler),
                 NullLogger<NyxIdApiClient>.Instance);
             var tool = new NyxIdLlmStatusTool(client);
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-1",
             });

@@ -164,7 +164,7 @@ public sealed class WebFetchUrlGuardTests
         var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "secret-token",
             });

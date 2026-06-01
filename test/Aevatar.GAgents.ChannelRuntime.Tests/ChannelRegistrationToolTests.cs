@@ -322,7 +322,7 @@ public sealed class ChannelRegistrationToolTests
         if (!string.IsNullOrWhiteSpace(scopeId))
             next["scope_id"] = scopeId;
 
-        AgentToolRequestContext.Current = AgentToolExecutionContextMapper.FromMetadata(next);
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(next);
 
         return new ResetMetadataScope(previous);
     }
