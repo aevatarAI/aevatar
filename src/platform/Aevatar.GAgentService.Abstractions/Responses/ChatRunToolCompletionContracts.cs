@@ -2,8 +2,10 @@ using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.GAgentService.Abstractions.Responses;
 
-// Refactor (issue1631-first): wait=complete keeps the public tool receipt contract,
-// while ChatRun actor-owned auto-resume remains a later product/protocol decision.
+// Refactor (iter290/cluster001): Old pattern: wait=complete routed through ChatRun
+// actor/coordinator continuation scaffolding. New principle: invocation tools return
+// accepted/streaming receipt fields on the live tool execution path; completion is
+// observed through read models instead of a ChatRun continuation shim.
 public sealed record ChatRunToolCompletionRequest(
     string ResponseId,
     string? ModelName,
@@ -23,12 +25,3 @@ public sealed record ChatRunToolCompletionRequest(
     string CompletionResultJson = "",
     bool CompletionObserved = false,
     string ErrorCode = "");
-
-// Refactor (issue1631-first): chat-run-aware invocation tools can return typed
-// accepted/streaming receipt fields without registering a ChatRun continuation actor.
-public interface IChatRunToolCompletionControlExecutor
-{
-    Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
-        ChatRunToolCompletionRequest request,
-        CancellationToken ct = default);
-}

@@ -290,7 +290,7 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                     var callToolContext = toolContext.WithCallId(toolCall.Id);
                     using (AgentToolContextScope.Push(callToolContext))
                     {
-                        result = await ExecuteToolAsync(request, tool, toolCall, argumentsJson, llmRound, ct);
+                        result = await tool.ExecuteAsync(argumentsJson, ct);
                     }
                 }
                 else
@@ -306,15 +306,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
             }
         }
     }
-
-    private static Task<string> ExecuteToolAsync(
-        LLMRequest request,
-        IAgentTool tool,
-        ToolCall toolCall,
-        string argumentsJson,
-        int llmRound,
-        CancellationToken ct) =>
-        tool.ExecuteAsync(argumentsJson, ct);
 
     private static async Task<(string Text, TokenUsage? Usage, IReadOnlyList<ToolCall> ToolCalls)> CollectStreamCompletionAsync(
         ILLMProvider provider,
