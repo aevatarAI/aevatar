@@ -263,6 +263,11 @@ function renderTargetSummary(
         ? "Chat stream"
         : "Command invoke";
 
+  // Refactor (iter164/issue1636-first-slice):
+  //   Old pattern: the shared app flow guide explained route selection,
+  //   endpoint identity, payload shape, and transport as one global checklist.
+  //   New principle: Runs setup starts with the concrete target summary here,
+  //   and leaves low-level transport/payload switches in the advanced section.
   return (
     <div data-testid="runs-launch-target-summary" style={targetSummaryStyle}>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
@@ -678,6 +683,11 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     />
                     <Collapse
                       ghost
+                      // Refactor (iter164/issue1636-first-slice):
+                      //   Old pattern: transport and protobuf payload controls
+                      //   competed with the first-run route decision on the main rail.
+                      //   New principle: expose the route-first path by default and
+                      //   keep protocol controls available behind an explicit affordance.
                       items={[
                         {
                           key: "advanced",

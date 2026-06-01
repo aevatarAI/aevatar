@@ -514,6 +514,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     endpointLabel === selectedEndpointId
       ? endpointLabel
       : `${endpointLabel} (${selectedEndpointId || '—'})`;
+  // Refactor (iter164/issue1636-first-slice):
+  //   Old pattern: disabled invoke controls forced readers to infer whether
+  //   scope, member, service, or endpoint setup was missing.
+  //   New principle: Studio invoke reports the immediate blocked target reason
+  //   beside the current target summary instead of sending users to a global guide.
   const disabledReason = !scopeId
     ? 'Missing scope'
     : !normalizedMemberId

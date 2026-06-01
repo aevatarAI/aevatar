@@ -134,6 +134,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             <DetailPill style={currentRunPillStyle} text={currentRunPillText} />
           </Space>
         </div>
+        {/* Refactor (iter164/issue1636-first-slice):
+            Old pattern: Team users left the overview to read a shared flow guide
+            before discovering whether the next action was roster, binding, entry,
+            test launch, or run observation.
+            New principle: the overview renders the actor-owned Team state as one
+            local next-step band, with the decision supplied by the detail container. */}
         <div
           data-testid="team-next-step-band"
           style={{
