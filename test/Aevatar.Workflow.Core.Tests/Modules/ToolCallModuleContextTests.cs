@@ -148,7 +148,8 @@ public sealed class ToolCallModuleContextTests
     public async Task ToolCallModule_ShouldSetExecutionIdOnFailureStepCompletion()
     {
         var tool = new FakeAgentTool("failing_tool", _ => throw new InvalidOperationException("boom"));
-        var module = CreateModule(tool);
+        var port = new FakeExecutionPort(AgentToolExecutionResult.Failed("boom"));
+        var module = CreateModule(tool, port);
         var ctx = new RecordingWorkflowContext();
 
         await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "call_proxy", executionId: "exec-1");
@@ -336,8 +337,97 @@ public sealed class ToolCallModuleContextTests
         LastCompleted(ctx).Output.Should().Be("""{"proxied":true}""");
     }
 
-    private static ToolCallModule CreateModule(IAgentTool tool) =>
-        new([new SingleToolSource(tool)], NullLogger<ToolCallModule>.Instance);
+    [Fact]
+    public async Task ToolCallModule_WhenExecutionPortMissing_ShouldFailClosedAndSkipRawToolExecution()
+    {
+        var tool = new CountingAgentTool("safe_tool", _ => """{"raw":true}""");
+        var module = new ToolCallModule(
+            [new SingleToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance,
+            executionPort: null);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name);
+
+        tool.ExecuteCalls.Should().Be(0);
+        var toolResult = ctx.Published.Select(x => x.Event).OfType<ToolResultEvent>().Single();
+        toolResult.Success.Should().BeFalse();
+        toolResult.Error.Should().Contain("execution port is not configured");
+        var completed = LastCompleted(ctx);
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("execution port is not configured");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldUseExecutionPortAndNotCallToolDirectly()
+    {
+        var tool = new CountingAgentTool("ported_tool", _ => """{"raw":true}""");
+        var port = new FakeExecutionPort(AgentToolExecutionResult.Succeeded("""{"ported":true}"""));
+        var module = CreateModule(tool, port);
+        var ctx = new RecordingWorkflowContext();
+        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
+            ctx,
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "token-123",
+                },
+            });
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            stepId: "ported_step",
+            input: """{"x":1}""",
+            executionId: "exec-ported");
+
+        tool.ExecuteCalls.Should().Be(0);
+        port.Requests.Should().ContainSingle();
+        var request = port.Requests.Single();
+        request.Tool.Should().BeSameAs(tool);
+        request.ToolName.Should().Be("ported_tool");
+        request.ToolCallId.Should().Be("workflow:run-1:ported_step:exec-ported");
+        request.ArgumentsJson.Should().Be("""{"x":1}""");
+        request.ExecutionContext.Credentials.NyxIdAccessToken.Should().Be("token-123");
+        request.ExecutionContext.Request.CallId.Should().Be("workflow:run-1:ported_step:exec-ported");
+        LastCompleted(ctx).Success.Should().BeTrue();
+        LastCompleted(ctx).Output.Should().Be("""{"ported":true}""");
+    }
+
+    [Theory]
+    [InlineData(AgentToolExecutionStatus.ApprovalDenied)]
+    [InlineData(AgentToolExecutionStatus.ApprovalTimedOut)]
+    [InlineData(AgentToolExecutionStatus.ApprovalPending)]
+    [InlineData(AgentToolExecutionStatus.MiddlewareTerminated)]
+    [InlineData(AgentToolExecutionStatus.Failed)]
+    public async Task ToolCallModule_WhenPortReturnsNonSuccessStatus_ShouldPublishFailedEvents(
+        AgentToolExecutionStatus status)
+    {
+        var tool = new CountingAgentTool("blocked_tool", _ => """{"raw":true}""");
+        var port = new FakeExecutionPort(new AgentToolExecutionResult(status, null, $"{status} blocked"));
+        var module = CreateModule(tool, port);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name);
+
+        tool.ExecuteCalls.Should().Be(0);
+        var toolResult = ctx.Published.Select(x => x.Event).OfType<ToolResultEvent>().Single();
+        toolResult.Success.Should().BeFalse();
+        toolResult.Error.Should().Contain($"{status} blocked");
+        var completed = LastCompleted(ctx);
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain($"{status} blocked");
+    }
+
+    private static ToolCallModule CreateModule(
+        IAgentTool tool,
+        IAgentToolExecutionPort? executionPort = null) =>
+        new(
+            [new SingleToolSource(tool)],
+            NullLogger<ToolCallModule>.Instance,
+            executionPort ?? new DirectFakeExecutionPort());
 
     private static async Task ExecuteToolCallAsync(
         ToolCallModule module,
@@ -390,6 +480,24 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
+    private sealed class CountingAgentTool(string name, Func<string, string> execute) : IAgentTool
+    {
+        public string Name { get; } = name;
+
+        public string Description => "counting fake tool";
+
+        public string ParametersSchema => "{}";
+
+        public int ExecuteCalls { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecuteCalls++;
+            return Task.FromResult(execute(argumentsJson));
+        }
+    }
+
     private sealed class NyxIdLikeTool : IAgentTool
     {
         public string Name => "nyxid_like_proxy";
@@ -421,6 +529,33 @@ public sealed class ToolCallModuleContextTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
+    }
+
+    private sealed class DirectFakeExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionResult> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var _ = AgentToolContextScope.Push(request.ExecutionContext);
+            var result = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
+            return AgentToolExecutionResult.Succeeded(result);
+        }
+    }
+
+    private sealed class FakeExecutionPort(AgentToolExecutionResult result) : IAgentToolExecutionPort
+    {
+        public List<AgentToolExecutionRequest> Requests { get; } = [];
+
+        public Task<AgentToolExecutionResult> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(result);
         }
     }
 

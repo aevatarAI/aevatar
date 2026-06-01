@@ -165,6 +165,8 @@ public class ToolApprovalMiddlewareTests
 
         nextExecuted.Should().BeFalse();
         ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.TerminationReason.Should().Be("blocked");
         ctx.Result.Should().Contain("Tool 'danger' execution denied: blocked");
     }
 
@@ -183,6 +185,7 @@ public class ToolApprovalMiddlewareTests
         await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
 
         ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalTimedOut);
         ctx.Result.Should().Contain("approval timed out");
     }
 
@@ -201,6 +204,8 @@ public class ToolApprovalMiddlewareTests
         await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
 
         ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalPending);
+        ctx.TerminationReason.Should().Be("req-1");
         ctx.Result.Should().Contain("\"approval_required\":true");
         ctx.Result.Should().Contain("\"request_id\":\"");
     }
@@ -217,6 +222,8 @@ public class ToolApprovalMiddlewareTests
         await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
 
         ctx.Terminate.Should().BeTrue();
+        ctx.TerminationKind.Should().Be(ToolCallTerminationKind.ApprovalDenied);
+        ctx.TerminationReason.Should().Contain("denied 3 times");
         ctx.Result.Should().Contain("has been denied 3 times");
         handler.Requests.Should().BeEmpty();
     }

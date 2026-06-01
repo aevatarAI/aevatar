@@ -109,6 +109,7 @@ public class AIFeatureBootstrapCoverageTests
         using var provider = services.BuildServiceProvider();
         provider.GetService<IRoleAgentTypeResolver>().Should().NotBeNull();
         provider.GetService<IVoiceToolInvoker>().Should().NotBeNull();
+        provider.GetService<IAgentToolExecutionPort>().Should().NotBeNull();
 
         var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
         llmFactory.GetDefault().Name.Should().Be("deepseek");

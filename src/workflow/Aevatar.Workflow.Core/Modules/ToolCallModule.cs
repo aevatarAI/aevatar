@@ -17,14 +17,17 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly ILogger<ToolCallModule> _logger;
+    private readonly IAgentToolExecutionPort? _executionPort;
     private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
 
     public ToolCallModule(
         IEnumerable<IAgentToolSource> toolSources,
-        ILogger<ToolCallModule> logger)
+        ILogger<ToolCallModule> logger,
+        IAgentToolExecutionPort? executionPort = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _executionPort = executionPort;
     }
 
     public string Name => "tool_call";
@@ -76,20 +79,47 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        if (_executionPort == null)
+        {
+            await PublishToolFailureAsync(
+                ctx,
+                request,
+                toolName,
+                "agent tool execution port is not configured",
+                ct);
+            return;
+        }
+
         try
         {
             var toolContext = BuildToolContext(ctx, callId);
-            string result;
-            using (AgentToolContextScope.Push(toolContext))
+            var result = await _executionPort.ExecuteAsync(
+                new AgentToolExecutionRequest(
+                    Tool: tool,
+                    ToolName: toolName,
+                    ToolCallId: callId,
+                    ArgumentsJson: argumentsJson,
+                    ExecutionContext: toolContext),
+                ct);
+
+            if (result.Status != AgentToolExecutionStatus.Succeeded)
             {
-                result = await tool.ExecuteAsync(argumentsJson, ct);
+                await PublishToolFailureAsync(
+                    ctx,
+                    request,
+                    toolName,
+                    BuildExecutionFailure(result),
+                    ct);
+                return;
             }
+
+            var resultJson = result.ResultJson ?? string.Empty;
 
             await ctx.PublishAsync(new ToolResultEvent
             {
                 CallId = callId,
                 Success = true,
-                ResultJson = result,
+                ResultJson = resultJson,
             }, TopologyAudience.Self, ct);
 
             await ctx.PublishAsync(new StepCompletedEvent
@@ -98,7 +128,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 RunId = request.RunId,
                 ExecutionId = request.ExecutionId,
                 Success = true,
-                Output = result,
+                Output = resultJson,
             }, TopologyAudience.Self, ct);
         }
         catch (Exception ex)
@@ -121,6 +151,22 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 CallId = callId
             }
+        };
+    }
+
+    private static string BuildExecutionFailure(AgentToolExecutionResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            return result.ErrorMessage;
+
+        return result.Status switch
+        {
+            AgentToolExecutionStatus.ApprovalDenied => "tool execution denied by approval policy",
+            AgentToolExecutionStatus.ApprovalTimedOut => "tool approval timed out",
+            AgentToolExecutionStatus.ApprovalPending => "tool approval is pending",
+            AgentToolExecutionStatus.MiddlewareTerminated => "tool execution terminated by middleware",
+            AgentToolExecutionStatus.Failed => "tool execution failed",
+            _ => $"tool execution did not succeed: {result.Status}",
         };
     }
 
