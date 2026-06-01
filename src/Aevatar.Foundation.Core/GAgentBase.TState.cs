@@ -58,25 +58,28 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     public override async Task DeactivateAsync(CancellationToken ct = default)
     {
         var eventSourcing = EnsureEventSourcingConfigured();
-        await OnDeactivateAsync(ct);
         try
         {
-            await eventSourcing.ConfirmEventsAsync(ct);
-        }
-        catch (EventStoreOptimisticConcurrencyException)
-        {
-            // Refactor (iter713/cluster-gagentbase-deactivation-occ-flush-containment):
-            // Old pattern: deactivation OCC escaped with stale pending events and could
-            // block base lifecycle cleanup. New principle: deactivation-only OCC
-            // containment drains stale pending events, skips snapshot, and still runs
-            // base shutdown.
-            eventSourcing.DiscardPendingEvents();
-            await base.DeactivateAsync(ct);
-            return;
-        }
+            await OnDeactivateAsync(ct);
+            try
+            {
+                await eventSourcing.ConfirmEventsAsync(ct);
+            }
+            catch (EventStoreOptimisticConcurrencyException)
+            {
+                // Refactor (iter713/cluster-gagentbase-deactivation-occ-flush-containment):
+                // Deactivation-only OCC containment drains stale pending events,
+                // skips snapshot, and still lets base lifecycle cleanup run below.
+                eventSourcing.DiscardPendingEvents();
+                return;
+            }
 
-        await eventSourcing.PersistSnapshotAsync(_state, ct);
-        await base.DeactivateAsync(ct);
+            await eventSourcing.PersistSnapshotAsync(_state, ct);
+        }
+        finally
+        {
+            await base.DeactivateAsync(ct);
+        }
     }
 
     /// <summary>Hook invoked after state changes, useful for CQRS projection.</summary>

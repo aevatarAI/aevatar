@@ -166,6 +166,115 @@ public class AgentLifecycleBddTests
         events.Count.ShouldBe(1);
     }
 
+    [Fact(DisplayName = "Given OnDeactivate fails, base cleanup should run and hook failure should propagate")]
+    public async Task Given_OnDeactivateFails_When_Deactivated_Then_BaseCleanupRunsAndFailurePropagates()
+    {
+        // Given
+        var failure = new InvalidOperationException("on deactivate failed");
+        var behavior = new RecordingEventSourcingBehavior();
+        var module = new LifecycleTrackingModule();
+        var agent = new DeactivationHookFailureAgent(failure)
+        {
+            EventSourcing = behavior,
+        };
+        agent.SetId("lifecycle-hook-failure");
+        agent.Services = TestRuntimeServices.BuildProvider();
+        agent.RegisterModule(module);
+        await agent.ActivateAsync();
+
+        // When
+        var thrown = await Should.ThrowAsync<InvalidOperationException>(agent.DeactivateAsync());
+
+        // Then
+        thrown.ShouldBeSameAs(failure);
+        module.DisposeCount.ShouldBe(1);
+        behavior.ConfirmCalls.ShouldBe(0);
+        behavior.SnapshotCalls.ShouldBe(0);
+        behavior.DiscardPendingEventsCount.ShouldBe(0);
+    }
+
+    [Fact(DisplayName = "Given non-OCC confirm fails, base cleanup should run without discarding or snapshotting")]
+    public async Task Given_ConfirmEventsFails_When_Deactivated_Then_BaseCleanupRunsAndFailurePropagates()
+    {
+        // Given
+        var failure = new InvalidOperationException("confirm failed");
+        var behavior = new RecordingEventSourcingBehavior(confirmFailure: failure);
+        var module = new LifecycleTrackingModule();
+        var agent = new CounterAgent
+        {
+            EventSourcing = behavior,
+        };
+        agent.SetId("lifecycle-confirm-failure");
+        agent.Services = TestRuntimeServices.BuildProvider();
+        agent.RegisterModule(module);
+        await agent.ActivateAsync();
+
+        // When
+        var thrown = await Should.ThrowAsync<InvalidOperationException>(agent.DeactivateAsync());
+
+        // Then
+        thrown.ShouldBeSameAs(failure);
+        module.DisposeCount.ShouldBe(1);
+        behavior.ConfirmCalls.ShouldBe(1);
+        behavior.SnapshotCalls.ShouldBe(0);
+        behavior.DiscardPendingEventsCount.ShouldBe(0);
+    }
+
+    [Fact(DisplayName = "Given ConfirmEvents and lifecycle cleanup fail, when deactivated, should throw cleanup AggregateException")]
+    public async Task Given_ConfirmEventsAndLifecycleCleanupFail_When_Deactivated_Then_CleanupAggregateExceptionWins()
+    {
+        // Given
+        var confirmFailure = new InvalidOperationException("confirm failed");
+        var behavior = new RecordingEventSourcingBehavior(confirmFailure: confirmFailure);
+        var module = new ThrowingLifecycleModule(new InvalidOperationException("dispose failed"));
+        var agent = new CounterAgent
+        {
+            EventSourcing = behavior,
+        };
+        agent.SetId("lifecycle-confirm-cleanup-failure");
+        agent.Services = TestRuntimeServices.BuildProvider();
+        agent.RegisterModule(module);
+        await agent.ActivateAsync();
+
+        // When
+        var thrown = await Should.ThrowAsync<AggregateException>(agent.DeactivateAsync());
+
+        // Then
+        behavior.ConfirmCalls.ShouldBe(1);
+        behavior.SnapshotCalls.ShouldBe(0);
+        module.DisposeCount.ShouldBe(1);
+        thrown.InnerExceptions.Count.ShouldBe(1);
+        thrown.InnerExceptions[0].Message.ShouldBe("dispose failed");
+        behavior.DiscardPendingEventsCount.ShouldBe(0);
+    }
+
+    [Fact(DisplayName = "Given snapshot fails, base cleanup should run and snapshot failure should propagate")]
+    public async Task Given_PersistSnapshotFails_When_Deactivated_Then_BaseCleanupRunsAndFailurePropagates()
+    {
+        // Given
+        var failure = new InvalidOperationException("snapshot failed");
+        var behavior = new RecordingEventSourcingBehavior(snapshotFailure: failure);
+        var module = new LifecycleTrackingModule();
+        var agent = new CounterAgent
+        {
+            EventSourcing = behavior,
+        };
+        agent.SetId("lifecycle-snapshot-failure");
+        agent.Services = TestRuntimeServices.BuildProvider();
+        agent.RegisterModule(module);
+        await agent.ActivateAsync();
+
+        // When
+        var thrown = await Should.ThrowAsync<InvalidOperationException>(agent.DeactivateAsync());
+
+        // Then
+        thrown.ShouldBeSameAs(failure);
+        module.DisposeCount.ShouldBe(1);
+        behavior.ConfirmCalls.ShouldBe(1);
+        behavior.SnapshotCalls.ShouldBe(1);
+        behavior.DiscardPendingEventsCount.ShouldBe(0);
+    }
+
     private sealed class CounterReplayBehavior : EventSourcingBehavior<CounterState>
     {
         public CounterReplayBehavior(
@@ -244,6 +353,129 @@ public class AgentLifecycleBddTests
         {
             DisposeCount++;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class DeactivationHookFailureAgent : CounterAgent
+    {
+        private readonly Exception _failure;
+
+        public DeactivationHookFailureAgent(Exception failure)
+        {
+            _failure = failure;
+        }
+
+        protected override Task OnDeactivateAsync(CancellationToken ct)
+        {
+            _ = ct;
+            return Task.FromException(_failure);
+        }
+    }
+
+    private sealed class RecordingEventSourcingBehavior : IEventSourcingBehavior<CounterState>
+    {
+        private readonly Exception? _confirmFailure;
+        private readonly Exception? _snapshotFailure;
+
+        public RecordingEventSourcingBehavior(
+            Exception? confirmFailure = null,
+            Exception? snapshotFailure = null)
+        {
+            _confirmFailure = confirmFailure;
+            _snapshotFailure = snapshotFailure;
+        }
+
+        public long CurrentVersion => 0;
+
+        public int ConfirmCalls { get; private set; }
+
+        public int SnapshotCalls { get; private set; }
+
+        public int DiscardPendingEventsCount { get; private set; }
+
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        {
+            _ = evt;
+        }
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            _ = ct;
+            ConfirmCalls++;
+            return _confirmFailure != null
+                ? Task.FromException<EventStoreCommitResult>(_confirmFailure)
+                : Task.FromResult(new EventStoreCommitResult
+                {
+                    AgentId = "recording",
+                    LatestVersion = CurrentVersion,
+                });
+        }
+
+        public Task PersistSnapshotAsync(CounterState currentState, CancellationToken ct = default)
+        {
+            _ = currentState;
+            _ = ct;
+            SnapshotCalls++;
+            return _snapshotFailure != null
+                ? Task.FromException(_snapshotFailure)
+                : Task.CompletedTask;
+        }
+
+        public Task<CounterState?> ReplayAsync(string agentId, CancellationToken ct = default)
+        {
+            _ = agentId;
+            _ = ct;
+            return Task.FromResult<CounterState?>(new CounterState());
+        }
+
+        public void DiscardPendingEvents() => DiscardPendingEventsCount++;
+
+        public CounterState TransitionState(CounterState current, IMessage evt)
+        {
+            _ = evt;
+            return current;
+        }
+    }
+
+    private sealed class ThrowingLifecycleModule : ILifecycleAwareEventModule
+    {
+        private readonly Exception _disposeFailure;
+
+        public ThrowingLifecycleModule(Exception disposeFailure)
+        {
+            _disposeFailure = disposeFailure;
+        }
+
+        public string Name => "lifecycle-throwing";
+
+        public int Priority => 0;
+
+        public int DisposeCount { get; private set; }
+
+        public bool CanHandle(EventEnvelope envelope)
+        {
+            _ = envelope;
+            return false;
+        }
+
+        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+        {
+            _ = envelope;
+            _ = ctx;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public Task InitializeAsync(CancellationToken ct)
+        {
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            throw _disposeFailure;
         }
     }
 
