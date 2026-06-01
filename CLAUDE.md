@@ -125,7 +125,7 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - AI 生成的设计文档默认不保留到 `docs/`；需要保留时必须有 `title/status/owner` frontmatter 并放入对应目录。
 - `docs/canon/` 和 `docs/adr/` 文件必须有 YAML frontmatter（`title/status/owner`）；文档 lint 使用 `tools/docs/lint.sh`，已纳入 CI 门禁。
 - 根目录 `.md` 只保留 `CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`；`docs/README.md` 由工具生成，不手动编辑。
-- 项目结构：`src/` 放生产代码，`test/` 放对应测试，`tools/Aevatar.Tools.Cli` 是 CLI 项目，`workflows/` 放 YAML 工作流。
+- 项目结构：`src/` 放生产代码，`test/` 放对应测试，`tools/` 放开发工具，`workflows/` 放 YAML 工作流。
 - `src/` 按能力与分层组织；保持项目名、命名空间、目录语义一致。
 - `test/` 与 `src/` 对应；测试文件命名 `*Tests.cs`，单文件聚焦一个行为域。
 - `tools/` 放开发工具，`demos/` 放示例程序；工作文档不加入 `aevatar.slnx`。
