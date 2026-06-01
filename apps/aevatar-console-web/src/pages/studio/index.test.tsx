@@ -5776,64 +5776,50 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:10:00Z",
       },
     ]);
-    mockScopeRuntimeApi.listServices
-      .mockResolvedValueOnce([
+    let draft1ServicePublished = false;
+    const draft2Service = {
+      serviceId: "draft2",
+      displayName: "draft2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-draft2",
+      endpoints: [
         {
-          serviceId: "draft2",
-          displayName: "draft2",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft2",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft2.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
+          endpointId: "chat",
+          displayName: "Chat",
+          kind: "chat",
+          description: "Chat with draft2.",
+          requestTypeUrl: "",
+          responseTypeUrl: "",
         },
-      ])
-      .mockResolvedValueOnce([
+      ],
+    };
+    const draft1Service = {
+      serviceId: "draft1",
+      displayName: "draft1",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-draft1",
+      endpoints: [
         {
-          serviceId: "draft2",
-          displayName: "draft2",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft2",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft2.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
+          endpointId: "chat",
+          displayName: "Chat",
+          kind: "chat",
+          description: "Chat with draft1.",
+          requestTypeUrl: "",
+          responseTypeUrl: "",
         },
-        {
-          serviceId: "draft1",
-          displayName: "draft1",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft1",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft1.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
-        },
-      ]);
-    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValueOnce({
+      ],
+    };
+    mockScopeRuntimeApi.listServices.mockImplementation(async () =>
+      draft1ServicePublished ? [draft2Service, draft1Service] : [draft2Service],
+    );
+    (studioApi.bindMemberWorkflow as jest.Mock).mockImplementationOnce(async () => {
+      draft1ServicePublished = true;
+      return {
       status: "accepted",
       bindingRunId: "bind-draft1",
       scopeId: "scope-1",
       memberId: "draft1",
+      };
     });
     (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValueOnce({
       bindingRunId: "bind-draft1",
