@@ -34,7 +34,7 @@ public sealed class ToolProviderHttpClientOwnershipTests
     {
         var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent("""{"items":[]}"""),
+            Content = new StringContent("""{"results":[{"title":"Agent tools","url":"https://example.com/agent-tools","snippet":"docs"}]}"""),
         });
         using var http = new HttpClient(handler);
         var client = new WebApiClient(
@@ -48,7 +48,98 @@ public sealed class ToolProviderHttpClientOwnershipTests
         client.Dispose();
         var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
 
-        result.Should().Be("""{"items":[]}""");
+        result.Error.Should().BeNull();
+        result.Results.Should().ContainSingle().Which.Should().Be(
+            new WebSearchResultItem("Agent tools", "https://example.com/agent-tools", "docs"));
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
+        request.Headers.Authorization!.Parameter.Should().Be("token-1");
+    }
+
+    [Fact]
+    public async Task WebApiClient_SearchAsync_ShouldReturnTypedError_WhenNoBackendConfigured()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"results":[]}"""),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(new WebToolOptions(), http);
+
+        var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
+
+        result.Results.Should().BeEmpty();
+        result.Error.Should().Be(new WebToolError(
+            "search_backend_not_configured",
+            "No search backend configured. Set NyxIdSearchSlug or SearchApiBaseUrl in WebToolOptions."));
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WebApiClient_SearchAsync_ShouldMapEmptyBodyToEmptyTypedResult()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(string.Empty),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                SearchApiBaseUrl = "https://search.test",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Results.Should().BeEmpty();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
+        request.Headers.Authorization!.Parameter.Should().Be("token-1");
+    }
+
+    [Fact]
+    public async Task WebApiClient_SearchAsync_ShouldMapNonJsonBodyToTypedError()
+    {
+        var handler = new RecordingHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("plain text result"),
+        });
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                SearchApiBaseUrl = "https://search.test",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
+
+        result.Results.Should().BeEmpty();
+        result.Error.Should().Be(new WebToolError("unstructured_search_result", "plain text result"));
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
+        request.Headers.Authorization!.Parameter.Should().Be("token-1");
+    }
+
+    [Fact]
+    public async Task WebApiClient_SearchAsync_ShouldMapHttpHandlerExceptionToTypedError()
+    {
+        var handler = new RecordingHttpMessageHandler(_ =>
+            throw new HttpRequestException("network unavailable"));
+        using var http = new HttpClient(handler);
+        var client = new WebApiClient(
+            new WebToolOptions
+            {
+                SearchApiBaseUrl = "https://search.test",
+            },
+            http);
+
+        var result = await client.SearchAsync("token-1", "agent tools", 3, CancellationToken.None);
+
+        result.Results.Should().BeEmpty();
+        result.Error.Should().Be(new WebToolError("request_failed", "network unavailable"));
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.RequestUri!.AbsoluteUri.Should().Be("https://search.test/search?q=agent%20tools&limit=3");
         request.Headers.Authorization!.Parameter.Should().Be("token-1");

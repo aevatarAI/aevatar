@@ -71,15 +71,13 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
         foreach (var (key, value) in NormalizeHeaders(command.Headers))
             configured.Headers[key] = value;
 
+        if (!command.Enabled)
+            await CancelNextFireLeaseAsync(CancellationToken.None);
+
         await PersistDomainEventAsync(configured);
 
         if (command.Enabled)
-        {
             await EnsureNextFireScheduledAsync(now, CancellationToken.None);
-            return;
-        }
-
-        await CancelNextFireLeaseAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -104,12 +102,12 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
     [EventHandler]
     public async Task HandleDisableAsync(WorkflowScheduleDisableCommand command)
     {
+        await CancelNextFireLeaseAsync(CancellationToken.None);
         await PersistDomainEventAsync(new WorkflowScheduleDisabledEvent
         {
             Reason = NormalizeOptional(command.Reason),
             DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
-        await CancelNextFireLeaseAsync(CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -219,8 +217,9 @@ public sealed class WorkflowScheduleGAgent : GAgentBase<WorkflowScheduleState>
 
         return new WorkflowChatRunRequest(
             Prompt: State.Prompt ?? string.Empty,
-            WorkflowName: State.WorkflowName,
-            ActorId: string.IsNullOrWhiteSpace(State.ActorId) ? null : State.ActorId,
+            Source: string.IsNullOrWhiteSpace(State.ActorId)
+                ? WorkflowChatSource.CatalogWorkflow(State.WorkflowName)
+                : WorkflowChatSource.DefinitionActor(State.ActorId, State.WorkflowName),
             SessionId: idempotencyKey,
             Metadata: headers,
             ScopeId: string.IsNullOrWhiteSpace(State.ScopeId) ? null : State.ScopeId);

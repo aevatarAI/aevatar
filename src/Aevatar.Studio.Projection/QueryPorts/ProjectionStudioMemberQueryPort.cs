@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.ReadModels;
@@ -20,6 +21,9 @@ namespace Aevatar.Studio.Projection.QueryPorts;
 /// </summary>
 public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
 {
+    // Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+    //   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+    //   New principle: ReadModel query port owns scope_id+team_id filter before pagination
     public const int MaxRosterPageSize = 200;
 
     private readonly IProjectionDocumentReader<StudioMemberCurrentStateDocument, string> _documentReader;
@@ -40,17 +44,32 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         if (requestedPageSize <= 0 || requestedPageSize > MaxRosterPageSize)
             requestedPageSize = MaxRosterPageSize;
 
+        var filters = new List<ProjectionDocumentFilter>
+        {
+            new()
+            {
+                FieldPath = "scope_id",
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(normalizedScopeId),
+            },
+        };
+
+        var normalizedTeamId = string.IsNullOrWhiteSpace(page?.TeamId)
+            ? null
+            : StudioTeamConventions.NormalizeTeamId(page.TeamId);
+        if (normalizedTeamId != null)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = "team_id",
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(normalizedTeamId),
+            });
+        }
+
         var query = new ProjectionDocumentQuery
         {
-            Filters =
-            [
-                new ProjectionDocumentFilter
-                {
-                    FieldPath = "scope_id",
-                    Operator = ProjectionDocumentFilterOperator.Eq,
-                    Value = ProjectionDocumentValue.FromString(normalizedScopeId),
-                },
-            ],
+            Filters = filters,
             Take = requestedPageSize,
             Cursor = string.IsNullOrWhiteSpace(page?.PageToken) ? null : page!.PageToken,
         };
@@ -173,6 +192,9 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         if (string.IsNullOrEmpty(document.BindingCurrentRunId))
             return null;
 
+        // Refactor (iter159/cluster-594-first):
+        //   Old pattern: Studio member binding-run status response 未暴露 StateVersion
+        //   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
         StudioMemberBindingFailureResponse? failure = null;
         if (!string.IsNullOrEmpty(document.BindingFailureCode))
         {
@@ -187,6 +209,7 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             ScopeId: document.ScopeId,
             MemberId: document.MemberId,
             Status: NormalizeBindingRunStatusWire(document.BindingCurrentStatus),
+            StateVersion: document.StateVersion,
             Failure: failure,
             UpdatedAt: document.BindingUpdatedAt?.ToDateTimeOffset());
     }

@@ -18,6 +18,95 @@ public sealed class StudioMemberGAgentStateTests
 {
     private readonly StudioMemberStateApplier _agent = new();
 
+    // Refactor (iter1345/cluster-519-draft-member-authority):
+    //   Old pattern: tests covered only direct create semantics, leaving the
+    //   draft projection ensure command contract implicit.
+    //   New principle: behavior tests lock the actor-owned idempotency and
+    //   conflict rules for the typed ensure-member command path.
+    [Fact]
+    public async Task HandleEnsureStudioMember_ShouldPersistCreatedEvent_WhenMissing()
+    {
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var eventSourcing = new RecordingEventSourcing(new StudioMemberState());
+        var agent = NewHandlerAgent(new StudioMemberState(), eventSourcing, new RecordingEventPublisher());
+
+        await agent.HandleEnsureStudioMember(new EnsureStudioMember
+        {
+            MemberId = "workflow-1",
+            ScopeId = "scope-1",
+            DisplayName = "Workflow 1",
+            Description = "draft member",
+            RequestedAtUtc = requestedAt,
+        });
+
+        var created = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberCreatedEvent>().Subject;
+        created.MemberId.Should().Be("workflow-1");
+        created.ScopeId.Should().Be("scope-1");
+        created.DisplayName.Should().Be("Workflow 1");
+        created.Description.Should().Be("draft member");
+        created.ImplementationKind.Should().Be(StudioMemberImplementationKind.Workflow);
+        created.PublishedServiceId.Should().Be(StudioMemberConventions.BuildPublishedServiceId("workflow-1"));
+        created.CreatedAtUtc.Should().Be(requestedAt);
+        eventSourcing.ConfirmCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleEnsureStudioMember_ShouldNoOp_WhenSameMemberAlreadyExists()
+    {
+        var existing = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "workflow-1",
+            ScopeId = "scope-1",
+            DisplayName = "Existing",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-workflow-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var eventSourcing = new RecordingEventSourcing(existing);
+        var agent = NewHandlerAgent(existing, eventSourcing, new RecordingEventPublisher());
+
+        await agent.HandleEnsureStudioMember(new EnsureStudioMember
+        {
+            MemberId = "workflow-1",
+            ScopeId = "scope-1",
+            DisplayName = "Ignored",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleEnsureStudioMember_ShouldReject_WhenExistingAuthorityDoesNotMatchCommandTarget()
+    {
+        var existing = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "workflow-1",
+            ScopeId = "scope-1",
+            DisplayName = "Existing",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-workflow-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var eventSourcing = new RecordingEventSourcing(existing);
+        var agent = NewHandlerAgent(existing, eventSourcing, new RecordingEventPublisher());
+
+        Func<Task> act = () => agent.HandleEnsureStudioMember(new EnsureStudioMember
+        {
+            MemberId = "workflow-2",
+            ScopeId = "scope-2",
+            DisplayName = "Conflicting workflow",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*member already initialized as 'scope-1/workflow-1'*");
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
     [Fact]
     public void Created_ShouldPersistPublishedServiceId()
     {
@@ -219,6 +308,125 @@ public sealed class StudioMemberGAgentStateTests
         // Composing on top of ADR-0016: team membership must never disturb
         // the rename-safe published_service_id contract.
         assigned.PublishedServiceId.Should().Be(created.PublishedServiceId);
+    }
+
+    [Fact]
+    public async Task HandleTeamAssignmentPatchRequested_ShouldCommitMoveFromAuthoritativeState()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-old",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+
+        await agent.HandleTeamAssignmentPatchRequested(new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            TargetTeamId = "team-new",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+        });
+
+        eventSourcing.RaisedEvents.Should().ContainSingle();
+        var reassigned = eventSourcing.RaisedEvents.Single()
+            .Should().BeOfType<StudioMemberReassignedEvent>().Subject;
+        reassigned.FromTeamId.Should().Be("team-old");
+        reassigned.ToTeamId.Should().Be("team-new");
+
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTeamAssignmentPatchRequested_ShouldCommitPureAssignFromAuthoritativeState()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = NewCreatedScriptMember(now);
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+
+        await agent.HandleTeamAssignmentPatchRequested(new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            TargetTeamId = "team-X",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+
+        var reassigned = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberReassignedEvent>().Subject;
+        reassigned.HasFromTeamId.Should().BeFalse();
+        reassigned.ToTeamId.Should().Be("team-X");
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTeamAssignmentPatchRequested_ShouldNoOp_WhenTargetMatchesAuthoritativeState()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+
+        await agent.HandleTeamAssignmentPatchRequested(new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            TargetTeamId = "team-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTeamAssignmentPatchRequested_ShouldCommitUnassignFromAuthoritativeState()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+
+        await agent.HandleTeamAssignmentPatchRequested(new StudioMemberTeamAssignmentPatchRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+        });
+
+        var reassigned = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberReassignedEvent>().Subject;
+        reassigned.FromTeamId.Should().Be("team-1");
+        reassigned.HasToTeamId.Should().BeFalse();
+        publisher.SentMessages.Should().BeEmpty();
     }
 
     [Fact]

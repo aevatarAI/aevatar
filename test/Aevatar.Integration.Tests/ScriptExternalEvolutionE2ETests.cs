@@ -1,7 +1,9 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Core.Compilation;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -64,7 +66,8 @@ public sealed class ScriptExternalEvolutionE2ETests
             CancellationToken.None);
         definition.ScriptId.Should().Be("external-script");
         definition.Revision.Should().Be("rev-1");
-        definition.SourceHash.Should().Be(ScriptingCommandEnvelopeTestKit.ComputeSourceHash(source).ToUpperInvariant());
+        definition.SourceHash.Should().Be(
+            ScriptPackageModel.ComputePackageHash(ScriptPackageSpecExtensions.CreateSingleSource(source)));
 
         await ScriptEvolutionIntegrationTestKit.EnsureRuntimeAsync(
             provider,

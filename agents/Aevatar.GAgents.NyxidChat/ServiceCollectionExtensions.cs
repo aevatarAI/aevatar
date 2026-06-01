@@ -29,11 +29,11 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static class ServiceCollectionExtensions
 {
-    // Refactor (iter17/cluster-038):
-    //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
-    //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     public static IServiceCollection AddNyxIdChat(this IServiceCollection services, IConfiguration? configuration = null)
     {
+        // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
+        //   Old pattern: Mainnet Host voice bootstrap injected actor runtime/dispatch and built initialization envelopes in the endpoint.
+        //   New principle: DI exposes the voice demo Application command port so Host composes the port instead of runtime internals.
         ArgumentNullException.ThrowIfNull(services);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
@@ -45,9 +45,16 @@ public static class ServiceCollectionExtensions
             provider => provider.GetRequiredService<NyxIdRelayOptions>());
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
+        services.TryAddSingleton<INyxIdRelayIngressPort, NyxIdRelayIngressPort>();
+        services.TryAddSingleton<NyxIdChatLifecycleFacade>();
+        AddNyxIdLifecycleCommands(services);
 
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
+        // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+        //   Old pattern: Mainnet Host/API composed the voice demo agent bootstrap workflow directly.
+        //   New principle: NyxID chat owns the actor-targeted bootstrap command port; hosts only opt into the module.
+        services.TryAddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
 
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
@@ -74,6 +81,8 @@ public static class ServiceCollectionExtensions
             }));
         }
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
+        services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
+        services.TryAddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
 
         // ─── LLM-call middleware that injects channel context into LLM requests ───
         // Lives here (not in Channel.Runtime) because it implements ILLMCallMiddleware
@@ -163,6 +172,25 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILogger<DefaultCommandInteractionService<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, AGUIEvent, NyxIdChatCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>>()));
+    }
+
+    private static void AddNyxIdLifecycleCommands(IServiceCollection services)
+    {
+        services.TryAddSingleton<ICommandTargetResolver<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>, NyxIdChatConversationCreateCommandTargetResolver>();
+        services.TryAddSingleton<ICommandTargetResolver<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandStartError>, NyxIdChatConversationDeleteCommandTargetResolver>();
+        services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdChatConversationCreateCommand>, NyxIdChatLifecycleCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdChatConversationDeleteCommand>, NyxIdChatLifecycleCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandTargetDispatcher<NyxIdChatConversationCreateCommandTarget>, ActorCommandTargetDispatcher<NyxIdChatConversationCreateCommandTarget>>();
+        services.TryAddSingleton<ICommandTargetDispatcher<NyxIdChatConversationDeleteCommandTarget>, ActorCommandTargetDispatcher<NyxIdChatConversationDeleteCommandTarget>>();
+        services.TryAddSingleton<ICommandReceiptFactory<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt>, NyxIdChatCreateLifecycleCommandReceiptFactory>();
+        services.TryAddSingleton<ICommandReceiptFactory<NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt>, NyxIdChatDeleteLifecycleCommandReceiptFactory>();
+        services.TryAddSingleton<ICommandDispatchPipeline<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>, DefaultCommandDispatchPipeline<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>>();
+        services.TryAddSingleton<ICommandDispatchPipeline<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>, DefaultCommandDispatchPipeline<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>>();
+        // Refactor (iter77/cluster-077-cqrs-command-outcome-stream-rpc):
+        //   Old pattern: NyxIdChat create awaited actor outcome via stream-RPC primitive (DispatchAndAwaitOutcomeAsync)
+        //   New principle (narrow scope): NyxIdChat create returns honest accepted ACK; terminal facts via committed events
+        services.TryAddSingleton<ICommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>, DefaultCommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>>();
+        services.TryAddSingleton<ICommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>, DefaultCommandDispatchService<NyxIdChatConversationDeleteCommand, NyxIdChatConversationDeleteCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>>();
     }
 
     private static NyxIdRelayOptions BindRelayOptions(IConfiguration? configuration)

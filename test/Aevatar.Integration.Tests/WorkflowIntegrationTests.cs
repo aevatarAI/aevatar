@@ -14,6 +14,7 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
@@ -22,12 +23,16 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Threading.Tasks;
 
 namespace Aevatar.Integration.Tests;
 
@@ -200,11 +205,17 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
+        var actorSuffix = Guid.NewGuid().ToString("N")[..8];
+        var definitionActorId = $"wf-{actorSuffix}";
+        var runActorId = $"wf-{actorSuffix}-run";
+        var researcherActorId = $"{runActorId}:researcher";
+        var reviewerActorId = $"{runActorId}:reviewer";
+        var writerActorId = $"{runActorId}:writer";
 
         // 创建 WorkflowGAgent 并通过配置事件注入 YAML
-        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
-        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-1-run");
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>(definitionActorId);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>(runActorId);
         await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -230,7 +241,7 @@ public class WorkflowIntegrationTests
                 DefinitionActorId = definitionActor.Id,
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
-                RunId = "wf-1-run",
+                RunId = runActorId,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -257,24 +268,52 @@ public class WorkflowIntegrationTests
         });
 
         // Then
-        (await runtime.ExistsAsync("wf-1")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:researcher")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:reviewer")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1-run:writer")).Should().BeTrue();
+        await WaitForActorAsync(runtime, definitionActorId);
+        await WaitForActorAsync(runtime, runActorId);
+        await WaitForActorAsync(runtime, researcherActorId);
+        await WaitForActorAsync(runtime, reviewerActorId);
+        await WaitForActorAsync(runtime, writerActorId);
 
         // 验证层级
-        var children = await runActor.GetChildrenIdsAsync();
+        var children = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ => await runActor.GetChildrenIdsAsync(),
+            childIds => childIds.Count == 3 &&
+                        childIds.Contains(researcherActorId) &&
+                        childIds.Contains(reviewerActorId) &&
+                        childIds.Contains(writerActorId),
+            $"Workflow run children not visible. actor_id={runActorId}",
+            CancellationToken.None);
         children.Should().HaveCount(3);
-        children.Should().Contain("wf-1-run:researcher");
-        children.Should().Contain("wf-1-run:reviewer");
-        children.Should().Contain("wf-1-run:writer");
+        children.Should().Contain(researcherActorId);
+        children.Should().Contain(reviewerActorId);
+        children.Should().Contain(writerActorId);
 
-        // 验证每个 RoleGAgent 的配置
-        var researcherActor = await runtime.GetAsync("wf-1-run:researcher");
-        researcherActor.Should().NotBeNull();
-        var researcher = (RoleGAgent)researcherActor!.Agent;
-        researcher.RoleName.Should().Be("Researcher");
+        // 验证每个 RoleGAgent 的初始化事件已作为 child actor 自身的 committed fact 可见。
+        var eventStore = sp.GetRequiredService<IEventStore>();
+        var researcherInitialized = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ =>
+            {
+                var events = await eventStore.GetEventsAsync(researcherActorId);
+                return events
+                    .Where(e => e.EventData?.Is(InitializeRoleAgentEvent.Descriptor) == true)
+                    .Select(e => e.EventData!.Unpack<InitializeRoleAgentEvent>())
+                    .FirstOrDefault();
+            },
+            evt => evt?.RoleName == "Researcher",
+            $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
+            CancellationToken.None);
+        researcherInitialized!.RoleId.Should().Be("researcher");
+        researcherInitialized.RoleName.Should().Be("Researcher");
+        researcherInitialized.SystemPrompt.Should().Contain("researcher");
+    }
+
+    private static async Task WaitForActorAsync(IActorRuntime runtime, string actorId)
+    {
+        await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            async _ => await runtime.ExistsAsync(actorId),
+            exists => exists,
+            $"Actor not visible. actor_id={actorId}",
+            CancellationToken.None);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -287,7 +326,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("role-test-1");
         var agent = (RoleGAgent)actor.Agent;
@@ -320,7 +359,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, mockLlm) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("llm-test-1");
         var agent = (RoleGAgent)actor.Agent;
@@ -376,7 +415,7 @@ public class WorkflowIntegrationTests
     {
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
-        using var _ = sp;
+        await using var _ = sp;
 
         // 创建层级
         var root = await runtime.CreateAsync<WorkflowGAgent>("root");
@@ -407,6 +446,187 @@ public class WorkflowIntegrationTests
 
         var r1Parent = await r1.GetParentIdAsync();
         r1Parent.Should().Be("root");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_CommittedRoleReplyThroughLocalRelay_ShouldCompletePendingLlmStep()
+    {
+        var eventStore = new InMemoryEventStore();
+        var services = new ServiceCollection();
+        services.AddAevatarRuntime();
+        services.AddSingleton<IEventStore>(eventStore);
+        services.AddSingleton<IEventStoreMaintenance>(eventStore);
+        services.AddAevatarWorkflow();
+        services.AddSingleton<IRoleAgentTypeResolver>(new StaticRoleAgentTypeResolver(typeof(ControlledRoleGAgent)));
+        await using var sp = services.BuildServiceProvider();
+        var runtime = sp.GetRequiredService<IActorRuntime>();
+        var streams = sp.GetRequiredService<IStreamProvider>();
+
+        var runActorId = $"relay-run-{Guid.NewGuid():N}";
+        var roleActorId = $"{runActorId}:writer";
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>(runActorId);
+        var workflowYaml = """
+            name: relay_workflow
+            roles:
+              - id: writer
+                name: Writer
+                system_prompt: "writer"
+                provider: mock
+            steps:
+              - id: draft
+                type: llm_call
+                target_role: writer
+            """;
+
+        await runActor.HandleEventAsync(Envelope(new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = "definition-relay",
+            WorkflowYaml = workflowYaml,
+            WorkflowName = "relay_workflow",
+            RunId = runActorId,
+        }));
+        await runActor.HandleEventAsync(Envelope(new ChatRequestEvent
+        {
+            Prompt = "write",
+            SessionId = "root-session",
+        }));
+
+        var roleActor = await runtime.GetAsync(roleActorId);
+        roleActor.Should().NotBeNull();
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(runActorId, runActorId, "draft", attempt: 1);
+        await runActor.HandleEventAsync(Envelope(new StepRequestEvent
+        {
+            StepId = "draft",
+            StepType = "llm_call",
+            RunId = runActorId,
+            Input = "write",
+            TargetRole = "writer",
+        }));
+
+        var pendingBefore = runActor.Agent.Should().BeOfType<WorkflowRunGAgent>().Subject
+            .GetExecutionState("llm_call")!
+            .Unpack<LLMCallModuleState>();
+        pendingBefore.PendingBySessionId.Should().ContainKey(sessionId);
+
+        await runActor.HandleEventAsync(Envelope(new TextMessageEndEvent
+        {
+            SessionId = sessionId,
+            Content = "live frame only",
+        }, publisherId: roleActorId));
+
+        var persistedAfterLiveFrame = await eventStore.GetEventsAsync(runActorId);
+        persistedAfterLiveFrame
+            .Where(x => x.EventData?.Is(StepCompletedEvent.Descriptor) == true)
+            .Should()
+            .BeEmpty();
+        runActor.Agent.Should().BeOfType<WorkflowRunGAgent>().Subject
+            .GetExecutionState("llm_call")!
+            .Unpack<LLMCallModuleState>()
+            .PendingBySessionId
+            .Should()
+            .ContainKey(sessionId);
+
+        var (completionObserved, completionSubscription) = await ObserveCommittedEventAsync(
+            streams.GetStream(runActorId),
+            StepCompletedEvent.Descriptor.FullName);
+        await using var completionObservation = completionSubscription;
+
+        var controlledRole = roleActor!.Agent.Should().BeOfType<ControlledRoleGAgent>().Subject;
+        controlledRole.CompleteNextRequest();
+        await completionObserved;
+
+        var persisted = await eventStore.GetEventsAsync(runActorId);
+        persisted
+            .Where(x => x.EventData?.Is(WorkflowRoleReplyRecordedEvent.Descriptor) == true)
+            .Should()
+            .ContainSingle();
+        var completed = persisted
+            .Where(x => x.EventData?.Is(StepCompletedEvent.Descriptor) == true)
+            .Select(x => x.EventData!.Unpack<StepCompletedEvent>())
+            .Should()
+            .ContainSingle(x => x.StepId == "draft")
+            .Subject;
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Contain("量子纠缠");
+        completed.WorkerId.Should().Be(roleActorId);
+
+        runActor.Agent.Should().BeOfType<WorkflowRunGAgent>().Subject
+            .GetExecutionState("llm_call")
+            .Should()
+            .BeNull();
+    }
+
+    private static EventEnvelope Envelope(
+        Google.Protobuf.IMessage message,
+        string publisherId = "test",
+        TopologyAudience direction = TopologyAudience.Self) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(message),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, direction),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        };
+
+    private static async Task<(Task Observed, IAsyncDisposable Subscription)> ObserveCommittedEventAsync(
+        IStream stream,
+        string eventFullName)
+    {
+        var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
+        {
+            if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) == true)
+            {
+                var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+                if (string.Equals(published.StateEvent?.EventData?.TypeUrl, $"type.googleapis.com/{eventFullName}", StringComparison.Ordinal))
+                    observed.TrySetResult();
+            }
+
+            await Task.CompletedTask;
+        });
+        return (observed.Task, subscription);
+    }
+
+    private sealed class StaticRoleAgentTypeResolver(System.Type roleAgentType) : IRoleAgentTypeResolver
+    {
+        public System.Type ResolveRoleAgentType() => roleAgentType;
+    }
+
+    private sealed class ControlledRoleGAgent : RoleGAgent
+    {
+        private TaskCompletionSource _allowCompletion = NewGate();
+
+        public void CompleteNextRequest() => _allowCompletion.TrySetResult();
+
+        public override async Task HandleChatRequest(ChatRequestEvent request)
+        {
+            if (!string.IsNullOrWhiteSpace(request.SessionId) && !State.Sessions.ContainsKey(request.SessionId))
+            {
+                await PersistDomainEventAsync(new RoleChatSessionStartedEvent
+                {
+                    SessionId = request.SessionId,
+                    Prompt = request.Prompt ?? string.Empty,
+                });
+            }
+
+            await _allowCompletion.Task;
+            _allowCompletion = NewGate();
+            await PersistDomainEventAsync(new RoleChatSessionCompletedEvent
+            {
+                RoleId = RoleId,
+                SessionId = request.SessionId ?? string.Empty,
+                Content = "经过调研，量子纠缠的最新进展包括：relay committed reply",
+                Prompt = request.Prompt ?? string.Empty,
+                ContentEmitted = true,
+            });
+        }
+
+        private static TaskCompletionSource NewGate() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -477,12 +697,12 @@ public class WorkflowIntegrationTests
 
     [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
-    public void Scenario7_AllCoreModules()
+    public async Task Scenario7_AllCoreModules()
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddAevatarWorkflow();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
 
         // ─── 流程控制 ───

@@ -44,9 +44,10 @@ public static class AgentToolExecutionContextMapper
         ArgumentNullException.ThrowIfNull(request);
 
         if (request.ToolContext is { } typedContext)
-            return typedContext;
+            return request.LlmControl?.ToToolContext(typedContext) ?? typedContext;
 
         var mapped = FromMetadata(request.Metadata);
+        mapped = request.LlmControl?.ToToolContext(mapped) ?? mapped;
         var caller = request.CallerContext;
         return mapped with
         {
@@ -76,6 +77,95 @@ public static class AgentToolExecutionContextMapper
         ArgumentNullException.ThrowIfNull(request);
 
         return FromRequest(request).WithCallId(callId);
+    }
+
+    public static AgentToolExecutionContext FromPayload(AgentToolExecutionContextPayload? payload)
+    {
+        if (payload == null)
+            return AgentToolExecutionContext.Empty;
+
+        return new AgentToolExecutionContext(
+            new AgentToolRequestIdentity(
+                AgentToolExecutionContext.Normalize(payload.Request?.RequestId),
+                AgentToolExecutionContext.Normalize(payload.Request?.CallId)),
+            new AgentToolCredentials(
+                AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.SenderNyxIdAccessToken)),
+            new AgentToolCallerContext(
+                AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
+                AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
+                AgentToolExecutionContext.Normalize(payload.Caller?.ResponseId)),
+            new AgentToolChannelContext(
+                AgentToolExecutionContext.Normalize(payload.Channel?.Platform),
+                AgentToolExecutionContext.Normalize(payload.Channel?.SenderId),
+                AgentToolExecutionContext.Normalize(payload.Channel?.RegistrationScopeId),
+                AgentToolExecutionContext.Normalize(payload.Channel?.MessageId),
+                AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId)),
+            new AgentToolSenderBindingContext(AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId)),
+            new LLMRequestRoutingContext(
+                AgentToolExecutionContext.Normalize(payload.Routing?.ModelOverride),
+                AgentToolExecutionContext.Normalize(payload.Routing?.NyxIdRoutePreference),
+                payload.Routing?.HasMaxToolRoundsOverride == true ? payload.Routing.MaxToolRoundsOverride : null,
+                AgentToolExecutionContext.Normalize(payload.Routing?.UserMemoryPrompt)),
+            new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
+            StripOwnedControlKeys(payload.ExternalMetadata));
+    }
+
+    public static AgentToolExecutionContextPayload ToPayload(this AgentToolExecutionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var payload = new AgentToolExecutionContextPayload
+        {
+            Request = new AgentToolRequestIdentityPayload
+            {
+                RequestId = context.Request.RequestId ?? string.Empty,
+                CallId = context.Request.CallId ?? string.Empty,
+            },
+            Credentials = new AgentToolCredentialsPayload
+            {
+                NyxIdAccessToken = context.Credentials.NyxIdAccessToken ?? string.Empty,
+                NyxIdOrgToken = context.Credentials.NyxIdOrgToken ?? string.Empty,
+                SenderNyxIdAccessToken = context.Credentials.SenderNyxIdAccessToken ?? string.Empty,
+            },
+            Caller = new AgentToolCallerContextPayload
+            {
+                ScopeId = context.Caller.ScopeId ?? string.Empty,
+                OwnerSubject = context.Caller.OwnerSubject ?? string.Empty,
+                ResponseId = context.Caller.ResponseId ?? string.Empty,
+            },
+            Channel = new AgentToolChannelContextPayload
+            {
+                Platform = context.Channel.Platform ?? string.Empty,
+                SenderId = context.Channel.SenderId ?? string.Empty,
+                RegistrationScopeId = context.Channel.RegistrationScopeId ?? string.Empty,
+                MessageId = context.Channel.MessageId ?? string.Empty,
+                PlatformMessageId = context.Channel.PlatformMessageId ?? string.Empty,
+            },
+            SenderBinding = new AgentToolSenderBindingContextPayload
+            {
+                BindingId = context.SenderBinding.BindingId ?? string.Empty,
+            },
+            Routing = new LLMRequestRoutingContextPayload
+            {
+                ModelOverride = context.Routing.ModelOverride ?? string.Empty,
+                NyxIdRoutePreference = context.Routing.NyxIdRoutePreference ?? string.Empty,
+                UserMemoryPrompt = context.Routing.UserMemoryPrompt ?? string.Empty,
+            },
+            ConnectedServices = new AgentToolConnectedServicesContextPayload
+            {
+                ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
+            },
+        };
+
+        if (context.Routing.MaxToolRoundsOverride.HasValue)
+            payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
+
+        foreach (var pair in StripOwnedControlKeys(context.ExternalMetadata))
+            payload.ExternalMetadata[pair.Key] = pair.Value;
+
+        return payload;
     }
 
     public static AgentToolExecutionContext FromMetadata(IReadOnlyDictionary<string, string>? metadata)

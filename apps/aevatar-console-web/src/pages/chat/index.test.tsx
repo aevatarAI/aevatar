@@ -89,26 +89,53 @@ jest.mock("@/shared/studio/api", () => ({
         scopeId: "scope-a",
         serviceId: "support-service",
       })),
-      getUserConfig: jest.fn(async () => ({
+      getUserLlmSettings: jest.fn(async () => ({
+        savedRoute: "",
+        savedRouteLabel: "NyxID Gateway",
+        effectiveRoute: "",
+        effectiveRouteLabel: "NyxID Gateway",
+        routeFallbackActive: false,
+        fallbackReason: null,
+        catalogStatus: "ready",
         defaultModel: "",
-        preferredLlmRoute: "",
-        runtimeBaseUrl: "https://runtime.example.test",
-      })),
-      getUserConfigModels: jest.fn(async () => ({
-        gatewayUrl: "https://nyx-gateway.example.test",
-        modelsByProvider: {
-          openai: ["gpt-5.4-mini", "gpt-4.1-mini"],
+        capabilities: {
+          canEditRoute: true,
+          canEditModel: true,
+          canSave: true,
+          canRetryCatalog: false,
         },
-        providers: [
+        routeOptions: [
           {
-            providerName: "OpenAI",
-            providerSlug: "openai",
-            proxyUrl: "https://nyx-api.example/openai",
+            routeValue: "",
+            label: "NyxID Gateway",
+            source: "gateway_provider",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            serviceId: null,
+            serviceSlug: null,
+            description: null,
+          },
+          {
+            routeValue: "/api/v1/proxy/s/openai",
+            label: "OpenAI",
             source: "user_service",
             status: "ready",
+            allowed: true,
+            ready: true,
+            serviceId: "svc-openai",
+            serviceSlug: "openai",
+            description: null,
           },
         ],
-        supportedModels: ["gpt-5.4-mini", "gpt-4.1-mini"],
+        modelGroupsByRoute: [
+          {
+            routeValue: "/api/v1/proxy/s/openai",
+            groupId: "openai",
+            label: "OpenAI",
+            models: ["gpt-5.4-mini", "gpt-4.1-mini"],
+          },
+        ],
       })),
       getSettings: jest.fn(async () => ({
         defaultProviderName: "openai-1",

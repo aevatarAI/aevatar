@@ -15,21 +15,17 @@ namespace Aevatar.AI.ToolProviders.Skills;
 /// 统一技能调用工具。替代散装的 skill_xxx 工具和 ornn_use_skill 工具。
 /// LLM 调用 use_skill(skill="名称") → 返回技能指令内容。
 /// </summary>
+// Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
 public sealed class UseSkillTool : IAgentTool
 {
-    /// <summary>
-    /// 远程技能缓存的最大保留时间。超过该窗口后下一次 use_skill 会重新拉取，确保 Ornn
-    /// 上的更新最多在该窗口内对 aevatar 可见。窗口太短会让常用 skill 频繁打 NyxID
-    /// proxy；太长会让 Ornn 上的更新拖很久才生效。5 分钟是当前的折中值。
-    /// </summary>
-    public static readonly TimeSpan RemoteSkillCacheTtl = TimeSpan.FromMinutes(5);
-
-    private readonly SkillRegistry _registry;
+    private readonly LocalSkillCatalog _localCatalog;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
 
-    public UseSkillTool(SkillRegistry registry, IRemoteSkillFetcher? remoteFetcher = null)
+    public UseSkillTool(LocalSkillCatalog localCatalog, IRemoteSkillFetcher? remoteFetcher = null)
     {
-        _registry = registry;
+        _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
     }
 
@@ -74,13 +70,12 @@ public sealed class UseSkillTool : IAgentTool
         // ─── 查找技能 ───
         SkillDefinition? skill = null;
 
-        // 1. 从注册表查找（本地 + 缓存未过期的远程）
-        // 远程技能传 maxAge=RemoteSkillCacheTtl 触发 TTL 校验：超过窗口的缓存视为不存在，
-        // 让下面的 fetcher 路径重拉。本地技能没有 RemoteId，仍然命中（视作永远新鲜）。
-        if (_registry.TryGet(skillName, out skill, maxAge: RemoteSkillCacheTtl) && skill != null)
+        // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+        //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+        //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+        if (_localCatalog.TryGet(skillName, out skill) && skill != null)
             return BuildSkillResponse(skill, args);
 
-        // 2. 缓存未命中或已过期 → 从远程拉取
         if (_remoteFetcher != null)
         {
             var token = AgentToolRequestContext.NyxIdAccessToken;
@@ -89,14 +84,11 @@ public sealed class UseSkillTool : IAgentTool
                 skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
                 if (skill != null)
                 {
-                    // Register 会用当前时间刷新 FetchedAt 戳记，下次 TTL 窗口重新计时。
-                    _registry.Register(skill);
                     return BuildSkillResponse(skill, args);
                 }
             }
         }
 
-        // 3. 均未找到
         return BuildErrorWithAvailableSkills($"Skill '{skillName}' not found.");
     }
 
@@ -127,6 +119,36 @@ public sealed class UseSkillTool : IAgentTool
         sb.AppendLine("## Instructions");
         sb.AppendLine();
         sb.AppendLine(instructions);
+        sb.AppendLine();
+        sb.AppendLine("## Skill Continuation");
+        sb.AppendLine();
+        sb.AppendLine(
+            "If these instructions leave you blocked by a missing capability, ambiguous workflow step, unavailable service, unknown API contract, repeated tool failure, or any other unsolved dependency, call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic proxy discovery or path guessing. Continue from the newly loaded skill.");
+
+        // Refactor (iter161/cluster-triage-ornn-skill-workflow-tool-signal #1259-first):
+        //   Old pattern: Runnable workflow YAML attachments were rendered only as generic Associated Files, leaving aevatar_start_workflow handoff implicit.
+        //   New principle: Render an explicit handoff section before generic files, preserving workflow_id and workflow_yamls as single-semantics tool fields.
+        if (skill.Workflows.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## aevatar_start_workflow Handoff");
+            sb.AppendLine();
+            sb.AppendLine("Call `aevatar_start_workflow` with this inline workflow bundle before treating workflow YAMLs as ordinary reference files.");
+
+            foreach (var workflow in skill.Workflows)
+            {
+                var payload = new
+                {
+                    workflow_id = workflow.WorkflowId,
+                    workflow_yamls = workflow.WorkflowYamls,
+                };
+
+                sb.AppendLine();
+                sb.AppendLine("```json");
+                sb.AppendLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+                sb.AppendLine("```");
+            }
+        }
 
         // 附带关联文件
         if (skill.AssociatedFiles is { Count: > 0 })
@@ -154,7 +176,7 @@ public sealed class UseSkillTool : IAgentTool
         var sb = new StringBuilder();
         sb.AppendLine(errorMessage);
 
-        var skills = _registry.GetModelInvocable();
+        var skills = _localCatalog.GetModelInvocable();
         if (skills.Count > 0)
         {
             sb.AppendLine();

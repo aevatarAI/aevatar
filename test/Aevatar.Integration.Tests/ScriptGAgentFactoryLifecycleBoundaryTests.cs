@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -29,8 +30,7 @@ public sealed class ScriptGAgentFactoryLifecycleBoundaryTests
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "factory-script",
             scriptRevision: revision,
-            sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
-            sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
+            scriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource),
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
 
@@ -39,6 +39,12 @@ public sealed class ScriptGAgentFactoryLifecycleBoundaryTests
 
         first.Should().Be(runtimeActorId);
         second.Should().Be(runtimeActorId);
+        await ScriptEvolutionIntegrationTestKit.WaitForScriptBindingAsync(
+            provider,
+            runtimeActorId,
+            definitionActorId,
+            revision,
+            CancellationToken.None);
 
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
         persisted.Count(x => x.EventData.Is(ScriptBehaviorBoundEvent.Descriptor)).Should().Be(1);

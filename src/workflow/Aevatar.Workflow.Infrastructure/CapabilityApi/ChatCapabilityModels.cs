@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal static class ChatCapabilityMessageTypes
@@ -13,16 +15,12 @@ public sealed record ChatInput
     /// <summary>Structured multimodal input parts for this chat run.</summary>
     public IReadOnlyList<ChatInputContentPart>? InputParts { get; init; }
 
-    /// <summary>
-    /// Workflow identifier lookup (built-ins and file-loaded workflows).
-    /// This field does not accept inline YAML semantics.
-    /// </summary>
+    public WorkflowChatSourceInput? Source { get; init; }
+
+    /// <summary>Legacy workflow identifier lookup. Prefer <see cref="Source"/>.</summary>
     public string? Workflow { get; init; }
 
-    /// <summary>
-    /// Existing workflow definition source actor id for a new run.
-    /// Resume/signal APIs must target the returned run actor id instead.
-    /// </summary>
+    /// <summary>Legacy workflow definition source actor id. Prefer <see cref="Source"/>.</summary>
     public string? AgentId { get; init; }
 
     /// Optional client-controlled session identifier for downstream chat correlation.
@@ -56,6 +54,63 @@ public sealed record ChatInput
     /// Optional run metadata passthrough for internal bridge integrations.
     /// </summary>
     public IDictionary<string, string>? Metadata { get; init; }
+
+    public ChatLlmControlInput? LlmControl { get; init; }
+
+    // Refactor (issue1332): Old pattern: workflow chat control used metadata or LlmControl only. New principle: reuse AgentToolExecutionContext as typed ToolContext without adding a workflow-specific abstraction.
+    public AgentToolExecutionContext? ToolContext { get; init; }
+}
+
+public sealed record ChatLlmControlInput
+{
+    public string? NyxIdAccessToken { get; init; }
+    public string? NyxIdOrgToken { get; init; }
+    public string? SenderNyxIdAccessToken { get; init; }
+    public string? ModelOverride { get; init; }
+    public string? NyxIdRoutePreference { get; init; }
+    public int? MaxToolRoundsOverride { get; init; }
+    public string? UserMemoryPrompt { get; init; }
+}
+
+public sealed record WorkflowChatSourceInput
+{
+    public string? Kind { get; init; }
+    public WorkflowChatCatalogNameSourceInput? CatalogName { get; init; }
+    public WorkflowChatDefinitionActorSourceInput? DefinitionActor { get; init; }
+    public WorkflowChatInlineYamlBundleSourceInput? InlineBundle { get; init; }
+
+    /// <summary>Legacy source workflow name alias. Prefer the typed source variant submessages.</summary>
+    public string? WorkflowName { get; init; }
+
+    /// <summary>Legacy source actor id alias. Prefer the typed source variant submessages.</summary>
+    public string? ActorId { get; init; }
+
+    /// <summary>Legacy inline YAML bundle alias. Prefer <see cref="InlineBundle"/>.</summary>
+    public IReadOnlyList<string>? WorkflowYamls { get; init; }
+}
+
+public sealed record WorkflowChatCatalogNameSourceInput
+{
+    public string? WorkflowName { get; init; }
+}
+
+public sealed record WorkflowChatDefinitionActorSourceInput
+{
+    public string? ActorId { get; init; }
+    public string? WorkflowName { get; init; }
+}
+
+public sealed record WorkflowChatInlineYamlBundleSourceInput
+{
+    public string? EntryName { get; init; }
+    public IReadOnlyList<WorkflowChatInlineYamlDocumentInput>? YamlDocuments { get; init; }
+    public string? ActorId { get; init; }
+}
+
+public sealed record WorkflowChatInlineYamlDocumentInput
+{
+    public string? Name { get; init; }
+    public string? Yaml { get; init; }
 }
 
 public sealed record ChatInputContentPart

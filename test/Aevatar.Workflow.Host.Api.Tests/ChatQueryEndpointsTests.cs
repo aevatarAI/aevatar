@@ -2,7 +2,12 @@ using System.Text;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -86,7 +91,8 @@ public sealed class ChatQueryEndpointsTests
             ],
         };
 
-        var result = ChatQueryEndpoints.ListPrimitives(service);
+        using var cts = new CancellationTokenSource();
+        var result = await ChatQueryEndpoints.ListPrimitives(service, cts.Token);
 
         var body = await ExecuteAsync(result);
         body.Should().Contain("workflow_call");
@@ -94,18 +100,59 @@ public sealed class ChatQueryEndpointsTests
         body.Should().Contain("child_example");
         body.Should().NotContain("ignored_non_example");
         service.Calls.Should().ContainInOrder("GetCapabilities", "ListWorkflowCatalog");
+        service.CancellationTokens.Should().OnlyContain(token => token == cts.Token);
     }
 
     [Fact]
-    public async Task GetActorSnapshot_ShouldReturnNotFound_WhenSnapshotMissing()
+    public async Task CatalogEndpoints_ShouldAwaitAsyncQueryServiceAndPassCancellationToken()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            WorkflowCatalog =
+            [
+                new WorkflowCatalogItem
+                {
+                    Name = "direct",
+                },
+            ],
+            WorkflowDetail = new WorkflowCatalogItemDetail
+            {
+                Catalog = new WorkflowCatalogItem
+                {
+                    Name = "direct",
+                },
+            },
+            Capabilities = new WorkflowCapabilitiesDocument
+            {
+                SchemaVersion = "capabilities.v1",
+            },
+        };
+        using var cts = new CancellationTokenSource();
+
+        var catalog = await ChatQueryEndpoints.ListWorkflowCatalog(service, cts.Token);
+        var capabilities = await ChatQueryEndpoints.GetCapabilities(service, cts.Token);
+        var detail = await ChatQueryEndpoints.GetWorkflowDetail("direct", service, cts.Token);
+
+        (await ExecuteAsync(catalog)).Should().Contain("direct");
+        (await ExecuteAsync(capabilities)).Should().Contain("capabilities.v1");
+        (await ExecuteAsync(detail)).Should().Contain("direct");
+        service.Calls.Should().ContainInOrder(
+            "ListWorkflowCatalog",
+            "GetCapabilities",
+            "GetWorkflowDetail:direct");
+        service.CancellationTokens.Should().OnlyContain(token => token == cts.Token);
+    }
+
+    [Fact]
+    public async Task GetWorkflowActorCurrentState_ShouldReturnNotFound_WhenCurrentStateMissing()
     {
         var service = new FakeWorkflowExecutionQueryApplicationService();
 
-        var result = await ChatQueryEndpoints.GetActorSnapshot("actor-1", service, CancellationToken.None);
+        var result = await ChatQueryEndpoints.GetWorkflowActorCurrentState("actor-1", service, CancellationToken.None);
 
         var http = await ExecuteWithContextAsync(result);
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        service.Calls.Should().ContainSingle().Which.Should().Be("GetActorSnapshot:actor-1");
+        service.Calls.Should().ContainSingle().Which.Should().Be("GetWorkflowActorCurrentState:actor-1");
     }
 
     [Fact]
@@ -115,27 +162,27 @@ public sealed class ChatQueryEndpointsTests
         {
             GraphEdges =
             [
-                new WorkflowActorGraphEdge
+                new WorkflowRunGraphExportEdge
                 {
                     EdgeId = "edge-1",
                     FromNodeId = "actor-1",
                     ToNodeId = "actor-2",
                 },
             ],
-            GraphSubgraph = new WorkflowActorGraphSubgraph
+            GraphSubgraph = new WorkflowRunGraphExportSubgraph
             {
                 RootNodeId = "actor-1",
             },
         };
 
-        var edgesResult = await ChatQueryEndpoints.ListActorGraphEdges(
+        var edgesResult = await ChatQueryEndpoints.ListWorkflowRunGraphExportEdges(
             "actor-1",
             service,
             take: 12,
             direction: " outbound ",
             edgeTypes: ["child", " child ", "", "sibling"],
             ct: CancellationToken.None);
-        var subgraphResult = await ChatQueryEndpoints.GetActorGraphSubgraph(
+        var subgraphResult = await ChatQueryEndpoints.GetWorkflowRunGraphExportSubgraph(
             "actor-1",
             service,
             depth: 3,
@@ -147,28 +194,23 @@ public sealed class ChatQueryEndpointsTests
         (await ExecuteAsync(edgesResult)).Should().Contain("edge-1");
         (await ExecuteAsync(subgraphResult)).Should().Contain("actor-1");
         service.Calls.Should().ContainInOrder(
-            "ListActorGraphEdges:actor-1:12:Outbound:child,sibling",
-            "GetActorGraphSubgraph:actor-1:3:8:Both:child");
+            "ListWorkflowRunGraphExportEdges:actor-1:12:Outbound:child,sibling",
+            "GetWorkflowRunGraphExportSubgraph:actor-1:3:8:Both:child");
     }
 
     [Fact]
-    public async Task GetActorGraphEnriched_ShouldCombineSnapshotAndSubgraph()
+    public async Task GetWorkflowRunGraphExportEnriched_ShouldReturnSubgraphOnly()
     {
         var service = new FakeWorkflowExecutionQueryApplicationService
         {
-            Snapshot = new WorkflowActorSnapshot
+            GraphSubgraph = new WorkflowRunGraphExportSubgraph
             {
-                ActorId = "actor-1",
-                WorkflowName = "direct",
-            },
-            GraphSubgraph = new WorkflowActorGraphSubgraph
-            {
-                RootNodeId = "actor-1",
+                RootNodeId = "run-1",
             },
         };
 
-        var result = await ChatQueryEndpoints.GetActorGraphEnriched(
-            "actor-1",
+        var result = await ChatQueryEndpoints.GetWorkflowRunGraphExportEnriched(
+            "run-1",
             service,
             depth: 4,
             take: 9,
@@ -177,12 +219,9 @@ public sealed class ChatQueryEndpointsTests
             ct: CancellationToken.None);
 
         var body = await ExecuteAsync(result);
-        body.Should().Contain("snapshot");
-        body.Should().Contain("subgraph");
-        body.Should().Contain("actor-1");
-        service.Calls.Should().ContainInOrder(
-            "GetActorSnapshot:actor-1",
-            "GetActorGraphSubgraph:actor-1:4:9:Inbound:child");
+        body.Should().Contain("run-1");
+        service.Calls.Should().ContainSingle()
+            .Which.Should().Be("GetWorkflowRunGraphExportSubgraph:run-1:4:9:Inbound:child");
     }
 
     [Fact]
@@ -192,7 +231,7 @@ public sealed class ChatQueryEndpointsTests
         {
             Timeline =
             [
-                new WorkflowActorTimelineItem
+                new WorkflowRunTimelineExportItem
                 {
                     Stage = "completed",
                     StepId = "step-1",
@@ -200,10 +239,85 @@ public sealed class ChatQueryEndpointsTests
             ],
         };
 
-        var timelineResult = await ChatQueryEndpoints.ListActorTimeline("actor-1", service, 15, CancellationToken.None);
+        var timelineResult = await ChatQueryEndpoints.ListWorkflowRunTimelineExport("actor-1", service, 15, CancellationToken.None);
 
         (await ExecuteAsync(timelineResult)).Should().Contain("step-1");
-        service.Calls.Should().Contain("ListActorTimeline:actor-1:15");
+        service.Calls.Should().Contain("ListWorkflowRunTimelineExport:actor-1:15");
+    }
+
+    [Fact]
+    public async Task WorkflowRunExportRoutes_ShouldBindActorIdAndQueryParameters()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            Snapshot = new WorkflowActorSnapshot
+            {
+                ActorId = "run-42",
+                WorkflowName = "direct",
+            },
+            Timeline =
+            [
+                new WorkflowRunTimelineExportItem
+                {
+                    Stage = "completed",
+                    StepId = "step-1",
+                },
+            ],
+            GraphEdges =
+            [
+                new WorkflowRunGraphExportEdge
+                {
+                    EdgeId = "edge-1",
+                    FromNodeId = "run-42",
+                    ToNodeId = "child-1",
+                    EdgeType = "child",
+                },
+            ],
+            GraphSubgraph = new WorkflowRunGraphExportSubgraph
+            {
+                RootNodeId = "run-42",
+                Nodes =
+                {
+                    new WorkflowRunGraphExportNode
+                    {
+                        NodeId = "run-42",
+                        NodeType = "workflow_run",
+                    },
+                },
+                Edges =
+                {
+                    new WorkflowRunGraphExportEdge
+                    {
+                        EdgeId = "edge-1",
+                        FromNodeId = "run-42",
+                        ToNodeId = "child-1",
+                        EdgeType = "child",
+                    },
+                },
+            },
+        };
+
+        await using var app = await CreateRouteAppAsync(service);
+        using var client = CreateClient(app);
+
+        var timeline = await client.GetAsync("/api/workflow-runs/run-42/timeline-export?take=7");
+        var edges = await client.GetAsync("/api/workflow-runs/run-42/graph-export/edges?take=8&direction=outbound&edgeTypes=child&edgeTypes=sibling");
+        var subgraph = await client.GetAsync("/api/workflow-runs/run-42/graph-export/subgraph?depth=3&take=9&direction=inbound&edgeTypes=child");
+        var enriched = await client.GetAsync("/api/workflow-runs/run-42/graph-export/enriched?depth=4&take=10&direction=both&edgeTypes=child");
+
+        timeline.EnsureSuccessStatusCode();
+        edges.EnsureSuccessStatusCode();
+        subgraph.EnsureSuccessStatusCode();
+        enriched.EnsureSuccessStatusCode();
+        (await timeline.Content.ReadAsStringAsync()).Should().Contain("step-1");
+        (await edges.Content.ReadAsStringAsync()).Should().Contain("edge-1");
+        (await subgraph.Content.ReadAsStringAsync()).Should().Contain("run-42");
+        (await enriched.Content.ReadAsStringAsync()).Should().Contain("run-42");
+        service.Calls.Should().ContainInOrder(
+            "ListWorkflowRunTimelineExport:run-42:7",
+            "ListWorkflowRunGraphExportEdges:run-42:8:Outbound:child,sibling",
+            "GetWorkflowRunGraphExportSubgraph:run-42:3:9:Inbound:child",
+            "GetWorkflowRunGraphExportSubgraph:run-42:4:10:Both:child");
     }
 
     private static async Task<string> ExecuteAsync(IResult result)
@@ -233,9 +347,38 @@ public sealed class ChatQueryEndpointsTests
         return await reader.ReadToEndAsync();
     }
 
+    private static async Task<WebApplication> CreateRouteAppAsync(IWorkflowExecutionQueryApplicationService service)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = [],
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddSingleton(service);
+        var app = builder.Build();
+        ChatQueryEndpoints.Map(app.MapGroup("/api"));
+        await app.StartAsync();
+        return app;
+    }
+
+    private static HttpClient CreateClient(WebApplication app)
+    {
+        var address = app.Services
+            .GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()!
+            .Addresses
+            .Single();
+
+        return new HttpClient
+        {
+            BaseAddress = new Uri(address),
+        };
+    }
+
     private sealed class FakeWorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; init; } = [];
         public IReadOnlyList<string> Workflows { get; init; } = [];
         public IReadOnlyList<WorkflowCatalogItem> WorkflowCatalog { get; init; } = [];
@@ -243,9 +386,9 @@ public sealed class ChatQueryEndpointsTests
         public WorkflowCapabilitiesDocument Capabilities { get; init; } = new();
         public WorkflowActorSnapshot? Snapshot { get; init; }
         public WorkflowRunReport? Report { get; init; }
-        public IReadOnlyList<WorkflowActorTimelineItem> Timeline { get; init; } = [];
-        public IReadOnlyList<WorkflowActorGraphEdge> GraphEdges { get; init; } = [];
-        public WorkflowActorGraphSubgraph GraphSubgraph { get; init; } = new();
+        public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; init; } = [];
+        public IReadOnlyList<WorkflowRunGraphExportEdge> GraphEdges { get; init; } = [];
+        public WorkflowRunGraphExportSubgraph GraphSubgraph { get; init; } = new();
         public List<string> Calls { get; } = [];
 
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
@@ -260,51 +403,58 @@ public sealed class ChatQueryEndpointsTests
             return Workflows;
         }
 
-        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog()
+        public List<CancellationToken> CancellationTokens { get; } = [];
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default)
         {
             Calls.Add("ListWorkflowCatalog");
-            return WorkflowCatalog;
+            CancellationTokens.Add(ct);
+            return Task.FromResult(WorkflowCatalog);
         }
 
-        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName)
+        public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(
+            string workflowName,
+            CancellationToken ct = default)
         {
             Calls.Add($"GetWorkflowDetail:{workflowName}");
-            return WorkflowDetail;
+            CancellationTokens.Add(ct);
+            return Task.FromResult(WorkflowDetail);
         }
 
-        public WorkflowCapabilitiesDocument GetCapabilities()
+        public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
         {
             Calls.Add("GetCapabilities");
-            return Capabilities;
+            CancellationTokens.Add(ct);
+            return Task.FromResult(Capabilities);
         }
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
-            Calls.Add($"GetActorSnapshot:{actorId}");
+            Calls.Add($"GetWorkflowActorCurrentState:{actorId}");
             return Task.FromResult(Snapshot);
         }
 
-        public Task<WorkflowRunReport?> GetActorReportAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)
         {
-            Calls.Add($"GetActorReport:{actorId}");
+            Calls.Add($"GetWorkflowRunReportArtifact:{actorId}");
             return Task.FromResult(Report);
         }
 
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default)
+        public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(string actorId, int take = 200, CancellationToken ct = default)
         {
-            Calls.Add($"ListActorTimeline:{actorId}:{take}");
+            Calls.Add($"ListWorkflowRunTimelineExport:{actorId}:{take}");
             return Task.FromResult(Timeline);
         }
 
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(string actorId, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default)
+        public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> ListWorkflowRunGraphExportEdgesAsync(string actorId, int take = 200, WorkflowRunGraphExportQueryOptions? options = null, CancellationToken ct = default)
         {
-            Calls.Add($"ListActorGraphEdges:{actorId}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
+            Calls.Add($"ListWorkflowRunGraphExportEdges:{actorId}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
             return Task.FromResult(GraphEdges);
         }
 
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(string actorId, int depth = 2, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default)
+        public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(string actorId, int depth = 2, int take = 200, WorkflowRunGraphExportQueryOptions? options = null, CancellationToken ct = default)
         {
-            Calls.Add($"GetActorGraphSubgraph:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
+            Calls.Add($"GetWorkflowRunGraphExportSubgraph:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
             return Task.FromResult(GraphSubgraph);
         }
     }

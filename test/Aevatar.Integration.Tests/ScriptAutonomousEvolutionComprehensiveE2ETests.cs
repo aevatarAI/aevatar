@@ -1,6 +1,9 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,7 +24,7 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
         const string orchestratorDefinitionActorId = "multi-orchestrator-definition";
         const string orchestratorRuntimeActorId = "multi-orchestrator-runtime";
 
-        await ScriptEvolutionIntegrationTestKit.UpsertDefinitionAsync(
+        var workerADefinition = await ScriptEvolutionIntegrationTestKit.UpsertDefinitionWithSnapshotAsync(
             provider,
             "worker-a-script",
             "rev-a-1",
@@ -32,7 +35,7 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
                 "1"),
             workerADefinitionActorId,
             CancellationToken.None);
-        await ScriptEvolutionIntegrationTestKit.UpsertDefinitionAsync(
+        var workerBDefinition = await ScriptEvolutionIntegrationTestKit.UpsertDefinitionWithSnapshotAsync(
             provider,
             "worker-b-script",
             "rev-b-1",
@@ -92,6 +95,8 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
                 "generated_round",
                 "2"),
             RuntimeAgentType = runtimeAgentType,
+            WorkerAV1DefinitionSnapshot = workerADefinition.Snapshot.ToBindingSpec(),
+            WorkerBV1DefinitionSnapshot = workerBDefinition.Snapshot.ToBindingSpec(),
         };
         await ScriptEvolutionIntegrationTestKit.ActivateAuthorityReadModelsAsync(
             provider,
@@ -178,18 +183,18 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
         catalogEntryA.RevisionHistory.Should().Contain(["rev-a-2", "rev-a-3"]);
         catalogEntryB.RevisionHistory.Should().Contain(["rev-b-2", "rev-b-3"]);
 
-        var workerADefinition = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
+        var workerADefinitionV3 = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
             provider,
             catalogEntryA.ActiveDefinitionActorId,
             "rev-a-3",
             CancellationToken.None);
-        var workerBDefinition = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
+        var workerBDefinitionV3 = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
             provider,
             catalogEntryB.ActiveDefinitionActorId,
             "rev-b-3",
             CancellationToken.None);
-        workerADefinition.Revision.Should().Be("rev-a-3");
-        workerBDefinition.Revision.Should().Be("rev-b-3");
+        workerADefinitionV3.Revision.Should().Be("rev-a-3");
+        workerBDefinitionV3.Revision.Should().Be("rev-b-3");
     }
 
     [Fact]
@@ -259,11 +264,11 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             CancellationToken.None);
         generatedResult.NormalizedText.Should().Be("SELF-GEN:GENERATED");
 
-        var v2Summary = await ScriptEvolutionIntegrationTestKit.GetStateAsync<SelfEvolutionV2State>(
+        var v2Summary = await ScriptEvolutionIntegrationTestKit.WaitForStateAsync<SelfEvolutionV2State>(
             provider,
             v2RuntimeId,
+            state => state.DecisionV3 == "promoted" && !string.IsNullOrWhiteSpace(state.V3RuntimeId),
             CancellationToken.None);
-        v2Summary.DecisionV3.Should().Be("promoted");
         var v3RuntimeId = v2Summary.V3RuntimeId;
         (await runtime.ExistsAsync(v3RuntimeId)).Should().BeTrue();
 
@@ -457,7 +462,8 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             CancellationToken.None);
         sendToDefinition.ScriptId.Should().Be("interaction-sendto-script");
         sendToDefinition.Revision.Should().Be("rev-sendto-1");
-        sendToDefinition.SourceHash.Should().Be(ScriptingCommandEnvelopeTestKit.ComputeSourceHash(sendToSource).ToUpperInvariant());
+        sendToDefinition.SourceHash.Should().Be(
+            ScriptPackageModel.ComputePackageHash(ScriptPackageSpecExtensions.CreateSingleSource(sendToSource)));
 
         var upsertDefinition = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
             provider,
@@ -466,6 +472,7 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             CancellationToken.None);
         upsertDefinition.ScriptId.Should().Be("interaction-invoke-script");
         upsertDefinition.Revision.Should().Be("rev-invoke-1");
-        upsertDefinition.SourceHash.Should().Be(ScriptingCommandEnvelopeTestKit.ComputeSourceHash(invokeSource).ToUpperInvariant());
+        upsertDefinition.SourceHash.Should().Be(
+            ScriptPackageModel.ComputePackageHash(ScriptPackageSpecExtensions.CreateSingleSource(invokeSource)));
     }
 }

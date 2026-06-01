@@ -33,4 +33,8 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\RecordingStudioWorkspacePorts.cs" Link="Shared\RecordingStudioWorkspacePorts.cs" />
+  </ItemGroup>
+
 </Project>

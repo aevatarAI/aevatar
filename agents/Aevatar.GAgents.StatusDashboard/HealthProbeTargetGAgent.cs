@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StatusDashboard.Executors;
@@ -22,11 +23,13 @@ namespace Aevatar.GAgents.StatusDashboard;
 /// </summary>
 public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>, IProjectedActor
 {
-    public static string ProjectionKind => HealthProbeProjectionPort.ProjectionKind;
+    public static string ProjectionKind => "health-probe-target";
 
     internal const string TickCallbackId = "health-probe-tick";
+    internal const string ExecutionTimeoutCallbackPrefix = "health-probe-execution-timeout";
     internal const int RetainedOutcomeCount = 120;
     private static readonly TimeSpan RetainedOutcomeWindow = TimeSpan.FromHours(2);
+    private TimeProvider? _cachedTimeProvider;
 
     // ─── Commands ───
 
@@ -34,6 +37,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
     public async Task HandleConfigureAsync(HealthProbeConfigureCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        var timeProvider = ResolveTimeProvider();
         if (command.Spec == null || string.IsNullOrWhiteSpace(command.Spec.Slug))
         {
             Logger.LogWarning("Ignoring HealthProbeConfigureCommand with missing descriptor for actor {ActorId}", Id);
@@ -52,7 +56,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         await PersistDomainEventAsync(new HealthProbeConfigured
         {
             Spec = command.Spec,
-            ConfiguredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ConfiguredAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
         });
 
         await EnsureNextTickAsync(initial: true);
@@ -78,91 +82,178 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             return;
         }
 
-        var outcome = await ExecuteProbeWithGuardsAsync(descriptor);
+        await StartProbeExecutionAsync(descriptor);
+    }
 
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleTimeoutFiredAsync(HealthProbeTimeoutFiredEvent timeout)
+    {
+        ArgumentNullException.ThrowIfNull(timeout);
+        var active = State.ActiveExecution;
+        if (active == null ||
+            string.IsNullOrWhiteSpace(timeout.OperationId) ||
+            !string.Equals(active.OperationId, timeout.OperationId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var timedOutAt = timeout.TimedOutAt ?? Timestamp.FromDateTimeOffset(ResolveTimeProvider().GetUtcNow());
+        var startedAt = active.StartedAt?.ToDateTimeOffset() ?? timedOutAt.ToDateTimeOffset();
+        var latencyMs = Math.Max(0, (int)Math.Round((timedOutAt.ToDateTimeOffset() - startedAt).TotalMilliseconds));
+        var timeoutMs = timeout.TimeoutMs > 0 ? timeout.TimeoutMs : active.TimeoutMs;
+        var descriptor = State.Spec;
+        var outcome = new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Down,
+            LatencyMs = latencyMs,
+            Detail = "timeout",
+            ErrorMessage = $"Probe '{descriptor?.ProbeKind ?? active.Slug}' exceeded {timeoutMs}ms.",
+            ObservedAt = timedOutAt,
+        };
+
+        try
+        {
+            await PersistProbeTerminalEventsAsync(outcome, active.OperationId);
+        }
+        catch (EventStoreOptimisticConcurrencyException ex)
+        {
+            Logger.LogInformation(ex,
+                "Probe {Slug} timeout outcome lost a concurrent tick race; next tick will be re-armed",
+                timeout.Slug);
+        }
+
+        await EnsureNextTickAsync(initial: false);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleCompletedAsync(HealthProbeCompletedEvent completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        var active = State.ActiveExecution;
+        if (active == null ||
+            string.IsNullOrWhiteSpace(completed.OperationId) ||
+            !string.Equals(active.OperationId, completed.OperationId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        try
+        {
+            await PersistProbeTerminalEventsAsync(completed.Outcome, active.OperationId);
+        }
+        catch (EventStoreOptimisticConcurrencyException ex)
+        {
+            Logger.LogInformation(ex,
+                "Probe {Slug} observed outcome lost a concurrent tick race; next tick will be re-armed",
+                completed.Slug);
+        }
+
+        await EnsureNextTickAsync(initial: false);
+    }
+
+    private Task PersistProbeTerminalEventsAsync(HealthProbeOutcome outcome, string operationId)
+    {
+        // Refactor (iter158/cluster-157-004-timeout-cts):
+        // Old: HealthProbeObserved also cleared ActiveExecution, leaving the typed
+        //      HealthProbeExecutionCleared domain event with no producer.
+        // New: probe completion persists observed outcome and explicit clear event
+        //      together, so execution lifecycle remains actor-owned and observable.
+        return PersistDomainEventsAsync([
+            new HealthProbeObserved { Outcome = outcome },
+            new HealthProbeExecutionCleared { OperationId = operationId },
+        ]);
+    }
+
+    // ─── Probe execution ───
+
+    private async Task StartProbeExecutionAsync(HealthProbeTargetDescriptor descriptor)
+    {
+        var registry = Services.GetService<IHealthProbeExecutorRegistry>();
+        var timeProvider = ResolveTimeProvider();
+        // Refactor (iter89/cluster-089-status-dashboard-probe-clock):
+        // Old: sample DateTimeOffset.UtcNow and Stopwatch directly inside the actor.
+        // New: use the injected TimeProvider for observed_at, timeout budget, and monotonic elapsed latency.
+        var observedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow());
+
+        if (registry == null)
+        {
+            await ObserveImmediateOutcomeAsync(new HealthProbeOutcome
+            {
+                Status = HealthOutcomeStatus.Down,
+                Detail = "registry_unavailable",
+                ErrorMessage = "IHealthProbeExecutorRegistry is not registered in DI.",
+                ObservedAt = observedAt,
+            });
+            return;
+        }
+
+        var executor = registry.Resolve(descriptor.ProbeKind);
+        if (executor == null)
+        {
+            await ObserveImmediateOutcomeAsync(new HealthProbeOutcome
+            {
+                Status = HealthOutcomeStatus.Down,
+                Detail = "unknown_probe_kind",
+                ErrorMessage = $"No executor registered for probe kind '{descriptor.ProbeKind}'.",
+                ObservedAt = observedAt,
+            });
+            return;
+        }
+
+        var startedAt = timeProvider.GetTimestamp();
+        var timeoutMs = descriptor.TimeoutMs > 0 ? descriptor.TimeoutMs : 5_000;
+        var execution = await RegisterExecutionTimeoutAsync(descriptor, timeoutMs);
+        _ = ExecuteProbeAndSignalAsync(executor, descriptor.Clone(), execution, startedAt);
+    }
+
+    private async Task ExecuteProbeAndSignalAsync(
+        IHealthProbeExecutor executor,
+        HealthProbeTargetDescriptor descriptor,
+        HealthProbeExecutionState execution,
+        long startedAt)
+    {
+        var timeProvider = ResolveTimeProvider();
+        HealthProbeOutcome outcome;
+        try
+        {
+            outcome = await executor.ProbeAsync(descriptor, CancellationToken.None);
+            outcome.LatencyMs = ToLatencyMs(timeProvider.GetElapsedTime(startedAt));
+            outcome.ObservedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow());
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Probe '{Kind}' for {Slug} threw unexpectedly",
+                descriptor.ProbeKind, descriptor.Slug);
+            outcome = new HealthProbeOutcome
+            {
+                Status = HealthOutcomeStatus.Down,
+                LatencyMs = ToLatencyMs(timeProvider.GetElapsedTime(startedAt)),
+                Detail = "exception",
+                ErrorMessage = ex.Message,
+                ObservedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
+            };
+        }
+
+        await SendToAsync(Id, new HealthProbeCompletedEvent
+        {
+            Slug = descriptor.Slug,
+            OperationId = execution.OperationId,
+            Outcome = outcome,
+        }, CancellationToken.None);
+    }
+
+    private async Task ObserveImmediateOutcomeAsync(HealthProbeOutcome outcome)
+    {
         try
         {
             await PersistDomainEventAsync(new HealthProbeObserved { Outcome = outcome });
         }
         catch (EventStoreOptimisticConcurrencyException ex)
         {
-            Logger.LogInformation(ex,
-                "Probe {Slug} observed outcome lost a concurrent tick race; next tick will be re-armed",
-                descriptor.Slug);
+            Logger.LogInformation(ex, "Immediate probe outcome lost a concurrent tick race; next tick will be re-armed");
         }
 
         await EnsureNextTickAsync(initial: false);
-    }
-
-    // ─── Probe execution ───
-
-    private async Task<HealthProbeOutcome> ExecuteProbeWithGuardsAsync(HealthProbeTargetDescriptor descriptor)
-    {
-        var registry = Services.GetService<IHealthProbeExecutorRegistry>();
-        var observedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-
-        if (registry == null)
-        {
-            return new HealthProbeOutcome
-            {
-                Status = HealthOutcomeStatus.Down,
-                Detail = "registry_unavailable",
-                ErrorMessage = "IHealthProbeExecutorRegistry is not registered in DI.",
-                ObservedAt = observedAt,
-            };
-        }
-
-        var executor = registry.Resolve(descriptor.ProbeKind);
-        if (executor == null)
-        {
-            return new HealthProbeOutcome
-            {
-                Status = HealthOutcomeStatus.Down,
-                Detail = "unknown_probe_kind",
-                ErrorMessage = $"No executor registered for probe kind '{descriptor.ProbeKind}'.",
-                ObservedAt = observedAt,
-            };
-        }
-
-        var timeoutMs = descriptor.TimeoutMs > 0 ? descriptor.TimeoutMs : 5_000;
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        try
-        {
-            var outcome = await executor.ProbeAsync(descriptor, cts.Token);
-            sw.Stop();
-            // Always overwrite latency and observed_at with the in-actor values
-            // so executors stay focused on the upstream signal.
-            outcome.LatencyMs = (int)Math.Clamp(sw.ElapsedMilliseconds, 0, int.MaxValue);
-            outcome.ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-            return outcome;
-        }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
-        {
-            sw.Stop();
-            return new HealthProbeOutcome
-            {
-                Status = HealthOutcomeStatus.Down,
-                LatencyMs = (int)Math.Clamp(sw.ElapsedMilliseconds, 0, int.MaxValue),
-                Detail = "timeout",
-                ErrorMessage = $"Probe '{descriptor.ProbeKind}' exceeded {timeoutMs}ms.",
-                ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            };
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            Logger.LogWarning(ex, "Probe '{Kind}' for {Slug} threw unexpectedly",
-                descriptor.ProbeKind, descriptor.Slug);
-            return new HealthProbeOutcome
-            {
-                Status = HealthOutcomeStatus.Down,
-                LatencyMs = (int)Math.Clamp(sw.ElapsedMilliseconds, 0, int.MaxValue),
-                Detail = "exception",
-                ErrorMessage = ex.Message,
-                ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            };
-        }
     }
 
     // ─── Self-scheduling ───
@@ -177,6 +268,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         var dueTime = initial
             ? TimeSpan.FromSeconds(1)
             : TimeSpan.FromSeconds(intervalSeconds);
+        var scheduledFor = ResolveTimeProvider().GetUtcNow().Add(dueTime);
 
         await ScheduleSelfDurableTimeoutAsync(
             callbackId: TickCallbackId,
@@ -184,8 +276,48 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             evt: new HealthProbeTickRequested
             {
                 Slug = descriptor.Slug,
-                ScheduledFor = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.Add(dueTime)),
+                ScheduledFor = Timestamp.FromDateTimeOffset(scheduledFor),
             });
+    }
+
+    private async Task<HealthProbeExecutionState> RegisterExecutionTimeoutAsync(
+        HealthProbeTargetDescriptor descriptor,
+        int timeoutMs)
+    {
+        var now = ResolveTimeProvider().GetUtcNow();
+        var ticks = ResolveTimeProvider().GetTimestamp();
+        var operationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+            "health-probe-operation",
+            descriptor.Slug,
+            now.ToUnixTimeMilliseconds().ToString(),
+            ticks.ToString());
+        var execution = new HealthProbeExecutionState
+        {
+            OperationId = operationId,
+            Slug = descriptor.Slug,
+            StartedAt = Timestamp.FromDateTimeOffset(now),
+            TimeoutMs = timeoutMs,
+        };
+        await PersistDomainEventAsync(new HealthProbeExecutionStarted
+        {
+            Execution = execution.Clone(),
+        });
+
+        await ScheduleSelfDurableTimeoutAsync(
+            RuntimeCallbackKeyComposer.BuildCallbackId(
+                ExecutionTimeoutCallbackPrefix,
+                descriptor.Slug,
+                operationId),
+            TimeSpan.FromMilliseconds(timeoutMs),
+            new HealthProbeTimeoutFiredEvent
+            {
+                Slug = descriptor.Slug,
+                OperationId = operationId,
+                TimedOutAt = Timestamp.FromDateTimeOffset(now.AddMilliseconds(timeoutMs)),
+                TimeoutMs = timeoutMs,
+            });
+
+        return execution;
     }
 
     // ─── Activation ───
@@ -210,6 +342,8 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             .Match(current, evt)
             .On<HealthProbeConfigured>(ApplyConfigured)
             .On<HealthProbeObserved>(ApplyObserved)
+            .On<HealthProbeExecutionStarted>(ApplyExecutionStarted)
+            .On<HealthProbeExecutionCleared>(ApplyExecutionCleared)
             .OrCurrent();
 
     private static HealthProbeTargetState ApplyConfigured(HealthProbeTargetState s, HealthProbeConfigured evt)
@@ -221,6 +355,7 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         next.LastSuccessAt = null;
         next.ConsecutiveFailures = 0;
         next.RecentOutcomes.Clear();
+        next.ActiveExecution = null;
         return next;
     }
 
@@ -248,6 +383,24 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         return next;
     }
 
+    private static HealthProbeTargetState ApplyExecutionStarted(HealthProbeTargetState s, HealthProbeExecutionStarted evt)
+    {
+        var next = s.Clone();
+        next.ActiveExecution = evt.Execution?.Clone();
+        return next;
+    }
+
+    private static HealthProbeTargetState ApplyExecutionCleared(HealthProbeTargetState s, HealthProbeExecutionCleared evt)
+    {
+        var next = s.Clone();
+        if (next.ActiveExecution != null &&
+            string.Equals(next.ActiveExecution.OperationId, evt.OperationId, StringComparison.Ordinal))
+        {
+            next.ActiveExecution = null;
+        }
+        return next;
+    }
+
     private static void TrimRecentOutcomes(HealthProbeTargetState state, Timestamp? latestObservedAt)
     {
         if (latestObservedAt != null)
@@ -268,6 +421,12 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 
     private static bool IsBefore(Timestamp? timestamp, DateTimeOffset cutoff) =>
         timestamp != null && timestamp.ToDateTimeOffset() < cutoff;
+
+    private TimeProvider ResolveTimeProvider() =>
+        _cachedTimeProvider ??= Services.GetService<TimeProvider>() ?? TimeProvider.System;
+
+    private static int ToLatencyMs(TimeSpan elapsed) =>
+        (int)Math.Clamp(elapsed.TotalMilliseconds, 0, int.MaxValue);
 
     private static bool DescriptorsEquivalent(HealthProbeTargetDescriptor? a, HealthProbeTargetDescriptor? b)
     {

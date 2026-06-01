@@ -59,7 +59,7 @@ public sealed class ScopeGAgentAguiEventMapperTests
                 SessionId = "s2",
             }));
         textEndToolFailed!.RunError.Should().NotBeNull();
-        textEndToolFailed.RunError!.Message.Should().Be("LLM request failed [tools=none]: upstream");
+        textEndToolFailed.RunError!.Message.Should().Be("upstream");
 
         var toolCall = ScopeGAgentAguiEventMapper.TryMap(BuildEventEnvelope(new AiToolCall
         {
@@ -106,6 +106,40 @@ public sealed class ScopeGAgentAguiEventMapperTests
     }
 
     [Fact]
+    public void TryMap_ShouldMapEmptyCompletionContent_ToTextMessageEnd()
+    {
+        var textEnd = ScopeGAgentAguiEventMapper.TryMap(
+            BuildEventEnvelope(new AiTextEnd { Content = string.Empty, SessionId = "s-empty" }));
+
+        textEnd.Should().NotBeNull();
+        textEnd!.TextMessageEnd.Should().NotBeNull();
+        textEnd.TextMessageEnd!.MessageId.Should().Be("s-empty");
+        textEnd.RunError.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryMapExplicitSessionObservation_ShouldOnlyMapWrappedAguiEvent()
+    {
+        ScopeGAgentAguiEventMapper.TryMapExplicitSessionObservation(
+            BuildEventEnvelope(new AiTextContent { Delta = "d", SessionId = "s1" }))
+            .Should()
+            .BeNull();
+
+        var wrapped = new AGUIEvent
+        {
+            TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+            {
+                MessageId = "m1",
+                Delta = "hello",
+            },
+        };
+
+        ScopeGAgentAguiEventMapper.TryMapExplicitSessionObservation(BuildEventEnvelope(wrapped))
+            .Should()
+            .BeEquivalentTo(wrapped);
+    }
+
+    [Fact]
     public void TryMap_ShouldHandleUnknownPayloadAndWrappedAguiEvent()
     {
         ScopeGAgentAguiEventMapper.TryMap(new EventEnvelope
@@ -126,6 +160,18 @@ public sealed class ScopeGAgentAguiEventMapperTests
         {
             Payload = Any.Pack(wrapped),
         }).Should().BeEquivalentTo(wrapped);
+    }
+
+    [Theory]
+    [InlineData("", "LLM request failed.")]
+    [InlineData("   ", "LLM request failed.")]
+    [InlineData(" LLM request failed: upstream ", "LLM request failed: upstream")]
+    [InlineData("LLM request failed [tools=none] upstream", "LLM request failed [tools=none] upstream")]
+    [InlineData("LLM request failed [tools=none]:    ", "LLM request failed [tools=none]:")]
+    [InlineData("LLM request failed [tools=chrono_grep,chrono_glob]: NyxID authentication required", "NyxID authentication required")]
+    public void NormalizeLlmFailureMessage_ShouldNormalizeToolAnnotatedFailures(string content, string expected)
+    {
+        ScopeGAgentAguiEventMapper.NormalizeLlmFailureMessage(content).Should().Be(expected);
     }
 
     [Fact]

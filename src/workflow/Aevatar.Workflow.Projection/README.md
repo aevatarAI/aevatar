@@ -4,7 +4,7 @@ workflow 领域的 projection/readmodel 实现。当前 durable materialization 
 
 - authority：`WorkflowRunGAgent + WorkflowRunState + root committed events`
 - current-state replica：`WorkflowExecutionCurrentStateDocument`
-- durable artifacts：report / timeline / graph / actor binding
+- durable artifacts：report / timeline export / graph export / actor binding
 - session observation：AGUI / live workflow run events
 
 ## 主链
@@ -15,19 +15,15 @@ flowchart LR
   RUN["WorkflowRunGAgent committed observation"]
   CUR["WorkflowExecutionCurrentStateProjector"]
   REP["WorkflowRunInsightReportArtifactProjector"]
-  TL["WorkflowRunTimelineArtifactProjector"]
-  GRA["WorkflowRunGraphArtifactProjector"]
   AGUI["WorkflowExecutionRunEventProjector"]
   CURDOC["Current-State Document"]
   REPDOC["WorkflowRunInsightReportDocument"]
-  TLDOC["WorkflowRunTimelineDocument"]
   GRAPH["Graph Store"]
   HUB["ProjectionSessionEventHub&lt;WorkflowRunEventEnvelope&gt;"]
 
   RUN --> CUR --> CURDOC
   RUN --> REP --> REPDOC
-  RUN --> TL --> TLDOC
-  RUN --> GRA --> GRAPH
+  REP --> GRAPH
   RUN --> AGUI --> HUB
 ```
 
@@ -40,8 +36,6 @@ flowchart LR
 - [WorkflowExecutionArtifactQueryPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionArtifactQueryPort.cs)
 - [WorkflowExecutionCurrentStateProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs)
 - [WorkflowRunInsightReportArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportArtifactProjector.cs)
-- [WorkflowRunTimelineArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineArtifactProjector.cs)
-- [WorkflowRunGraphArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunGraphArtifactProjector.cs)
 - [WorkflowRunGraphArtifactMaterializer.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunGraphArtifactMaterializer.cs)
 
 ### session observation
@@ -57,8 +51,8 @@ flowchart LR
 
 - 不存在 `WorkflowRunInsightGAgent` secondary chain
 - current-state 只承认 actor-scoped current-state replica
-- report/timeline/graph 明确属于 derived durable artifacts
-- current-state/report/timeline/graph 都直接消费 root committed observation
+- report/timeline/graph 明确属于 workflow-run artifact/export 语义
+- current-state 与 report artifact 消费 root committed observation；timeline export 与 graph export 从 report artifact 派生
 - session release 不会停止 durable materialization
 - session activation 只保留 `rootActorId + commandId`
-- graph 直接读取 graph store，不再从 report document 派生
+- graph 查询读取 graph store；graph materialization 从 report artifact 派生

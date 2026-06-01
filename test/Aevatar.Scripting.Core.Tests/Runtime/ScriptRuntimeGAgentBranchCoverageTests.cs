@@ -6,7 +6,6 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
@@ -23,42 +22,15 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
     [InlineData("dispatcher")]
     [InlineData("capabilityFactory")]
     [InlineData("artifactResolver")]
-    [InlineData("materializationCompiler")]
     [InlineData("codec")]
     public void Ctor_ShouldRejectNullDependencies(string parameterName)
     {
         Action act = parameterName switch
         {
-            "dispatcher" => () => _ = new ScriptBehaviorGAgent(
-                null!,
-                new NoOpCapabilityFactory(),
-                CreateArtifactResolver(),
-                new ScriptReadModelMaterializationCompiler(),
-                new ProtobufMessageCodec()),
-            "capabilityFactory" => () => _ = new ScriptBehaviorGAgent(
-                new NoOpDispatcher(),
-                null!,
-                CreateArtifactResolver(),
-                new ScriptReadModelMaterializationCompiler(),
-                new ProtobufMessageCodec()),
-            "artifactResolver" => () => _ = new ScriptBehaviorGAgent(
-                new NoOpDispatcher(),
-                new NoOpCapabilityFactory(),
-                null!,
-                new ScriptReadModelMaterializationCompiler(),
-                new ProtobufMessageCodec()),
-            "materializationCompiler" => () => _ = new ScriptBehaviorGAgent(
-                new NoOpDispatcher(),
-                new NoOpCapabilityFactory(),
-                CreateArtifactResolver(),
-                null!,
-                new ProtobufMessageCodec()),
-            "codec" => () => _ = new ScriptBehaviorGAgent(
-                new NoOpDispatcher(),
-                new NoOpCapabilityFactory(),
-                CreateArtifactResolver(),
-                new ScriptReadModelMaterializationCompiler(),
-                null!),
+            "dispatcher" => () => _ = new ScriptBehaviorGAgent(null!, new NoOpCapabilityFactory(), CreateArtifactResolver(), new ProtobufMessageCodec()),
+            "capabilityFactory" => () => _ = new ScriptBehaviorGAgent(new NoOpDispatcher(), null!, CreateArtifactResolver(), new ProtobufMessageCodec()),
+            "artifactResolver" => () => _ = new ScriptBehaviorGAgent(new NoOpDispatcher(), new NoOpCapabilityFactory(), null!, new ProtobufMessageCodec()),
+            "codec" => () => _ = new ScriptBehaviorGAgent(new NoOpDispatcher(), new NoOpCapabilityFactory(), CreateArtifactResolver(), null!),
             _ => throw new InvalidOperationException("Unexpected parameter name."),
         };
 
@@ -139,8 +111,10 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             DefinitionActorId = definitionActorId,
             ScriptId = scriptId,
             Revision = revision,
-            SourceText = sourceText,
             SourceHash = "hash-1",
+            ScriptPackage = string.IsNullOrWhiteSpace(sourceText)
+                ? new ScriptPackageSpec()
+                : ScriptPackageSpecExtensions.CreateSingleSource(sourceText),
         }));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -157,7 +131,6 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = string.Empty,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
@@ -168,20 +141,18 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
 
         harness.Agent.State.DefinitionActorId.Should().Be("definition-1");
         harness.Agent.State.ScriptPackage.CsharpSources.Should().NotBeEmpty();
-        harness.Agent.State.SourceText.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleEnvelopeAsync_ShouldBind_WhenOnlySourceTextIsProvided()
+    public async Task HandleEnvelopeAsync_ShouldRejectBinding_WhenScriptPackageIsMissing()
     {
         var harness = CreateHarness();
 
-        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
         {
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = ScriptSources.UppercaseBehavior,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
             ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
@@ -189,9 +160,8 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             ReadModelSchemaHash = "schema-hash",
         }));
 
-        harness.Agent.State.DefinitionActorId.Should().Be("definition-1");
-        harness.Agent.State.SourceText.Should().Be(ScriptSources.UppercaseBehavior);
-        harness.Agent.State.ScriptPackage.CsharpSources.Should().BeEmpty();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*ScriptPackage must contain at least one C# source*");
     }
 
     [Fact]
@@ -361,6 +331,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
         {
             RunId = "run-committed",
+            CommandId = "command-committed",
             DefinitionActorId = "definition-1",
             ScriptRevision = "rev-1",
             RequestedEventType = "integration.requested",
@@ -372,12 +343,150 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         }));
 
         harness.Agent.State.LastRunId.Should().Be("run-committed");
-        harness.Agent.State.LastAppliedEventVersion.Should().Be(2);
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(3);
         harness.Agent.State.LastEventId.Should().Be(ScriptSources.UppercaseEventTypeUrl);
         harness.Agent.State.StateRoot.Should().NotBeNull();
         harness.Agent.State.StateRoot!.Unpack<SimpleTextState>().Value.Should().Be("HELLO");
         var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
-        persisted.Should().Contain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+        var factStateEvent = persisted.Single(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+        var outcomeStateEvent = persisted.Single(x => x.EventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor));
+        var outcome = outcomeStateEvent.EventData
+            .Unpack<ScriptRunOutcomeRecordedEvent>();
+        outcome.ScriptRunId.Should().Be("run-committed");
+        outcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+        outcome.CommandId.Should().Be("command-committed");
+        outcome.CorrelationId.Should().Be("corr-1");
+        outcome.CommittedFactCount.Should().Be(1);
+        outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
+        outcome.StateVersion.Should().Be(factStateEvent.Version + 1);
+        outcome.Result.Should().NotBeNull();
+        harness.Agent.State.LastRunOutcome.Should().NotBeNull();
+        harness.Agent.State.LastRunOutcome.ScriptRunId.Should().Be("run-committed");
+        harness.Agent.State.LastRunOutcome.CommittedFactCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRecordSucceededOutcome_WhenRunProducesNoFacts()
+    {
+        var harness = CreateHarness();
+        await BindAsync(harness.Agent);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-no-facts",
+            CommandId = "command-no-facts",
+            CorrelationId = "correlation-no-facts",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-no-facts",
+                Value = "hello",
+            }),
+        }, correlationId: string.Empty));
+
+        var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
+        persisted.Should().NotContain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+        var outcomeStateEvent = persisted.Single(x => x.EventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor));
+        var outcome = outcomeStateEvent.EventData
+            .Unpack<ScriptRunOutcomeRecordedEvent>();
+        outcome.ScriptRunId.Should().Be("run-no-facts");
+        outcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+        outcome.CommandId.Should().Be("command-no-facts");
+        outcome.CorrelationId.Should().Be("correlation-no-facts");
+        outcome.CommittedFactCount.Should().Be(0);
+        outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
+        outcome.Result.Should().BeNull();
+        harness.Agent.State.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRecordFailedOutcome_WhenRunDispatchFails()
+    {
+        var harness = CreateHarness(
+            dispatcher: new ThrowingDispatcher(new InvalidOperationException("script contract rejected")));
+        await BindAsync(harness.Agent);
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-failed",
+            CommandId = "command-failed",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-failed",
+                Value = "hello",
+            }),
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*script contract rejected*");
+
+        var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
+        var outcomeStateEvent = persisted.Single(x => x.EventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor));
+        var outcome = outcomeStateEvent.EventData
+            .Unpack<ScriptRunOutcomeRecordedEvent>();
+        outcome.ScriptRunId.Should().Be("run-failed");
+        outcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+        outcome.CommandId.Should().Be("command-failed");
+        outcome.Error.Should().Be("script contract rejected");
+        outcome.CommittedFactCount.Should().Be(0);
+        outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
+        harness.Agent.State.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+    }
+
+    [Theory]
+    [InlineData("definition-2", "scope-1", "bound to definition `definition-1`", "scope-1")]
+    [InlineData("definition-1", "scope-2", "bound to scope `scope-1`", "scope-2")]
+    public async Task HandleEnvelopeAsync_ShouldRecordFailedOutcome_WhenRunTargetValidationFails(
+        string targetDefinitionActorId,
+        string targetScopeId,
+        string expectedError,
+        string expectedOutcomeScopeId)
+    {
+        var harness = CreateHarness();
+        await BindAsync(harness.Agent, "scope-1");
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-validation-failed",
+                CommandId = "command-validation-failed",
+                CorrelationId = "correlation-validation-failed",
+                ScopeId = targetScopeId,
+                DefinitionActorId = targetDefinitionActorId,
+                ScriptRevision = "rev-1",
+                RequestedEventType = "integration.requested",
+                InputPayload = Any.Pack(new SimpleTextCommand
+                {
+                    CommandId = "command-validation-failed",
+                    Value = "hello",
+                }),
+            },
+            correlationId: string.Empty));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*{expectedError}*");
+
+        var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
+        persisted.Should().NotContain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+        var outcomeStateEvent = persisted
+            .Where(x => x.EventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+            .Should()
+            .ContainSingle()
+            .Subject;
+        var outcome = outcomeStateEvent.EventData.Unpack<ScriptRunOutcomeRecordedEvent>();
+        outcome.ScriptRunId.Should().Be("run-validation-failed");
+        outcome.CommandId.Should().Be("command-validation-failed");
+        outcome.CorrelationId.Should().Be("correlation-validation-failed");
+        outcome.ScopeId.Should().Be(expectedOutcomeScopeId);
+        outcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+        outcome.CommittedFactCount.Should().Be(0);
+        outcome.Error.Should().Contain(expectedError);
+        outcome.StateVersion.Should().Be(outcomeStateEvent.Version);
     }
 
     [Fact]
@@ -488,12 +597,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         IScriptBehaviorRuntimeCapabilityFactory? capabilityFactory = null)
     {
         var eventStore = new InMemoryEventStore();
-        var agent = new ScriptBehaviorGAgent(
-            dispatcher ?? new NoOpDispatcher(),
-            capabilityFactory ?? new NoOpCapabilityFactory(),
-            CreateArtifactResolver(),
-            new ScriptReadModelMaterializationCompiler(),
-            new ProtobufMessageCodec())
+        var agent = new ScriptBehaviorGAgent(dispatcher ?? new NoOpDispatcher(), capabilityFactory ?? new NoOpCapabilityFactory(), CreateArtifactResolver(), new ProtobufMessageCodec())
         {
             EventPublisher = new RecordingEventPublisher(),
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(eventStore),
@@ -509,23 +613,23 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         return new CachedScriptBehaviorArtifactResolver(compiler);
     }
 
-    private static BindScriptBehaviorRequestedEvent CreateBindRequest() =>
+    private static BindScriptBehaviorRequestedEvent CreateBindRequest(string scopeId = "") =>
         new()
         {
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = ScriptSources.UppercaseBehavior,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
             ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
             ReadModelSchemaVersion = "1",
             ReadModelSchemaHash = "schema-hash",
+            ScopeId = scopeId,
         };
 
-    private static async Task BindAsync(ScriptBehaviorGAgent agent) =>
-        await agent.HandleEnvelopeAsync(BuildEnvelope(CreateBindRequest()));
+    private static async Task BindAsync(ScriptBehaviorGAgent agent, string scopeId = "") =>
+        await agent.HandleEnvelopeAsync(BuildEnvelope(CreateBindRequest(scopeId)));
 
     private static EventEnvelope BuildEnvelope(IMessage payload, string? correlationId = "corr-1") =>
         new()
@@ -565,6 +669,18 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(factory(request));
+        }
+    }
+
+    private sealed class ThrowingDispatcher(Exception exception) : IScriptBehaviorDispatcher
+    {
+        public Task<IReadOnlyList<ScriptDomainFactCommitted>> DispatchAsync(
+            ScriptBehaviorDispatchRequest request,
+            CancellationToken ct)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromException<IReadOnlyList<ScriptDomainFactCommitted>>(exception);
         }
     }
 
@@ -618,18 +734,11 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         public Task<RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(string callbackId, TimeSpan dueTime, IMessage eventPayload, CancellationToken ct) =>
             Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 0, RuntimeCallbackBackend.InMemory));
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
-        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? string.Empty);
-        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
-        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
-        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
-        public Task<Aevatar.Scripting.Abstractions.Queries.ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) =>
-            Task.FromResult<Aevatar.Scripting.Abstractions.Queries.ScriptReadModelSnapshot?>(null);
-        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
         public Task<Aevatar.Scripting.Abstractions.Definitions.ScriptPromotionDecision> ProposeScriptEvolutionAsync(Aevatar.Scripting.Abstractions.Definitions.ScriptEvolutionProposal proposal, CancellationToken ct) =>
             Task.FromResult(new Aevatar.Scripting.Abstractions.Definitions.ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new Aevatar.Scripting.Abstractions.Definitions.ScriptEvolutionValidationReport(false, [])));
-        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
-            Task.FromResult(definitionActorId ?? string.Empty);
-        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+        public Task<ScriptDefinitionUpsertResult> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(new ScriptDefinitionUpsertResult(definitionActorId ?? string.Empty, new ScriptDefinitionBindingSpec { ScriptId = scriptId, Revision = scriptRevision, SourceHash = sourceHash }));
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, ScriptDefinitionBindingSpec definitionSnapshot, CancellationToken ct) =>
             Task.FromResult(runtimeActorId ?? string.Empty);
         public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>
             Task.CompletedTask;

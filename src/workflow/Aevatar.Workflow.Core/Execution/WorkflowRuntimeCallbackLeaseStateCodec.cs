@@ -14,6 +14,7 @@ internal static class WorkflowRuntimeCallbackLeaseStateCodec
             ActorId = lease.ActorId,
             CallbackId = lease.CallbackId,
             Generation = lease.Generation,
+            SlotEpoch = lease.SlotEpoch,
             Backend = lease.Backend switch
             {
                 RuntimeCallbackBackend.Dedicated => WorkflowRuntimeCallbackBackendState.Dedicated,
@@ -33,6 +34,9 @@ internal static class WorkflowRuntimeCallbackLeaseStateCodec
             state.Generation,
             state.Backend == WorkflowRuntimeCallbackBackendState.Dedicated
                 ? RuntimeCallbackBackend.Dedicated
-                : RuntimeCallbackBackend.InMemory);
+                : RuntimeCallbackBackend.InMemory)
+        {
+            SlotEpoch = state.SlotEpoch,
+        };
     }
 }

@@ -23,6 +23,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class WorkflowHostingExtensionsCoverageTests
 {
     [Fact]
@@ -61,7 +62,9 @@ public sealed class WorkflowHostingExtensionsCoverageTests
 
         builder.Services.Any(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunProvisioningPort)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowDefinitionProvisioningPort)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowDefinitionParser)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowActorBindingDocument, string>)).Should().BeTrue();
         builder.Services

@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
@@ -84,10 +85,11 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         var connector = new ThrowThenSuccessConnector("retryable");
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
 
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
+        ctx.SetNextElapsedTime(TimeSpan.FromMilliseconds(1234.56));
         var request = new StepRequestEvent
         {
             StepId = "s-retry",
@@ -101,7 +103,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request, correlationId: "corr-1"), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request, correlationId: "corr-1"), ctx);
 
         connector.Attempts.Should().Be(2);
         connector.LastRequest.Should().NotBeNull();
@@ -113,13 +115,15 @@ public sealed class ConnectorCallModuleCoverageTests
         completed.Output.Should().Be("ok");
         completed.Annotations["connector.attempts"].Should().Be("2");
         completed.Annotations["connector.name"].Should().Be("retryable");
+        completed.Annotations["connector.duration_ms"].Should().Be("1234.56");
     }
 
     [Fact]
     public async Task HandleAsync_WhenTimeoutAndContinue_ShouldKeepInput()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new DelayConnector("slow"));
+        var connector = new ManualConnector("slow");
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
@@ -135,14 +139,164 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var callTask = module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var timeout = ctx.Scheduled.Single(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(timeout), ctx, CancellationToken.None);
+
+        var completed = ctx.Published
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Single();
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("original");
         completed.Annotations["connector.continued_on_error"].Should().Be("true");
         completed.Annotations["connector.timeout_ms"].Should().Be("100");
         completed.Annotations.Should().ContainKey("connector.error");
+
+        connector.Complete(new ConnectorResponse
+        {
+            Success = true,
+            Output = "late",
+        });
+        await callTask;
+        await DrainConnectorContinuationsAsync(module, ctx);
+        ctx.Published.ToArray()
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTimeoutAndDefaultOnError_ShouldPublishFailureWithAnnotations()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        var connector = new ManualConnector("slow-default-fail");
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "s-timeout-fail",
+            RunId = "run-timeout-fail",
+            StepType = "connector_call",
+            Input = "original",
+            ExecutionId = "exec-timeout-fail",
+            Parameters =
+            {
+                ["connector"] = "slow-default-fail",
+                ["operation"] = "sync",
+                ["timeout_ms"] = "1",
+            },
+        };
+
+        var callTask = module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
+
+        var timeout = ctx.Scheduled.Single(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(timeout), ctx, CancellationToken.None);
+
+        var completed = ctx.Published
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completed.StepId.Should().Be("s-timeout-fail");
+        completed.RunId.Should().Be("run-timeout-fail");
+        completed.ExecutionId.Should().Be("exec-timeout-fail");
+        completed.Success.Should().BeFalse();
+        completed.Output.Should().BeEmpty();
+        completed.Error.Should().Be("connector call timed out after 100ms");
+        completed.Error.Should().Contain("timed out");
+        completed.Annotations["connector.name"].Should().Be("slow-default-fail");
+        completed.Annotations["connector.step_id"].Should().Be("s-timeout-fail");
+        completed.Annotations["connector.run_id"].Should().Be("run-timeout-fail");
+        completed.Annotations["connector.type"].Should().Be("test");
+        completed.Annotations["connector.operation"].Should().Be("sync");
+        completed.Annotations["connector.attempts"].Should().Be("1");
+        completed.Annotations["connector.timeout_ms"].Should().Be("100");
+        completed.Annotations["connector.duration_ms"].Should().Be("100.00");
+        completed.Annotations["connector.timeout_fired"].Should().Be("true");
+        completed.Annotations.Should().NotContainKey("connector.continued_on_error");
+
+        connector.Complete(new ConnectorResponse
+        {
+            Success = true,
+            Output = "late",
+        });
+        await callTask;
+        await DrainConnectorContinuationsAsync(module, ctx);
+        ctx.Published.ToArray()
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenConnectorCompletesAfterTimeout_ShouldIgnoreStaleCompletionAndClearActiveExecution()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        var connector = new ManualConnector("slow-stale-lease");
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "s-stale-timeout",
+            RunId = "run-stale-timeout",
+            StepType = "connector_call",
+            Input = "original",
+            ExecutionId = "exec-stale-timeout",
+            Parameters =
+            {
+                ["connector"] = "slow-stale-lease",
+                ["operation"] = "sync",
+                ["timeout_ms"] = "1",
+            },
+        };
+
+        var callTask = module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
+
+        var timeout = ctx.Scheduled.Single(x => x.Event is WorkflowConnectorTimeoutFiredEvent);
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(timeout), ctx, CancellationToken.None);
+
+        var timeoutCompletion = ctx.Published
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        timeoutCompletion.Success.Should().BeFalse();
+        timeoutCompletion.Output.Should().BeEmpty();
+        timeoutCompletion.Error.Should().Be("connector call timed out after 100ms");
+        timeoutCompletion.Error.Should().Contain("timed out");
+        timeoutCompletion.Annotations["connector.timeout_fired"].Should().Be("true");
+        timeoutCompletion.Annotations["connector.step_id"].Should().Be("s-stale-timeout");
+        timeoutCompletion.Annotations["connector.run_id"].Should().Be("run-stale-timeout");
+
+        connector.Complete(new ConnectorResponse
+        {
+            Success = true,
+            Output = "late-success",
+        });
+        await callTask;
+        await DrainConnectorContinuationsAsync(module, ctx);
+
+        ctx.Published.ToArray()
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Which
+            .Should()
+            .BeSameAs(timeoutCompletion);
+
+        var state = ctx.LoadState<ConnectorCallModuleState>("connector_call");
+        state.PendingByOperationId.Should().BeEmpty();
+        state.PendingOperationIdByStepId.Should().BeEmpty();
     }
 
     [Fact]
@@ -150,7 +304,7 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure");
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent", "run-secure");
         var services = new ServiceCollection().BuildServiceProvider();
@@ -182,7 +336,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
 
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-secure"}""");
@@ -199,7 +353,7 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure-json");
-        registry.Register(connector);
+        await registry.RegisterAsync(ConnectorRegistration.External(connector));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent-json", "run-secure-json");
         var services = new ServiceCollection().BuildServiceProvider();
@@ -230,7 +384,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
 
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-\"line\ntwo"}""");
@@ -240,7 +394,7 @@ public sealed class ConnectorCallModuleCoverageTests
     public async Task HandleAsync_WhenAssertResponsePathPassesAndPassThroughEnabled_ShouldKeepOriginalInput()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FixedResponseConnector("validator", """{"valid":true}"""));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FixedResponseConnector("validator", """{"valid":true}""")));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
@@ -256,7 +410,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
@@ -267,7 +421,7 @@ public sealed class ConnectorCallModuleCoverageTests
     public async Task HandleAsync_WhenAssertResponsePathFails_ShouldPublishFailure()
     {
         var registry = new ConfiguredConnectorRegistry();
-        registry.Register(new FixedResponseConnector("validator", """{"valid":false}"""));
+        await registry.RegisterAsync(ConnectorRegistration.External(new FixedResponseConnector("validator", """{"valid":false}""")));
         var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
@@ -282,7 +436,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(request), ctx);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeFalse();
@@ -313,6 +467,30 @@ public sealed class ConnectorCallModuleCoverageTests
         };
     }
 
+    private static async Task HandleAndDrainAsync(
+        ConnectorCallModule module,
+        EventEnvelope envelope,
+        TestEventHandlerContext ctx)
+    {
+        await module.HandleAsync(envelope, ctx, CancellationToken.None);
+        await DrainConnectorContinuationsAsync(module, ctx);
+    }
+
+    private static async Task DrainConnectorContinuationsAsync(
+        ConnectorCallModule module,
+        TestEventHandlerContext ctx)
+    {
+        for (var index = 0; index < ctx.Published.Count; index++)
+        {
+            if (ctx.Published[index].evt is not WorkflowConnectorAttemptCompletedEvent completed)
+                continue;
+
+            ctx.Published.RemoveAt(index);
+            index--;
+            await module.HandleAsync(Envelope(completed), ctx, CancellationToken.None);
+        }
+    }
+
     private sealed class ThrowThenSuccessConnector(string name) : IConnector
     {
         public int Attempts { get; private set; }
@@ -336,22 +514,22 @@ public sealed class ConnectorCallModuleCoverageTests
         }
     }
 
-    private sealed class DelayConnector(string name) : IConnector
+    private sealed class ManualConnector(string name) : IConnector
     {
+        private readonly TaskCompletionSource<ConnectorResponse> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public string Name { get; } = name;
         public string Type => "test";
 
-        public async Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
         {
             _ = request;
-            var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            await pending.Task.WaitAsync(ct);
-            return new ConnectorResponse
-            {
-                Success = true,
-                Output = "late",
-            };
+            _ = ct;
+            return _completion.Task;
         }
+
+        public void Complete(ConnectorResponse response) => _completion.SetResult(response);
     }
 
     private sealed class EchoConnector(string name) : IConnector

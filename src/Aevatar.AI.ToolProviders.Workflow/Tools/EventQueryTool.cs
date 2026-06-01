@@ -5,7 +5,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 namespace Aevatar.AI.ToolProviders.Workflow.Tools;
 
 /// <summary>
-/// Queries committed events for a workflow actor via the projection timeline.
+/// Queries committed events for a workflow run via the projection timeline export.
 /// All data comes from committed projection readmodels, not the event store directly.
 /// </summary>
 public sealed class EventQueryTool : IAgentTool
@@ -23,13 +23,19 @@ public sealed class EventQueryTool : IAgentTool
 
     public string Name => "event_query";
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string Description =>
-        "Query committed events for a workflow actor. " +
+        "Query committed events for a workflow run. " +
         "Shows the chronological timeline of execution: " +
         "step requests, completions, role replies, errors, and state transitions. " +
         "Optionally filter by stage or event type. " +
-        "Use 'edges' action to see actor-to-actor communication edges.";
+        "Use 'edges' action to see workflow run graph export edges.";
 
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
     public string ParametersSchema => """
         {
           "type": "object",
@@ -39,9 +45,9 @@ public sealed class EventQueryTool : IAgentTool
               "enum": ["timeline", "edges"],
               "description": "Action: 'timeline' (default) chronological events, 'edges' actor communication graph"
             },
-            "actor_id": {
+            "workflow_run_id": {
               "type": "string",
-              "description": "Workflow actor ID to query"
+              "description": "Workflow run ID to query"
             },
             "stage_filter": {
               "type": "string",
@@ -61,7 +67,7 @@ public sealed class EventQueryTool : IAgentTool
               "description": "Max events to return (default: 50, max: 200)"
             }
           },
-          "required": ["actor_id"]
+          "required": ["workflow_run_id"]
         }
         """;
 
@@ -78,15 +84,15 @@ public sealed class EventQueryTool : IAgentTool
         try
         {
             var args = ToolArgs.Parse(argumentsJson);
-            var actorId = args.Str("actor_id");
-            if (string.IsNullOrWhiteSpace(actorId))
-                return """{"error":"'actor_id' is required"}""";
+            var workflowRunId = args.Str("workflow_run_id");
+            if (string.IsNullOrWhiteSpace(workflowRunId))
+                return """{"error":"'workflow_run_id' is required"}""";
 
             var action = args.Str("action", "timeline");
             return action switch
             {
-                "edges" => await GetEdgesAsync(actorId, args, ct),
-                _ => await GetTimelineAsync(actorId, args, ct),
+                "edges" => await GetEdgesAsync(workflowRunId, args, ct),
+                _ => await GetTimelineAsync(workflowRunId, args, ct),
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -96,14 +102,17 @@ public sealed class EventQueryTool : IAgentTool
         }
     }
 
-    private async Task<string> GetTimelineAsync(string actorId, ToolArgs args, CancellationToken ct)
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
+    private async Task<string> GetTimelineAsync(string workflowRunId, ToolArgs args, CancellationToken ct)
     {
         var take = Math.Clamp(args.Int("take") ?? _options.MaxTimelineItems, 1, 200);
         var stageFilter = args.Str("stage_filter");
         var eventTypeFilter = args.Str("event_type_filter");
 
-        var timeline = await _queryService.ListActorTimelineAsync(actorId, take, ct);
-        IEnumerable<WorkflowActorTimelineItem> filtered = timeline;
+        var timeline = await _queryService.ListWorkflowRunTimelineExportAsync(workflowRunId, take, ct);
+        IEnumerable<WorkflowRunTimelineExportItem> filtered = timeline;
 
         if (!string.IsNullOrWhiteSpace(stageFilter))
             filtered = filtered.Where(t => t.Stage.Contains(stageFilter, StringComparison.OrdinalIgnoreCase));
@@ -121,24 +130,27 @@ public sealed class EventQueryTool : IAgentTool
 
         return JsonSerializer.Serialize(new
         {
-            actor_id = actorId, events, count = events.Length, total_available = timeline.Count,
+            workflow_run_id = workflowRunId, events, count = events.Length, total_available = timeline.Count,
         }, s_json);
     }
 
-    private async Task<string> GetEdgesAsync(string actorId, ToolArgs args, CancellationToken ct)
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
+    private async Task<string> GetEdgesAsync(string workflowRunId, ToolArgs args, CancellationToken ct)
     {
         var take = Math.Clamp(args.Int("take") ?? 200, 1, 500);
         var edgeTypes = args.StrArray("edge_types");
 
         var options = edgeTypes.Length > 0
-            ? new WorkflowActorGraphQueryOptions { EdgeTypes = edgeTypes }
+            ? new WorkflowRunGraphExportQueryOptions { EdgeTypes = edgeTypes }
             : null;
 
-        var edges = await _queryService.ListActorGraphEdgesAsync(actorId, take, options, ct);
+        var edges = await _queryService.ListWorkflowRunGraphExportEdgesAsync(workflowRunId, take, options, ct);
 
         return JsonSerializer.Serialize(new
         {
-            actor_id = actorId,
+            workflow_run_id = workflowRunId,
             edges = edges.Select(e => new
             {
                 id = e.EdgeId, from = e.FromNodeId, to = e.ToNodeId,

@@ -232,6 +232,9 @@ public sealed partial class GAgentRunTerminalReadModel : IProjectionReadModel<GA
     }
 }
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public sealed partial class LlmSessionCurrentStateReadModel : IProjectionReadModel<LlmSessionCurrentStateReadModel>
 {
     public DateTimeOffset CreatedAt
@@ -286,6 +289,24 @@ public sealed partial class LlmSessionForwardedToolCallReadModel
     }
 }
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+public sealed partial class LlmSessionCompletionReadModel
+{
+    public DateTimeOffset? CompletedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(CompletedAtUtcValue);
+        set => CompletedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public IList<LlmSessionCompletedToolCallReadModel> ToolCalls
+    {
+        get => ToolCallEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(ToolCallEntries, value);
+    }
+}
+
 public sealed partial class ResponsesAgentToolStateCurrentStateReadModel
     : IProjectionReadModel<ResponsesAgentToolStateCurrentStateReadModel>
 {
@@ -307,12 +328,6 @@ public sealed partial class ResponsesAgentToolStateCurrentStateReadModel
         set => ServiceProjectionReadModelSupport.ReplaceCollection(TodoItemEntries, value);
     }
 
-    public IList<ResponsesTaskTraceReadModel> Tasks
-    {
-        get => TaskTraceEntries;
-        set => ServiceProjectionReadModelSupport.ReplaceCollection(TaskTraceEntries, value);
-    }
-
     public IList<ResponsesWebTraceReadModel> WebTraces
     {
         get => WebTraceEntries;
@@ -327,21 +342,6 @@ public sealed partial class ResponsesAgentToolStateCurrentStateReadModel
 }
 
 public sealed partial class ResponsesTodoItemReadModel
-{
-    public DateTimeOffset CreatedAt
-    {
-        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
-        set => CreatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
-    }
-
-    public DateTimeOffset UpdatedAt
-    {
-        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
-        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
-    }
-}
-
-public sealed partial class ResponsesTaskTraceReadModel
 {
     public DateTimeOffset CreatedAt
     {

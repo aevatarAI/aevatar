@@ -34,7 +34,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -78,7 +78,7 @@ public sealed class WorkflowApplicationLayerTests
         var acceptedReceipts = new ConcurrentQueue<WorkflowChatRunAcceptedReceipt>();
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             (frame, _) =>
             {
                 emittedFrames.Enqueue(frame);
@@ -135,7 +135,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var executeTask = service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             async (acceptedReceipt, _) =>
             {
@@ -181,7 +181,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -220,7 +220,7 @@ public sealed class WorkflowApplicationLayerTests
                     WorkflowProjectionCompletionStatus.Completed)));
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -250,7 +250,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDurableCompletionResolver());
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -273,7 +273,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = CreateAcceptedOnlyDispatchService(
             pipeline);
 
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "missing", null));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
@@ -283,8 +283,7 @@ public sealed class WorkflowApplicationLayerTests
     public async Task AcceptedOnlyCommandDispatchService_ShouldReturnReceipt_WithoutConsumingRunEvents()
     {
         var actorPort = new FakeWorkflowRunActorPort();
-        var target = new WorkflowRunAcceptedCommandTarget(
-            new FakeActor("actor-1"),
+        var target = new WorkflowRunAcceptedCommandTarget("actor-1",
             "direct",
             ["definition-1", "actor-1"],
             actorPort);
@@ -292,7 +291,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = CreateAcceptedOnlyDispatchService(
             new FakeAcceptedDispatchPipeline { Result = AcceptedSuccess(target, receipt) });
 
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")));
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);
@@ -348,13 +347,11 @@ public sealed class WorkflowApplicationLayerTests
         string commandId,
         IReadOnlyList<string>? createdActorIds = null)
     {
-        var readModelActivationPort = projectionPort;
         var target = new WorkflowRunCommandTarget(
-            new FakeActor(actorId),
+            actorId,
             workflowName,
             createdActorIds ?? [],
             projectionPort,
-            readModelActivationPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var projectionLease = new FakeProjectionLease(actorId, commandId);
@@ -412,7 +409,7 @@ public sealed class WorkflowApplicationLayerTests
             return Task.FromResult(Result);
         }
 
-        public async Task DispatchPreparedAsync(
+        public async Task<DispatchAdmission> DispatchPreparedAsync(
             CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
             CancellationToken ct = default)
         {
@@ -424,7 +421,7 @@ public sealed class WorkflowApplicationLayerTests
                 if (DispatchPreparedRelease != null)
                     await DispatchPreparedRelease.Task.ConfigureAwait(false);
                 AfterDispatchPrepared?.Invoke();
-                return;
+                return DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope);
             }
 
             if (CleanupOnDispatchPreparedFailure && execution.Target is ICommandDispatchCleanupAware cleanupAware)
@@ -447,8 +444,9 @@ public sealed class WorkflowApplicationLayerTests
             if (!prepared.Succeeded || prepared.Target == null)
                 return prepared;
 
-            await DispatchPreparedAsync(prepared.Target, ct);
-            return prepared;
+            var admission = await DispatchPreparedAsync(prepared.Target, ct);
+            return CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
+                prepared.Target with { Admission = admission });
         }
     }
 
@@ -468,13 +466,13 @@ public sealed class WorkflowApplicationLayerTests
             return Task.FromResult(Result);
         }
 
-        public Task DispatchPreparedAsync(
+        public Task<DispatchAdmission> DispatchPreparedAsync(
             CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
             CancellationToken ct = default)
         {
-            _ = execution;
+            ArgumentNullException.ThrowIfNull(execution);
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(execution.Target.TargetId, execution.Envelope));
         }
 
         public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsync(
@@ -569,8 +567,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public List<IAsyncDisposable?> DetachCalls { get; } = [];
@@ -582,20 +579,6 @@ public sealed class WorkflowApplicationLayerTests
         public int DetachFailureCount { get; set; }
         public int ReleaseFailureCount { get; set; }
         public int ReleaseAttemptCount => ReleaseAttempts.Count;
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
-
-        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
-            string rootActorId,
-            string commandId,
-            CancellationToken ct = default) =>
-            Task.FromResult<IWorkflowExecutionProjectionLease?>(new FakeProjectionLease(rootActorId, commandId));
-
         public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
@@ -608,6 +591,19 @@ public sealed class WorkflowApplicationLayerTests
             }
 
             return Task.FromResult<IAsyncDisposable?>(null);
+        }
+
+        public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            var lease = new FakeProjectionLease(rootActorId, commandId);
+            var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+            return liveSinkLease == null
+                ? null
+                : new EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>(lease, liveSinkLease);
         }
 
         public Task DetachLiveSinkAsync(
@@ -671,17 +667,13 @@ public sealed class WorkflowApplicationLayerTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<string> DestroyCalls { get; } = [];
         public int ExpectedDestroyCount { get; set; } = int.MaxValue;
         public TaskCompletionSource<bool> DestroyCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? DestroyException { get; set; }
-
-        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)

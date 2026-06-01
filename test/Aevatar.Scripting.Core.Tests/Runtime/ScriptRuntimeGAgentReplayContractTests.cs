@@ -5,7 +5,6 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
@@ -30,7 +29,7 @@ public class ScriptBehaviorGAgentReplayContractTests
         harness.Agent.State.ScriptId.Should().Be("script-1");
         harness.Agent.State.Revision.Should().Be("rev-1");
         harness.Agent.State.LastRunId.Should().Be("run-1");
-        harness.Agent.State.LastAppliedEventVersion.Should().Be(2);
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(3);
         harness.Agent.State.StateRoot.Should().NotBeNull();
         harness.Agent.State.StateRoot.Unpack<ScriptProfileState>().CommandCount.Should().Be(1);
         harness.Agent.State.LastEventId.Should().Be(Any.Pack(new ScriptProfileUpdated()).TypeUrl);
@@ -46,7 +45,7 @@ public class ScriptBehaviorGAgentReplayContractTests
         await RunAsync(harness.Agent, "run-2", "rev-1", "runtime.requested");
 
         harness.Agent.State.LastRunId.Should().Be("run-2");
-        harness.Agent.State.LastAppliedEventVersion.Should().Be(3);
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(5);
         harness.Agent.State.StateRoot.Should().NotBeNull();
         harness.Agent.State.StateRoot.Unpack<ScriptProfileState>().CommandCount.Should().Be(2);
     }
@@ -77,7 +76,6 @@ public class ScriptBehaviorGAgentReplayContractTests
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            SourceText = StatefulBehaviorSource,
             SourceHash = sourceHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(StatefulBehaviorSource),
             StateTypeUrl = Any.Pack(new ScriptProfileState()).TypeUrl,
@@ -133,11 +131,9 @@ public class ScriptBehaviorGAgentReplayContractTests
         var codec = new ProtobufMessageCodec();
         var dispatcher = new Aevatar.Scripting.Application.Runtime.ScriptBehaviorDispatcher(
             artifactResolver,
-            new ScriptReadModelMaterializationCompiler(),
-            new ScriptNativeProjectionBuilder(),
             codec);
         var publisher = new RecordingEventPublisher();
-        var agent = new ScriptBehaviorGAgent(dispatcher, new StaticCapabilityFactory(), artifactResolver, new ScriptReadModelMaterializationCompiler(), codec)
+        var agent = new ScriptBehaviorGAgent(dispatcher, new StaticCapabilityFactory(), artifactResolver, codec)
         {
             EventPublisher = publisher,
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(
@@ -187,17 +183,11 @@ public class ScriptBehaviorGAgentReplayContractTests
         public Task<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(string callbackId, TimeSpan dueTime, IMessage eventPayload, CancellationToken ct) =>
             Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease("runtime-1", callbackId, 0, Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
         public Task CancelDurableCallbackAsync(Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
-        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? string.Empty);
-        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
-        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
-        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
-        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
-        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
         public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) =>
             Task.FromResult(new ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new ScriptEvolutionValidationReport(false, [])));
-        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
-            Task.FromResult(definitionActorId ?? string.Empty);
-        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+        public Task<ScriptDefinitionUpsertResult> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(new ScriptDefinitionUpsertResult(definitionActorId ?? string.Empty, new ScriptDefinitionBindingSpec { ScriptId = scriptId, Revision = scriptRevision, SourceHash = sourceHash }));
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, ScriptDefinitionBindingSpec definitionSnapshot, CancellationToken ct) =>
             Task.FromResult(runtimeActorId ?? string.Empty);
         public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>
             Task.CompletedTask;

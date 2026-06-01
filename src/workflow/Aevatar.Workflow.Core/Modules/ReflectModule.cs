@@ -11,6 +11,14 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Self-reflection loop: draft → critique → improve → critique → ...
 /// Repeats until critique says "PASS" or max rounds reached.
 /// </summary>
+// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+// Refactor (iter164/cluster-002-first):
+//   Old pattern: module listened to TextMessageEndEvent / ChatResponseEvent (presentation frames)
+//                and converted them to StepCompletedEvent.
+//   New principle: module reads completion from WorkflowRoleReplyRecordedEvent
+//                  (actor-owned committed event), removing dependency on presentation stream.
 public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "reflect";
@@ -27,10 +35,12 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames advanced reflect phases.
+        //   New principle: only committed WorkflowRoleReplyRecordedEvent advances pending reflect phases.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor));
+                payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -95,21 +105,12 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        string? content = null;
-        string? sessionId = null;
-        if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ChatResponseEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
+        if (!payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
+            return;
 
+        var evt = payload.Unpack<WorkflowRoleReplyRecordedEvent>();
+        var content = evt.Content;
+        var sessionId = evt.SessionId;
         if (string.IsNullOrWhiteSpace(sessionId))
             return;
 
@@ -205,8 +206,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         {
             Prompt = prompt,
             SessionId = sessionId,
+            Telegram = new TelegramBridgeRequest(),
         };
-        CopyParameters(state.ChatMetadataParameters, chatRequest.Headers);
+        CopyParametersToChatRequest(state.ChatMetadataParameters, chatRequest);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
             await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
@@ -239,8 +241,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         {
             Prompt = prompt,
             SessionId = sessionId,
+            Telegram = new TelegramBridgeRequest(),
         };
-        CopyParameters(state.ChatMetadataParameters, chatRequest.Headers);
+        CopyParametersToChatRequest(state.ChatMetadataParameters, chatRequest);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
             await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
@@ -277,6 +280,28 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             TopologyAudience.Self,
             ct);
 
+    private static void CopyParametersToChatRequest(
+        MapField<string, string> source,
+        ChatRequestEvent chatRequest)
+    {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
+        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
+        foreach (var (key, value) in source)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+
+            var normalizedKey = key.Trim();
+            var normalizedValue = value.Trim();
+            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+            if (LLMCallModule.TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue))
+                continue;
+
+            chatRequest.Metadata[normalizedKey] = normalizedValue;
+        }
+    }
+
     private static void CopyParameters(
         MapField<string, string> source,
         MapField<string, string> destination)
@@ -285,11 +310,6 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
-            if (string.Equals(key, "agent_type", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(key, "agent_id", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
 
             destination[key.Trim()] = value.Trim();
         }

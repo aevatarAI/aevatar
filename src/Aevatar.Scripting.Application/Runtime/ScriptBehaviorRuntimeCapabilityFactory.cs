@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Scripting.Abstractions.Behaviors;
-using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
@@ -9,11 +8,15 @@ using Google.Protobuf;
 
 namespace Aevatar.Scripting.Application.Runtime;
 
+// Refactor (iter27/cluster-029-scripting-runtime-raw-actor-lifecycle):
+//   Old pattern: Scripting behavior runtime exposes raw IActorRuntime lifecycle/topology by assembly-qualified type name and caller-supplied actor ids
+//   New principle: Delete raw script-facing actor lifecycle/topology API; keep existing typed scripting ports (provisioning/command/definition/catalog/evolution)
+// Refactor (iter113/cluster-113-scripting-runtime-definition-snapshot-side-read):
+//   Old pattern: Scripting runtime side-read scripting definition snapshot via runtime readmodel (cache + factory injection).
+//   New principle: Direct command-owned ScriptDefinitionSnapshot;delete runtime readmodel side-read/cache/factory injection;migrate script-facing API as in-scope migration risk(public API break in scope).
 public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRuntimeCapabilityFactory
 {
     private readonly IAICapability _aiCapability;
-    private readonly IActorRuntime _runtime;
-    private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
@@ -22,8 +25,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
 
     public ScriptBehaviorRuntimeCapabilityFactory(
         IAICapability aiCapability,
-        IActorRuntime runtime,
-        IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
@@ -31,8 +32,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         IScriptCatalogCommandPort catalogCommandPort)
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
@@ -60,8 +59,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
             scheduleSelfSignalAsync,
             cancelCallbackAsync,
             _aiCapability,
-            _runtime,
-            _definitionSnapshotPort,
             _proposalPort,
             _definitionCommandPort,
             _runtimeProvisioningPort,

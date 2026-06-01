@@ -2,7 +2,9 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using FluentAssertions;
@@ -10,12 +12,14 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Net;
 using System.Text.Json;
 
 namespace Aevatar.Hosting.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHealthEndpointsTests
 {
     [Fact]
@@ -56,6 +60,8 @@ public sealed class MainnetHealthEndpointsTests
         {
             options.BaseUrl = "https://nyx.example.com";
         });
+        builder.Services.AddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
+        builder.Services.AddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
 

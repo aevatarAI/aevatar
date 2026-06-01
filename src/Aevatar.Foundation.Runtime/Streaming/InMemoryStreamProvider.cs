@@ -11,6 +11,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Streaming;
 
+// DEV/TEST ONLY transport - production must use a durable Orleans/Kafka stream provider.
+// Refactor (iter109/cluster-109-inmemory-stream-inline-dispatch):
+//   Old pattern: Local stream runtime keeps actor-id stream registries and uses background Task.Run loops to invoke subscribers (DispatchSubscribersConcurrently fire-and-forgets each subscriber).
+//   New principle: InMemoryStream is dev/test-only transport (usage proves no production registration); delete DispatchSubscribersConcurrently + fire-and-forget subscriber Task.Run; keep stream/forwarding registry but remove concurrent dispatch path; no new admission abstraction.
 /// <summary>In-memory stream provider maintaining one event stream per actor.</summary>
 public sealed class InMemoryStreamProvider :
     IStreamProvider,
@@ -61,24 +65,34 @@ public sealed class InMemoryStreamProvider :
     /// <returns>Actor event stream instance.</returns>
     public IStream GetStream(string actorId)
     {
-        var created = false;
-        var stream = _streams.GetOrAdd(actorId, id =>
+        while (true)
         {
-            created = true;
-            return new InMemoryStream(
-                id,
+            if (_streams.TryGetValue(actorId, out var existing))
+                return existing;
+
+            // Refactor (iter88/cluster-088):
+            // Old: ConcurrentDictionary.GetOrAdd ran a factory that constructed streams whose
+            // constructor started background loops; losing factories could leak short-lived loops.
+            // New: TryAdd selects the authoritative stream before Start/NotifyCreated run.
+            var candidate = new InMemoryStream(
+                actorId,
                 _options,
                 _loggerFactory.CreateLogger<InMemoryStream>(),
-                envelope => _forwardingEngine.ForwardAsync(id, envelope),
+                envelope => _forwardingEngine.ForwardAsync(actorId, envelope),
                 (binding, ct) => _forwardingRegistry.UpsertAsync(binding, ct),
-                (targetStreamId, ct) => _forwardingRegistry.RemoveAsync(id, targetStreamId, ct),
-                ct => _forwardingRegistry.ListBySourceAsync(id, ct));
-        });
+                (targetStreamId, ct) => _forwardingRegistry.RemoveAsync(actorId, targetStreamId, ct),
+                ct => _forwardingRegistry.ListBySourceAsync(actorId, ct),
+                autoStart: false);
 
-        if (created)
-            NotifyCreated(actorId);
+            if (_streams.TryAdd(actorId, candidate))
+            {
+                candidate.Start();
+                NotifyCreated(actorId);
+                return candidate;
+            }
 
-        return stream;
+            candidate.Shutdown();
+        }
     }
 
     /// <summary>Removes and shuts down stream for specified actor.</summary>

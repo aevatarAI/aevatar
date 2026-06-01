@@ -25,6 +25,9 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// </summary>
 internal static class StudioTeamEndpoints
 {
+    // Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+    //   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+    //   New principle: ReadModel query port owns scope_id+team_id filter before pagination
     public static void Map(IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -196,12 +199,16 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            var detail = await teamService.UpdateAsync(
+            var receipt = await teamService.UpdateAsync(
                 scopeId,
                 teamId,
                 new UpdateStudioTeamRequest(displayNamePatch, descriptionPatch),
                 ct);
-            return Results.Ok(detail);
+            // Refactor (iter96/cluster-547):
+            //   Old: dispatch then GetAsync readmodel returned 200 OK + snapshot (pretending completion).
+            //   New: no readmodel read; 202 Accepted + Location points to stable team query resource,
+            //        body only carries accepted/no_change receipt.
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId), receipt);
         }
         catch (StudioTeamNotFoundException ex)
         {
@@ -225,7 +232,12 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            return Results.Ok(await teamService.ArchiveAsync(scopeId, teamId, ct));
+            var receipt = await teamService.ArchiveAsync(scopeId, teamId, ct);
+            // Refactor (iter96/cluster-547):
+            //   Old: dispatch then GetAsync readmodel returned 200 OK + snapshot (pretending completion).
+            //   New: no readmodel read; 202 Accepted + Location points to stable team query resource,
+            //        body only carries accepted/no_change receipt.
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId), receipt);
         }
         catch (StudioTeamNotFoundException ex)
         {
@@ -297,15 +309,9 @@ internal static class StudioTeamEndpoints
     /// filtered by <c>team_id</c> (ADR-0017 §HTTP endpoints) — the team read
     /// model never mirrors the roster.
     ///
-    /// For v1 this iterates the scope's roster and filters in-process. The
-    /// member query port today doesn't expose a typed <c>team_id</c> filter,
-    /// so the filter happens after the read model returns. A typed filter on
-    /// the query port is a follow-up that does not change the wire shape.
-    ///
-    /// To avoid silent empty pages when team members are spread across
-    /// scope-level pages, this method iterates scope pages until enough
-    /// team-filtered results are collected. The returned page token is
-    /// the scope-level cursor of the page where collection stopped.
+    /// The member query port owns the typed <c>team_id</c> filter and applies
+    /// it before pagination, so sparse team members across a scope still page
+    /// by team membership rather than by the unfiltered scope roster.
     /// </summary>
     internal static async Task<IResult> HandleListMembersAsync(
         HttpContext http,
@@ -326,41 +332,12 @@ internal static class StudioTeamEndpoints
             // with empty roster".
             _ = await teamService.GetAsync(scopeId, teamId, ct);
 
-            const int defaultPageSize = 50;
-            const int maxScopePageIterations = 100;
+            var page = new StudioMemberRosterPageRequest(
+                PageSize: pageSize,
+                PageToken: pageToken,
+                TeamId: teamId);
 
-            var effectivePageSize = pageSize ?? defaultPageSize;
-            var filtered = new List<Aevatar.Studio.Application.Studio.Contracts.StudioMemberSummaryResponse>();
-            var nextCursor = string.IsNullOrWhiteSpace(pageToken) ? null : pageToken;
-            string? finalNextPageToken = null;
-            var iterations = 0;
-
-            while (filtered.Count < effectivePageSize && iterations < maxScopePageIterations)
-            {
-                iterations++;
-                var page = new StudioMemberRosterPageRequest(effectivePageSize, nextCursor);
-                var roster = await memberService.ListAsync(scopeId, page, ct);
-
-                foreach (var member in roster.Members)
-                {
-                    if (string.Equals(member.TeamId, teamId, StringComparison.Ordinal))
-                        filtered.Add(member);
-                }
-
-                if (string.IsNullOrWhiteSpace(roster.NextPageToken))
-                {
-                    finalNextPageToken = null;
-                    break;
-                }
-
-                nextCursor = roster.NextPageToken;
-                finalNextPageToken = nextCursor;
-            }
-
-            return Results.Ok(new StudioMemberRosterResponse(
-                ScopeId: scopeId,
-                Members: filtered,
-                NextPageToken: finalNextPageToken));
+            return Results.Ok(await memberService.ListAsync(scopeId, page, ct));
         }
         catch (StudioTeamNotFoundException ex)
         {

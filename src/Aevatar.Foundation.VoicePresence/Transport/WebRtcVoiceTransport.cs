@@ -11,6 +11,9 @@ namespace Aevatar.Foundation.VoicePresence.Transport;
 /// WebRTC implementation of <see cref="IVoiceTransport" />.
 /// Audio is carried over RTP/Opus and control frames are carried over a data channel.
 /// </summary>
+// Refactor (iter44/issue-866-voice-presence-process-runtime-state):
+//   Old pattern: VoicePresenceModule kept _runtimeState/_userTransport/relay tasks/dispatcher as module fields that participated in active session, transport attach, and provider response decisions outside actor turn.
+//   New principle: RoleGAgent voice runtime state is the only authority for active session / transport attached / lease expiry / provider binding; transport handles are byte-only volatile leases; provider/transport callbacks enqueue typed self-signals only.
 public sealed class WebRtcVoiceTransport : IVoiceTransport
 {
     private static readonly JsonFormatter ControlJsonWriter = new(JsonFormatter.Settings.Default);

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -14,8 +15,14 @@ namespace Aevatar.GAgents.StreamingProxy;
 /// OpenClaw agents. Does NOT call LLM itself — it receives messages from
 /// participants and broadcasts them to all SSE subscribers.
 /// </summary>
+// Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+// Room effects from adapters enter as typed request payloads through the actor inbox.
+// This actor remains the only component that converts those requests into committed room domain events.
+// External Nyx streaming I/O stays outside actor turns.
 public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>, IProjectedActor
 {
+    internal const string ChatLifecycleContinuationRunnerStreamId = "streaming-proxy:chat-lifecycle-continuation-runner";
+
     public static string ProjectionKind => StreamingProxyProjectionKinds.CurrentState;
 
     [EventHandler(EndpointName = "initializeRoom")]
@@ -33,20 +40,73 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer.
+        //   New principle: StreamingProxyGAgent owns typed lifecycle facts; host-side runner performs external Nyx I/O outside actor turns.
+        var sessionId = request.SessionId?.Trim() ?? string.Empty;
+        var scopeId = request.ScopeId?.Trim() ?? string.Empty;
+        var prompt = request.Prompt?.Trim() ?? string.Empty;
+        var lifecycleEvent = new StreamingProxyChatLifecycleAcceptedEvent
+        {
+            SessionId = sessionId,
+            ScopeId = scopeId,
+        };
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        if (!string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken))
+            lifecycleEvent.AccessToken = toolContext.Credentials.NyxIdAccessToken;
+        if (!string.IsNullOrWhiteSpace(toolContext.Routing.NyxIdRoutePreference))
+            lifecycleEvent.PreferredRoute = toolContext.Routing.NyxIdRoutePreference;
+        if (!string.IsNullOrWhiteSpace(toolContext.Routing.ModelOverride))
+            lifecycleEvent.DefaultModel = toolContext.Routing.ModelOverride;
+
         var topicEvent = new GroupChatTopicEvent
         {
-            Prompt = request.Prompt,
-            SessionId = request.SessionId,
+            Prompt = prompt,
+            SessionId = sessionId,
         };
 
+        await PersistDomainEventAsync(lifecycleEvent);
         await PersistDomainEventAsync(topicEvent);
 
         // Publish topic so all SSE subscribers (user + OpenClaws) receive it
         await PublishAsync(topicEvent, TopologyAudience.Parent);
 
+        if (!string.IsNullOrWhiteSpace(lifecycleEvent.AccessToken))
+        {
+            await SendToAsync(
+                ChatLifecycleContinuationRunnerStreamId,
+                new StreamingProxyChatLifecycleContinuationRequested
+                {
+                    RoomId = Id,
+                    SessionId = sessionId,
+                    ScopeId = scopeId,
+                    Prompt = prompt,
+                    AccessToken = lifecycleEvent.AccessToken,
+                    PreferredRoute = lifecycleEvent.PreferredRoute,
+                    DefaultModel = lifecycleEvent.DefaultModel,
+                });
+        }
+
         Logger.LogInformation(
             "[StreamingProxy] Topic started: {Preview}",
-            request.Prompt.Length > 100 ? request.Prompt[..100] + "..." : request.Prompt);
+            prompt.Length > 100 ? prompt[..100] + "..." : prompt);
+    }
+
+    [EventHandler(EndpointName = "continueChatLifecycle")]
+    public async Task HandleChatLifecycleContinuationRequested(StreamingProxyChatLifecycleContinuationRequested request)
+    {
+        // Refactor (iter104/cluster-1 r2):
+        //   Old pattern: this actor handler awaited StreamingProxyNyxParticipantCoordinator and ran Nyx/LLM streaming I/O in the actor turn.
+        //   New principle: External Nyx streaming I/O stays outside actor turns; this compatibility endpoint only republishes the typed request to the host runner.
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrWhiteSpace(request.AccessToken))
+            return;
+
+        if (string.IsNullOrWhiteSpace(request.RoomId))
+            request.RoomId = Id;
+
+        await SendToAsync(ChatLifecycleContinuationRunnerStreamId, request);
     }
 
     [EventHandler(EndpointName = "postMessage")]
@@ -63,15 +123,51 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             evt.Content.Length > 100 ? evt.Content[..100] + "..." : evt.Content);
     }
 
+    [EventHandler(EndpointName = "requestPostMessage")]
+    public async Task HandleParticipantMessageRequested(StreamingProxyParticipantMessageRequested request)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Room command adapters now submit request payloads instead of committed room facts.
+        // This actor validates its authoritative state boundary and mints the committed message event.
+        // Projection and SSE continue to observe only the existing committed event types.
+        await HandleGroupChatMessage(new GroupChatMessageEvent
+        {
+            AgentId = request.AgentId,
+            AgentName = string.IsNullOrWhiteSpace(request.AgentName) ? request.AgentId : request.AgentName,
+            Content = request.Content,
+            SessionId = request.SessionId,
+        });
+    }
+
     [EventHandler(EndpointName = "joinRoom")]
     public async Task HandleGroupChatParticipantJoined(GroupChatParticipantJoinedEvent evt)
     {
+        if (HasParticipant(evt.AgentId))
+        {
+            Logger.LogInformation("[StreamingProxy] Participant already joined: {Name} ({Id})", evt.DisplayName, evt.AgentId);
+            return;
+        }
+
         await PersistDomainEventAsync(evt);
 
         // Broadcast join notification
         await PublishAsync(evt, TopologyAudience.Parent);
 
         Logger.LogInformation("[StreamingProxy] Participant joined: {Name} ({Id})", evt.DisplayName, evt.AgentId);
+    }
+
+    [EventHandler(EndpointName = "requestJoinRoom")]
+    public async Task HandleParticipantJoinRequested(StreamingProxyParticipantJoinRequested request)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Join requests are command input, not already-committed participant facts.
+        // Idempotent participant ownership stays inside this room actor state.
+        // Downstream projections still receive GroupChatParticipantJoinedEvent only after this handler commits it.
+        await HandleGroupChatParticipantJoined(new GroupChatParticipantJoinedEvent
+        {
+            AgentId = request.AgentId,
+            DisplayName = string.IsNullOrWhiteSpace(request.DisplayName) ? request.AgentId : request.DisplayName,
+        });
     }
 
     [EventHandler(EndpointName = "leaveRoom")]
@@ -85,9 +181,31 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         Logger.LogInformation("[StreamingProxy] Participant left: {Id}", evt.AgentId);
     }
 
+    [EventHandler(EndpointName = "requestLeaveRoom")]
+    public async Task HandleParticipantLeaveRequested(StreamingProxyParticipantLeaveRequested request)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Leave requests report adapter observations; this actor owns whether a leave fact is committed.
+        // Missing participants remain a no-op so stale Nyx failures cannot invent room history.
+        // Committed leave events remain the only projection/SSE participant removal signal.
+        if (!HasParticipant(request.AgentId))
+        {
+            Logger.LogInformation("[StreamingProxy] Participant leave ignored because participant is not joined: {Id}", request.AgentId);
+            return;
+        }
+
+        await HandleGroupChatParticipantLeft(new GroupChatParticipantLeftEvent
+        {
+            AgentId = request.AgentId,
+        });
+    }
+
     [EventHandler(EndpointName = "completeSession")]
     public async Task HandleChatSessionTerminalStateChanged(StreamingProxyChatSessionTerminalStateChanged evt)
     {
+        // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
+        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
+        //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
         await PersistDomainEventAsync(evt);
 
         Logger.LogInformation(
@@ -95,6 +213,22 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             Id,
             evt.SessionId,
             evt.Status);
+    }
+
+    [EventHandler(EndpointName = "requestCompleteSession")]
+    public async Task HandleSessionTerminalStateRequested(StreamingProxySessionTerminalStateRequested request)
+    {
+        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
+        // Terminal requests carry observed adapter outcome; this actor owns the committed terminal fact.
+        // The actor stamps terminal time at commit so callers cannot imply a stronger ACK than dispatch.
+        // Existing terminal projection remains keyed by StreamingProxyChatSessionTerminalStateChanged.
+        await HandleChatSessionTerminalStateChanged(new StreamingProxyChatSessionTerminalStateChanged
+        {
+            SessionId = request.SessionId,
+            Status = request.Status,
+            TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ErrorMessage = request.ErrorMessage ?? string.Empty,
+        });
     }
 
     /// <summary>
@@ -109,6 +243,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             .On<GroupChatMessageEvent>(ApplyMessage)
             .On<GroupChatParticipantJoinedEvent>(ApplyParticipantJoined)
             .On<GroupChatParticipantLeftEvent>(ApplyParticipantLeft)
+            .On<StreamingProxyChatLifecycleAcceptedEvent>(ApplyLifecycleAccepted)
             .On<StreamingProxyChatSessionTerminalStateChanged>(ApplyTerminalStateChanged)
             .OrCurrent();
 
@@ -163,6 +298,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         StreamingProxyGAgentState current,
         GroupChatParticipantJoinedEvent evt)
     {
+        // Refactor (iter50/issue-887-streaming-proxy-participant-authority):
+        //   Old pattern: StreamingProxyGAgent and singleton StreamingProxyParticipantGAgent both held participant fact; reads went to singleton readmodel, writes to both — dual fact source.
+        //   New principle: StreamingProxyGAgent per room is the single participant authority; singleton actor/store/readmodel deleted; reads go through room current-state projection.
         var next = current.Clone();
         RemoveParticipant(next, evt.AgentId);
         next.Participants.Add(new StreamingProxyParticipant
@@ -183,11 +321,15 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         return next;
     }
 
+    private bool HasParticipant(string agentId) =>
+        State.Participants.Any(participant =>
+            string.Equals(participant.AgentId, agentId, StringComparison.OrdinalIgnoreCase));
+
     private static void RemoveParticipant(StreamingProxyGAgentState state, string agentId)
     {
         for (var i = state.Participants.Count - 1; i >= 0; i--)
         {
-            if (string.Equals(state.Participants[i].AgentId, agentId, StringComparison.Ordinal))
+            if (string.Equals(state.Participants[i].AgentId, agentId, StringComparison.OrdinalIgnoreCase))
                 state.Participants.RemoveAt(i);
         }
     }
@@ -217,4 +359,29 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         };
         return next;
     }
+
+    private static StreamingProxyGAgentState ApplyLifecycleAccepted(
+        StreamingProxyGAgentState current,
+        StreamingProxyChatLifecycleAcceptedEvent evt)
+    {
+        var next = current.Clone();
+        if (string.IsNullOrWhiteSpace(evt.SessionId))
+            return next;
+
+        next.ChatLifecycles[evt.SessionId] = new StreamingProxyChatLifecycleRecord
+        {
+            SessionId = evt.SessionId,
+            ScopeId = evt.ScopeId,
+            AccessToken = evt.AccessToken,
+            PreferredRoute = evt.PreferredRoute,
+            DefaultModel = evt.DefaultModel,
+        };
+        return next;
+    }
+
+    internal static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
+        int successfulReplies) =>
+        successfulReplies > 0
+            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
+            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 }

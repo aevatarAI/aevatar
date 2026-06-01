@@ -57,7 +57,7 @@ var request = new ChatRunRequest
 
 await foreach (var evt in client.StartRunStreamAsync(request, cancellationToken))
 {
-    Console.WriteLine($"{evt.Type} | message={evt.Frame.Message}");
+    Console.WriteLine($"{evt.Type} | message={evt.Frame.RunError?.Message}");
 }
 ```
 
@@ -173,13 +173,13 @@ var capabilities = await client.GetCapabilitiesAsync(cancellationToken);
 var detail = await client.GetWorkflowDetailAsync("auto", cancellationToken);
 
 var snapshot = await client.GetActorSnapshotAsync("actor-1", cancellationToken);
-var timeline = await client.GetActorTimelineAsync("actor-1", take: 200, cancellationToken);
+var timeline = await client.GetWorkflowRunTimelineExportAsync("actor-1", take: 200, cancellationToken);
 ```
 
 说明：
 
 - `GetCapabilitiesAsync` / `GetWorkflowDetailAsync` / `GetActorSnapshotAsync` 遇到 `404` 返回 `null`
-- `GetActorTimelineAsync` 要求 `take > 0`
+- `GetWorkflowRunTimelineExportAsync` 要求 `take > 0`
 
 ---
 
@@ -229,4 +229,4 @@ IAevatarWorkflowClient client = new AevatarWorkflowClient(
 - `GetCapabilitiesAsync` -> `GET /api/capabilities`
 - `GetWorkflowDetailAsync` -> `GET /api/workflows/{workflowName}`
 - `GetActorSnapshotAsync` -> `GET /api/actors/{actorId}`
-- `GetActorTimelineAsync` -> `GET /api/actors/{actorId}/timeline?take={take}`
+- `GetWorkflowRunTimelineExportAsync` -> `GET /api/workflow-runs/{workflowRunId}/timeline-export?take={take}`

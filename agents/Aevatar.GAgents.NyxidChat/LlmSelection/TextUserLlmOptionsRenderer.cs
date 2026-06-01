@@ -185,10 +185,10 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         Value = option.ServiceId,
         IsPrimary = option.Allowed && string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase),
         IsDisabled = !option.Allowed || !string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase),
-        Arguments =
+        LlmSelection = new LlmSelectionActionPayload
         {
-            [LlmActionArgument] = SelectServiceAction,
-            [ServiceIdArgument] = option.ServiceId,
+            Action = SelectServiceAction,
+            ServiceId = option.ServiceId,
         },
     };
 
@@ -199,10 +199,10 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         Label = preset.Title,
         Value = preset.Id,
         IsPrimary = true,
-        Arguments =
+        LlmSelection = new LlmSelectionActionPayload
         {
-            [LlmActionArgument] = ApplyPresetAction,
-            [PresetIdArgument] = preset.Id,
+            Action = ApplyPresetAction,
+            PresetId = preset.Id,
         },
     };
 }

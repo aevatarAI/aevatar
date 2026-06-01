@@ -35,9 +35,10 @@ public sealed class WorkflowHumanInteractionProjector
         if (string.IsNullOrWhiteSpace(evt.DeliveryTargetId))
             return;
 
-        var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in evt.Metadata)
-            annotations[key] = value;
+        // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
+        //   New principle: typed suspension fields are the single source; Metadata is open extension data only.
+        var annotations = BuildAnnotations(evt);
 
         var request = new HumanInteractionRequest
         {
@@ -66,4 +67,21 @@ public sealed class WorkflowHumanInteractionProjector
             "secure_input" => ["submit"],
             _ => Array.Empty<string>(),
         };
+
+    private static Dictionary<string, string> BuildAnnotations(WorkflowSuspendedEvent evt)
+    {
+        var annotations = WorkflowSuspendedSecureInputMetadata.FilterOpenExtensionMetadata(evt.Metadata);
+        var variableName = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.VariableName);
+        var secure = evt.Secure;
+        var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.RedactedOutput);
+
+        if (!string.IsNullOrWhiteSpace(variableName))
+            annotations["variable"] = variableName;
+        if (secure)
+            annotations["secure"] = "true";
+        if (!string.IsNullOrWhiteSpace(redactedOutput))
+            annotations["redacted_output"] = redactedOutput;
+
+        return annotations;
+    }
 }

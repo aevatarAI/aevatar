@@ -5,18 +5,15 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
-using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Hosting.CapabilityApi;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-using Microsoft.AspNetCore.Http;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Microsoft.AspNetCore.Http;
+
 namespace Aevatar.Studio.Application;
 
 public sealed class AppScopedScriptService
@@ -36,8 +33,7 @@ public sealed class AppScopedScriptService
     private readonly IScriptCatalogQueryPort? _scriptCatalogQueryPort;
     private readonly IScriptEvolutionDecisionReadPort? _scriptEvolutionDecisionReadPort;
     private readonly IScriptingActorAddressResolver? _scriptingActorAddressResolver;
-    private readonly IScriptReadModelQueryApplicationService? _readModelQueryService;
-    private readonly IScriptStoragePort? _scriptStoragePort;
+    private readonly IScriptRuntimeActivityQueryPort? _runtimeActivityQueryPort;
     private readonly IHttpClientFactory _httpClientFactory;
 
     public AppScopedScriptService(
@@ -50,8 +46,7 @@ public sealed class AppScopedScriptService
         IScriptCatalogQueryPort? scriptCatalogQueryPort = null,
         IScriptEvolutionDecisionReadPort? scriptEvolutionDecisionReadPort = null,
         IScriptingActorAddressResolver? scriptingActorAddressResolver = null,
-        IScriptReadModelQueryApplicationService? readModelQueryService = null,
-        IScriptStoragePort? scriptStoragePort = null)
+        IScriptRuntimeActivityQueryPort? runtimeActivityQueryPort = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _scriptQueryPort = scriptQueryPort;
@@ -62,8 +57,7 @@ public sealed class AppScopedScriptService
         _scriptCatalogQueryPort = scriptCatalogQueryPort;
         _scriptEvolutionDecisionReadPort = scriptEvolutionDecisionReadPort;
         _scriptingActorAddressResolver = scriptingActorAddressResolver;
-        _readModelQueryService = readModelQueryService;
-        _scriptStoragePort = scriptStoragePort;
+        _runtimeActivityQueryPort = runtimeActivityQueryPort;
     }
 
     public async Task<IReadOnlyList<ScopeScriptSummary>> ListAsync(
@@ -121,61 +115,38 @@ public sealed class AppScopedScriptService
             allowNotFound: true);
     }
 
-    public async Task<IReadOnlyList<ScriptReadModelSnapshotHttpResponse>> ListRuntimeSnapshotsAsync(
+    public async Task<IReadOnlyList<ScriptRuntimeActivitySnapshot>> ListRuntimeActivitiesAsync(
         int take,
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take <= 0 ? 24 : take, 1, 200);
-        if (_readModelQueryService != null)
+        if (_runtimeActivityQueryPort != null)
         {
-            var snapshots = await _readModelQueryService.ListSnapshotsAsync(boundedTake, ct);
-            return snapshots
-                .Select(static snapshot => new ScriptReadModelSnapshotHttpResponse(
-                    snapshot.ActorId,
-                    snapshot.ScriptId,
-                    snapshot.DefinitionActorId,
-                    snapshot.Revision,
-                    snapshot.ReadModelTypeUrl,
-                    FormatReadModelJson(snapshot.ReadModelPayload),
-                    snapshot.StateVersion,
-                    snapshot.LastEventId,
-                    snapshot.UpdatedAt))
-                .ToArray();
+            // Refactor (iter56/cluster-928-script-any-public-delete): old=public Any → JSON readmodel surface,
+            // new=removed (keep internal semantic Any).
+            // Studio activity now uses native AppScriptReadModel data.
+            return await _runtimeActivityQueryPort.ListAsync(boundedTake, ct);
         }
 
-        return await SendAsync<List<ScriptReadModelSnapshotHttpResponse>>(
+        return await SendAsync<List<ScriptRuntimeActivitySnapshot>>(
                    HttpMethod.Get,
-                   $"/api/scripts/runtimes?take={boundedTake}",
+                   $"/api/app/scripts/runtimes?take={boundedTake}",
                    body: null,
                    ct) ??
                [];
     }
 
-    public async Task<ScriptReadModelSnapshotHttpResponse?> GetRuntimeSnapshotAsync(
+    public async Task<ScriptRuntimeActivitySnapshot?> GetRuntimeActivityAsync(
         string actorId,
         CancellationToken ct = default)
     {
         var normalizedActorId = NormalizeRequired(actorId, nameof(actorId));
-        if (_readModelQueryService != null)
-        {
-            var snapshot = await _readModelQueryService.GetSnapshotAsync(normalizedActorId, ct);
-            return snapshot == null
-                ? null
-                : new ScriptReadModelSnapshotHttpResponse(
-                    snapshot.ActorId,
-                    snapshot.ScriptId,
-                    snapshot.DefinitionActorId,
-                    snapshot.Revision,
-                    snapshot.ReadModelTypeUrl,
-                    FormatReadModelJson(snapshot.ReadModelPayload),
-                    snapshot.StateVersion,
-                    snapshot.LastEventId,
-                    snapshot.UpdatedAt);
-        }
+        if (_runtimeActivityQueryPort != null)
+            return await _runtimeActivityQueryPort.GetAsync(normalizedActorId, ct);
 
-        return await SendAsync<ScriptReadModelSnapshotHttpResponse>(
+        return await SendAsync<ScriptRuntimeActivitySnapshot>(
             HttpMethod.Get,
-            $"/api/scripts/runtimes/{Uri.EscapeDataString(normalizedActorId)}/readmodel",
+            $"/api/app/scripts/runtimes/{Uri.EscapeDataString(normalizedActorId)}/activity",
             body: null,
             ct,
             allowNotFound: true);
@@ -229,8 +200,9 @@ public sealed class AppScopedScriptService
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var scriptPackage = AppScriptPackagePayloads.ResolvePackage(request.Package, request.SourceText);
         var sourceText = NormalizeRequired(
-            AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.SourceText),
+            scriptPackage.GetPrimaryCSharpSource(),
             nameof(request.SourceText));
         var scriptId = StudioDocumentIdNormalizer.Normalize(request.ScriptId, "script");
 
@@ -241,7 +213,7 @@ public sealed class AppScopedScriptService
                 new ScopeScriptUpsertRequest(
                     normalizedScopeId,
                     scriptId,
-                    sourceText,
+                    scriptPackage,
                     request.RevisionId,
                     request.ExpectedBaseRevision),
                 ct);
@@ -258,9 +230,10 @@ public sealed class AppScopedScriptService
                 ct) ?? throw new InvalidOperationException("Script save returned an empty response.");
         }
 
-        var accepted = BuildAcceptedSaveResponse(sourceText, upsertResult);
-        _ = UploadScriptBestEffortAsync(scriptId, sourceText);
-        return accepted;
+        // Refactor (iter348/cluster-002):
+        //   Old pattern: AppScopedScriptService fires fire-and-forget storage upload after ACK
+        //   New principle: actor projection save-observation is single source; no orphan chrono storage mirror
+        return BuildAcceptedSaveResponse(sourceText, upsertResult);
     }
 
     public async Task<ScopeScriptSaveObservationResult> ObserveSaveAsync(
@@ -513,58 +486,6 @@ public sealed class AppScopedScriptService
     {
         var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-    }
-
-    private async Task UploadScriptBestEffortAsync(string scriptId, string sourceText)
-    {
-        if (_scriptStoragePort == null)
-            return;
-
-        try
-        {
-            await _scriptStoragePort.UploadScriptAsync(scriptId, sourceText, CancellationToken.None);
-        }
-        catch
-        {
-            /* don't fail the accepted save if chrono-storage upload fails */
-        }
-    }
-
-    private static string FormatReadModelJson(Any? payload)
-    {
-        if (payload == null)
-            return "{}";
-
-        if (payload.Is(AppScriptReadModel.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<AppScriptReadModel>());
-        if (payload.Is(Struct.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Struct>());
-        if (payload.Is(Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Value>());
-        if (payload.Is(ListValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<ListValue>());
-        if (payload.Is(StringValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<StringValue>());
-        if (payload.Is(BoolValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<BoolValue>());
-        if (payload.Is(Int32Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Int32Value>());
-        if (payload.Is(Int64Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Int64Value>());
-        if (payload.Is(UInt32Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<UInt32Value>());
-        if (payload.Is(UInt64Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<UInt64Value>());
-        if (payload.Is(FloatValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<FloatValue>());
-        if (payload.Is(DoubleValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<DoubleValue>());
-        if (payload.Is(BytesValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<BytesValue>());
-        if (payload.Is(Empty.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Empty>());
-
-        return "{}";
     }
 
     private static AppScriptCatalogSnapshot ToCatalogSnapshot(

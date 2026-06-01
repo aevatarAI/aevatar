@@ -60,9 +60,11 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
             ct);
 
         EnsureStaticChatTarget(target, invocationRequest);
-        var actorTypeName = target.Artifact.DeploymentPlan.StaticPlan?.ActorTypeName?.Trim() ?? string.Empty;
-        if (actorTypeName.Length == 0)
-            throw new InvalidOperationException("Static GAgent service has no actor type configured.");
+        var staticPlan = target.Artifact.DeploymentPlan.StaticPlan;
+        var agentKind = staticPlan?.AgentKind?.Trim() ?? string.Empty;
+        var actorTypeName = staticPlan?.ActorTypeName?.Trim() ?? string.Empty;
+        if (agentKind.Length == 0 && actorTypeName.Length == 0)
+            throw new InvalidOperationException("Static GAgent service has no agent kind configured.");
 
         StaticGAgentStreamAcceptedReceipt? accepted = null;
 
@@ -78,6 +80,8 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(input.Timeout ?? DefaultInteractionTimeout);
 
+        // Refactor (iter1353/cluster-001): Old pattern: static invocation lowered trusted facts into headers before draft-run dispatch.
+        // New principle: headers stay payload-only; typed ToolContext and LlmControl cross the command boundary unchanged.
         var interaction = await _interactionService.ExecuteAsync(
             new GAgentDraftRunCommand(
                 ScopeId: identity.TenantId,
@@ -87,7 +91,10 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
                 SessionId: input.SessionId,
                 Headers: headers,
                 InputParts: input.InputParts,
-                UseCorrelationIdAsFallbackSessionId: false),
+                UseCorrelationIdAsFallbackSessionId: false,
+                AgentKind: agentKind,
+                ToolContext: input.ToolContext,
+                LlmControl: input.LlmControl),
             emitAsync,
             OnAcceptedAsync,
             timeoutCts.Token);

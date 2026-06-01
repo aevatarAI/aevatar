@@ -21,16 +21,16 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdChatProjectionSessionTests
 {
     [Fact]
-    public async Task ProjectionPort_ShouldStartAttachDetachAndReleaseChatSession()
+    public async Task ProjectionPort_ShouldAttachExistingDetachAndReleaseChatSession()
     {
-        var activation = new RecordingActivationService();
         var release = new RecordingReleaseService();
         var hub = new RecordingSessionEventHub();
-        var port = new NyxIdChatSessionProjectionPort(activation, release, hub);
+        var runtime = new RecordingActorRuntime();
+        runtime.MarkExists("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
+        var port = new NyxIdChatSessionProjectionPort(release, hub, CreateAttachExistingLookup(runtime));
         var sink = new RecordingEventSink();
 
-        var lease = await port.EnsureChatProjectionAsync("chat-actor-1", "session-1", CancellationToken.None);
-        var liveSinkLease = await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var attachment = await port.AttachExistingChatProjectionAsync("chat-actor-1", "session-1", sink, CancellationToken.None);
         await hub.Handler!(new AGUIEvent
         {
             TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
@@ -39,28 +39,80 @@ public sealed class NyxIdChatProjectionSessionTests
                 Delta = "hello",
             },
         });
-        await port.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
-        await port.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
-
-        var request = activation.Requests.Should().ContainSingle().Subject;
-        request.RootActorId.Should().Be("chat-actor-1");
-        request.SessionId.Should().Be("session-1");
-        request.ProjectionKind.Should().Be("nyxid-chat-session");
-        request.Mode.Should().Be(ProjectionRuntimeMode.SessionObservation);
-
-        var runtimeLease = lease.Should().BeOfType<NyxIdChatSessionRuntimeLease>().Subject;
+        await port.DetachLiveSinkAsync(attachment!.LiveSinkLease, CancellationToken.None);
+        await port.ReleaseActorProjectionAsync(attachment.ProjectionLease, CancellationToken.None);
+        var runtimeLease = attachment.ProjectionLease.Should().BeOfType<NyxIdChatSessionRuntimeLease>().Subject;
         runtimeLease.ActorId.Should().Be("chat-actor-1");
         runtimeLease.RootEntityId.Should().Be("chat-actor-1");
-        runtimeLease.ScopeId.Should().Be("chat-actor-1");
+        runtimeLease.Context.RootActorId.Should().Be("chat-actor-1");
         runtimeLease.SessionId.Should().Be("session-1");
-        runtimeLease.Context.Should().BeSameAs(activation.LeaseToReturn.Context);
 
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("chat-actor-1");
+        hub.LastRootActorId.Should().Be("chat-actor-1");
         hub.LastSessionId.Should().Be("session-1");
         sink.Events.Should().ContainSingle().Which.TextMessageContent.Delta.Should().Be("hello");
         hub.DisposedSubscriptions.Should().Be(1);
-        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
+        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(attachment.ProjectionLease);
+    }
+
+    [Fact]
+    public void ProjectionPort_ShouldNotExposePublicEnsureProjectionApi()
+    {
+        typeof(INyxIdChatSessionProjectionPort)
+            .GetMethods()
+            .Select(method => method.Name)
+            .Should()
+            .NotContain(name => name.StartsWith("Ensure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AttachExistingChatProjectionAsync_ShouldAttachOnlyWhenProjectionSessionExists()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.MarkExists("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
+        var hub = new RecordingSessionEventHub();
+        var port = new NyxIdChatSessionProjectionPort(
+            new RecordingReleaseService(),
+            hub,
+            CreateAttachExistingLookup(runtime));
+        var sink = new RecordingEventSink();
+
+        var attachment = await port.AttachExistingChatProjectionAsync(
+            "chat-actor-1",
+            "session-1",
+            sink,
+            CancellationToken.None);
+
+        attachment.Should().NotBeNull();
+        attachment!.ProjectionLease.ActorId.Should().Be("chat-actor-1");
+        attachment.ProjectionLease.SessionId.Should().Be("session-1");
+        hub.SubscribeCalls.Should().Be(1);
+        hub.LastRootActorId.Should().Be("chat-actor-1");
+        hub.LastSessionId.Should().Be("session-1");
+        runtime.ExistsCalls.Should().ContainSingle()
+            .Which.Should().Be("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
+    }
+
+    [Fact]
+    public async Task AttachExistingChatProjectionAsync_ShouldReturnNull_WhenProjectionSessionIsCold()
+    {
+        var runtime = new RecordingActorRuntime();
+        var hub = new RecordingSessionEventHub();
+        var port = new NyxIdChatSessionProjectionPort(
+            new RecordingReleaseService(),
+            hub,
+            CreateAttachExistingLookup(runtime));
+
+        var attachment = await port.AttachExistingChatProjectionAsync(
+            "chat-actor-1",
+            "session-1",
+            new RecordingEventSink(),
+            CancellationToken.None);
+
+        attachment.Should().BeNull();
+        hub.SubscribeCalls.Should().Be(0);
+        runtime.ExistsCalls.Should().ContainSingle()
+            .Which.Should().Be("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
     }
 
     [Fact]
@@ -123,7 +175,7 @@ public sealed class NyxIdChatProjectionSessionTests
             CancellationToken.None);
 
         hub.Published.Should().HaveCount(4);
-        hub.Published.Should().OnlyContain(p => p.ScopeId == "chat-actor-1" && p.SessionId == "session-1");
+        hub.Published.Should().OnlyContain(p => p.RootActorId == "chat-actor-1" && p.SessionId == "session-1");
         hub.Published[0].Event.TextMessageStart.MessageId.Should().Be("session-1");
         hub.Published[1].Event.TextMessageContent.MessageId.Should().Be("session-1");
         hub.Published[1].Event.TextMessageContent.Delta.Should().Be("delta");
@@ -166,27 +218,6 @@ public sealed class NyxIdChatProjectionSessionTests
         hub.Published.Should().BeEmpty();
     }
 
-    private sealed class RecordingActivationService : IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public NyxIdChatSessionRuntimeLease LeaseToReturn { get; } = new(new NyxIdChatSessionProjectionContext
-        {
-            RootActorId = "chat-actor-1",
-            ProjectionKind = "nyxid-chat-session",
-            SessionId = "session-1",
-        });
-
-        public Task<NyxIdChatSessionRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(LeaseToReturn);
-        }
-    }
-
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>
     {
         public List<NyxIdChatSessionRuntimeLease> Leases { get; } = [];
@@ -199,31 +230,77 @@ public sealed class NyxIdChatProjectionSessionTests
         }
     }
 
+    private static IProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease> CreateAttachExistingLookup(
+        IActorRuntime runtime) =>
+        new ProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease, NyxIdChatSessionProjectionContext>(
+            runtime,
+            request => new NyxIdChatSessionProjectionContext
+            {
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+                SessionId = request.SessionId,
+            },
+            (_, context) => new NyxIdChatSessionRuntimeLease(context));
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        private readonly HashSet<string> _existingActors = new(StringComparer.Ordinal);
+
+        public List<string> ExistsCalls { get; } = [];
+
+        public void MarkExists(string actorId) => _existingActors.Add(actorId);
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor?> GetAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string id)
+        {
+            ExistsCalls.Add(id);
+            return Task.FromResult(_existingActors.Contains(id));
+        }
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
     private sealed class RecordingSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
     {
-        public List<(string ScopeId, string SessionId, AGUIEvent Event)> Published { get; } = [];
+        public List<(string RootActorId, string SessionId, AGUIEvent Event)> Published { get; } = [];
         public int SubscribeCalls { get; private set; }
         public int DisposedSubscriptions { get; private set; }
-        public string? LastScopeId { get; private set; }
+        public string? LastRootActorId { get; private set; }
         public string? LastSessionId { get; private set; }
         public Func<AGUIEvent, ValueTask>? Handler { get; private set; }
 
-        public Task PublishAsync(string scopeId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
+        public Task PublishAsync(string rootActorId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Published.Add((scopeId, sessionId, evt));
+            Published.Add((rootActorId, sessionId, evt));
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<AGUIEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             SubscribeCalls++;
-            LastScopeId = scopeId;
+            LastRootActorId = rootActorId;
             LastSessionId = sessionId;
             Handler = handler;
             return Task.FromResult<IAsyncDisposable>(new DelegateAsyncDisposable(() => DisposedSubscriptions++));

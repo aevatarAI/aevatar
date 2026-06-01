@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -8,6 +9,12 @@ using Aevatar.GAgentService.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Projection.Queries;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+// Refactor (iter81/cluster-081-direct-response-completion-not-session-fact):
+//   Old pattern: direct Responses/Messages held terminal completion in request-local result; LlmSession only marked Completed
+//   New principle: record typed LlmSessionCompletion on session for direct paths; terminal protocol output renders from session contract/readmodel
 public sealed class LlmSessionQueryReader : ILlmSessionQueryPort
 {
     private readonly IProjectionDocumentReader<LlmSessionCurrentStateReadModel, string> _documentStore;
@@ -58,7 +65,35 @@ public sealed class LlmSessionQueryReader : ILlmSessionQueryPort
                     call.EmittedAt,
                     call.ReceivedAt,
                     call.ResolvedAt))
-                .ToArray());
+                .ToArray(),
+            MapCompletion(readModel.Completion));
+
+    // Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+    //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+    //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
+    private static LlmSessionCompletionSnapshot? MapCompletion(LlmSessionCompletionReadModel? completion)
+    {
+        if (completion is null || completion.CompletedAt is null)
+            return null;
+
+        return new LlmSessionCompletionSnapshot(
+            completion.OutputText ?? string.Empty,
+            completion.ToolCalls
+                .Select(static tool => new LlmSessionCompletedToolCallSnapshot(
+                    tool.CallId,
+                    tool.ToolName,
+                    ResponsesJsonValues.ToBoundaryJson(tool.Result)))
+                .ToArray(),
+            completion.CompletedAt,
+            string.IsNullOrWhiteSpace(completion.FailureCode) ? null : completion.FailureCode,
+            string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage,
+            completion.Usage is null
+                ? null
+                : new TokenUsage(
+                    completion.Usage.PromptTokens,
+                    completion.Usage.CompletionTokens,
+                    completion.Usage.TotalTokens));
+    }
 
     /// <summary>
     /// For Expired calls without a caller-provided result, the boundary

@@ -163,7 +163,38 @@ SSE 流维持原状。
 | `aevatar.workflow.name` | string | yes | workflow name |
 | `aevatar.workflow.step` | string | no | 当前 step（如适用） |
 
-### 3.6 LLM / Tool（由 `Aevatar.GenAI` 拥有，未变）
+### 3.6 Channel runtime `[experimental]`
+
+Channel runtime spans emit through the canonical `Aevatar.Agents` source via
+`ChannelDiagnostics`. They keep the channel RFC span names while using the
+documented `aevatar.channel.*` tag family so Host OTel collection and
+repository dashboards can join them with the rest of the Aevatar trace surface.
+iter85/cluster-085 keeps channel diagnostics on the single canonical source.
+
+#### `channel.pipeline.invoke` `[experimental]`
+
+`TracingMiddleware` wraps one channel pipeline invocation. Downstream channel
+middleware and bot-turn spans run inside this span.
+
+| Tag | Type | Required | 说明 |
+|-----|------|----------|------|
+| `aevatar.channel.activity_id` | string | yes | normalized inbound activity id |
+| `aevatar.channel.provider_event_id` | string | no | adapter-provided raw payload identifier |
+| `aevatar.channel.canonical_key` | string | yes | `ConversationReference.CanonicalKey` |
+| `aevatar.channel.bot_instance_id` | string | yes | bot instance routing dimension |
+| `aevatar.channel.id` | string | yes | channel id |
+| `aevatar.channel.retry_count` | int64 | yes | retry attempt count |
+| `aevatar.channel.raw_payload_blob_ref` | string | no | redacted raw payload blob reference |
+| `aevatar.channel.auth_principal` | string | yes | auth principal summary |
+
+The same tag family is used by the other channel RFC spans when those spans are
+implemented: `channel.ingress.verify`, `channel.ingress.commit`,
+`channel.pipeline.dedup`, `channel.pipeline.resolve`, `channel.bot.turn`,
+`channel.egress.send`, `channel.egress.update`, `channel.egress.delete`, and
+`channel.egress.commit`. Outbound success spans may also set
+`aevatar.channel.sent_activity_id`.
+
+### 3.7 LLM / Tool（由 `Aevatar.GenAI` 拥有，未变）
 
 `invoke_agent` / `chat` / `execute_tool` 等 activity 在 `Aevatar.GenAI`
 源，按 [OTel GenAI SemConv](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
@@ -189,6 +220,15 @@ SSE 流维持原状。
 | `aevatar.workflow.run_id` | `Aevatar.Agents` | experimental | workflow.run, projection.materialize (workflow context) |
 | `aevatar.workflow.name` | `Aevatar.Agents` | experimental | workflow.run |
 | `aevatar.workflow.step` | `Aevatar.Agents` | experimental | workflow.run, projection.materialize (workflow context) |
+| `aevatar.channel.activity_id` | `Aevatar.Agents` | experimental | channel.* |
+| `aevatar.channel.provider_event_id` | `Aevatar.Agents` | experimental | channel.ingress.*, channel.pipeline.invoke |
+| `aevatar.channel.canonical_key` | `Aevatar.Agents` | experimental | channel.* |
+| `aevatar.channel.bot_instance_id` | `Aevatar.Agents` | experimental | channel.* |
+| `aevatar.channel.id` | `Aevatar.Agents` | experimental | channel.* |
+| `aevatar.channel.sent_activity_id` | `Aevatar.Agents` | experimental | channel.egress.* |
+| `aevatar.channel.retry_count` | `Aevatar.Agents` | experimental | channel.ingress.*, channel.egress.*, channel.pipeline.invoke |
+| `aevatar.channel.raw_payload_blob_ref` | `Aevatar.Agents` | experimental | channel.ingress.*, channel.pipeline.invoke |
+| `aevatar.channel.auth_principal` | `Aevatar.Agents` | experimental | channel.egress.*, channel.pipeline.invoke |
 
 ## 5. 稳定性策略
 
@@ -214,9 +254,9 @@ SSE 流维持原状。
 
 - 生产部署的 sampler 由部署侧决定；本文档不强制。建议生产用
   `ParentBased(TraceIdRatioBased)`，开发用 `AlwaysOn`。
-- Inspector demo（[demos/Aevatar.Demos.Inspector](../../demos/Aevatar.Demos.Inspector)，
-  详见 ADR [0023](../adr/0023-two-tier-inspector-architecture.md)）在
-  注册时显式覆盖为 `AlwaysOn`，仅本地生效。
+- 本地 Inspector-style consumer（详见 ADR
+  [0023](../adr/0023-two-tier-inspector-architecture.md)）可在注册时显式覆盖为
+  `AlwaysOn`，仅本地生效。
 - Activity emit **必须 infallible**：tag set 失败 / listener 抛错 **不**
   传播到业务路径。`AevatarActivitySource` 的 helper 方法内置 try/catch
   swallow。
@@ -247,10 +287,13 @@ public static class AevatarActivitySource
 每个 callsite 一行。decorator 内的 post-call tag（如
 `aevatar.projection.state.version`）通过 `activity?.SetTag(...)`
 显式设，包 try/catch swallow（参见 ADR 0021 §"Consequences"）。
+Channel runtime may use its domain-local `ChannelDiagnostics` facade, but that
+facade must alias `AevatarActivitySource.Source` and only expose tag keys from
+the `aevatar.channel.*` family listed above.
 
 ## 8. 消费者：ActivityListener pattern
 
-Inspector demo 的最小消费实现：
+Inspector-style 本地 consumer 的最小消费实现：
 
 ```csharp
 var listener = new ActivityListener
@@ -289,7 +332,7 @@ CLAUDE.md "Protobuf 优先" 适用于：
 - 跨节点 RPC 内部传输
 - actor 持久态、event store、readmodel doc 等仓库内部存储
 
-**例外**：Host → browser demo 边界（即 Inspector REST / SSE endpoint
+**例外**：Host → browser demo 边界（例如 Inspector REST / SSE endpoint
 对前端 React 的传输）允许 JSON。具体规则：
 
 - Tier 1 REST：readmodel `state_root`（Protobuf `Any`）在 host 端用
@@ -308,8 +351,8 @@ SSE 通道，由 `WorkflowExecutionRunEventProjector` 派发。本文档新增�
 
 | 消费者 | 通道 | 数据形式 |
 |--------|------|----------|
-| Workflow Studio (yaml editor + run viewer) | 原 `WorkflowEvent` SSE | `WorkflowOutputFrame` envelope (Protobuf) |
-| Inspector demo (live actor system viz) | OTel `Aevatar.Agents` activities | OTel activity + tags（observation） |
+| Workflow Studio (yaml editor + run viewer) | 原 `WorkflowEvent` SSE | `WorkflowRunEventEnvelope` proto（JSON 仅在 wire boundary） |
+| Inspector-style live actor system viz | OTel `Aevatar.Agents` activities | OTel activity + tags（observation） |
 | 外部 trace stack (Jaeger / Tempo) | OTel exporter | OTel spans |
 
 三个消费者读同一份 committed 事实源（workflow committed events），

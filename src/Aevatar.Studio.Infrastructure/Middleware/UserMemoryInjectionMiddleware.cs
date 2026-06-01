@@ -6,9 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Studio.Infrastructure.Middleware;
 
 /// <summary>
-/// LLM 调用中间件：读取请求元数据中预加载的用户记忆文本块，追加到系统消息末尾。
-/// 记忆文本由 NyxIdChatEndpoints 在请求入口处加载，存储于
-/// <see cref="LLMRequestMetadataKeys.UserMemoryPrompt"/> 键下。
+/// LLM 调用中间件：读取请求控制上下文中预加载的用户记忆文本块，追加到系统消息末尾。
 /// </summary>
 internal sealed class UserMemoryInjectionMiddleware : ILLMCallMiddleware
 {
@@ -27,12 +25,8 @@ internal sealed class UserMemoryInjectionMiddleware : ILLMCallMiddleware
 
     private void TryInjectMemory(LLMCallContext context)
     {
-        var metadata = context.Request.Metadata;
-        if (metadata is null)
-            return;
-
-        if (!metadata.TryGetValue(LLMRequestMetadataKeys.UserMemoryPrompt, out var memorySection) ||
-            string.IsNullOrWhiteSpace(memorySection))
+        var memorySection = context.Request.LlmControl?.UserMemoryPrompt;
+        if (string.IsNullOrWhiteSpace(memorySection))
             return;
 
         var messages = context.Request.Messages;

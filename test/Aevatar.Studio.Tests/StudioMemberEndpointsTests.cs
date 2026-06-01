@@ -260,6 +260,7 @@ public sealed class StudioMemberEndpointsTests
             ScopeId: ScopeId,
             MemberId: "member-1",
             Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+            StateVersion: 7,
             UpdatedAt: DateTimeOffset.UtcNow);
         var service = new RecordingMemberService
         {

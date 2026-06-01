@@ -1,4 +1,4 @@
-import { MoreOutlined } from "@ant-design/icons";
+import { MoreOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Space, Typography, theme } from "antd";
 import React from "react";
 import type { TeamDetailTab } from "@/shared/navigation/teamRoutes";
@@ -23,6 +23,10 @@ type TeamActionRailProps = {
   readonly editTeamHint?: string;
   readonly onArchiveTeam?: () => void;
   readonly onOpenTeamEditor: () => void;
+  readonly onOpenTeamTest?: () => void;
+  readonly testTeamDisabled?: boolean;
+  readonly testTeamHint?: string;
+  readonly testTeamLabel?: string;
 };
 
 type TeamTabBarProps = {
@@ -69,6 +73,10 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   editTeamHint,
   onArchiveTeam,
   onOpenTeamEditor,
+  onOpenTeamTest,
+  testTeamDisabled = false,
+  testTeamHint,
+  testTeamLabel = "测试团队",
 }) => {
   const archiveMenuItems =
     archiveTeamActionLabel && onArchiveTeam
@@ -84,6 +92,17 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
 
   return (
     <Space key="team-detail-actions" wrap>
+      {onOpenTeamTest ? (
+        <Button
+          disabled={testTeamDisabled}
+          icon={<PlayCircleOutlined />}
+          onClick={onOpenTeamTest}
+          style={topActionButtonStyle}
+          title={testTeamDisabled ? testTeamHint : undefined}
+        >
+          {testTeamLabel}
+        </Button>
+      ) : null}
       <Button
         disabled={editTeamDisabled}
         onClick={onOpenTeamEditor}
@@ -107,11 +126,11 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
         >
           <span title={archiveTeamDisabled ? archiveTeamHint : undefined}>
             <Button
-              aria-label="Team more actions"
+              aria-label="团队更多操作"
               disabled={archiveTeamDisabled}
               icon={<MoreOutlined />}
               style={{ ...topActionButtonStyle, paddingInline: 14 }}
-              title="More actions"
+              title="更多操作"
             />
           </span>
         </Dropdown>

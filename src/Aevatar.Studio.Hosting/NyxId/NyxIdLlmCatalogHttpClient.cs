@@ -150,21 +150,7 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
 
     private string? ResolveNyxIdAuthorityBase()
     {
-        var authority = _configuration["Cli:App:NyxId:Authority"]
-            ?? _configuration["Aevatar:NyxId:Authority"]
-            ?? _configuration["Aevatar:Authentication:Authority"];
-
-        if (string.IsNullOrWhiteSpace(authority))
-            return null;
-
-        var trimmed = authority.Trim().TrimEnd('/');
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out _))
-            return null;
-
-        const string gatewaySuffix = "/api/v1/llm/gateway/v1";
-        return trimmed.EndsWith(gatewaySuffix, StringComparison.OrdinalIgnoreCase)
-            ? trimmed[..^gatewaySuffix.Length]
-            : trimmed;
+        return NyxIdAuthorityResolver.ResolveNyxIdAuthorityBase(_configuration);
     }
 
     private readonly record struct NyxIdHttpResult(HttpStatusCode StatusCode, string Body);

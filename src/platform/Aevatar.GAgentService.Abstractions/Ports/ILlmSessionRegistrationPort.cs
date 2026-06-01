@@ -2,6 +2,9 @@ using Aevatar.GAgentService.Abstractions.Queries;
 
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public interface ILlmSessionRegistrationPort
 {
     Task<LlmSessionRegistrationResult> RegisterAsync(
@@ -18,6 +21,12 @@ public interface ILlmSessionRegistrationPort
         string sessionActorId,
         string responseId,
         LlmSessionForwardedToolCall call,
+        CancellationToken ct = default);
+
+    Task RecordCompletionAsync(
+        string sessionActorId,
+        string responseId,
+        LlmSessionCompletion completion,
         CancellationToken ct = default);
 
     Task ReceiveForwardedToolResultAsync(

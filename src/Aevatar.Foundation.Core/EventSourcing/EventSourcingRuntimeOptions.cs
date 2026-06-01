@@ -39,25 +39,12 @@ public sealed class EventSourcingRuntimeOptions
     ///
     /// Set this flag to <c>true</c> only when every actor sharing this
     /// options instance can tolerate replaying with stale state at the
-    /// store-side version. Prefer <see
-    /// cref="ShouldRecoverFromVersionDriftOnReplay"/> for per-actor opt-in
-    /// (e.g. only projection scope actors) and leave this off as the safe
-    /// global default. With recovery active, ReplayAsync logs the drift at
+    /// store-side version. Projection scope actors opt in through
+    /// IEventSourcingVersionDriftRecoverableActor; leave this flag off as
+    /// the safe global default. With recovery active, ReplayAsync logs the drift at
     /// warning, sets <c>_currentVersion</c> to the store version, and lets
     /// the next commit proceed; the ConfirmEventsAsync catch path remains a
     /// second line of defense.
     /// </summary>
     public bool RecoverFromVersionDriftOnReplay { get; set; }
-
-    /// <summary>
-    /// Per-agent opt-in predicate evaluated at behavior construction time.
-    /// Returning <c>true</c> for a given agent id enables drift recovery on
-    /// replay for that actor regardless of the global
-    /// <see cref="RecoverFromVersionDriftOnReplay"/> flag. Use this to scope
-    /// recovery to actor families that are known to be idempotent (e.g.
-    /// <c>agentId =&gt; agentId.StartsWith("projection.durable.scope:")</c>)
-    /// without granting the same affordance to domain GAgents that hold
-    /// non-idempotent state.
-    /// </summary>
-    public Func<string, bool>? ShouldRecoverFromVersionDriftOnReplay { get; set; }
 }

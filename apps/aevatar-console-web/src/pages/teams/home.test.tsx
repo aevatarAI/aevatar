@@ -161,8 +161,14 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     expect(screen.queryByText("当前工作空间")).toBeNull();
-    expect(screen.getByText("AI Team")).toBeTruthy();
+    expect(screen.getByText("AI Team 总数")).toBeTruthy();
+    expect(screen.getByText("待处理 Team")).toBeTruthy();
+    expect(screen.getByText("最近完成 Team")).toBeTruthy();
+    expect(screen.queryByText("运行稳定")).toBeNull();
     expect(screen.getByText("团队列表")).toBeTruthy();
+    expect(
+      screen.getByText("按 Team 聚合成员与最近运行信号，优先处理异常或待关注项。"),
+    ).toBeTruthy();
     expect(screen.queryByText("运行正常")).toBeNull();
     expect(screen.queryByText("需要处理")).toBeNull();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
@@ -181,6 +187,24 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("进入 Studio")).toBeNull();
     expect(screen.queryByText("新增成员")).toBeNull();
     expect(screen.queryByText("查看默认成员运行")).toBeNull();
+  });
+
+  it("shows completed run status as completion, not stability", async () => {
+    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockResolvedValueOnce({
+      ...buildMemberRunCatalog("member-alpha"),
+      runs: [
+        {
+          ...buildMemberRunCatalog("member-alpha").runs[0],
+          completionStatus: "completed",
+          lastSuccess: true,
+        },
+      ],
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect(screen.queryByText("稳定")).toBeNull();
   });
 
   it("routes Create Team to the real create-team page", async () => {
@@ -213,6 +237,211 @@ describe("TeamsHomePage", () => {
     ).toBeNull();
   });
 
+  it("loads every bound member run summary without showing a synthetic sync warning", async () => {
+    const members = Array.from({ length: 13 }, (_, index) => ({
+      ...defaultMembers[0],
+      memberId: `member-${index + 1}`,
+      displayName: `成员 ${index + 1}`,
+      publishedServiceId: `service-${index + 1}`,
+      teamId: "t-support",
+    }));
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members,
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(
+      await screen.findByText("成员已绑定服务，最近还没有运行记录。"),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledTimes(13);
+    });
+    expect(screen.queryByText("部分 Team 的运行状态仍在同步")).toBeNull();
+    expect(screen.queryByText("状态同步中")).toBeNull();
+    expect(
+      screen.queryByText(/首页暂未同步到最近运行状态/),
+    ).toBeNull();
+    expect(screen.queryByText(/绑定事实/)).toBeNull();
+    expect(screen.queryByText(/帮助你快速判断是否需要处理/)).toBeNull();
+  });
+
+  it("keeps long member and service summaries compact while preserving full text in titles", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          teamId: "t-long",
+          scopeId: "scope-a",
+          displayName: "超长展示团队",
+          description: "需要压缩展示",
+          lifecycleStage: "active",
+          memberCount: 3,
+          createdAt: "2026-05-01T09:10:00Z",
+          updatedAt: "2026-05-01T10:10:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        {
+          ...defaultMembers[0],
+          memberId: "member-long-1",
+          displayName: "gagent-2 / member-m-d168d2df4f434004993f4ed475534497",
+          publishedServiceId: "service-long-1",
+          teamId: "t-long",
+        },
+        {
+          ...defaultMembers[0],
+          memberId: "member-long-2",
+          displayName: "另一个非常长的成员名字用于完整悬停展示",
+          publishedServiceId: "service-long-2",
+          teamId: "t-long",
+        },
+        {
+          ...defaultMembers[0],
+          memberId: "member-long-3",
+          displayName: "第三个成员",
+          publishedServiceId: "service-long-3",
+          teamId: "t-long",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        ...defaultServices[0],
+        serviceId: "service-long-1",
+        displayName: "gagent-2 / member-m-d168d2df4f434004993f4ed475534497",
+      },
+      {
+        ...defaultServices[0],
+        serviceId: "service-long-2",
+        displayName: "另一个非常长的服务名用于验证 hover 全量展示",
+      },
+      {
+        ...defaultServices[0],
+        serviceId: "service-long-3",
+        displayName: "第三个服务",
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("heading", { level: 3, name: "超长展示团队" })).toBeTruthy();
+    expect(screen.getByText(/等 3 个成员/).closest("[title]")).toHaveAttribute(
+      "title",
+      expect.stringContaining("另一个非常长的成员名字用于完整悬停展示"),
+    );
+    expect(
+      screen.getByText("关联服务").previousElementSibling,
+    ).toHaveAttribute(
+      "title",
+      expect.stringContaining("另一个非常长的服务名用于验证 hover 全量展示"),
+    );
+    expect(screen.getByText("Team 标识：t-long").closest("[title]")).toHaveAttribute(
+      "title",
+      "t-long",
+    );
+  });
+
+  it("keeps long Team titles compact while preserving the full title in a tooltip", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        {
+          teamId: "t-wide",
+          scopeId: "scope-a",
+          displayName:
+            "这是一个非常长的 Team 名称，用来验证首页标题不会把整张卡片撑到失控",
+          description: "需要保持稳定层级",
+          lifecycleStage: "active",
+          memberCount: 1,
+          createdAt: "2026-05-01T09:10:00Z",
+          updatedAt: "2026-05-01T10:10:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        {
+          ...defaultMembers[0],
+          memberId: "member-wide",
+          displayName: "标题验证成员",
+          publishedServiceId: "service-wide",
+          teamId: "t-wide",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        ...defaultServices[0],
+        serviceId: "service-wide",
+        displayName: "标题验证服务",
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    const heading = await screen.findByRole("heading", {
+      level: 3,
+      name: "这是一个非常长的 Team 名称，用来验证首页标题不会把整张卡片撑到失控",
+    });
+    expect(heading.parentElement).toHaveAttribute(
+      "title",
+      "这是一个非常长的 Team 名称，用来验证首页标题不会把整张卡片撑到失控",
+    );
+  });
+
+  it("keeps the list view primary action near the Team summary instead of after every fact block", async () => {
+    const teams = Array.from({ length: 7 }, (_, index) => ({
+      ...defaultTeams[0],
+      teamId: `t-list-${index + 1}`,
+      displayName: `列表团队 ${index + 1}`,
+      memberCount: 1,
+      updatedAt: `2026-05-0${Math.min(index + 1, 9)}T10:02:00Z`,
+    }));
+    const members = Array.from({ length: 7 }, (_, index) => ({
+      ...defaultMembers[0],
+      memberId: `member-list-${index + 1}`,
+      displayName: `列表成员 ${index + 1}`,
+      publishedServiceId: `service-list-${index + 1}`,
+      teamId: `t-list-${index + 1}`,
+    }));
+    const services = Array.from({ length: 7 }, (_, index) => ({
+      ...defaultServices[0],
+      serviceId: `service-list-${index + 1}`,
+      displayName: `列表服务 ${index + 1}`,
+    }));
+
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams,
+      nextPageToken: null,
+    });
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members,
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce(services);
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("list", { name: "团队紧凑视图" })).toBeTruthy();
+    const article = screen
+      .getByRole("heading", { level: 4, name: "列表团队 1" })
+      .closest("article");
+    expect(article?.firstElementChild?.textContent).toContain("查看团队");
+  });
+
   it("opens the bound member detail handoff from the primary action", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
@@ -229,7 +458,7 @@ describe("TeamsHomePage", () => {
     expect(params.get("runId")).toBe("run-latest");
   });
 
-  it("falls back to the locally stored auth scope when the live session lookup fails", async () => {
+  it("does not load roster data from a locally restored scope when server auth fails", async () => {
     window.history.replaceState({}, "", "/teams");
     persistAuthSession({
       tokens: {
@@ -256,6 +485,12 @@ describe("TeamsHomePage", () => {
         "登录状态暂时不可用，请刷新后重试。 已使用本地登录信息继续加载团队。",
       ),
     ).toBeTruthy();
+    expect(studioApi.listTeams).not.toHaveBeenCalled();
+    expect(studioApi.listMembers).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
+    expect(screen.queryByText("部分团队信号暂时不可见")).toBeNull();
+    expect(screen.queryByText("团队列表暂时无法加载。")).toBeNull();
+    expect(screen.queryByText("AI Team 总数")).toBeNull();
 
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");

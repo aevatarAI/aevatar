@@ -23,9 +23,10 @@ internal sealed class WorkflowRunObservationLifecycle
         CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: workflow binder activated materialization and live projections during command preparation.
-        //   New principle: interaction observation lifecycle starts read-side observation before dispatch without affecting dispatch-only command admission.
+        // Refactor (iter41/cluster-041-command-observation-projection-activation):
+        //   Old pattern: command observation binders ensure/activate projection/readmodel sessions before dispatch.
+        //   New principle: observation binders attach only to existing projection-owned sessions;
+        //   activation happens in projection-owned startup/background/committed-state lifecycle.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(execution);
 
@@ -35,27 +36,14 @@ internal sealed class WorkflowRunObservationLifecycle
 
         try
         {
-            if (!await target.ActivateMaterializationAsync(ct))
-            {
-                await target.RollbackCreatedActorsAsync(CancellationToken.None);
-                return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
-                    WorkflowChatRunStartError.ProjectionDisabled);
-            }
-
-            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
-                token => _projectionPort.EnsureActorProjectionAsync(
-                    target.ActorId,
-                    context.CommandId,
-                    token),
+            var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
+                target.ActorId,
+                context.CommandId,
                 sink,
                 ct);
 
             if (attachment == null)
-            {
-                await target.RollbackCreatedActorsAsync(CancellationToken.None);
-                return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
-                    WorkflowChatRunStartError.ProjectionDisabled);
-            }
+                return await FailProjectionUnavailableAsync(target, sink);
 
             target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink);
             return CommandObservationBindingResult<WorkflowChatRunStartError>.Success();
@@ -86,5 +74,15 @@ internal sealed class WorkflowRunObservationLifecycle
         {
             return ex;
         }
+    }
+
+    private static async Task<CommandObservationBindingResult<WorkflowChatRunStartError>> FailProjectionUnavailableAsync(
+        WorkflowRunCommandTarget target,
+        IEventSink<WorkflowRunEventEnvelope> sink)
+    {
+        await target.RollbackCreatedActorsAsync(CancellationToken.None);
+        await sink.DisposeAsync();
+        return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
+            WorkflowChatRunStartError.ProjectionDisabled);
     }
 }

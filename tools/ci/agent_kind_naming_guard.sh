@@ -26,8 +26,19 @@ emit_violation() {
   violations=$((violations + 1))
 }
 
-# Files that may declare kinds: any C# under src/, agents/, tools/ excluding tests.
-SEARCH_PATHS=("src" "agents" "tools/Aevatar.Tools.Cli")
+# Files that may declare kinds: any C# under production source roots.
+candidate_search_paths=("src" "agents")
+SEARCH_PATHS=()
+for candidate in "${candidate_search_paths[@]}"; do
+  if [[ -d "${candidate}" ]]; then
+    SEARCH_PATHS+=("${candidate}")
+  fi
+done
+
+if (( ${#SEARCH_PATHS[@]} == 0 )); then
+  echo "agent_kind_naming_guard: no source roots found, skipping."
+  exit 0
+fi
 
 # `rg -o` emits one line per match (not per matching line); this is required
 # because a single source line may legally carry both `[GAgent("a.b")]` and

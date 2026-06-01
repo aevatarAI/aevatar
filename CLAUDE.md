@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+<!--
+Refactor (iter33/cluster-claude-md-slim):
+Old pattern: CLAUDE.md mixed top-level architecture rules with duplicated operational runbooks and skill-owned details.
+New principle: CLAUDE.md keeps the cross-process architecture and engineering boundary; operational procedures live in their owning skills.
+-->
+
 ## 顶级架构约束（最高优先级）
 - 严格分层：`Domain / Application / Infrastructure / Host`；`API` 仅做宿主与组合，不承载业务编排。
 - 统一投影链路：CQRS 与 AGUI 走同一套 Projection Pipeline，统一入口、一对多分发，禁止双轨实现。
@@ -12,33 +18,32 @@
 - Actor 即业务实体：一个 actor = 一个业务实体（数据与方法同住）；禁止按技术功能（读/写/投影）拆分同一业务实体为多个 actor。
 - 删除优先：空转发、重复抽象、无业务价值代码直接删除，不保留兼容空壳。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
-- **外部仓库无改动权（强制）**：本仓库的需求实现**禁止依赖外部仓库（NyxID/chrono-storage/chrono-ornn 等）的新增或修改**。这些仓库是独立产品，"恰好能"服务 aevatar 不等于专为 aevatar 服务——比如 NyxID 不是 aevatar 的 LLM provider 后端，只是 aevatar 可以借用它已发布的 OAuth broker / proxy 能力。出方案时禁止出现"在 NyxID 加端点"、"在 chrono-* 改 schema"、"等外部仓库支持新协议"等步骤；现有外部 surface 不够时，方案必须改成"在本仓库内绕开"或"不做这个功能"。**唯一例外**：在外部仓库观察到明确的 bug（行为与其已发布契约不一致），可以提 issue，但提之前先确认本仓库没有用错。完整规则见 AGENTS.md §"外部仓库改动权"。
+- 外部仓库无改动权：本仓库需求禁止依赖 NyxID / chrono-storage / chrono-ornn 等外部仓库新增或修改；现有 surface 不足时，在本仓库内绕开或不做。只有发现外部仓库行为违反其已发布契约时，才可提 issue。
 
 ## 架构哲学
 - 单一主干，插件扩展：只保留一条权威业务主链路；新能力以插件/模块挂载，禁止平行"第二系统"。
 - 内核最小化：核心层只承载稳定不变量与通用机制；波动能力下沉到扩展层。
 - 扩展对称性：内建与扩展能力遵循同一抽象模型与生命周期协议。
+- 抽象优先：依赖行为契约与语义接口，而非具体类型与实现细节；组合面向能力，非面向实现。
 - 边界清晰：协议适配、业务编排、状态管理分属不同层；禁止跨层偷渡语义。
 - 事实源唯一：跨请求/跨节点一致性事实必须有唯一权威来源（Actor 持久态或分布式状态），不依赖进程内偶然状态。
+- 强类型内核，窄扩展点：稳定语义默认强类型；只有插件/第三方/跨边界透传需求明确时才保留 bag。
 - 渐进演进：开发期可用本地/内存实现，但生产语义必须能无缝迁移到分布式与持久化。
-- 正确架构优先：选择正确的架构设计，因为正确的架构在增长时自然解决下游问题；如果架构无法在增长时解决问题，则架构本身不正确。
+- 正确架构优先：正确架构在增长时自然解决下游问题；如果架构无法在增长时解决问题，则架构本身不正确。
 - 治理前置：架构规则必须可自动化验证（门禁、测试、文档一致性）。
 
-## 字段命名与 `Metadata` 决策树（强制）
-
-判定顺序：
-
-1. **核心语义？** 影响业务语义/控制流/稳定查询 → 强类型 `proto field / typed sub-message / typed option`。不因"未来可能扩展"先放 bag。
-2. **开放扩展边界？** 生产方/消费方不完全同源、允许第三方追加、缺失不破坏主流程 → 允许 bag。
-3. **bag 职责命名**：command 头 → `Headers`；业务完成注解 → `Annotations`；pipeline 临时共享上下文 → `Items`。
-4. **`Metadata` 判定**：看对象语义边界，不看"是否跨层"。`request/response/event/command` 自身的正式开放扩展信息 → 可叫 `Metadata`；middleware/hook/pipeline 执行过程的进程内临时上下文 → 叫 `Items`，即使跨多个处理层。
-5. **保留原则**：边界扩展袋天然就是开放式 metadata 时，保留 `Metadata`，不硬改成缩窄含义的名字。
-6. **外部协议**：第三方 SDK/外部协议原生 `Metadata` 允许在 adapter/boundary 保留；进入仓库内部主模型后必须映射回 typed 字段或按职责命名结构。
-7. **演进路径**：仓库内可控的稳定语义优先 `proto field` 演进，不先用字符串 key 兜底。
-8. **不匹配时**：新增按职责命名的字段/子消息，不硬塞现有 bag，不把明确语义降级回通用 `Metadata`。
+## 字段命名与 Metadata 决策树（强制）
+1. 核心语义？影响业务语义/控制流/稳定查询 → 强类型 `proto field / typed sub-message / typed option`，不因"未来可能扩展"先放 bag。
+2. 开放扩展边界？生产方/消费方不完全同源、允许第三方追加、缺失不破坏主流程 → 允许 bag。
+3. bag 职责命名：command 头 → `Headers`；业务完成注解 → `Annotations`；pipeline 临时共享上下文 → `Items`。
+4. `Metadata` 判定：看对象语义边界，不看"是否跨层"。`request/response/event/command` 自身正式开放扩展信息可叫 `Metadata`；middleware/hook/pipeline 执行过程上下文叫 `Items`。
+5. 保留原则：边界扩展袋天然就是开放式 metadata 时，保留 `Metadata`，不硬改成缩窄含义的名字。
+6. 外部协议：第三方 SDK/外部协议原生 `Metadata` 允许在 adapter/boundary 保留；进入内部主模型后必须映射回 typed 字段或按职责命名结构。
+7. 演进路径：仓库内可控的稳定语义优先 `proto field` 演进，不先用字符串 key 兜底。
+8. 不匹配时：新增按职责命名的字段/子消息，不硬塞现有 bag，不把明确语义降级回通用 `Metadata`。
 
 ## Command / Envelope / Dispatch（强制）
-- `Envelope` 是统一消息包络（`command/reply/signal/event/query`），但是否可持久化、可投影、可观察必须由消息契约显式定义，不因"都走 Envelope"混淆语义。
+- `Envelope` 是统一消息包络（`command/reply/signal/event/query`），但是否可持久化、可投影、可观察必须由消息契约显式定义。
 - committed domain event 必须可观察：write-side 完成 committed event 后必须送入 projection 主链；禁止只落 event store 而不进入可观察流。
 - 业务消息与查询语义分离：actor 间 event 链路是业务协议；readmodel 查询只读已物化事实；二者契约、一致性、完成判定不得混用。
 - 禁止 generic actor query/reply：不得定义通用 `Query*Requested -> *Responded` 协议或通用 `request-reply client` 兜底读取；查询走 readmodel，跨 actor 交互走 command/event。
@@ -52,72 +57,59 @@
 - 命名跟随职责：接口/类型/目录命名描述职责边界，不泄露 `runtime/stream/protocol` 偶然细节。
 
 ## 权威状态 / ReadModel / Projection（强制）
-
-### 权威状态
 - 单一权威拥有者：每个稳定业务事实有唯一 actor 拥有；`committed event store + actor state` 是唯一真相，readmodel 只是查询副本。
 - 运行时形态不是业务事实：不得把本地实例类型、代理类型、对象可见结构当成业务绑定依据。
 - 身份与事实分离：稳定 ID 只负责寻址与复用键；可变绑定必须显式建模、显式读取。
-
-### 读写边界
 - 查询始终走 readmodel：对外查询只读 readmodel；不暴露 actor 内部状态、state mirror payload 或 event replay 为查询主路径。
 - 写侧端口只负责 lifecycle/command；读取走窄 query contract 或 projection，禁止 Application/Infrastructure 直读 write-model 内部状态。
 - 禁止侧读冒充 query：禁止直读其他 actor 的 event store、持久态快照或"事实重建器"拼装查询结果；跨 actor 读取走 readmodel 或 projection。
-- 禁止 query-time replay/priming：`QueryPort/QueryService/ApplicationService` 不得在请求路径读 `IEventStore`、重放 events、临时重建 state mirror；不得在 query 方法内同步补投影或补跑 ES/materialization。刷新须通过正式 projection 会话、后台 materializer 或写侧预挂接 projection 完成。
-
-### ReadModel 契约
+- 禁止 query-time replay/priming：`QueryPort/QueryService/ApplicationService` 不得在请求路径读 `IEventStore`、重放 events、临时重建 state mirror，或在 query 方法内同步补投影/补跑 ES/materialization；刷新须通过正式 projection 会话、后台 materializer 或写侧预挂接 projection 完成。
 - `EventEnvelope` 是唯一投影传输壳：业务消息与投影消息都用 `EventEnvelope`；区别由强类型 payload 表达，禁止引入第二层包络。
 - 业务一致性与查询一致性分层：actor 间链路对"消息已接收/事件已提交/协议已推进"负责；readmodel 对"某 `StateVersion` 已物化可见"负责；禁止混用。
 - 一权威状态 → 多 readmodel：不同 readmodel 表达同一 actor 当前态的不同查询形态，不得各自重算业务状态机。
 - readmodel 按需创建：只有存在稳定消费场景（明确消费方、查询入口、返回 DTO）时才新增 readmodel。
 - readmodel 根契约：仓库内 `readmodel` 默认表示 `actor-scoped current-state replica`；不符合的改名降级为 `artifact/export/log`，或由 aggregate actor 拥有。
 - 聚合必须 actor 化：跨 actor 聚合/汇总/关联若有稳定业务语义，建模为 aggregate actor；禁止长期放在 query-time 拼装层。
-
-### Projection Pipeline
 - projection 只消费 committed 事实：基于 committed domain event 或其同源 durable feed 构建；禁止订阅入站 command、self continuation 或 actor 运行时偶然结构。
-- projection 负责物化，不负责推导：消费 `EventEnvelope<CommittedStateEventPublished>` 的 `state_event + state_root` 物化到 document/index/search/graph store；actor 内已确定的当前态语义前移到 actor，projection 只做校验、覆盖写入、索引、分发。
-- actor 不直接拥有存储实现：actor 发布 `state_root` 作为 readmodel 统一 committed 输入，但 document store/graph store/query provider 等物化职责属于 projection/runtime/provider 边界。
+- projection 负责物化，不负责推导：消费 `EventEnvelope<CommittedStateEventPublished>` 的 `state_event + state_root` 物化到 document/index/search/graph store；actor 内已确定的当前态语义前移到 actor。
+- actor 不直接拥有存储实现：actor 发布 `state_root` 作为 readmodel 统一 committed 输入，但物化职责属于 projection/runtime/provider 边界。
 - 正常路径禁止 replay：query path 和 projection path 不依赖 `event replay/rebuild/backfill`；replay 只属于后台修复/迁移/灾难恢复。
 - 版本对齐权威源：readmodel 版本必须来自权威 actor 的 committed version 或等价水位；禁止本地 projection counter 或 `StateVersion++` 冒充权威版本。
 - 覆盖复制优先：readmodel 写入语义是"基于权威源版本的单调覆盖"；旧不覆盖新，重复幂等，冲突报错。
 - 不默认保留历史视图：`timeline/audit/report/analytics` 不是默认 readmodel 形态；如有业务价值，降级为 artifact/export 或由专门 actor 拥有。
 - 查询诚实：readmodel 可最终一致，但必须暴露权威源版本或刷新戳；禁止在弱读结果上暗示强一致。
 - 状态镜像契约面向查询：state mirror payload 作为 readmodel 输入时须是面向读侧的稳定强类型契约，非 actor 内部 state 的原样 dump。
-
-### 设计完备性
 - 默认路径须定义资源语义：任何"缺失即创建"策略须同时定义归属、复用规则和清理责任。
 - 本地可用不等于分布式正确：依赖本地 runtime 偶然细节才成立的实现视为未完成设计。
 - 抽象一旦能被滥用即设计未完成：允许绕过读写分离/actor 边界/权威源的通用接口须继续收窄。
 
-## Actor 设计原则（强制）
-- Actor 以业务命名：actor 类型和 ID 描述业务实体（`UserConfigGAgent`、`ChatConversationGAgent`），不描述技术角色；禁止 `WriteActor`、`ReadModelActor`、`StoreActor` 等技术功能命名。
-- 读写分离在 Projection Pipeline 层面实现，不在 actor 层面实现：actor 拥有完整业务状态并处理命令；committed event 流入 Projection Pipeline 物化查询视图；禁止为同一业务实体创建"写 actor"和"读 actor"两个分身。
-- 应用层契约以业务命名：读端口用 `IXxxQueryPort`（封装 projection 读取 + 业务映射），写命令通过 `IActorDispatchPort` 或等价命令分发机制发往 GAgent；禁止 `IXxxStore` 等存储导向命名出现在应用层。endpoint 不直接依赖 `IActorRuntime` 或 `IProjectionDocumentReader` 等基础设施抽象。应用层契约必须承载业务语义（验证、映射、默认值），禁止纯转发空壳。
-- 面向对象内聚：actor 是数据与行为的统一体；同一业务实体的状态、命令处理、事件发布在同一个 actor 内完成；禁止将数据和方法拆分到不同 actor 再通过消息传递拼装。
-
-## Actor 生命周期（强制）
+## Actor 设计 / 生命周期 / 执行模型（强制）
+- Actor 以业务命名：actor 类型和 ID 描述业务实体，禁止 `WriteActor`、`ReadModelActor`、`StoreActor` 等技术功能命名。
+- 读写分离在 Projection Pipeline 层实现，不在 actor 层实现：actor 拥有完整业务状态并处理命令；committed event 流入 Projection Pipeline 物化查询视图。
+- 应用层契约以业务命名：读端口用 `IXxxQueryPort`，写命令通过 `IActorDispatchPort` 或等价命令分发机制；禁止 `IXxxStore` 等存储导向命名出现在应用层，endpoint 不直接依赖 `IActorRuntime`/`IProjectionDocumentReader` 等基础设施抽象；应用层契约必须承载业务语义，禁止纯转发空壳。
+- 面向对象内聚：同一业务实体的状态、命令处理、事件发布在同一个 actor 内完成；禁止将数据和方法拆分到不同 actor 再拼装。
 - 默认短生命周期：一次执行/会话/编排即完成的能力，建模为 `run/session/task-scoped actor`；GAgent、workflow、scripting 只要协议一致均可作为实现来源。
 - 长期 actor 限定事实拥有者：`definition/catalog/manager/index/checkpoint` 等需长期持有权威状态、串行推进事实的对象。
 - 单线程 actor 不做热点共享服务：actor 用于维护状态边界和顺序语义，不用于承接无限扩张的共享吞吐。
 - 升级前滚：默认"旧 run 留旧实现，新请求走新实现"；无状态迁移契约时禁止原地热替换。
 - `actorId` 对调用方不透明：不得解析前缀/类型名/实现来源，不得把字面模式当业务判断条件。
-
-## Actor 执行模型（强制）
-- 单线程事实源：运行态只在事件处理主线程修改；禁止 `lock/Monitor/ConcurrentDictionary` 作为并发补丁维护事实状态。无锁优先：需加锁 → 先判定为"破坏 Actor 边界"→ 重构为事件化串行模型。
-- 回调只发信号：`Task.Run`/`Timer`/线程池回调不直接读写运行态或推进业务；只发布内部触发事件（如 timeout/retry fired）。
+- 单线程事实源：运行态只在事件处理主线程修改；禁止 `lock/Monitor/ConcurrentDictionary` 作为并发补丁维护事实状态。需加锁时先重构为事件化串行模型。
+- 回调只发信号：`Task.Run`/`Timer`/线程池回调不直接读写运行态或推进业务；只发布内部触发事件。
 - 业务推进内聚：工作流推进（成功/失败/分支/重试）在 Actor 事件处理流程内完成，保证顺序性与可重放性。
-- self continuation 事件化：Actor 需"下一拍继续"时通过标准 self-message 进入自身 inbox 再消费；禁止绕过消息抽象的临时 helper 或依赖特定 runtime 的 self-dispatch 偶然行为。
+- AI 对话主链必须流式化：实时会话入口必须使用 `ChatStreamAsync`；`ChatAsync` 仅可用于明确的非交互式离线场景。
+- self continuation 事件化：Actor 需"下一拍继续"时通过标准 self-message 进入自身 inbox 再消费；禁止绕过消息抽象的临时 helper。
 - 延迟/超时事件化：`delay/timeout/retry backoff` 统一"异步等待 → 发布内部事件 → Actor 内消费并对账"；禁止回调线程直接改状态。
-- 跨 actor 等待 continuation 化："发送请求 → 结束当前 turn → reply/timeout event 唤醒继续"；禁止当前 turn 同步等待，禁止本地快照读取、event store 侧读或伪 RPC 绕过。
+- 跨 actor 等待 continuation 化："发送请求 → 结束当前 turn → reply/timeout event 唤醒继续"；禁止当前 turn 同步等待或通过侧读/伪 RPC 绕过。
 - query 与 command 边界分清：读已提交事实 → 读 readmodel；需对方参与新业务交互 → 发 command/event + reply/timeout continuation。
 - 显式对账：内部触发事件携带最小充分相关键（如 `run_id + step_id`），Actor 内做活跃态校验，拒绝陈旧事件。
 
 ## 中间层状态约束（强制）
 - 禁止中间层维护 `entity/actor/workflow-run/session` 等 ID → 上下文/事实状态的进程内映射（`Dictionary<>`/`ConcurrentDictionary<>`/`HashSet<>`/`Queue<>`）。
-- Actor 内部运行态集合可保留在内存或 Actor `State`（如 `module_runtime`）；前提：不作为跨节点事实源，按生命周期及时清理。
-- 跨 Actor/跨节点一致性状态：优先 Actor 持久态；无法放入时用抽象化分布式状态服务；禁止中间层进程内缓存作为事实源。
+- Actor 内部运行态集合可保留在内存或 Actor `State`；前提是不作为跨节点事实源，并按生命周期及时清理。
+- 跨 Actor/跨节点一致性状态优先 Actor 持久态；无法放入时用抽象化分布式状态服务，禁止中间层进程内缓存作为事实源。
 - `InMemory` 实现仅限开发/测试，不外溢到中间层业务语义。
 - 方法内局部临时集合可用，不得提升为服务级/单例级事实状态字段。
-- 投影端口：禁止 `actorId -> context` 反查管理生命周期，改为显式 `lease/session` 句柄传递。
+- 投影端口禁止 `actorId -> context` 反查管理生命周期，改为显式 `lease/session` 句柄传递。
 
 ## 序列化（强制）
 - 统一 Protobuf：`State`、领域事件、命令、回调载荷、快照、缓存载荷、跨 Actor/跨节点内部传输对象全部使用 Protobuf。
@@ -125,255 +117,42 @@
 - 外部协议必须 JSON 时，仅在 Host/Adapter 边界做协议转换；进入应用/领域/运行时层后恢复为 Protobuf。
 - 新增状态/事件/持久化载荷：先定义 `.proto` 并生成类型，再接入实现；禁止先写临时结构后补 Protobuf。
 
-## 文档系统（强制）
-- `docs/canon/` 是唯一权威参考；一个 topic 一个文件，不可有重复。架构评审与重构讨论统一用 [docs/canon/architecture-vocabulary.md](docs/canon/architecture-vocabulary.md) 的词汇（Module / Interface / Depth / Seam / Adapter / Leverage / Locality）。
-- `docs/adr/` 是 ADR（Architecture Decision Records），不可变，只可被新决策 supersede。文件名 `NNNN-slug.md`，编号唯一不可重用。
-- `docs/history/` 存放已归档的思考快照，按月份组织，明确标记非权威。
-- AI 生成的设计文档在会话结束后默认不保留到 `docs/`；需要保留的必须添加 frontmatter（title/status/owner）并放入对应目录。
-- 所有 `docs/canon/` 和 `docs/adr/` 文件必须有 YAML frontmatter，包含 `title`、`status`、`owner` 字段。
-- Lint 操作由 `tools/docs/lint.sh` 执行，已集成到 CI 门禁。
-- 根目录允许的 `.md` 文件：`CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`。`src/` 下各项目允许自身 `README.md`。
-- `docs/README.md` 由 `tools/docs/build-index.sh` 自动生成，不手动编辑。
-
-### 不保留历史记录,但保留反面示例(强制)
-
-Per Auric (2026-05-19) "不要保留历史记录,历史记录都在git里面有" + "可以保留反面,保障harness":
-
-**文件层面**:
-- 废弃 / 重命名 / 替换的文件直接 `git rm`,不创建 `*.deprecated` / `*.bak` / `*.old` / `*.archived` / `*-superseded.md` 等历史保留版本。历史在 `git log` / `git show <sha>:<path>` 里。
-- `sed -i.bak` 用完立刻 `rm *.bak`。
-- 不要"先 mv 到 .deprecated 等下个 iter 再删":今天废止今天就删,git revert 比恢复 working tree 更干净。
-
-**spec / prompt / skill 文件内容层面**:
-- **不写历史叙述**: 不要在 skill / prompt / spec 里写 "Per Auric YYYY-MM-DD" 出处引用、"旧规则曾经是 X,现在改为 Y"、"supersede 了 Z"、"## History" / "## Legacy" / "## Why we changed" 等。这些都在 commit message + git log 里。skill **只描述当前态**。
-- **但保留 anti-pattern 反面示例**: "❌ 禁止 X" / "反模式: 如果你 X 就会 Y" 这种**防护性反面**是有价值的(它告诉 codex / future-self 不要踩坑,而不是叙述历史)。规则:**反面要描述"会发生什么坏事"而不是"以前我们这么干过"**。
-  - ✅ 好的反面:`❌ 第一行不是 ## 🤖 → comment-monitor 会把它当 maintainer 评论 react,造成自循环`
-  - ❌ 坏的历史叙述:`旧版 skill 没要求 ## 🤖,导致 monitor false-positive,Auric 2026-05-19 让我们加这条`
-
-**例外**:`docs/adr/` 与 `docs/history/` 是被显式设计为归档的目录,这里的规则不覆盖它们(它们本来就是归档)。
-
-**Memory 文件**(`/.claude/projects/.../memory/*.md`)允许写"trigger 事件"(行为反思需要),但 skill 本身不写。
-
-## 项目结构
-- `src/`：生产代码（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
-- `test/`：对应测试项目（单元、集成、API）。
-- `docs/`：架构文档（`canon/` 权威参考、`adr/` ADR、`history/` 归档、`audit-scorecard/` 审计）。
-- `workflows/`：YAML 工作流定义；`tools/`：开发工具；`demos/`：示例程序。
-- **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
-
-## 构建与运行
-
-### 基础命令
-- `dotnet restore aevatar.slnx --nologo` / `dotnet build aevatar.slnx --nologo` / `dotnet test aevatar.slnx --nologo`
-- `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
-- `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
-
-### CI 门禁（全量）
-- `bash tools/ci/architecture_guards.sh`：CI 架构门禁主入口。
-- 分片构建：`bash tools/ci/solution_split_guards.sh`
-- 全量测试：`dotnet test aevatar.slnx --nologo`
-- 慢测：`bash tools/ci/slow_test_guards.sh`
-
-### 专项门禁（按变更范围触发）
-
-| 变更范围 | 门禁脚本 |
-|---------|---------|
-| workflow actor binding / definition identity / resume-signal | `tools/ci/workflow_binding_boundary_guard.sh` |
-| query/read port / projection priming / projection lifecycle | `tools/ci/query_projection_priming_guard.sh` |
-| current-state readmodel / state version | `tools/ci/projection_state_version_guard.sh` |
-| `*CurrentState*Projector` 回读同类 readmodel | `tools/ci/projection_state_mirror_current_state_guard.sh` |
-| 事件类型 → reducer 路由映射 | `tools/ci/projection_route_mapping_guard.sh` |
-| CLI playground / Demo Web 静态资源 | `tools/ci/playground_asset_drift_guard.sh` |
-| 测试新增/修改 | `tools/ci/test_stability_guards.sh` |
-
-## Codex CLI 调用规范（强制）
-
-无人值守编排（如 `codex-refactor-loop` skill）调用 codex CLI 时统一遵循下列规则。手工调用 codex 也建议遵守，避免行为漂移。
-
-### 调用接口
-
-- **非交互**：始终用 `codex exec`，不要用裸 `codex`（裸 codex 进入 TUI，无人值守会 hang）。
-- **stdin 喂 prompt**：用 `-` 占位符 + shell stdin 重定向；不要把长 prompt 塞 argv，长度上限会截断。
-- **权限**：`--dangerously-bypass-approvals-and-sandbox`（要求 codex 不弹任何确认；调用方自己负责沙箱）。
-- **工作目录**：`-C <dir>` 显式指定；如在 git worktree 内工作，加 `--add-dir <repo-root>` 让 codex 也能读主仓库（CLAUDE.md、tools/ci/、docs/canon/ 等）。
-- **可选 git-repo check**：`--skip-git-repo-check`（防御性；worktree 也算 repo，但版本差异不要踩）。
-
-### Timeout 强制下限：3600s（1 小时）
-
-- **任何 codex exec 调用 timeout < 3600s 视为配置错误**。`spawn-codex.sh` 包装器主动拒绝 `--timeout < 3600`（exit 2）。
-- 理由：codex 在深扫 / 多文件重构 / coverage manifest 这类任务上需要时间；短 timeout 会让 codex 输出截断的"已完成"标记，调用方误以为成功，再实际验证时发现半截工作 → controller 重派 → 总耗时反而更长。
-- 推荐档：
-  - audit / 诊断类：3600-7200s（深扫覆盖完整 ≥60 文件 + 6 个 analyzer 命令）
-  - implement 类（per cluster）：5400-7200s（90-120 分钟）
-  - verify 类：3600-5400s
-  - rework / 1-line 类小修：3600s（仍是下限；小任务也别压时间）
-- 即使任务确定能快速跑完，也用 3600s 上限 —— `timeout` 是上限不是承诺时长，codex 完成会立刻退出。
-
-### 标准包装
-
-`./.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh` 是标准入口，所有 phase prompt 通过它跑：
-
-```bash
-.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
-  --cd <working-dir> \
-  --prompt <prompt-file> \
-  --log <log-file> \
-  --timeout 3600        # >= 3600 强制
-  [--add-dir <repo-root>]   # 当 cd 是 worktree 时
-  [--model <model-name>]    # 可选
-```
-
-包装器自动：
-- 拒绝 timeout < 3600（exit 2 + 提示文档）
-- 用 `-` stdin 把 prompt 喂进去
-- 末尾追加 `EXIT=<code>` 和 `DONE_AT=<ISO8601>` 到 log
-- 启动时 stderr 打印 `SPAWN: prompt=<path> log=<path>` + 完成时打印 `DONE: log=<path> exit=<N>`
-- 支持 `--prompt-text "..."` (自动 mktemp `/tmp/codex-prompt-XXXXXXXX.md`,免去调用方先手工写文件)
-- 不 commit、不 push、不 checkout —— 这些由 controller 负责
-
-### 后台调度
-
-- 通过 Bash 工具 `run_in_background: true` 启动，harness 会在 codex 退出时发 `<task-notification>`；不要前台阻塞等待 codex 完成。
-- 同时启动多个 codex（并行 cluster）时，每个独立背景 task；用 worktree 隔离写入。
-- 兜底 wakeup 1500-1800s（用 `ScheduleWakeup`），primary 信号是 task notification。
-
-### Prompt 内容硬约束（传递给每个 codex）
-
-- 禁止 commit / push / checkout —— 这些由 controller 处理。
-- 禁止安装新依赖 —— 失败比偷装包好诊断。
-- 禁止 disable / skip 测试让 CI 绿。
-- 禁止 `Task.Delay` 做测试节奏；用确定性 awaiter。
-- 必须输出明确的终止 marker（如 `IMPLEMENT_DONE:<id>:<status>`、`VERIFY_DONE:<id>:<verdict>`、`AUDIT_DONE:<path>:<N>` 或 `AUDIT_INCOMPLETE:<reason>`）—— controller 用这些路由下一步。
-- 越界 scope 时打印 `SCOPE_EXTEND: <file> <reason>` 再改，便于审计。
-
-### Prompt + 输出必须双 file（强制,debug 友好）
-
-每次 codex 调用 **prompt 是文件,输出是文件**。两者都可在事后被 `cat`/`grep`/`tail` 检查;debug 时一一对应:`cat <prompt-path>` 看 codex 看到什么,`cat <log-path>` 看 codex 做了什么。
-
-具体规则:
-- **Prompt → 文件**。要么调用方先把 prompt 写到具名文件(`.refactor-loop/prompts/...md`),再用 `--prompt <file>`;要么用 `--prompt-text "..."` 让 wrapper 自动 mktemp 一个 `/tmp/codex-prompt-XXXXXXXX.md`。**禁止 inline-string-to-stdin** 或 argv-prompt 调用 codex,这两者都让 debug 时找不到原始 prompt。
-- **输出 → 文件**。`--log <path>` 必填,wrapper 把 codex 的 stdout+stderr+`EXIT=...`+`DONE_AT=...` 全写进该文件。**禁止 `> /dev/null`** 或纯 stdout(失去 debug 痕迹)。
-- **路径透明**。wrapper 在 stderr 上先打印 `SPAWN: prompt=<path> log=<path> cd=<dir> timeout=<s>`,完成后打印 `DONE: log=<path> exit=<N> prompt=<path>`。调用方 / `tail` 立即看到两个路径,无需事后猜文件名。
-
-教训:2026-05-19 Auric 明确 "提示词直接写到一个临时文件就可以, 输出也输出到一个临时文件, 方便debug"。任何"为了图省事"绕开此规范的调用方式均不再允许。
-
-### 反模式（禁止）
-
-- 用裸 `codex` 进 TUI 在无人值守流程里
-- timeout < 3600
-- 把 prompt 塞 argv（长 prompt 截断）
-- 不带 `-C` 让 codex 用当前 cwd（worktree cwd-leak 会污染）
-- codex prompt 让 codex 自己 commit/push（git 拓扑应由 controller 集中管理）
-- 把 codex 输出当真相不验证 —— controller 必须读 log 末尾 marker 后再推进
-- **inline-string prompt**(失去 debug 文件):必须 `--prompt <file>` 或 `--prompt-text` 让 wrapper mktemp
-- **不带 `--log`**(输出散在 stdout):必须显式 log 文件路径
-
-## 编码风格
-- 遵循 `.editorconfig`：UTF-8、LF、4 空格缩进、去除行尾空白。
-- 推荐模式：`Aevatar.<Layer>.<Feature>`。
-- 先抽象后实现；优先接口注入；避免跨层直接调用。
-- 公开 API 与领域对象命名表达业务意图，避免含糊词。
-
-## 前端设计默认规则
-- 前端相关请求（页面、组件、控制台、playground、样式重构、视觉 polish）默认遵循 `aevatar-frontend-design` 规范；若运行环境存在同名 skill，优先使用。
-- 先确定一个明确审美方向，再开始编码；禁止把多个弱风格混在一起，禁止生成无记忆点的通用 SaaS 外观。
-- 禁止默认回落到通用 AI 审美：避免把 `Inter/Arial/Roboto/system-ui` 作为首选字体，避免紫白渐变、模板化卡片网格、无差异面板堆叠。
-- 优先抽取 design tokens / CSS variables / theme tokens，统一颜色、字体、间距、圆角、阴影与动效，不接受大面积零散硬编码。
-- 在现有信息架构和交互模型内提升层次、比例、对比、质感与动效；除非用户明确要求大改，否则不要破坏既有导航和工作流。
-- 结果必须可用：响应式、键盘可达、基本可访问性达标，真实内容密度下仍可读。
-
-
-## 测试与质量门禁
-- 测试栈：xUnit、FluentAssertions、`coverlet.collector`。
-- 测试文件命名：`*Tests.cs`，单文件聚焦一个行为域。
-- 行为变更必须补测试；重构不得降低关键路径覆盖率。自动生成代码不纳入覆盖率考核。
-- 轮询等待门禁（`test_stability_guards.sh`）强制：禁止随意 `Task.Delay(...)`/`WaitUntilAsync(...)`。确属跨进程最终一致性探测且无法改为确定性同步时，须加入 `tools/ci/test_polling_allowlist.txt` 并说明原因。
-- CI 守卫（full-scan）：
-  - 禁止 `GetAwaiter().GetResult()`
-  - 禁止 `TypeUrl.Contains(...)` 字符串路由
-  - 禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`
-  - 禁止中间层 ID 映射 Dic 事实态字段（扫描 Projection/Application/Orchestration）
-  - 禁止投影端口回退 `actorId` 反查上下文
-  - 新增非抽象 `Reducer` 类必须被测试引用
-  - 事件类型 → reducer 路由须 `TypeUrl` 派生 + 精确键路由（`EventTypeUrl` 分组 + `TryGetValue`）
-
-## 提交与 PR
-- 分支命名：`<type>/YYYY-MM-DD_<purpose>`。`type` ∈ {`feat`, `fix`, `refactor`, `docs`, `test`, `chore`}；日期定长 `YYYY-MM-DD`；`purpose` 小写字母+数字+连字符，简短单一目标。示例：`feat/2026-03-12_gagent-protocol-first-plan`。
-- 提交信息：祈使句，聚焦单一目的。
-- PR 必须包含：问题与方案、影响路径、验证命令与结果、相关文档更新。架构调整须同步 `docs/`。
-
-## 文档
-- mermaid 默认指令（所有图首行）：`%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%`
-- mermaid 标签用引号：`A2["RoleGAgent"]`。
-- `sequenceDiagram` 紧凑布局（收紧 margin 与文案长度）；禁止固定大宽度样式撑大时序图；需查看细节用外层 `overflow-x: auto` 横向滚动。
-- 文件名时间戳前置定长：日期 `YYYY-MM-DD-`，日期时间 `YYYY-MM-DD-HH-mm-ss-`。示例：`2026-03-09-workflow-architecture.md`。
-- 打分/审计文档 → `docs/audit-scorecard/`。
-- 工作文档不加入 `aevatar.slnx`。
-
-### Mermaid 在 GitHub issue / PR comment 的禁忌（强制）
-
-post 到 GitHub issue 或 PR comment 的 mermaid 经常渲染失败。规则：
-
-- **禁止双语混排标签**：`participant X as "Caller / 调用线程"` 这种带 `/` 的引号双语标签 GitHub 渲染器会断行或不识别。EN 与 ZH 各画一张图。
-- **禁止依赖 `%%{init: ...}%%` 指令**：GitHub mermaid 不保证支持 `themeVariables.fontSize`、`flowchart.useMaxWidth: false` 等。默认指令只对仓库内 docs 渲染有效，不对 GitHub UI 评论框生效。
-- **禁止超宽 sequenceDiagram**：6+ participant + 长标签会被 GitHub 容器裁掉，且不会出现横向滚动条。如超过 4 个 participant 或单标签超 30 字符，改用 ASCII 框图。
-- **优先用 ASCII / 表格**：GitHub issue/PR 评论里的设计澄清,首选 ASCII 流程图(monospace block)和 markdown 表格,而不是 mermaid。可读性优先。
-- **mermaid 仅在仓库内 `docs/` 文件用**：那里渲染器稳定、CSS 可控。issue/PR 评论里只在确认渲染成功的简单 `flowchart LR` 场景才用。
-
-教训来源: 2026-05-19 在 issue #684 post 多 participant + 引号双语 sequence diagram,GitHub 完全不渲染,Auric 直接反馈 "图没法看"。
-
-## gstack
-
-Use the `/browse` skill from gstack for all web browsing. Never use `mcp__Claude_in_Chrome__*` tools directly.
-
-Available skills:
-- `/office-hours` — YC-style brainstorming and idea validation
-- `/plan-ceo-review` — CEO/founder-mode plan review
-- `/plan-eng-review` — Eng manager-mode plan review
-- `/plan-design-review` — Designer's eye plan review
-- `/design-consultation` — Design system creation
-- `/design-shotgun` — Multi-variant design exploration
-- `/review` — Pre-landing PR review
-- `/ship` — Ship workflow (test, review, PR)
-- `/land-and-deploy` — Merge + deploy + verify
-- `/canary` — Post-deploy canary monitoring
-- `/benchmark` — Performance regression detection
-- `/browse` — Headless browser for testing and dogfooding
-- `/connect-chrome` — Launch real Chrome controlled by gstack
-- `/qa` — QA test + fix bugs
-- `/qa-only` — QA report only (no fixes)
-- `/design-review` — Visual design audit + fix
-- `/setup-browser-cookies` — Import browser cookies for auth
-- `/setup-deploy` — Configure deployment settings
-- `/retro` — Weekly engineering retrospective
-- `/investigate` — Systematic debugging with root cause analysis
-- `/document-release` — Post-ship documentation update
-- `/codex` — Second opinion via OpenAI Codex
-- `/cso` — Security audit
-- `/autoplan` — Auto-review pipeline (CEO + design + eng)
-- `/careful` — Safety guardrails for destructive commands
-- `/freeze` — Restrict edits to a specific directory
-- `/guard` — Full safety mode (careful + freeze)
-- `/unfreeze` — Remove edit restrictions
-- `/gstack-upgrade` — Upgrade gstack to latest version
-
-## Skill routing
-
-When the user's request matches an available skill, ALWAYS invoke it using the Skill
-tool as your FIRST action. Do NOT answer directly, do NOT use other tools first.
-The skill has specialized workflows that produce better results than ad-hoc answers.
-
-Key routing rules:
-- Product ideas, "is this worth building", brainstorming → invoke office-hours
-- Bugs, errors, "why is this broken", 500 errors → invoke investigate
-- Ship, deploy, push, create PR → invoke ship
-- QA, test the site, find bugs → invoke qa
-- Code review, check my diff → invoke review
-- Update docs after shipping → invoke document-release
-- Weekly retro → invoke retro
-- Design system, brand → invoke design-consultation
-- Visual audit, design polish → invoke design-review
-- Architecture review → invoke plan-eng-review
-- Save progress, checkpoint, resume → invoke checkpoint
-- Code quality, health check → invoke health
-- 架构审计, architecture audit, architecture drift → invoke arch-audit
+## 工程约定（精简）
+- 文档：`docs/canon/` 是权威参考，`docs/adr/` 是不可变 ADR，`docs/history/` 是非权威归档；架构词汇见 `docs/canon/architecture-vocabulary.md`。
+- `docs/canon/` 一个 topic 一个文件，不重复建权威文档；新增或调整架构口径时优先更新既有 canon。
+- `docs/adr/` 只追加新决策，不改写历史决策；被替代的 ADR 通过新 ADR supersede。
+- `docs/history/` 仅放归档快照，正文必须明确非权威，不得被实现或测试当作规范来源。
+- AI 生成的设计文档默认不保留到 `docs/`；需要保留时必须有 `title/status/owner` frontmatter 并放入对应目录。
+- `docs/canon/` 和 `docs/adr/` 文件必须有 YAML frontmatter（`title/status/owner`）；文档 lint 使用 `tools/docs/lint.sh`，已纳入 CI 门禁。
+- 根目录 `.md` 只保留 `CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`；`docs/README.md` 由工具生成，不手动编辑。
+- 项目结构：`src/` 放生产代码，`test/` 放对应测试，`tools/` 放开发工具，`workflows/` 放 YAML 工作流。
+- `src/` 按能力与分层组织；保持项目名、命名空间、目录语义一致。
+- `test/` 与 `src/` 对应；测试文件命名 `*Tests.cs`，单文件聚焦一个行为域。
+- `tools/` 放开发工具，`demos/` 放示例程序；工作文档不加入 `aevatar.slnx`。
+- 构建：使用 `dotnet restore/build/test aevatar.slnx --nologo`；仓库内禁止新增 `5000` 端口示例或默认值，Web API 同时禁用 `5000` 与 `5050`。
+- 本地运行 Workflow API 使用 `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`。
+- dotnet 命令统一带 `--nologo`；新增脚本、README、CLI 示例、测试样例必须与端口约束一致。
+- 全量测试使用 `dotnet test aevatar.slnx --nologo`；单项目覆盖率按对应测试项目显式运行。
+- 编码风格：遵循 `.editorconfig`；公开 API 与领域对象命名表达业务意图，避免含糊词。
+- 先抽象后实现，优先接口注入，避免跨层直接调用；不需要的代码直接删除。
+- 公开命名避免含糊词；接口、DTO、事件、ReadModel 名称必须表达职责与业务语义。
+- 前端：前端请求默认遵循 `aevatar-frontend-design` skill；结果必须响应式、键盘可达、真实内容密度下仍可读。
+- 前端改动优先抽取 design tokens / CSS variables，不接受大面积零散硬编码。
+- 测试：行为变更必须补测试；禁止用 `[Skip]` 或 disable 测试换绿；禁止随意 `Task.Delay(...)`/`WaitUntilAsync(...)`，确需最终一致性探测时必须加入 allowlist 并说明原因。
+- 测试栈为 xUnit、FluentAssertions、`coverlet.collector`；重构不得降低关键路径覆盖率。
+- 自动生成代码不纳入覆盖率考核；不得把覆盖率作为脚手架生成代码的合并门禁。
+- CI full-scan 禁止 `GetAwaiter().GetResult()`、`TypeUrl.Contains(...)` 字符串路由、投影端口 `actorId` 反查上下文。
+- 新增非抽象 `Reducer` 类必须有测试引用；事件类型到 reducer 路由必须使用精确键路由。
+- 守卫：提交前按变更范围运行对应 `tools/ci/*_guard*.sh`；架构相关默认跑 `bash tools/ci/architecture_guards.sh`，测试相关默认跑 `bash tools/ci/test_stability_guards.sh`。
+- 涉及 query/read、projection lifecycle、state version、workflow binding、CLI playground 静态资源时，运行对应专项 guard。
+- 若新增或修改测试，提交前必须运行 `bash tools/ci/test_stability_guards.sh`。
+- Git：分支命名 `<type>/YYYY-MM-DD_<purpose>`；提交信息用祈使句并聚焦单一目的；PR 写明问题与方案、影响路径、验证命令与结果。
+- 分支 `type` 仅限 `feat/fix/refactor/docs/test/chore`；日期固定 `YYYY-MM-DD`；purpose 只用小写字母、数字、连字符。
+- 架构调整 PR 必须同步相关 `docs/`，并在验证结果中列出 build/test/guard。
+- 不保留历史副本：废弃文件直接删除，不创建 `.bak/.old/.deprecated` 等长期遗留；历史由 git 保存。
+- Mermaid：仓库 docs 图首行使用统一 `%%{init: ...}%%` 指令，标签加引号；GitHub issue/PR comment 优先 ASCII/表格，复杂 mermaid 只放仓库 docs。
+- 文档文件名如带时间戳，必须前置定长：`YYYY-MM-DD-` 或 `YYYY-MM-DD-HH-mm-ss-`。
+- Mermaid `sequenceDiagram` 默认紧凑布局，避免固定大宽度；需要细节时让外层容器横向滚动。
+- gstack：网页浏览与 QA 使用 gstack `/browse` 等 skill；不要直接调用底层 Chrome MCP 工具。
+- Skill routing：请求明确匹配仓库内 skill 时优先使用对应 skill；skill 已自包含的操作细则不复制回本文件。
+- Codex loop 细则由 `.claude/skills/codex-refactor-loop/` 与 `.claude/skills/codex-implement-loop/` 自维护；`CLAUDE.md` 只保留跨流程架构与工程边界。

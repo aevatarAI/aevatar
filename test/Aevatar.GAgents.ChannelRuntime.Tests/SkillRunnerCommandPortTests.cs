@@ -193,7 +193,7 @@ public sealed class SkillRunnerCommandPortTests
     {
         public IActorRuntime Runtime { get; }
         public IActorDispatchPort Dispatch { get; }
-        public UserAgentCatalogProjectionPort Projection { get; }
+        public UserAgentCatalogProjectionBootstrapActivator Projection { get; }
         public IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> Activation { get; }
         public List<EventEnvelope> Captured { get; } = new();
         public SkillRunnerCommandPort Port { get; }
@@ -205,11 +205,11 @@ public sealed class SkillRunnerCommandPortTests
             Projection = CreateProjectionPort(out var activation, out _);
             Activation = activation;
             Dispatch.DispatchAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
-                .Returns(Task.CompletedTask);
+                .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
             Port = new SkillRunnerCommandPort(Runtime, Dispatch);
         }
 
-        public static UserAgentCatalogProjectionPort CreateProjectionPort(
+        public static UserAgentCatalogProjectionBootstrapActivator CreateProjectionPort(
             out IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> activation,
             out UserAgentCatalogMaterializationRuntimeLease lease)
         {
@@ -218,11 +218,11 @@ public sealed class SkillRunnerCommandPortTests
                 new UserAgentCatalogMaterializationContext
                 {
                     RootActorId = UserAgentCatalogGAgent.WellKnownId,
-                    ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+                    ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
                 });
             activation.EnsureAsync(Arg.Any<ProjectionScopeStartRequest>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(lease));
-            return new UserAgentCatalogProjectionPort(activation);
+            return new UserAgentCatalogProjectionBootstrapActivator(activation);
         }
     }
 }

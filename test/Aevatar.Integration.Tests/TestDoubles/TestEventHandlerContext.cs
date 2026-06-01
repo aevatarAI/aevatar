@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -10,7 +11,11 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Integration.Tests;
 
-internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor
+internal sealed class TestEventHandlerContext :
+    IEventHandlerContext,
+    IWorkflowExecutionContext,
+    IWorkflowExecutionRuntimeContextAccessor,
+    IWorkflowExecutionStateHostAccessor
 {
     private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
 
@@ -38,7 +43,27 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         ? host.RuntimeContext
         : _fallbackRuntimeContext;
 
+    public IWorkflowExecutionStateHost StateHost => Agent is IWorkflowExecutionStateHost host
+        ? host
+        : throw new InvalidOperationException("Workflow execution state host is required.");
+
     private readonly WorkflowExecutionRuntimeContext _fallbackRuntimeContext = new();
+    private TimeSpan? _nextElapsedTime;
+
+    public DateTimeOffset UtcNow { get; set; } = DateTimeOffset.UtcNow;
+
+    public long GetTimestamp() => 1;
+
+    public TimeSpan GetElapsedTime(long startingTimestamp)
+    {
+        _ = startingTimestamp;
+        return _nextElapsedTime ?? TimeSpan.Zero;
+    }
+
+    public void SetNextElapsedTime(TimeSpan elapsedTime)
+    {
+        _nextElapsedTime = elapsedTime;
+    }
 
     public TState LoadState<TState>(string scopeKey)
         where TState : class, IMessage<TState>, new()
@@ -163,7 +188,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(UtcNow),
             Payload = Any.Pack(callback.Event),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? AgentId, TopologyAudience.Self),
         };
@@ -179,7 +204,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
             CallbackId = callback.CallbackId,
             Generation = callback.Generation,
             FireIndex = 0,
-            FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            FiredAtUnixTimeMs = UtcNow.ToUnixTimeMilliseconds(),
         };
         return envelope;
     }
@@ -255,6 +280,23 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
 
     public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
+    public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+    public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+    public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+    {
+        WorkflowExecutionContextTestState.ApplyDelta(ExecutionContextState, delta);
+        return Task.CompletedTask;
+    }
+
+    public Task ClearExecutionContextAsync(CancellationToken ct = default)
+    {
+        ExecutionContextState.Llm = null;
+        ExecutionContextState.Connector = null;
+        return Task.CompletedTask;
+    }
+
     public Any? GetExecutionState(string scopeKey) =>
         _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
@@ -302,6 +344,23 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
 
     public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
+    public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+    public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+    public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+    {
+        WorkflowExecutionContextTestState.ApplyDelta(ExecutionContextState, delta);
+        return Task.CompletedTask;
+    }
+
+    public Task ClearExecutionContextAsync(CancellationToken ct = default)
+    {
+        ExecutionContextState.Llm = null;
+        ExecutionContextState.Connector = null;
+        return Task.CompletedTask;
+    }
+
     public Any? GetExecutionState(string scopeKey) =>
         _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
@@ -337,4 +396,34 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
     public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+}
+
+internal static class WorkflowExecutionContextTestState
+{
+    public static void ApplyDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta delta)
+    {
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                NyxidAccessToken = delta.Llm.NyxidAccessToken,
+                ModelOverride = delta.Llm.ModelOverride,
+                NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+            };
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization,
+            };
+        }
+    }
 }

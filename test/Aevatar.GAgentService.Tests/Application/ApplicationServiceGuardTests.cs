@@ -9,7 +9,6 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Governance.Application.Services;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
@@ -42,14 +41,14 @@ public sealed class ApplicationServiceGuardTests
             new ServiceInvocationResolutionService(
                 new NoOpCatalogQueryReader(),
                 new NoOpTrafficViewQueryReader(),
-                new ConfiguredServiceRevisionArtifactStore()),
+                new FakeServiceRevisionCatalogQueryReader()),
             null!,
             new NoOpInvocationDispatcher());
         Action nullDispatcher = () => new ServiceInvocationApplicationService(
             new ServiceInvocationResolutionService(
                 new NoOpCatalogQueryReader(),
                 new NoOpTrafficViewQueryReader(),
-                new ConfiguredServiceRevisionArtifactStore()),
+                new FakeServiceRevisionCatalogQueryReader()),
             new NoOpInvokeAdmissionAuthorizer(),
             null!);
 
@@ -160,19 +159,19 @@ public sealed class ApplicationServiceGuardTests
         Action nullCatalogReader = () => new ActivationCapabilityViewAssembler(
             null!,
             new NoOpConfigurationQueryReader(),
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
         Action nullConfigurationReader = () => new ActivationCapabilityViewAssembler(
             new NoOpCatalogQueryReader(),
             null!,
-            new ConfiguredServiceRevisionArtifactStore());
-        Action nullArtifactStore = () => new ActivationCapabilityViewAssembler(
+            new FakeServiceRevisionCatalogQueryReader());
+        Action nullRevisionCatalog = () => new ActivationCapabilityViewAssembler(
             new NoOpCatalogQueryReader(),
             new NoOpConfigurationQueryReader(),
             null!);
 
         nullCatalogReader.Should().Throw<ArgumentNullException>();
         nullConfigurationReader.Should().Throw<ArgumentNullException>();
-        nullArtifactStore.Should().Throw<ArgumentNullException>();
+        nullRevisionCatalog.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -232,7 +231,7 @@ public sealed class ApplicationServiceGuardTests
 
     private sealed class NoOpActorDispatchPort : IActorDispatchPort
     {
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) => Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
     }
 
     private sealed class NoOpServiceCommandTargetProvisioner : IServiceCommandTargetProvisioner

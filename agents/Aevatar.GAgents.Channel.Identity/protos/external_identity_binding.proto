@@ -36,8 +36,8 @@ message CommitBindingCommand {
 
 // Issued by the /unbind handler after a successful NyxID DELETE call, or by
 // the turn path on `invalid_grant` from token-exchange. When state has no
-// active binding, the actor leaves binding facts unchanged but republishes
-// its authoritative state root so stale readmodels can be overwritten.
+// active binding, the actor leaves binding facts unchanged. Stale readmodel
+// repair belongs to projection lifecycle / maintenance, not this command.
 message RevokeBindingCommand {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   // Free-form reason for audit (e.g. "user_unbind", "nyx_invalid_grant",
@@ -59,16 +59,12 @@ message ExternalIdentityBindingRevokedEvent {
   string reason = 3;
 }
 
-// Persisted when an inbound CommitBindingCommand is discarded because the
-// actor already holds an active binding_id, when RevokeBindingCommand observes
-// already-empty actor state, OR when a deploy needs to re-publish the
-// authoritative state root for a legacy binding actor whose projection scope
-// was never activated. Apply is identity — the binding facts are not mutated.
-// The projector still sees a state-root publication and materializes the
-// authoritative state into the readmodel.
+// Tombstone for the removed projection-only event. Keep its message name and
+// field numbers reserved so old event-store payloads remain replay-safe and
+// future events cannot reuse the same wire shape accidentally.
 message ExternalIdentityBindingProjectionRebuildRequestedEvent {
-  string reason = 1;
-  google.protobuf.Timestamp requested_at = 2;
+  reserved 1, 2;
+  reserved "reason", "requested_at";
 }
 
 // Stateless OAuth `state` token payload (HMAC-sealed, never in grain state).

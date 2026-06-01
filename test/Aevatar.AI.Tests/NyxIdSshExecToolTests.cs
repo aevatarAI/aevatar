@@ -44,12 +44,24 @@ public class NyxIdSshExecToolTests
     }
 
     [Fact]
-    public void RequiresApproval_AlwaysTrue()
+    public void RequiresApproval_DefaultsToTrue()
     {
         var tool = new NyxIdSshExecTool(CreateDummyClient());
         tool.RequiresApproval(
             """{"service":"sg-office","command":"uname -a","principal":"ubuntu"}""")
             .Should().BeTrue();
+    }
+
+    [Fact]
+    public void RequiresApproval_WhenBypassEnabled_ReturnsFalse()
+    {
+        var tool = new NyxIdSshExecTool(
+            CreateDummyClient(),
+            new NyxIdToolOptions { BypassSshExecApproval = true });
+
+        tool.RequiresApproval(
+                """{"service":"sg-office","command":"uname -a","principal":"ubuntu"}""")
+            .Should().BeFalse();
     }
 
     [Fact]

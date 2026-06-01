@@ -12,6 +12,14 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Sends a structured evaluation prompt to the target role, parses the numeric score
 /// from the response, and applies threshold-based branching.
 /// </summary>
+// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+// Refactor (iter164/cluster-002-first):
+//   Old pattern: module listened to TextMessageEndEvent / ChatResponseEvent (presentation frames)
+//                and converted them to StepCompletedEvent.
+//   New principle: module reads completion from WorkflowRoleReplyRecordedEvent
+//                  (actor-owned committed event), removing dependency on presentation stream.
 public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "evaluate";
@@ -28,10 +36,12 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var p = envelope.Payload;
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames completed evaluate steps.
+        //   New principle: only committed WorkflowRoleReplyRecordedEvent completes pending evaluate steps.
         return p != null &&
                (p.Is(StepRequestEvent.Descriptor) ||
-                p.Is(TextMessageEndEvent.Descriptor) ||
-                p.Is(ChatResponseEvent.Descriptor));
+                p.Is(WorkflowRoleReplyRecordedEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -110,8 +120,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             {
                 Prompt = prompt,
                 SessionId = sessionId,
+                Telegram = new TelegramBridgeRequest(),
             };
-            CopyParametersToChatHeaders(request.Parameters, chatRequest.Headers);
+            CopyParametersToChatRequest(request.Parameters, chatRequest);
             try
             {
                 if (!target.UseSelf)
@@ -145,28 +156,19 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        string? content = null;
-        string? sid = null;
+        if (!payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
+            return;
 
-        if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            content = evt.Content; sid = evt.SessionId;
-        }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ChatResponseEvent>();
-            content = evt.Content; sid = evt.SessionId;
-        }
-
-        if (sid == null)
+        var evt = payload.Unpack<WorkflowRoleReplyRecordedEvent>();
+        var sid = evt.SessionId;
+        if (string.IsNullOrWhiteSpace(sid))
             return;
 
         var stateForCompletion = WorkflowExecutionStateAccess.Load<EvaluateModuleState>(ctx, ModuleStateKey);
         if (!stateForCompletion.PendingBySessionId.TryGetValue(sid, out var evalCtx))
             return;
 
-        var score = ParseScore(content ?? "");
+        var score = ParseScore(evt.Content ?? "");
         var passed = score >= evalCtx.Threshold;
 
         ctx.Logger.LogInformation("Evaluate {StepId}: score={Score} threshold={Threshold} passed={Passed}",
@@ -215,21 +217,25 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    private static void CopyParametersToChatHeaders(
+    private static void CopyParametersToChatRequest(
         MapField<string, string> parameters,
-        MapField<string, string> headers)
+        ChatRequestEvent chatRequest)
     {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
+        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
         foreach (var (key, value) in parameters)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
-            if (string.Equals(key, "agent_type", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(key, "agent_id", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
 
-            headers[key.Trim()] = value.Trim();
+            var normalizedKey = key.Trim();
+            var normalizedValue = value.Trim();
+            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
+            if (LLMCallModule.TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue))
+                continue;
+
+            chatRequest.Metadata[normalizedKey] = normalizedValue;
         }
     }
 

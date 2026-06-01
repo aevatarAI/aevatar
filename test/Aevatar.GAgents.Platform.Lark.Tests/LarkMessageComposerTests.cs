@@ -94,6 +94,17 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void BuildCloseStreamingSettingsJson_ShouldUseNestedCardKitSettingsShape()
+    {
+        var json = LarkStreamingCardShell.BuildCloseStreamingSettingsJson();
+
+        json.ShouldBe("""{"config":{"streaming_mode":false}}""");
+        using var document = JsonDocument.Parse(json);
+        document.RootElement.TryGetProperty("streaming_mode", out _).ShouldBeFalse();
+        document.RootElement.GetProperty("config").GetProperty("streaming_mode").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
     public void Compose_WhenTextExceedsConfiguredLimit_AppendsTruncationMarker()
     {
         var payload = CreateComposer().Compose(

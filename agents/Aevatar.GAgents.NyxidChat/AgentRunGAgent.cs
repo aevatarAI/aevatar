@@ -1,5 +1,5 @@
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -8,7 +8,6 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -21,10 +20,17 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter20/cluster-004):
 //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+// Refactor (iter73/cluster-073-durable-callback-runtime-credentials):
+//   Old pattern: durable callback envelope clones full command/chunk payload, may embed transient runtime credentials (reply_token)
+//   New principle: callback payload carries only stable IDs + actor-owned lease keys; actor reconciles from current actor state on fire
+// Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+//   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+//   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
+// Refactor (iter107/cluster-1-channel-business-io-process-queue):
+//   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
+//   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
-    public const string ActorIdPrefix = "channel-agent-run:";
-
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
 
     /// <summary>
@@ -41,58 +47,45 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     internal static readonly TimeSpan TerminalCleanupDelay = TimeSpan.FromMinutes(5);
     private const string TerminalCleanupCallbackPrefix = "agent-run-terminal-cleanup";
-    internal static readonly TimeSpan OutputDispatchTimeout = TimeSpan.FromSeconds(10);
+    private const string GenerationTimeoutCallbackPrefix = "agent-run-generation-timeout";
     internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
+    internal static readonly TimeSpan DropNotificationRetryDelay = TimeSpan.FromSeconds(5);
+    private const string DropNotificationRetryCallbackPrefix = "agent-run-drop-notification-retry";
 
     private readonly IActorRuntime _actorRuntime;
-    private readonly IActorDispatchPort _actorDispatchPort;
-    private readonly IConversationReplyGenerator _replyGenerator;
-    private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
+    private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
-    private readonly INyxIdRelayScopeResolver? _scopeResolver;
-    private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly IActorRuntimeCallbackScheduler? _callbackScheduler;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunGAgent> _logger;
 
     public AgentRunGAgent(
         IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
-        IConversationReplyGenerator replyGenerator,
-        IInteractiveReplyCollector? interactiveReplyCollector,
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
         ILogger<AgentRunGAgent> logger,
-        INyxIdRelayScopeResolver? scopeResolver = null,
-        IUserConfigQueryPort? userConfigQueryPort = null,
         IActorRuntimeCallbackScheduler? callbackScheduler = null,
         TimeProvider? timeProvider = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
-        _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
-        _interactiveReplyCollector = interactiveReplyCollector;
+        _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
         _relayOptions = relayOptions;
-        _scopeResolver = scopeResolver;
-        _userConfigQueryPort = userConfigQueryPort;
         _callbackScheduler = callbackScheduler;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    }
-
-    public static string BuildActorId(string correlationId)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
-        return ActorIdPrefix + correlationId.Trim();
     }
 
     protected override AgentRunGAgentState TransitionState(AgentRunGAgentState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
             .On<AgentRunStartedEvent>(ApplyStarted)
+            .On<AgentRunReplyGenerationRequestedEvent>(ApplyReplyGenerationRequested)
+            .On<AgentRunReplyStepStateUpdatedEvent>(ApplyReplyStepStateUpdated)
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunDroppedEvent>(ApplyDropped)
+            .On<AgentRunDropNotificationDispatchedEvent>(ApplyDropNotificationDispatched)
             .On<AgentRunFailedEvent>(ApplyFailed)
             .On<AgentRunCleanupCompletedEvent>(ApplyCleanupCompleted)
             .OrCurrent();
@@ -120,9 +113,42 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
+        // Refactor (iter101/cluster-105): Old=run_id could be recovered by parsing the run actor id; New=run_id is command data.
+        if (!AgentRunId.TryParse(command.RunId, out var typedCommandRunId))
+        {
+            _logger.LogWarning(
+                "Dropping malformed agent run start command without typed run_id: runActor={RunActorId} correlation={CorrelationId}",
+                Id,
+                command.Request.CorrelationId);
+            return;
+        }
+
+        var commandRunId = typedCommandRunId.Value;
         var request = command.Request.Clone();
         ApplyTargetRefOverrides(request);
-        var runId = NormalizeOptional(request.CorrelationId) ?? Id;
+        if (!string.IsNullOrWhiteSpace(request.RunId) &&
+            !string.Equals(request.RunId.Trim(), commandRunId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Dropping malformed agent run start command with mismatched run_id: commandRunId={CommandRunId} requestRunId={RequestRunId} runActor={RunActorId}",
+                commandRunId,
+                request.RunId,
+                Id);
+            return;
+        }
+
+        request.RunId = commandRunId;
+        if (!AgentRunId.TryParse(request.RunId, out _))
+        {
+            // Refactor (iter98/cluster-002): Old=missing run_id fell back to correlation/actor id; New=start commands without explicit run_id are malformed.
+            _logger.LogWarning(
+                "Dropping malformed agent run start command without run_id: runActor={RunActorId} correlation={CorrelationId}",
+                Id,
+                request.CorrelationId);
+            return;
+        }
+
+        var runId = ResolveRunId(request);
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         // ADR-0021 chain.finalized precondition: terminal status means the run has
@@ -163,6 +189,15 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
+        if (State.Status is AgentRunStatus.ReplyGenerationRequested)
+        {
+            _logger.LogInformation(
+                "Ignoring duplicate agent run start while reply generation is already requested: runId={RunId} correlation={CorrelationId}",
+                runId,
+                request.CorrelationId);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(State.RunId))
         {
             await PersistDomainEventAsync(new AgentRunStartedEvent
@@ -176,7 +211,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         try
         {
-            await ProcessAsync(request, runId);
+            await RequestReplyGenerationAsync(request, runId);
         }
         catch (AgentRunOutputDispatchException ex)
         {
@@ -193,6 +228,124 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         {
             await FailAfterUnexpectedExceptionAsync(request, runId, ex);
         }
+    }
+
+    [EventHandler]
+    public async Task HandleOutputDispatchRetryAsync(AgentRunOutputDispatchRetryRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!IsCurrentOutputDispatchRetry(command))
+            return;
+
+        var request = BuildOutputDispatchRetryRequest(command);
+        if (command.RequiresRuntimeReplyToken)
+        {
+            _logger.LogWarning(
+                "Dropping durable output-dispatch retry without runtime reply_token: runId={RunId} correlation={CorrelationId}",
+                command.RunId,
+                command.CorrelationId);
+            await PersistFailedAsync(
+                request,
+                command.RunId,
+                "missing_relay_reply_token_for_durable_retry",
+                "Durable output-dispatch retry cannot rehydrate runtime-only relay reply_token.");
+            return;
+        }
+
+        try
+        {
+            await ReDispatchProducedReplyAsync(request, command.RunId);
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            if (!await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
+                throw;
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleDropNotificationRetryAsync(AgentRunDropNotificationRetryRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!IsCurrentDropNotificationRetry(command))
+            return;
+
+        try
+        {
+            await DispatchPendingDropNotificationAsync();
+            await TryPersistDropNotificationDispatchedAsync();
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            await TryScheduleDropNotificationRetryAsync(command.Attempt + 1, ex);
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleReplyGenerationFailedAsync(AgentRunReplyGenerationFailed command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
+            return;
+
+        var request = command.Request?.Clone() ?? new NeedsLlmReplyEvent
+        {
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+            RunId = command.RunId,
+        };
+        ApplyTargetRefOverrides(request);
+        if (string.IsNullOrWhiteSpace(request.TargetActorId))
+            request.TargetActorId = command.TargetActorId;
+
+        var errorCode = NormalizeOptional(command.ErrorCode) ?? "agent_run_generation_failed";
+        var errorSummary = command.ErrorSummary ?? string.Empty;
+        try
+        {
+            await ProduceAndDispatchAsync(
+                request,
+                command.RunId,
+                "Sorry, I wasn't able to generate a response. Please try again.",
+                null,
+                LlmReplyTerminalState.Failed,
+                errorCode,
+                errorSummary);
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            if (await TryHandleOutputDispatchFailureAsync(request, command.RunId, ex))
+                return;
+
+            await PersistFailedAsync(request, command.RunId, errorCode, errorSummary);
+        }
+        catch (Exception ex)
+        {
+            await FailAfterUnexpectedExceptionAsync(request, command.RunId, ex);
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleReplyGenerationTimedOutAsync(AgentRunReplyGenerationTimedOut command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
+            return;
+
+        await DispatchGenerationTimeoutDropNotificationAsync(command);
+
+        await PersistDomainEventAsync(new AgentRunFailedEvent
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+            ErrorCode = "llm_reply_timeout",
+            ErrorSummary = $"LLM reply generation exceeded {(int)ResolveFallbackTimeout().TotalSeconds}s budget.",
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+
+        await ScheduleTerminalCleanupAsync(command.RunId);
     }
 
     [EventHandler]
@@ -233,10 +386,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         await _actorRuntime.DestroyAsync(Id, CancellationToken.None);
     }
 
-    private async Task ProcessAsync(NeedsLlmReplyEvent request, string runId)
+    private async Task RequestReplyGenerationAsync(NeedsLlmReplyEvent request, string runId)
     {
         _logger.LogInformation(
-            "Processing agent run LLM reply request: runId={RunId} correlation={CorrelationId} target={TargetActorId}",
+            "Requesting agent run LLM reply generation: runId={RunId} correlation={CorrelationId} target={TargetActorId}",
             runId,
             request.CorrelationId,
             request.TargetActorId);
@@ -282,159 +435,318 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         await EnsureTargetActorAsync(request.TargetActorId);
 
-        string replyText;
-        MessageContent? outboundIntent = null;
-        var terminalState = LlmReplyTerminalState.Completed;
-        var errorCode = string.Empty;
-        var errorSummary = string.Empty;
-        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
-        var streamingState = TryBuildStreamingReplyState(streamingSink, request);
-
-        IReadOnlyDictionary<string, string> effectiveMetadata;
-        using (var metadataCts = new CancellationTokenSource(MetadataBuildBudget))
+        var requestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var attempt = Math.Max(1, State.GenerationAttempt + 1);
+        await PersistDomainEventAsync(new AgentRunReplyGenerationRequestedEvent
         {
-            try
-            {
-                effectiveMetadata = await BuildEffectiveMetadataAsync(request, metadataCts.Token);
-            }
-            catch (OperationCanceledException ex) when (metadataCts.IsCancellationRequested)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Deferred LLM reply metadata build timed out after {TimeoutSeconds}s: runId={RunId} correlation={CorrelationId}",
-                    (int)MetadataBuildBudget.TotalSeconds,
-                    runId,
-                    request.CorrelationId);
-                replyText = "Sorry, I couldn't load your model preferences in time. Please try again.";
-                terminalState = LlmReplyTerminalState.Failed;
-                errorCode = "llm_reply_metadata_timeout";
-                errorSummary = $"Metadata enrichment exceeded {(int)MetadataBuildBudget.TotalSeconds}s budget.";
-                await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent);
-                await ProduceAndDispatchAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
-                return;
-            }
-        }
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            RequestedAtUnixMs = requestedAtUnixMs,
+            Attempt = attempt,
+        });
 
-        var fallbackTimeout = ResolveFallbackTimeout();
-        using var timeoutCts = fallbackTimeout > TimeSpan.Zero
-            ? new CancellationTokenSource(fallbackTimeout)
-            : new CancellationTokenSource();
-
-        try
-        {
-            IDisposable? interactiveReplyScope = null;
-            try
-            {
-                if (ShouldCaptureInteractiveReply(request.Activity))
-                    interactiveReplyScope = _interactiveReplyCollector?.BeginScope();
-
-                // ADR-0021 §6 / canon §8 actor-edge closeout: the generator returns a
-                // single ConversationReplyResult per run carrying aggregated Usage and the
-                // last FinishReason. Round-internal terminal markers no longer leak past
-                // ChatRuntime, so this is the lone closeout observation point.
-                var replyResult = await _replyGenerator.GenerateReplyAsync(
-                    request.Activity,
-                    effectiveMetadata,
-                    streamingState,
-                    timeoutCts.Token);
-                replyText = replyResult.Text ?? string.Empty;
-                if (replyResult.Usage is not null || !string.IsNullOrEmpty(replyResult.FinishReason))
-                {
-                    _logger.LogInformation(
-                        "LLM reply closeout: runId={RunId} correlation={CorrelationId} promptTokens={Prompt} completionTokens={Completion} totalTokens={Total} finishReason={FinishReason}",
-                        runId,
-                        request.CorrelationId,
-                        replyResult.Usage?.PromptTokens,
-                        replyResult.Usage?.CompletionTokens,
-                        replyResult.Usage?.TotalTokens,
-                        replyResult.FinishReason ?? "(none)");
-                }
-                outboundIntent = _interactiveReplyCollector?.TryTake();
-            }
-            finally
-            {
-                interactiveReplyScope?.Dispose();
-            }
-
-            if (streamingState is not null &&
-                outboundIntent is null &&
-                !string.IsNullOrWhiteSpace(replyText))
-            {
-                await streamingState.FinalizeAsync(replyText, CancellationToken.None);
-            }
-
-            if (outboundIntent is null && string.IsNullOrWhiteSpace(replyText))
-            {
-                terminalState = LlmReplyTerminalState.Failed;
-                errorCode = "empty_reply";
-                errorSummary = "Reply generator returned an empty response.";
-                replyText = "Sorry, I wasn't able to generate a response. Please try again.";
-            }
-        }
-        catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested)
-        {
-            terminalState = LlmReplyTerminalState.Failed;
-            errorCode = "llm_reply_timeout";
-            errorSummary = $"LLM reply generation exceeded {(int)fallbackTimeout.TotalSeconds}s budget.";
-            replyText = "Sorry, this took too long to process - the model or one of its tools didn't " +
-                        "respond in time. Please try again, or rephrase the request.";
-            _logger.LogWarning(
-                ex,
-                "Deferred LLM reply timed out after {TimeoutSeconds}s: runId={RunId} correlation={CorrelationId}",
-                (int)fallbackTimeout.TotalSeconds,
-                runId,
-                request.CorrelationId);
-        }
-        catch (Exception ex)
-        {
-            terminalState = LlmReplyTerminalState.Failed;
-            errorCode = "llm_reply_failed";
-            errorSummary = ex.Message;
-            replyText = NyxIdRelayErrorClassifier.Classify(ex.Message);
-            _logger.LogWarning(
-                ex,
-                "Deferred LLM reply generation failed: runId={RunId} correlation={CorrelationId}",
-                runId,
-                request.CorrelationId);
-        }
-
-        if (terminalState == LlmReplyTerminalState.Failed)
-        {
-            // Streaming-sink failure finalize: when the LLM run terminates with a fallback
-            // text (timeout / classifier / empty reply), surface that text on the live
-            // streaming card/edit message before the LlmReplyReadyEvent lands. Carried over
-            // from feature/lark-bot's dispatch hardening.
-            await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent);
-        }
-
-        await ProduceAndDispatchAsync(
-            request,
-            runId,
-            replyText,
-            outboundIntent,
-            terminalState,
-            errorCode,
-            errorSummary);
+        await ScheduleGenerationTimeoutAsync(request, runId, attempt);
+        await StartPerStepReplyGenerationAsync(request, runId, attempt);
     }
 
-    private async Task FinalizeFailureStreamingSinkAsync(
-        StreamingReplyRunState? streamingState,
-        string replyText,
-        MessageContent? outboundIntent)
+    private async Task StartPerStepReplyGenerationAsync(NeedsLlmReplyEvent request, string runId, int attempt)
     {
-        if (streamingState is not null &&
-            outboundIntent is null &&
-            !string.IsNullOrWhiteSpace(replyText))
+        var generationContext = await BuildInitialStepStateAsync(request, runId, attempt);
+        await PersistStepStateAsync(generationContext);
+        await PublishAsync(new AgentRunNextLlmStepRequestedEvent
         {
-            try
-            {
-                await streamingState.FinalizeAsync(replyText, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to finalize streaming failure text for agent run {ActorId}", Id);
-            }
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = attempt,
+            StepIndex = generationContext.NextStepIndex,
+            Request = request.Clone(),
+        }, TopologyAudience.Self, CancellationToken.None);
+    }
+
+    private async Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
+        int attempt)
+    {
+        // Refactor (iter99/cluster-596-phase-e): Old pattern: ChatRuntime owned round/tool loop state in one executor call.
+        // New principle: AgentRunGAgent persists the per-step waterline and advances through typed self-messages.
+        return await _generationExecutor.BuildInitialStepStateAsync(
+                new AgentRunReplyGenerationExecutionRequest(runId, Id, attempt, request.Clone()),
+                CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private async Task PersistStepStateAsync(AgentRunReplyStepState stepState)
+    {
+        await PersistDomainEventAsync(new AgentRunReplyStepStateUpdatedEvent
+        {
+            RunId = stepState.RunId,
+            CorrelationId = stepState.CorrelationId,
+            TargetActorId = stepState.TargetActorId,
+            Attempt = stepState.Attempt,
+            StepState = stepState.Clone(),
+        });
+    }
+
+    private async Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        await _generationExecutor.ExecuteLlmStepAsync(
+            new AgentRunReplyStepExecutionRequest(
+                stepState.RunId,
+                Id,
+                stepState.Attempt,
+                stepState.NextStepIndex,
+                request.Clone(),
+                stepState.Clone()),
+            CancellationToken.None);
+    }
+
+    private async Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        await _generationExecutor.ExecuteToolStepAsync(
+            new AgentRunReplyStepExecutionRequest(
+                stepState.RunId,
+                Id,
+                stepState.Attempt,
+                stepState.NextStepIndex,
+                request.Clone(),
+                stepState.Clone()),
+            CancellationToken.None);
+    }
+
+    private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    {
+        var hasReplyText = !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+        await ProduceAndDispatchAsync(
+            request,
+            stepState.RunId,
+            hasReplyText
+                ? stepState.AccumulatedText
+                : "Sorry, I wasn't able to generate a response. Please try again.",
+            stepState.OutboundIntent?.Clone(),
+            hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
+            hasReplyText ? string.Empty : "empty_reply",
+            hasReplyText ? string.Empty : "Reply generator returned an empty response.");
+    }
+
+    private static bool ShouldCompleteAfterLlmStep(AgentRunReplyStepState stepState, bool isCompletedLlmStep)
+    {
+        if (stepState.PendingToolCalls.Count > 0)
+            return false;
+
+        // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+        // slash silently consumed.
+        // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+        // non-slash text path unchanged (owner-LLM chat fallback).
+        if (stepState.FinalNoToolsStep)
+            return isCompletedLlmStep;
+
+        if (isCompletedLlmStep && string.IsNullOrWhiteSpace(stepState.AccumulatedText))
+            return true;
+
+        if (stepState.Round >= stepState.MaxToolRounds)
+            return false;
+
+        return !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+    }
+
+    private async Task<AgentRunReplyStepState> AdvanceToFinalNoToolsStepAsync(AgentRunReplyStepState stepState)
+    {
+        var next = stepState.Clone();
+        next.FinalNoToolsStep = true;
+        next.NextStepIndex++;
+        await PersistStepStateAsync(next);
+        return next;
+    }
+
+    private bool IsCurrentStepRequest(string runId, string correlationId, int attempt, int stepIndex)
+    {
+        if (!IsCurrentGenerationContinuation(runId, correlationId, attempt))
+            return false;
+
+        var currentStep = State.GenerationStep;
+        if (currentStep is null)
+            return stepIndex <= 1;
+
+        return stepIndex == currentStep.NextStepIndex;
+    }
+
+    private bool IsCurrentStepResult(string runId, string correlationId, int attempt, int stepIndex)
+    {
+        if (!IsCurrentGenerationContinuation(runId, correlationId, attempt))
+            return false;
+
+        var currentStep = State.GenerationStep;
+        if (currentStep is null)
+            return false;
+
+        return stepIndex == currentStep.NextStepIndex + 1;
+    }
+
+    private static NeedsLlmReplyEvent BuildStepRequest(AgentRunNextLlmStepRequestedEvent command) =>
+        new()
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+        };
+
+    private static NeedsLlmReplyEvent BuildStepRequest(AgentRunNextToolStepRequestedEvent command) =>
+        new()
+        {
+            RunId = command.RunId,
+            CorrelationId = command.CorrelationId,
+            TargetActorId = command.TargetActorId,
+        };
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleNextLlmStepAsync(AgentRunNextLlmStepRequestedEvent command)
+    {
+        // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+        //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+        //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
+        ArgumentNullException.ThrowIfNull(command);
+        var hasResult = command.LlmStepResult is not null;
+        if (hasResult)
+        {
+            if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+                return;
+
+            await PersistStepStateAsync(ApplyLlmStepResult(State.GenerationStep!, command.LlmStepResult!, command.StepIndex));
         }
+        else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+        {
+            return;
+        }
+
+        var request = command.Request?.Clone() ?? BuildStepRequest(command);
+        ApplyTargetRefOverrides(request);
+
+        var stepState = State.GenerationStep;
+        if (stepState is null)
+            return;
+
+        if (ShouldCompleteAfterLlmStep(stepState, hasResult))
+        {
+            await CompletePerStepReplyAsync(request, stepState);
+            return;
+        }
+
+        if (stepState.PendingToolCalls.Count > 0)
+        {
+            await DispatchToolStepExecutorAsync(request, stepState);
+            return;
+        }
+
+        if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
+            stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
+
+        await DispatchLlmStepExecutorAsync(request, stepState);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleNextToolStepAsync(AgentRunNextToolStepRequestedEvent command)
+    {
+        // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+        //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
+        //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
+        ArgumentNullException.ThrowIfNull(command);
+        var hasResult = command.ToolStepResult is not null;
+        if (hasResult)
+        {
+            if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+                return;
+
+            await PersistStepStateAsync(ApplyToolStepResult(State.GenerationStep!, command.ToolStepResult!, command.StepIndex));
+        }
+        else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+        {
+            return;
+        }
+
+        var request = command.Request?.Clone() ?? BuildStepRequest(command);
+        ApplyTargetRefOverrides(request);
+        var stepState = State.GenerationStep;
+        if (stepState is null)
+            return;
+
+        if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
+            stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
+
+        await DispatchLlmStepExecutorAsync(request, stepState);
+    }
+
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
+    private static AgentRunReplyStepState ApplyLlmStepResult(
+        AgentRunReplyStepState current,
+        AgentRunLlmStepResult result,
+        int completedStepIndex)
+    {
+        var next = current.Clone();
+        next.NextStepIndex = completedStepIndex;
+        next.AccumulatedText = result.AccumulatedText ?? string.Empty;
+        AddUsage(next, result.Usage);
+        if (result.OutboundIntent is not null)
+            next.OutboundIntent = result.OutboundIntent.Clone();
+        if (!string.IsNullOrEmpty(result.FinishReason))
+            next.LastFinishReason = result.FinishReason;
+        if (result.HasStreamedTextContent)
+            next.HasStreamedTextContent = true;
+
+        next.PendingToolCalls.Clear();
+        if (result.ToolCalls.Count > 0)
+            next.PendingToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
+
+        if (!string.IsNullOrEmpty(result.Content) ||
+            !string.IsNullOrEmpty(result.ReasoningContent) ||
+            result.ToolCalls.Count > 0)
+        {
+            var message = new AgentRunChatMessage
+            {
+                Role = "assistant",
+                Content = result.Content ?? string.Empty,
+                ReasoningContent = result.ReasoningContent ?? string.Empty,
+            };
+            message.ToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
+            next.Messages.Add(message);
+        }
+
+        return next;
+    }
+
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
+    private static AgentRunReplyStepState ApplyToolStepResult(
+        AgentRunReplyStepState current,
+        AgentRunToolStepResult result,
+        int completedStepIndex)
+    {
+        var next = current.Clone();
+        next.NextStepIndex = completedStepIndex;
+        next.PendingToolCalls.Clear();
+        next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
+        if (result.AdvanceRound)
+            next.Round++;
+        return next;
+    }
+
+    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
+    //   Old pattern: AgentRunReplyGenerationExecutor cloned/mutated AgentRunReplyStepState and the actor persisted that full state.
+    //   New principle: Executor returns typed IO facts; actor applies deterministic step-state transition inside event handling.
+    private static void AddUsage(AgentRunReplyStepState state, AgentRunReplyTokenUsage? usage)
+    {
+        if (usage is null)
+            return;
+
+        state.AggregatedUsage ??= new AgentRunReplyTokenUsage();
+        state.AggregatedUsage.PromptTokens += usage.PromptTokens;
+        state.AggregatedUsage.CompletionTokens += usage.CompletionTokens;
+        state.AggregatedUsage.TotalTokens += usage.TotalTokens;
     }
 
     /// <summary>
@@ -463,7 +775,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             errorCode,
             errorSummary);
 
-        await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        await DispatchReadyEventAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
 
         // Past the point of user-visible delivery. State persistence failures and cleanup
         // scheduling failures MUST NOT propagate out — otherwise HandleStartAsync's outer
@@ -486,6 +798,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var outbound = State.ProducedOutbound;
         await DispatchReadyEventAsync(
             request,
+            runId,
             State.ProducedReplyText ?? string.Empty,
             outbound,
             State.ProducedTerminalState,
@@ -539,17 +852,31 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task DropAsync(NeedsLlmReplyEvent request, string runId, string reason)
     {
-        if (CanNotifyDrop(request))
-            await DispatchDropNotificationAsync(request, reason);
-
-        await PersistDomainEventAsync(new AgentRunDroppedEvent
+        // Refactor (iter99/cluster-605-drop-outbox):
+        //   Old pattern: notify DeferredLlmReplyDroppedEvent before persisting AgentRunDroppedEvent; notification failure left no actor-owned retry fact.
+        //   New principle: persist the drop outbox fact first, then notify; retry callbacks replay the notification from AgentRunGAgentState.
+        var dropped = new AgentRunDroppedEvent
         {
             RunId = runId,
             CorrelationId = request.CorrelationId,
             TargetActorId = request.TargetActorId,
             Reason = reason,
             DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        });
+        };
+        await PersistDomainEventAsync(dropped);
+
+        if (CanNotifyDrop(request))
+        {
+            try
+            {
+                await DispatchPendingDropNotificationAsync();
+                await TryPersistDropNotificationDispatchedAsync();
+            }
+            catch (AgentRunOutputDispatchException ex)
+            {
+                await TryScheduleDropNotificationRetryAsync(1, ex);
+            }
+        }
 
         await ScheduleTerminalCleanupAsync(runId);
     }
@@ -588,6 +915,29 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             TargetActorId = request.TargetActorId,
             DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
+    }
+
+    private async Task TryPersistDropNotificationDispatchedAsync()
+    {
+        try
+        {
+            await PersistDomainEventAsync(new AgentRunDropNotificationDispatchedEvent
+            {
+                RunId = State.PendingDropNotificationRunId,
+                CorrelationId = State.PendingDropNotificationCorrelationId,
+                TargetActorId = State.PendingDropNotificationTargetActorId,
+                DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to persist AgentRunDropNotificationDispatchedEvent after successful drop notification; " +
+                "drop outbox may retry until the dispatched marker is committed. runId={RunId} correlation={CorrelationId}",
+                State.PendingDropNotificationRunId,
+                State.PendingDropNotificationCorrelationId);
+        }
     }
 
     private async Task PersistFailedAsync(
@@ -655,6 +1005,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task DispatchReadyEventAsync(
         NeedsLlmReplyEvent request,
+        string runId,
         string replyText,
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
@@ -680,246 +1031,17 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             // entry. The actor consumes these fields and never persists them.
             ReplyToken = request.ReplyToken ?? string.Empty,
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
+            RunId = runId,
         };
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(request.TargetActorId, ready, outputCts.Token);
+            await SendToAsync(request.TargetActorId, ready, CancellationToken.None);
         }
         catch (Exception ex)
         {
             throw new AgentRunOutputDispatchException(
                 $"Failed to send LLM reply ready event to conversation actor '{request.TargetActorId}'.",
                 ex);
-        }
-    }
-
-    private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, string targetActorId)
-    {
-        if (_relayOptions is not { StreamingRepliesEnabled: true })
-            return null;
-        if (request.Activity?.OutboundDelivery is not
-            {
-                ReplyMessageId.Length: > 0,
-                CorrelationId.Length: > 0,
-            })
-        {
-            return null;
-        }
-        if (string.IsNullOrWhiteSpace(request.CorrelationId))
-            return null;
-
-        var cardMode = _relayOptions.StreamingCardKitEnabled;
-        return new TurnStreamingReplySink(
-            _actorDispatchPort,
-            targetActorId,
-            request.CorrelationId,
-            request.RegistrationId,
-            request.Activity.Clone(),
-            request.ReplyToken,
-            request.ReplyTokenExpiresAtUnixMs,
-            _timeProvider,
-            _logger,
-            cardMode);
-    }
-
-    private StreamingReplyRunState? TryBuildStreamingReplyState(TurnStreamingReplySink? sink, NeedsLlmReplyEvent request)
-    {
-        if (sink is null || _relayOptions is null)
-            return null;
-
-        var cardMode = _relayOptions.StreamingCardKitEnabled;
-        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, cardMode
-            ? _relayOptions.StreamingCardKitFlushIntervalMs
-            : _relayOptions.StreamingFlushIntervalMs));
-        var maxInterimChunks = cardMode
-            ? int.MaxValue
-            : Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
-
-        return new StreamingReplyRunState(sink, throttle, maxInterimChunks, _timeProvider);
-    }
-
-    /// <summary>
-    /// Actor-owned coalescing state for one generated reply stream.
-    /// </summary>
-    /// <remarks>
-    /// Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
-    ///   Old pattern: timer callback directly inspects/mutates pending business output and dispatches actor command from callback thread
-    ///   New principle: this run flow owns throttling, duplicate suppression, interim caps, and final flush ordering before dispatch; throttled deltas never block the actor turn.
-    /// </remarks>
-    private sealed class StreamingReplyRunState : IStreamingReplySink
-    {
-        private readonly TurnStreamingReplySink _sink;
-        private readonly TimeSpan _throttle;
-        private readonly int _maxInterimChunks;
-        private readonly TimeProvider _timeProvider;
-        private string _lastEmittedText = string.Empty;
-        private DateTimeOffset _lastEmitAt = DateTimeOffset.MinValue;
-        private int _chunksEmitted;
-        private string _pendingText = string.Empty;
-
-        public StreamingReplyRunState(
-            TurnStreamingReplySink sink,
-            TimeSpan throttle,
-            int maxInterimChunks,
-            TimeProvider timeProvider)
-        {
-            _sink = sink;
-            _throttle = throttle < TimeSpan.Zero ? TimeSpan.Zero : throttle;
-            _maxInterimChunks = maxInterimChunks < 0 ? 0 : maxInterimChunks;
-            _timeProvider = timeProvider;
-        }
-
-        public Task OnDeltaAsync(string accumulatedText, CancellationToken ct) =>
-            TryDispatchAsync(accumulatedText, isFinal: false, ct);
-
-        public Task FinalizeAsync(string finalText, CancellationToken ct) =>
-            TryDispatchAsync(finalText, isFinal: true, ct);
-
-        private async Task TryDispatchAsync(string text, bool isFinal, CancellationToken ct)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-                return;
-
-            if (string.Equals(text, _lastEmittedText, StringComparison.Ordinal))
-            {
-                if (isFinal || string.Equals(text, _pendingText, StringComparison.Ordinal))
-                    ClearPending();
-                return;
-            }
-
-            if (!isFinal && _chunksEmitted >= _maxInterimChunks)
-            {
-                StashPending(text);
-                return;
-            }
-
-            if (!isFinal)
-            {
-                var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
-                if (elapsed < _throttle)
-                {
-                    StashPending(text);
-                    return;
-                }
-            }
-
-            await _sink.DispatchAsync(text, ct).ConfigureAwait(false);
-            if (_sink.ChunksEmitted > _chunksEmitted)
-            {
-                _lastEmittedText = text;
-                _lastEmitAt = _timeProvider.GetUtcNow();
-                _chunksEmitted = _sink.ChunksEmitted;
-                if (isFinal || string.Equals(_pendingText, text, StringComparison.Ordinal))
-                    ClearPending();
-            }
-        }
-
-        private void StashPending(string text)
-        {
-            _pendingText = text;
-        }
-
-        private void ClearPending()
-        {
-            _pendingText = string.Empty;
-        }
-    }
-
-    private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(
-        NeedsLlmReplyEvent request,
-        CancellationToken ct)
-    {
-        var routedModel = NormalizeOptional(request.TargetRef?.ForwardToModel?.ModelName);
-        var metadata = new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
-
-        await ApplyBotOwnerLlmConfigAsync(request, metadata, ct);
-        if (routedModel is not null)
-            metadata[LLMRequestMetadataKeys.ModelOverride] = routedModel;
-
-        var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
-        if (!string.IsNullOrWhiteSpace(userAccessToken))
-        {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken;
-            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken;
-        }
-
-        return metadata;
-    }
-
-    private async Task ApplyBotOwnerLlmConfigAsync(
-        NeedsLlmReplyEvent request,
-        IDictionary<string, string> metadata,
-        CancellationToken ct)
-    {
-        if (_scopeResolver is null || _userConfigQueryPort is null)
-            return;
-
-        var apiKeyId = request.Activity?.Bot?.Value?.Trim();
-        if (string.IsNullOrWhiteSpace(apiKeyId))
-            return;
-
-        string? scopeId;
-        try
-        {
-            scopeId = await _scopeResolver.ResolveScopeIdByApiKeyAsync(apiKeyId, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to resolve bot owner scope id for LLM config: runId={RunId} correlation={CorrelationId} apiKeyId={ApiKeyId}",
-                Id,
-                request.CorrelationId,
-                apiKeyId);
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(scopeId))
-        {
-            _logger.LogDebug(
-                "No bot owner scope id resolved for LLM config: runId={RunId} correlation={CorrelationId} apiKeyId={ApiKeyId}",
-                Id,
-                request.CorrelationId,
-                apiKeyId);
-            return;
-        }
-
-        try
-        {
-            var config = await _userConfigQueryPort.GetAsync(scopeId, ct);
-            if (!string.IsNullOrWhiteSpace(config.DefaultModel))
-                metadata[LLMRequestMetadataKeys.ModelOverride] = config.DefaultModel.Trim();
-            if (!string.IsNullOrWhiteSpace(config.PreferredLlmRoute))
-                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = config.PreferredLlmRoute.Trim();
-            if (config.MaxToolRounds > 0)
-                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] =
-                    config.MaxToolRounds.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-            _logger.LogInformation(
-                "Applied bot owner LLM config: runId={RunId} correlation={CorrelationId} scopeId={ScopeId} model={Model} route={Route}",
-                Id,
-                request.CorrelationId,
-                scopeId,
-                string.IsNullOrWhiteSpace(config.DefaultModel) ? "<server-default>" : config.DefaultModel,
-                string.IsNullOrWhiteSpace(config.PreferredLlmRoute) ? "<server-default>" : config.PreferredLlmRoute);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to load bot owner LLM config: runId={RunId} correlation={CorrelationId} scopeId={ScopeId}",
-                Id,
-                request.CorrelationId,
-                scopeId);
         }
     }
 
@@ -944,24 +1066,59 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         !string.IsNullOrWhiteSpace(request.TargetActorId) &&
         !string.IsNullOrWhiteSpace(request.CorrelationId);
 
-    private async Task DispatchDropNotificationAsync(NeedsLlmReplyEvent request, string reason)
+    private async Task DispatchPendingDropNotificationAsync()
     {
+        var targetActorId = NormalizeOptional(State.PendingDropNotificationTargetActorId);
+        var correlationId = NormalizeOptional(State.PendingDropNotificationCorrelationId);
+        if (targetActorId is null || correlationId is null)
+            return;
+
         var dropped = new DeferredLlmReplyDroppedEvent
         {
-            CorrelationId = request.CorrelationId,
-            Reason = reason,
-            DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            CorrelationId = correlationId,
+            Reason = State.PendingDropNotificationReason ?? string.Empty,
+            DroppedAtUnixMs = State.PendingDropNotificationDroppedAtUnixMs > 0
+                ? State.PendingDropNotificationDroppedAtUnixMs
+                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         };
 
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(request.TargetActorId, dropped, outputCts.Token);
+            await SendToAsync(targetActorId, dropped, CancellationToken.None);
         }
         catch (Exception ex)
         {
             throw new AgentRunOutputDispatchException(
-                $"Failed to send deferred LLM reply drop event to conversation actor '{request.TargetActorId}' (reason '{reason}').",
+                $"Failed to send deferred LLM reply drop event to conversation actor '{targetActorId}' (reason '{dropped.Reason}').",
+                ex);
+        }
+    }
+
+    private async Task DispatchGenerationTimeoutDropNotificationAsync(AgentRunReplyGenerationTimedOut command)
+    {
+        if (string.IsNullOrWhiteSpace(command.TargetActorId) ||
+            string.IsNullOrWhiteSpace(command.CorrelationId))
+        {
+            return;
+        }
+
+        var dropped = new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = command.CorrelationId,
+            Reason = "llm_reply_timeout",
+            DroppedAtUnixMs = command.TimedOutAtUnixMs > 0
+                ? command.TimedOutAtUnixMs
+                : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        };
+
+        try
+        {
+            await SendToAsync(command.TargetActorId, dropped, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            throw new AgentRunOutputDispatchException(
+                $"Failed to send agent run generation timeout drop event to conversation actor '{command.TargetActorId}'.",
                 ex);
         }
     }
@@ -999,9 +1156,15 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 BuildTimeoutRequest(
                     BuildOutputDispatchRetryCallbackId(runId),
                     OutputDispatchRetryDelay,
-                    new AgentRunStartRequested
+                    new AgentRunOutputDispatchRetryRequested
                     {
-                        Request = request.Clone(),
+                        RunId = runId,
+                        CorrelationId = request.CorrelationId,
+                        TargetActorId = request.TargetActorId,
+                        Attempt = State.GenerationAttempt,
+                        Generation = Math.Max(1, State.GenerationAttempt),
+                        RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                        RequiresRuntimeReplyToken = IsRelayRequest(request),
                     }),
                 ct: CancellationToken.None);
             return true;
@@ -1012,6 +1175,47 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 ex,
                 "Failed to schedule agent run output retry: runId={RunId} actorId={ActorId}",
                 runId,
+                Id);
+            return false;
+        }
+    }
+
+    private async Task<bool> TryScheduleDropNotificationRetryAsync(
+        int attempt,
+        AgentRunOutputDispatchException dispatchException)
+    {
+        _logger.LogWarning(
+            dispatchException,
+            "Agent run drop notification was not accepted; run remains retryable from drop outbox state: runId={RunId} correlation={CorrelationId}",
+            State.PendingDropNotificationRunId,
+            State.PendingDropNotificationCorrelationId);
+
+        if (_callbackScheduler is null)
+            return false;
+
+        try
+        {
+            await _callbackScheduler.ScheduleTimeoutAsync(
+                BuildTimeoutRequest(
+                    BuildDropNotificationRetryCallbackId(State.PendingDropNotificationRunId, attempt),
+                    DropNotificationRetryDelay,
+                    new AgentRunDropNotificationRetryRequested
+                    {
+                        RunId = State.PendingDropNotificationRunId,
+                        CorrelationId = State.PendingDropNotificationCorrelationId,
+                        TargetActorId = State.PendingDropNotificationTargetActorId,
+                        Attempt = Math.Max(1, attempt),
+                        RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    }),
+                ct: CancellationToken.None);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to schedule agent run drop notification retry: runId={RunId} actorId={ActorId}",
+                State.PendingDropNotificationRunId,
                 Id);
             return false;
         }
@@ -1043,6 +1247,136 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 runId,
                 Id);
         }
+    }
+
+    private async Task ScheduleGenerationTimeoutAsync(NeedsLlmReplyEvent request, string runId, int attempt)
+    {
+        if (_callbackScheduler is null)
+            return;
+
+        var fallbackTimeout = ResolveFallbackTimeout();
+        if (fallbackTimeout <= TimeSpan.Zero)
+            return;
+
+        try
+        {
+            await _callbackScheduler.ScheduleTimeoutAsync(
+                BuildTimeoutRequest(
+                    BuildGenerationTimeoutCallbackId(runId, attempt),
+                    fallbackTimeout,
+                    new AgentRunReplyGenerationTimedOut
+                    {
+                        RunId = runId,
+                        CorrelationId = request.CorrelationId,
+                        TargetActorId = request.TargetActorId,
+                        TimedOutAtUnixMs = _timeProvider.GetUtcNow().Add(fallbackTimeout).ToUnixTimeMilliseconds(),
+                        Attempt = attempt,
+                    }),
+                ct: CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to schedule agent run generation timeout: runId={RunId} actorId={ActorId}",
+                runId,
+                Id);
+        }
+    }
+
+    private bool IsCurrentOutputDispatchRetry(AgentRunOutputDispatchRetryRequested command)
+    {
+        if (IsTerminal())
+            return false;
+
+        if (State.Status is not AgentRunStatus.ReplyProduced)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(State.RunId) &&
+            !string.Equals(State.RunId, command.RunId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.CorrelationId) &&
+            !string.Equals(State.CorrelationId, command.CorrelationId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.TargetActorId) &&
+            !string.Equals(State.TargetActorId, command.TargetActorId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (command.Generation > 0 && State.GenerationAttempt != command.Generation)
+            return false;
+
+        return command.Attempt <= 0 || State.GenerationAttempt == command.Attempt;
+    }
+
+    private bool IsCurrentDropNotificationRetry(AgentRunDropNotificationRetryRequested command)
+    {
+        if (State.Status is not AgentRunStatus.Dropped)
+            return false;
+
+        if (State.DropNotificationDispatchedAtUnixMs != 0)
+            return false;
+
+        if (string.IsNullOrWhiteSpace(State.PendingDropNotificationCorrelationId) ||
+            string.IsNullOrWhiteSpace(State.PendingDropNotificationTargetActorId))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationRunId) &&
+            !string.Equals(State.PendingDropNotificationRunId, command.RunId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationCorrelationId) &&
+            !string.Equals(State.PendingDropNotificationCorrelationId, command.CorrelationId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.PendingDropNotificationTargetActorId) &&
+            !string.Equals(State.PendingDropNotificationTargetActorId, command.TargetActorId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private NeedsLlmReplyEvent BuildOutputDispatchRetryRequest(AgentRunOutputDispatchRetryRequested command) =>
+        new()
+        {
+            RunId = command.RunId ?? string.Empty,
+            CorrelationId = NormalizeOptional(command.CorrelationId) ?? State.CorrelationId ?? string.Empty,
+            TargetActorId = NormalizeOptional(command.TargetActorId) ?? State.TargetActorId ?? string.Empty,
+            Activity = BuildOutputDispatchRetryActivity(command),
+        };
+
+    private ChatActivity? BuildOutputDispatchRetryActivity(AgentRunOutputDispatchRetryRequested command)
+    {
+        var correlationId = NormalizeOptional(command.CorrelationId) ?? NormalizeOptional(State.CorrelationId);
+        if (correlationId is null)
+            return null;
+
+        return new ChatActivity
+        {
+            Id = correlationId,
+            OutboundDelivery = command.RequiresRuntimeReplyToken
+                ? new OutboundDeliveryContext
+                {
+                    CorrelationId = correlationId,
+                    ReplyMessageId = correlationId,
+                }
+                : null,
+        };
     }
 
     private RuntimeCallbackTimeoutRequest BuildTimeoutRequest(
@@ -1085,6 +1419,26 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         return $"{OutputDispatchRetryCallbackPrefix}:{new string(chars)}";
     }
 
+    private static string BuildDropNotificationRetryCallbackId(string runId, int attempt)
+    {
+        var normalized = NormalizeOptional(runId) ?? "unknown";
+        var chars = normalized
+            .Select(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+            .Take(96)
+            .ToArray();
+        return $"{DropNotificationRetryCallbackPrefix}:{new string(chars)}:{Math.Max(1, attempt)}";
+    }
+
+    private static string BuildGenerationTimeoutCallbackId(string runId, int attempt)
+    {
+        var normalized = NormalizeOptional(runId) ?? "unknown";
+        var chars = normalized
+            .Select(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+            .Take(96)
+            .ToArray();
+        return $"{GenerationTimeoutCallbackPrefix}:{new string(chars)}:{attempt}";
+    }
+
     private async Task EnsureTargetActorAsync(string targetActorId)
     {
         if (string.IsNullOrWhiteSpace(targetActorId))
@@ -1093,6 +1447,29 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var actor = await _actorRuntime.GetAsync(targetActorId);
         if (actor is null)
             await _actorRuntime.CreateAsync<ConversationGAgent>(targetActorId, CancellationToken.None);
+    }
+
+    private bool IsCurrentGenerationContinuation(string runId, string correlationId, int attempt)
+    {
+        if (IsTerminal())
+            return false;
+
+        if (State.Status is not AgentRunStatus.ReplyGenerationRequested)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(State.RunId) &&
+            !string.Equals(State.RunId, runId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.CorrelationId) &&
+            !string.Equals(State.CorrelationId, correlationId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return attempt <= 0 || State.GenerationAttempt == attempt;
     }
 
     /// <summary>
@@ -1105,18 +1482,14 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     ///
     /// Action semantics on the relay run-actor path:
     /// <list type="bullet">
-    ///   <item><c>ForwardToGAgent.actor_id</c> → overrides
-    ///     <see cref="NeedsLlmReplyEvent.TargetActorId"/>. The reply is
-    ///     dispatched to the forwarded actor; <c>EnsureTargetActorAsync</c>
-    ///     creates it as a <c>ConversationGAgent</c> if missing.</item>
-    ///   <item><c>ForwardToModel.model_name</c> → sets
-    ///     <c>metadata[LLMRequestMetadataKeys.ModelOverride]</c>. The chat
-    ///     route policy is more specific than the bot owner's default model,
-    ///     so it intentionally overwrites a bot-owner-config-supplied model
-    ///     when both are present.</item>
-    ///   <item><c>Reject</c> → resolver-side already failed the turn before
+    ///   <item><c>ForwardToModel.tool_choice_hint</c> is preserved as tool
+    ///     prefill only; it never overrides <see cref="NeedsLlmReplyEvent.TargetActorId"/>.</item>
+    ///   <item><c>ForwardToModel.model_name</c> is mapped by the generation executor
+    ///     this typed route decision into LLM metadata before invoking the
+    ///     provider.</item>
+    ///   <item><c>Reject</c> means resolver-side already failed the turn before
     ///     the run was dispatched; this method shouldn't see it.</item>
-    ///   <item>Anything else / no TargetRef → no-op (resolver returned
+    ///   <item>Anything else / no TargetRef is a no-op (resolver returned
     ///     fallback / no policy / unsupported v2 action).</item>
     /// </list>
     /// </summary>
@@ -1128,20 +1501,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         switch (targetRef.ActionCase)
         {
-            case ChatRouteAction.ActionOneofCase.ForwardToGagent:
-                var forwardedActorId = NormalizeOptional(targetRef.ForwardToGagent?.ActorId);
-                if (forwardedActorId is not null &&
-                    !string.Equals(forwardedActorId, request.TargetActorId, StringComparison.Ordinal))
-                {
-                    _logger.LogInformation(
-                        "Chat-route override: redirecting run target actor {Original} → {Override} (correlation={CorrelationId})",
-                        NormalizeOptional(request.TargetActorId) ?? "<empty>",
-                        forwardedActorId,
-                        request.CorrelationId);
-                    request.TargetActorId = forwardedActorId;
-                }
-                break;
             case ChatRouteAction.ActionOneofCase.ForwardToModel:
+                // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill,
+                // not actor addressing. The run target stays owned by the dispatch command.
                 var routedModel = NormalizeOptional(targetRef.ForwardToModel?.ModelName);
                 if (routedModel is not null)
                 {
@@ -1149,7 +1511,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                         "Chat-route override: pinning LLM model to {Model} (correlation={CorrelationId})",
                         routedModel,
                         request.CorrelationId);
-                    request.Metadata[LLMRequestMetadataKeys.ModelOverride] = routedModel;
                 }
                 break;
             default:
@@ -1160,21 +1521,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
     }
 
-    private bool ShouldCaptureInteractiveReply(ChatActivity? activity)
-    {
-        if (_interactiveReplyCollector is null)
-            return false;
-
-        if (_relayOptions is { InteractiveRepliesEnabled: false })
-            return false;
-
-        return activity?.OutboundDelivery is
-        {
-            ReplyMessageId.Length: > 0,
-            CorrelationId.Length: > 0,
-        };
-    }
-
     private static AgentRunGAgentState ApplyStarted(AgentRunGAgentState current, AgentRunStartedEvent evt)
     {
         var next = current.Clone();
@@ -1183,6 +1529,34 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.TargetActorId = evt.TargetActorId;
         next.Status = AgentRunStatus.Started;
         next.StartedAtUnixMs = evt.StartedAtUnixMs;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyReplyGenerationRequested(
+        AgentRunGAgentState current,
+        AgentRunReplyGenerationRequestedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        next.Status = AgentRunStatus.ReplyGenerationRequested;
+        next.GenerationRequestedAtUnixMs = evt.RequestedAtUnixMs;
+        next.GenerationAttempt = evt.Attempt;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyReplyStepStateUpdated(
+        AgentRunGAgentState current,
+        AgentRunReplyStepStateUpdatedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        if (evt.Attempt > 0)
+            next.GenerationAttempt = evt.Attempt;
+        next.GenerationStep = evt.StepState?.Clone();
         return next;
     }
 
@@ -1247,6 +1621,24 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.CompletedAtUnixMs = evt.DroppedAtUnixMs;
         next.ErrorCode = evt.Reason;
         next.ErrorSummary = string.Empty;
+        next.PendingDropNotificationRunId = evt.RunId;
+        next.PendingDropNotificationCorrelationId = evt.CorrelationId;
+        next.PendingDropNotificationTargetActorId = evt.TargetActorId;
+        next.PendingDropNotificationReason = evt.Reason;
+        next.PendingDropNotificationDroppedAtUnixMs = evt.DroppedAtUnixMs;
+        next.DropNotificationDispatchedAtUnixMs = 0;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyDropNotificationDispatched(
+        AgentRunGAgentState current,
+        AgentRunDropNotificationDispatchedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        next.DropNotificationDispatchedAtUnixMs = evt.DispatchedAtUnixMs;
         return next;
     }
 
@@ -1282,6 +1674,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var trimmed = value?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
+
+    private static string ResolveRunId(NeedsLlmReplyEvent request) =>
+        AgentRunId.Parse(request.RunId).Value;
 
     private sealed class AgentRunOutputDispatchException(string message, Exception innerException)
         : Exception(message, innerException);

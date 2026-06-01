@@ -5,7 +5,7 @@ package aevatar.gagents.scheduled;
 option csharp_namespace = "Aevatar.GAgents.Scheduled";
 
 import "google/protobuf/timestamp.proto";
-import "user_agent_catalog.proto";
+import "agent_messages.proto";
 
 // ─── Skill Runner (persistent scheduled agent) ───
 
@@ -32,7 +32,7 @@ message SkillRunnerOutboundConfig {
   string lark_receive_id_type_fallback = 10;
   // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
   // for new agents; the deprecated scattered fields remain for legacy state.
-  OwnerScope owner_scope = 11;
+  aevatar.OwnerScope owner_scope = 11;
   // NyxID outbound proxy slug to use when delivering a failure-notification
   // message after a primary outbound delivery has been rejected. Captured at
   // agent-create time from the inbound channel-bot's slug — by definition
@@ -74,6 +74,24 @@ message SkillRunnerState {
   // by the original safety net, which only fired when ≥1 nyxid_proxy call had
   // failed. Skills that don't fan out to nyxid_proxy at all leave this false.
   bool requires_nyxid_proxy_success = 21;
+}
+
+message SkillRunnerExecutionDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  google.protobuf.Timestamp created_at_utc = 6;
+  string template_name = 7;
+  string scope_id = 8;
+  string schedule_cron = 9;
+  string schedule_timezone = 10;
+  string status = 11;
+  google.protobuf.Timestamp last_run_at_utc = 12;
+  google.protobuf.Timestamp next_run_at_utc = 13;
+  int32 error_count = 14;
+  string last_error = 15;
 }
 
 message InitializeSkillRunnerCommand {
@@ -136,6 +154,11 @@ message SkillRunnerExecutionCompletedEvent {
 message SkillRunnerExecutionFailedEvent {
   google.protobuf.Timestamp failed_at = 1;
   string error = 2;
+}
+
+message SkillRunnerExecutionRejectedEvent {
+  google.protobuf.Timestamp rejected_at = 1;
+  string reason = 2;
 }
 
 message DisableSkillRunnerCommand {

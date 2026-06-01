@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
@@ -28,6 +29,9 @@ using Aevatar.Scripting.Projection.DependencyInjection;
 
 namespace Aevatar.Scripting.Hosting.DependencyInjection;
 
+// Refactor (iter27/cluster-029-scripting-runtime-raw-actor-lifecycle):
+//   Old pattern: Scripting behavior runtime exposes raw IActorRuntime lifecycle/topology by assembly-qualified type name and caller-supplied actor ids
+//   New principle: Delete raw script-facing actor lifecycle/topology API; keep existing typed scripting ports (provisioning/command/definition/catalog/evolution)
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddScriptCapability(

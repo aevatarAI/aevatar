@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -25,7 +26,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
     private readonly IScopeScriptQueryPort _scopeScriptQueryPort;
     private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
-    private readonly IWorkflowRunActorPort _workflowRunActorPort;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeBindingCommandApplicationService(
@@ -35,8 +37,9 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         IServiceGovernanceQueryPort serviceGovernanceQueryPort,
         IScopeScriptQueryPort scopeScriptQueryPort,
         IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
-        IWorkflowRunActorPort workflowRunActorPort,
-        IOptions<ScopeWorkflowCapabilityOptions> options)
+        IWorkflowDefinitionParser workflowDefinitionParser,
+        IOptions<ScopeWorkflowCapabilityOptions> options,
+        IAgentKindRegistry? agentKindRegistry = null)
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
@@ -44,7 +47,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
         _scopeScriptQueryPort = scopeScriptQueryPort ?? throw new ArgumentNullException(nameof(scopeScriptQueryPort));
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
-        _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
+        _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _agentKindRegistry = agentKindRegistry;
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
     }
@@ -287,6 +291,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 StaticPlan = new StaticServiceDeploymentPlan
                 {
                     ActorTypeName = staticSpec.ActorTypeName,
+                    AgentKind = staticSpec.AgentKind,
                     PreferredActorId = staticSpec.PreferredActorId ?? string.Empty,
                 },
             },
@@ -448,7 +453,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     {
         var gagent = request.GAgent
             ?? throw new InvalidOperationException("gagent is required for implementationKind 'gagent'.");
-        var actorTypeName = ScopeWorkflowCapabilityOptions.NormalizeRequired(gagent.ActorTypeName, nameof(gagent.ActorTypeName));
+        var agentKind = NormalizeGAgentKind(gagent);
+        var actorTypeName = NormalizeLegacyActorTypeName(gagent.ActorTypeName, agentKind);
 
         // Start with caller-supplied endpoints, then ensure a chat endpoint always exists.
         var endpointSpecs = (gagent.Endpoints ?? [])
@@ -478,6 +484,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     StaticSpec = new StaticServiceRevisionSpec
                     {
                         ActorTypeName = actorTypeName,
+                        AgentKind = agentKind,
                     },
                 };
                 revisionSpec.StaticSpec.Endpoints.Add(endpointSpecs.Select(ToEndpointDescriptor));
@@ -494,6 +501,38 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     GAgent: new ScopeBindingGAgentResult(
                         actorTypeName),
                     ExpectedDeploymentId: expectedDeploymentId));
+    }
+
+    private string NormalizeGAgentKind(ScopeBindingGAgentSpec gagent)
+    {
+        var agentKind = ScopeWorkflowCapabilityConventions.NormalizeOptional(gagent.AgentKind);
+        if (!string.IsNullOrWhiteSpace(agentKind))
+            return agentKind;
+
+        var actorTypeName = ScopeWorkflowCapabilityConventions.NormalizeOptional(gagent.ActorTypeName);
+        if (string.IsNullOrWhiteSpace(actorTypeName))
+            ScopeWorkflowCapabilityOptions.NormalizeRequired(string.Empty, nameof(gagent.AgentKind));
+
+        if (_agentKindRegistry != null &&
+            _agentKindRegistry.TryResolveKindByClrTypeName(actorTypeName!, out var resolvedKind))
+            return resolvedKind;
+
+        return string.Empty;
+    }
+
+    private string NormalizeLegacyActorTypeName(string? actorTypeName, string agentKind)
+    {
+        var normalizedActorTypeName = ScopeWorkflowCapabilityConventions.NormalizeOptional(actorTypeName);
+        if (!string.IsNullOrWhiteSpace(normalizedActorTypeName))
+            return normalizedActorTypeName;
+
+        if (_agentKindRegistry != null)
+        {
+            var implementation = _agentKindRegistry.Resolve(agentKind);
+            return implementation.Metadata.ImplementationClrTypeName;
+        }
+
+        return string.Empty;
     }
 
     private async Task<WorkflowYamlBundle> ParseWorkflowBundleAsync(
@@ -515,7 +554,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             if (string.IsNullOrWhiteSpace(workflowYaml))
                 throw new InvalidOperationException("workflowYamls must not contain empty YAML entries.");
 
-            var parse = await _workflowRunActorPort.ParseWorkflowYamlAsync(workflowYaml, ct);
+            var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
             if (!parse.Succeeded)
                 throw new InvalidOperationException(parse.Error);
 

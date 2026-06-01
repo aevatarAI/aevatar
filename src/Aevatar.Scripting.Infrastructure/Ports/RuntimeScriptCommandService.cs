@@ -1,20 +1,19 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
+// Refactor (iter149/issue1132): Old pattern: runtime script commands had an optional handled-dispatch bypass around the typed command service.  New principle: runtime script commands always use the typed accepted-only dispatch service.
 public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
 {
     private readonly ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
-    private readonly IScriptExecutionReadModelActivationPort _readModelActivationPort;
 
     public RuntimeScriptCommandService(
-        ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
-        IScriptExecutionReadModelActivationPort readModelActivationPort)
+        ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
-        _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
     }
 
     public async Task RunRuntimeAsync(
@@ -71,20 +70,17 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
         string? scopeId,
         CancellationToken ct)
     {
-        _ = await _readModelActivationPort.ActivateAsync(runtimeActorId, ct);
-
-        var result = await _dispatchService.DispatchAsync(
-            new RunScriptRuntimeCommand(
-                runtimeActorId,
-                runId,
-                inputPayload?.Clone(),
-                scriptRevision ?? string.Empty,
-                definitionActorId ?? string.Empty,
-                requestedEventType ?? string.Empty,
-                scopeId,
-                string.IsNullOrWhiteSpace(commandId) ? null : commandId.Trim(),
-                string.IsNullOrWhiteSpace(correlationId) ? null : correlationId.Trim()),
-            ct);
+        var command = new RunScriptRuntimeCommand(
+            runtimeActorId,
+            runId,
+            inputPayload?.Clone(),
+            scriptRevision ?? string.Empty,
+            definitionActorId ?? string.Empty,
+            requestedEventType ?? string.Empty,
+            scopeId,
+            string.IsNullOrWhiteSpace(commandId) ? null : commandId.Trim(),
+            string.IsNullOrWhiteSpace(correlationId) ? null : correlationId.Trim());
+        var result = await _dispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime dispatch failed.");
     }

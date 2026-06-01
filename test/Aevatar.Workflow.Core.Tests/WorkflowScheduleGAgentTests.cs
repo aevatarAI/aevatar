@@ -96,6 +96,77 @@ public sealed class WorkflowScheduleGAgentTests
     }
 
     [Fact]
+    public async Task HandleDisableAsync_ShouldCancelExistingLeaseBeforeDisabledStateClearsIt()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingWorkflowRunDispatchService();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
+        {
+            ScheduleId = "schedule-1",
+            WorkflowName = "direct",
+            Prompt = "hello",
+            CronExpression = "* * * * *",
+            Timezone = "UTC",
+            Enabled = true,
+        });
+
+        await agent.HandleDisableAsync(new WorkflowScheduleDisableCommand
+        {
+            Reason = "pause",
+        });
+
+        scheduler.Canceled.Should().ContainSingle();
+        scheduler.Canceled[0].ActorId.Should().Be(ScheduleActorId);
+        scheduler.Canceled[0].CallbackId.Should().Be(NextFireCallbackId);
+        scheduler.Canceled[0].Generation.Should().Be(1);
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WhenUpdatingToDisabled_ShouldCancelExistingLeaseBeforeConfiguredStateClearsIt()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingWorkflowRunDispatchService();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
+        {
+            ScheduleId = "schedule-1",
+            WorkflowName = "direct",
+            Prompt = "hello",
+            CronExpression = "* * * * *",
+            Timezone = "UTC",
+            Enabled = true,
+        });
+
+        await agent.HandleConfigureAsync(new WorkflowScheduleConfigureCommand
+        {
+            ScheduleId = "schedule-1",
+            WorkflowName = "direct",
+            Prompt = "updated",
+            CronExpression = "*/5 * * * *",
+            Timezone = "UTC",
+            Enabled = false,
+        });
+
+        scheduler.Canceled.Should().ContainSingle();
+        scheduler.Canceled[0].ActorId.Should().Be(ScheduleActorId);
+        scheduler.Canceled[0].CallbackId.Should().Be(NextFireCallbackId);
+        scheduler.Canceled[0].Generation.Should().Be(1);
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.Prompt.Should().Be("updated");
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleEventAsync_WhenDueCallbackArrives_ShouldDispatchNonManualFireAndScheduleNext()
     {
         var eventStore = new TestEventStore();

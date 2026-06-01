@@ -116,11 +116,15 @@ public sealed record StudioMemberBindingFailureResponse(
     string Message,
     DateTimeOffset FailedAt);
 
+// Refactor (iter159/cluster-594-first):
+//   Old pattern: Studio member binding-run status response 未暴露 StateVersion
+//   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
 public sealed record StudioMemberBindingRunStatusResponse(
     string BindingRunId,
     string ScopeId,
     string MemberId,
     string Status,
+    long StateVersion,
     StudioMemberBindingFailureResponse? Failure = null,
     DateTimeOffset? UpdatedAt = null)
 {
@@ -132,9 +136,13 @@ public sealed record StudioMemberRosterResponse(
     IReadOnlyList<StudioMemberSummaryResponse> Members,
     string? NextPageToken = null);
 
+// Refactor (iter74/cluster-074-studio-team-members-query-fanout):
+//   Old pattern: Host loops scope roster pages + Host-side TeamId filter
+//   New principle: ReadModel query port owns scope_id+team_id filter before pagination
 public sealed record StudioMemberRosterPageRequest(
     int? PageSize = null,
-    string? PageToken = null);
+    string? PageToken = null,
+    string? TeamId = null);
 
 public sealed record CreateStudioMemberRequest(
     string DisplayName,

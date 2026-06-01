@@ -130,6 +130,68 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task RemoteSkillFetcher_LiftsWorkflowYamlFilesIntoTypedDescriptorWithFrontmatterEntryOverride()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Workflow Skill",
+                "description": "Runs a workflow",
+                "files": {
+                  "SKILL.md": "---\nname: wf-skill\ndescription: Use workflow skill\nworkflow: custom-entry\n---\nRun it.",
+                  "workflows/z-child.yml": " name: z-child\nsteps: []\n ",
+                  "workflows/a-main.yaml": "name: a-main\nsteps: []\n",
+                  "workflows/empty.yaml": "   ",
+                  "docs/workflows/ignored.yaml": "name: ignored\nsteps: []\n",
+                  "assets/readme.md": "reference"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Workflow Skill");
+
+        skill.Should().NotBeNull();
+        skill!.Workflows.Should().ContainSingle();
+        var workflow = skill.Workflows.Single();
+        workflow.WorkflowId.Should().Be("custom-entry");
+        workflow.WorkflowYamls.Should().Equal(
+            "name: a-main\nsteps: []",
+            "name: z-child\nsteps: []");
+        skill.AssociatedFiles.Should().NotBeNull();
+        skill.AssociatedFiles!.Keys.Should().Contain("workflows/a-main.yaml");
+    }
+
+    [Fact]
+    public async Task RemoteSkillFetcher_DefaultsWorkflowIdToFirstSortedWorkflowFileNameWithoutFrontmatterEntry()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Workflow Skill",
+                "description": "Runs a workflow",
+                "files": {
+                  "SKILL.md": "---\nname: wf-skill\ndescription: Use workflow skill\n---\nRun it.",
+                  "workflows/z-child.yml": "name: z-child\nsteps: []\n",
+                  "workflows/a-main.yaml": "name: a-main\nsteps: []\n"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Workflow Skill");
+
+        skill.Should().NotBeNull();
+        var workflow = skill!.Workflows.Should().ContainSingle().Subject;
+        workflow.WorkflowId.Should().Be("a-main");
+        workflow.WorkflowYamls.Should().Equal(
+            "name: a-main\nsteps: []",
+            "name: z-child\nsteps: []");
+    }
+
+    [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenNyxIdProxyReportsError()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson(
@@ -146,10 +208,9 @@ public sealed class OrnnSkillClientTests
     public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
     {
         // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
-        // `/api/v1/skills/chrono-ai-daily/json` hung for 113 s, holding the Orleans grain turn
-        // captive until the outer 120 s LLM reply budget tripped. Once OrnnSkillClient enforces
-        // its own per-call timeout, the call must surface a fast null instead of letting the
-        // upstream slowness propagate to the caller.
+        // `/api/v1/skills/chrono-ai-daily/json` hung for 113 s, holding the Orleans grain turn.
+        // OrnnSkillClient must surface a fast null instead of letting one upstream request
+        // stall the whole skill workflow.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
         var client = CreateClient(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
 
@@ -185,10 +246,9 @@ public sealed class OrnnSkillClientTests
     [Fact]
     public async Task GetSkillJsonAsync_DoesNotMaskCallerCancellationAsTimeoutError()
     {
-        // If the caller cancels (e.g. the outer LLM reply budget tripped), we must NOT log the
-        // failure as "exceeded per-call budget" — that misroutes the diagnosis. Letting the
-        // OperationCanceledException propagate keeps caller cancellation semantically distinct
-        // from our own per-call timeout fallback.
+        // If the caller cancels, we must NOT log the failure as "exceeded per-call budget" —
+        // that misroutes the diagnosis. Letting the OperationCanceledException propagate keeps
+        // caller cancellation semantically distinct from our own per-call timeout fallback.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
         var client = CreateClient(handler, perCallTimeout: TimeSpan.FromSeconds(10));
 

@@ -1,8 +1,8 @@
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
-using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.Hosting.Tests;
 
@@ -21,7 +21,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: "user-1"));
 
-        var act = () => resolver.ResolveAsync(nyxIdAccessToken: "", new DefaultHttpContext());
+        var act = () => resolver.ResolveAsync(CreateContext(""));
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>()
             .WithMessage("*access token is required*");
@@ -32,7 +32,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: "user-1"));
 
-        var act = () => resolver.ResolveAsync(nyxIdAccessToken: "   ", new DefaultHttpContext());
+        var act = () => resolver.ResolveAsync(CreateContext("   "));
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
     }
@@ -42,7 +42,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: null));
 
-        var act = () => resolver.ResolveAsync("some-token", new DefaultHttpContext());
+        var act = () => resolver.ResolveAsync(CreateContext("some-token"));
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>()
             .WithMessage("*Could not resolve current NyxID user id*");
@@ -53,7 +53,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: "   "));
 
-        var act = () => resolver.ResolveAsync("some-token", new DefaultHttpContext());
+        var act = () => resolver.ResolveAsync(CreateContext("some-token"));
 
         await act.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
     }
@@ -63,7 +63,7 @@ public sealed class ResponsesCallerScopeResolverTests
     {
         var resolver = new NyxIdResponsesCallerScopeResolver(new StubUserResolver(returnUserId: "  alice-1  "));
 
-        var scope = await resolver.ResolveAsync("token", new DefaultHttpContext());
+        var scope = await resolver.ResolveAsync(CreateContext("token"));
 
         scope.ScopeId.Should().Be("alice-1");
         scope.OwnerSubject.Should().Be("alice-1");
@@ -77,11 +77,31 @@ public sealed class ResponsesCallerScopeResolverTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        var act = () => resolver.ResolveAsync("token", new DefaultHttpContext(), cts.Token);
+        var act = () => resolver.ResolveAsync(CreateContext("token"), cts.Token);
 
         // Stub honors cancellation token; ensures the resolver passes ct through.
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldContinueUsingInboundBearerForMeFallback()
+    {
+        var currentUserResolver = new StubUserResolver(returnUserId: "alice");
+        var resolver = new NyxIdResponsesCallerScopeResolver(currentUserResolver);
+
+        _ = await resolver.ResolveAsync(CreateContext(
+            "bearer-token",
+            identityToken: "identity-token",
+            delegationToken: "delegation-token"));
+
+        currentUserResolver.LastAccessToken.Should().Be("bearer-token");
+    }
+
+    private static ResponsesCallerScopeResolutionContext CreateContext(
+        string bearerToken,
+        string? identityToken = null,
+        string? delegationToken = null) =>
+        new(bearerToken, identityToken, delegationToken);
 
     private sealed class StubUserResolver : INyxIdCurrentUserResolver
     {
@@ -89,9 +109,12 @@ public sealed class ResponsesCallerScopeResolverTests
 
         public StubUserResolver(string? returnUserId) => _returnUserId = returnUserId;
 
+        public string? LastAccessToken { get; private set; }
+
         public Task<string?> ResolveCurrentUserIdAsync(string nyxIdAccessToken, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            LastAccessToken = nyxIdAccessToken;
             return Task.FromResult(_returnUserId);
         }
     }

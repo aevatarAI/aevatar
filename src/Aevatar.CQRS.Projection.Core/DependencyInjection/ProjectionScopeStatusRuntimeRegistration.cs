@@ -30,6 +30,16 @@ public static class ProjectionScopeStatusRuntimeRegistration
             });
         services.TryAddSingleton<Func<ProjectionScopeStatusMaterializationContext, ProjectionScopeStatusRuntimeLease>>(
             static _ => static context => new ProjectionScopeStatusRuntimeLease(context));
+        services.TryAddSingleton<IProjectionScopeAttachExistingLeaseLookup<ProjectionScopeStatusRuntimeLease>>(sp =>
+            new ProjectionScopeAttachExistingLeaseLookup<
+                ProjectionScopeStatusRuntimeLease,
+                ProjectionScopeStatusMaterializationContext>(
+                sp.GetRequiredService<IActorRuntime>(),
+                request => new ProjectionScopeStatusMaterializationContext
+                {
+                    RootActorId = request.RootActorId,
+                },
+                (_, context) => new ProjectionScopeStatusRuntimeLease(context)));
         services.TryAddSingleton<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>(sp =>
             new ProjectionScopeActivationService<
                 ProjectionScopeStatusRuntimeLease,
@@ -44,7 +54,8 @@ public static class ProjectionScopeStatusRuntimeRegistration
                 (_, context) => new ProjectionScopeStatusRuntimeLease(context),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
-                sp.GetService<ILoggerFactory>()));
+                sp.GetService<ILoggerFactory>(),
+                streams: sp.GetService<IStreamProvider>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<ProjectionScopeStatusRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 ProjectionScopeStatusRuntimeLease,

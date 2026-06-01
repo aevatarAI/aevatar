@@ -26,7 +26,10 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
+    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
+    private readonly IClock _clock;
+    private readonly ITimeZoneResolver _timeZoneResolver;
     // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
     // NyxIdProxyToolFailureCountingMiddleware appended to the tool-call middleware chain.
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
@@ -44,7 +47,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IToolApprovalHandler? approvalHandler = null,
+        IClock? clock = null,
+        ITimeZoneResolver? timeZoneResolver = null,
+        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -54,7 +60,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             toolSources,
             nyxIdApiClient,
             ownerLlmConfigSource,
-            approvalHandler)
+            approvalHandler,
+            clock,
+            timeZoneResolver,
+            larkOutboundDispatcher)
     {
     }
 
@@ -67,7 +76,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentToolSource>? toolSources,
         NyxIdApiClient? nyxIdApiClient,
         IOwnerLlmConfigSource? ownerLlmConfigSource,
-        IToolApprovalHandler? approvalHandler)
+        IToolApprovalHandler? approvalHandler,
+        IClock? clock,
+        ITimeZoneResolver? timeZoneResolver,
+        ILarkOutboundDispatcher? larkOutboundDispatcher)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -78,7 +90,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             approvalHandler)
     {
         _nyxIdApiClient = nyxIdApiClient;
+        _larkOutboundDispatcher = larkOutboundDispatcher;
         _ownerLlmConfigSource = ownerLlmConfigSource;
+        _clock = clock ?? new SystemClock();
+        _timeZoneResolver = timeZoneResolver ?? new TimeZoneResolver();
         _toolFailureCounter = toolMiddlewareChain.Counter;
     }
 
@@ -108,6 +123,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }),
         scheduleTimeoutAsync: (id, dueTime, evt, ct) => ScheduleSelfDurableTimeoutAsync(id, dueTime, evt, ct: ct),
         cancelCallbackAsync: (lease, ct) => CancelDurableCallbackAsync(lease, ct),
+        clock: _clock,
+        timeZoneResolver: _timeZoneResolver,
         logger: Logger,
         ownerDescription: $"Skill runner {Id}");
 
@@ -145,6 +162,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerNextRunScheduledEvent>(ApplyNextRunScheduled)
             .On<SkillRunnerExecutionCompletedEvent>(ApplyCompleted)
             .On<SkillRunnerExecutionFailedEvent>(ApplyFailed)
+            .On<SkillRunnerExecutionRejectedEvent>(ApplyRejected)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
             .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
@@ -185,7 +203,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         await PersistDomainEventAsync(initialized);
 
-        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        // Refactor (iter89/cluster-089-scheduled-runner-wall-clock):
+        //   Old: SkillRunnerGAgent sampled DateTimeOffset.UtcNow and cron helper resolved timezone inline.
+        //   New: ChannelScheduleRunner owns injected clock/timezone dependencies and samples once for this turn.
+        await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
         await UpsertRegistryAsync(CancellationToken.None);
     }
 
@@ -195,10 +216,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         if (!State.Enabled)
         {
             Logger.LogInformation("Skill runner {ActorId} ignored trigger because it is disabled", Id);
+            await PersistDomainEventAsync(new SkillRunnerExecutionRejectedEvent
+            {
+                RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
+                Reason = SkillRunnerDefaults.RejectionReasonRunnerDisabled,
+            });
             return;
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.UtcNow;
         try
         {
             var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
@@ -286,7 +312,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             });
         }
 
-        await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
     }
 
     private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
@@ -298,6 +324,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = await BuildExecutionMetadataAsync(ct);
+        var llmControl = await BuildExecutionLlmControlAsync(ct);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromMetadata(metadata));
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
@@ -307,7 +335,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             : new SkillRunnerStreamingRunState(sink, SkillRunnerDefaults.StreamingEditThrottle, TimeProvider.System);
         try
         {
-            await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
+            await foreach (var chunk in ChatStreamAsync(
+                               [ContentPart.TextPart(prompt)],
+                               requestId,
+                               llmControl,
+                               toolContext,
+                               metadata,
+                               ct))
             {
                 if (string.IsNullOrEmpty(chunk.DeltaContent))
                     continue;
@@ -451,20 +485,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             State.OutboundConfig.LarkReceiveIdType,
             State.OutboundConfig.ConversationId);
 
-        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
-        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
-        LarkReceiveTarget? fallback = null;
-        if (!string.IsNullOrEmpty(fallbackId) && !string.IsNullOrEmpty(fallbackType))
-            fallback = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-
         return new SkillRunnerStreamingReplySink(
-            client,
-            State.OutboundConfig.NyxApiKey,
-            State.OutboundConfig.NyxProviderSlug,
-            primary,
-            fallback,
+            ResolveLarkOutboundDispatcher(client),
+            new LarkSendNewMessageRequest(
+                State.OutboundConfig.NyxApiKey,
+                State.OutboundConfig.NyxProviderSlug,
+                MessageType: "text",
+                ContentJson: string.Empty,
+                PrimaryTarget: primary,
+                FallbackTarget: ResolveFallbackTarget()),
             BuildLarkRejectionMessage,
-            Logger);
+            Logger,
+            client);
     }
 
     /// <summary>
@@ -641,7 +673,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 deliveryTarget.ReceiveIdType);
         }
 
-        var outcome = await TrySendWithFallbackAsync(client, output, slug, deliveryTarget, ct);
+        var outcome = await ResolveLarkOutboundDispatcher(client).SendNewMessageAsync(
+            new LarkSendNewMessageRequest(
+                State.OutboundConfig.NyxApiKey,
+                slug,
+                MessageType: "text",
+                ContentJson: JsonSerializer.Serialize(new { text = output }),
+                PrimaryTarget: deliveryTarget,
+                FallbackTarget: ResolveFallbackTarget()),
+            ct);
 
         if (!outcome.Succeeded)
         {
@@ -656,76 +696,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
-    private readonly record struct SendOutcome(bool Succeeded, int? LarkCode, string Detail)
+    private LarkReceiveTarget? ResolveFallbackTarget()
     {
-        public static SendOutcome Success() => new(true, null, string.Empty);
-        public static SendOutcome Failed(int? larkCode, string detail) => new(false, larkCode, detail);
-    }
-
-    /// <summary>
-    /// Sends the outbound text via the typed primary delivery target, then on a Lark
-    /// <c>230002 bot not in chat</c> rejection retries once with the fallback target if one
-    /// was captured at agent-create time. The fallback covers cross-app same-tenant
-    /// deployments where the outbound app is not a member of the inbound DM chat — without
-    /// it, the chat_id-first priority would regress those deployments. Returns success vs.
-    /// failure (with Lark code+detail) so the caller can throw cleanly without re-parsing
-    /// the response.
-    /// </summary>
-    private async Task<SendOutcome> TrySendWithFallbackAsync(
-        NyxIdApiClient client,
-        string output,
-        string slug,
-        LarkReceiveTarget primary,
-        CancellationToken ct)
-    {
-        var primaryResponse = await SendOutboundAsync(client, output, slug, primary, ct);
-        if (!LarkProxyResponse.TryGetError(primaryResponse, out var larkCode, out var detail))
-            return SendOutcome.Success();
-
-        // Only Lark `bot not in chat` triggers the fallback. Nyx envelope errors (no Lark
-        // code) and other Lark business errors propagate directly so the user sees actionable
-        // recovery guidance for the actual failure mode.
-        if (larkCode != LarkBotErrorCodes.BotNotInChat)
-            return SendOutcome.Failed(larkCode, detail);
-
         var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
         var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
-        if (string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType))
-            return SendOutcome.Failed(larkCode, detail);
-
-        Logger.LogInformation(
-            "Skill runner {ActorId} primary delivery target rejected as `bot not in chat` (code 230002); retrying with fallback typed pair (receive_id_type={FallbackType})",
-            Id,
-            fallbackType);
-
-        var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-        var fallbackResponse = await SendOutboundAsync(client, output, slug, fallbackTarget, ct);
-        if (!LarkProxyResponse.TryGetError(fallbackResponse, out var fallbackCode, out var fallbackDetail))
-            return SendOutcome.Success();
-
-        return SendOutcome.Failed(fallbackCode, fallbackDetail);
+        return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
+            ? null
+            : new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
     }
 
-    private async Task<string> SendOutboundAsync(
-        NyxIdApiClient client,
-        string output,
-        string slug,
-        LarkReceiveTarget target,
-        CancellationToken ct)
-    {
-        var body = JsonSerializer.Serialize(new
-        {
-            receive_id = target.ReceiveId,
-            msg_type = "text",
-            content = JsonSerializer.Serialize(new { text = output }),
-        });
-
-        return await client.ProxyRequestAsync(
-            State.OutboundConfig.NyxApiKey,
-            slug,
-            $"open-apis/im/v1/messages?receive_id_type={target.ReceiveIdType}",
-            "POST", body, null, ct);
-    }
+    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher(NyxIdApiClient client) =>
+        _larkOutboundDispatcher ?? Services.GetService<ILarkOutboundDispatcher>() ?? new LarkOutboundDispatcher(client, Logger);
 
     private static string BuildLarkRejectionMessage(int? larkCode, string detail)
     {
@@ -818,14 +799,27 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = State.OutboundConfig?.NyxApiKey ?? string.Empty,
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
         if (!string.IsNullOrWhiteSpace(State.ScopeId))
             metadata["scope_id"] = State.ScopeId;
 
+        return metadata;
+    }
+
+    private async Task<LLMControlContext> BuildExecutionLlmControlAsync(CancellationToken ct)
+    {
+        var control = new LLMControlContext(
+            NyxIdAccessToken: State.OutboundConfig?.NyxApiKey,
+            NyxIdOrgToken: State.OutboundConfig?.NyxApiKey,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null);
+
         // Pin the bot owner's pre-configured model + NyxID route + tool-round cap onto the
-        // outbound LLM metadata, the same pattern AgentRunGAgent applies for
+        // outbound typed LLM control, the same pattern AgentRunGAgent applies for
         // nyxid-chat. Without this, scheduled runs fall through to NyxIdLLMProvider's
         // compile-time defaults (`gpt-5.4` against `/api/v1/llm/gateway/v1/`), which the
         // gateway routes to the OpenAI provider — failing for bot owners who pre-configured
@@ -834,15 +828,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // through ActivatorUtilities so DI fills the optional ctor param at activation
         // time); a per-execution `Services.GetService<>` lookup would be redundant and was
         // dropped per codex's PR #509 partial dissent on r3159047120.
-        await OwnerLlmConfigApplier.ApplyAsync(
-            metadata,
+        return await OwnerLlmConfigApplier.ApplyAsync(
+            control,
             State.ScopeId,
             _ownerLlmConfigSource,
             Logger,
             actorLabel: "Skill runner",
             actorId: Id,
             ct);
-        return metadata;
     }
 
     private string BuildExecutionPrompt(DateTimeOffset now, string? reason)
@@ -855,20 +848,14 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private async Task UpsertRegistryAsync(CancellationToken ct)
     {
-#pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration
-        var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
-        var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
-        var ownerScope = State.OutboundConfig?.OwnerScope
-                         ?? OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+        var ownerScope = State.OutboundConfig?.OwnerScope;
 
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = legacyPlatform,
             ConversationId = State.OutboundConfig?.ConversationId ?? string.Empty,
             NyxProviderSlug = State.OutboundConfig?.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.OutboundConfig?.NyxApiKey ?? string.Empty,
-            OwnerNyxUserId = legacyOwnerNyxUserId,
             AgentType = SkillRunnerDefaults.AgentType,
             TemplateName = State.TemplateName ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
@@ -880,10 +867,27 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
         };
-#pragma warning restore CS0612
 
+        // Refactor (iter92/cluster-092):
+        //   Old: write path simultaneously emitted deprecated `Platform`/`OwnerNyxUserId`.
+        //   New: write path emits only `OwnerScope`; legacy fields are retained only in
+        //   the no-`OwnerScope` fallback branch for backwards compatibility.
         if (ownerScope is not null)
-            command.OwnerScope = ownerScope;
+        {
+            command.OwnerScope = ownerScope.Clone();
+        }
+        else
+        {
+#pragma warning disable CS0612 // legacy field write only for pre-owner_scope state
+            var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
+            var legacyPlatform = ResolvePlatform(State.OutboundConfig?.Platform);
+            command.Platform = legacyPlatform;
+            command.OwnerNyxUserId = legacyOwnerNyxUserId;
+            var legacyScope = OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+#pragma warning restore CS0612
+            if (legacyScope is not null)
+                command.OwnerScope = legacyScope;
+        }
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
     }
@@ -950,6 +954,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var next = current.Clone();
         next.LastRunAt = evt.FailedAt;
         next.LastError = evt.Error ?? string.Empty;
+        next.ErrorCount += 1;
+        return next;
+    }
+
+    private static SkillRunnerState ApplyRejected(SkillRunnerState current, SkillRunnerExecutionRejectedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastRunAt = evt.RejectedAt;
+        next.LastError = evt.Reason ?? string.Empty;
         next.ErrorCount += 1;
         return next;
     }

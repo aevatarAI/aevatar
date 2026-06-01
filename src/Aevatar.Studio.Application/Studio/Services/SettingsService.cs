@@ -3,11 +3,14 @@ using Aevatar.Studio.Application.Studio.Contracts;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
-// Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: runtime and appearance settings were read from and written to the local workspace store.
-//   New principle: workspace settings flow through workspace query/command ports while provider secrets remain in the settings store boundary.
+// Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
+//   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.
+//   New principle: Studio executions are a bounded ServiceRunGAgent readmodel facade; UI/layout/draft index are deleted/downgraded to client cache or derived from existing actor-backed sources. No new history/draft index actor.
 public sealed class SettingsService
 {
+    private const string ClientOwnedAppearanceTheme = "blue";
+    private const string ClientOwnedColorMode = "light";
+
     private static readonly HttpClient RuntimeProbeClient = new()
     {
         Timeout = TimeSpan.FromSeconds(8),
@@ -31,7 +34,7 @@ public sealed class SettingsService
     {
         var workspace = (await _workspaceQueryPort.GetAsync(cancellationToken)).Settings;
         var aevatar = await _aevatarSettingsStore.GetAsync(cancellationToken);
-        return ToResponse(workspace.RuntimeBaseUrl, workspace.AppearanceTheme, workspace.ColorMode, aevatar);
+        return ToResponse(workspace.RuntimeBaseUrl, aevatar);
     }
 
     public async Task<StudioSettingsResponse> SaveAsync(
@@ -43,22 +46,12 @@ public sealed class SettingsService
         var runtimeBaseUrl = string.IsNullOrWhiteSpace(request.RuntimeBaseUrl)
             ? settings.RuntimeBaseUrl
             : NormalizeRuntimeBaseUrl(request.RuntimeBaseUrl);
-        var appearanceTheme = string.IsNullOrWhiteSpace(request.AppearanceTheme)
-            ? settings.AppearanceTheme
-            : NormalizeAppearanceTheme(request.AppearanceTheme);
-        var colorMode = string.IsNullOrWhiteSpace(request.ColorMode)
-            ? settings.ColorMode
-            : NormalizeColorMode(request.ColorMode);
 
-        if (!string.Equals(runtimeBaseUrl, settings.RuntimeBaseUrl, StringComparison.Ordinal) ||
-            !string.Equals(appearanceTheme, settings.AppearanceTheme, StringComparison.Ordinal) ||
-            !string.Equals(colorMode, settings.ColorMode, StringComparison.Ordinal))
+        if (!string.Equals(runtimeBaseUrl, settings.RuntimeBaseUrl, StringComparison.Ordinal))
         {
             await _workspaceCommandPort.UpdateSettingsAsync(settings with
             {
                 RuntimeBaseUrl = runtimeBaseUrl,
-                AppearanceTheme = appearanceTheme,
-                ColorMode = colorMode,
             }, workspace.StateVersion, cancellationToken);
         }
 
@@ -82,7 +75,7 @@ public sealed class SettingsService
                         ApiKeyConfigured: !string.IsNullOrWhiteSpace(provider.ApiKey)))
                     .ToList()), cancellationToken);
 
-        return ToResponse(runtimeBaseUrl, appearanceTheme, colorMode, saved);
+        return ToResponse(runtimeBaseUrl, saved);
     }
 
     public async Task<RuntimeConnectionTestResponse> TestRuntimeAsync(
@@ -139,11 +132,11 @@ public sealed class SettingsService
             Message: lastError?.Message ?? "Failed to reach the runtime.");
     }
 
-    private static StudioSettingsResponse ToResponse(string runtimeBaseUrl, string appearanceTheme, string colorMode, StoredAevatarSettings aevatar) =>
+    private static StudioSettingsResponse ToResponse(string runtimeBaseUrl, StoredAevatarSettings aevatar) =>
         new(
             runtimeBaseUrl,
-            appearanceTheme,
-            colorMode,
+            ClientOwnedAppearanceTheme,
+            ClientOwnedColorMode,
             aevatar.SecretsFilePath,
             aevatar.DefaultProviderName,
             aevatar.ProviderTypes
@@ -178,24 +171,4 @@ public sealed class SettingsService
         return normalized.TrimEnd('/');
     }
 
-    private static string NormalizeAppearanceTheme(string? value)
-    {
-        var normalized = value?.Trim().ToLowerInvariant() ?? string.Empty;
-        return normalized switch
-        {
-            "coral" => "coral",
-            "forest" => "forest",
-            _ => "blue",
-        };
-    }
-
-    private static string NormalizeColorMode(string? value)
-    {
-        var normalized = value?.Trim().ToLowerInvariant() ?? string.Empty;
-        return normalized switch
-        {
-            "dark" => "dark",
-            _ => "light",
-        };
-    }
 }

@@ -3,6 +3,7 @@ using FluentAssertions;
 
 namespace Aevatar.Integration.Tests;
 
+[Collection(ProcessEnvSerialCollection.Name)]
 public class ConnectorConfigTests
 {
     [Fact]
@@ -249,7 +250,7 @@ public class ConnectorConfigTests
             telegramUser.TelegramUser.ApiHash.Should().Be("hash-abc");
             telegramUser.TelegramUser.PhoneNumber.Should().Be("+8613800000000");
             telegramUser.TelegramUser.SessionPath.Should().Be("telegram-user/main.session");
-            telegramUser.TelegramUser.AllowedOperations.Should().Equal("/sendMessage", "/getUpdates");
+            telegramUser.TelegramUser.AllowedOperations.Should().Equal("/sendMessage");
         }
         finally
         {

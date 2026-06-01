@@ -3,6 +3,8 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.CQRS.Core.DependencyInjection;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
 using Aevatar.Studio.Projection.Metadata;
@@ -10,6 +12,7 @@ using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Studio.Projection.Repair;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Workspace;
 using Microsoft.Extensions.Configuration;
@@ -37,6 +40,10 @@ public static class ServiceCollectionExtensions
         if (configuration != null)
             optionsBuilder.Bind(configuration.GetSection(StudioMemberPlatformBindingOptions.SectionName));
 
+        services.AddCqrsCore();
+        services.AddStudioProjectionActorCommandDispatch();
+        services.TryAddSingleton<StudioWorkflowDraftMemberEnsureCommandFactory>();
+
         // Projection read-model runtime (write dispatcher + sink bindings)
         services.AddProjectionReadModelRuntime();
 
@@ -54,7 +61,6 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             context => new StudioMaterializationRuntimeLease(context));
-        services.TryAddSingleton<StudioCurrentStateProjectionPort>();
 
         // ── Projectors ──
 
@@ -80,10 +86,6 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
-            StreamingProxyParticipantCurrentStateProjector>();
-
-        services.AddCurrentStateProjectionMaterializer<
-            StudioMaterializationContext,
             ChatHistoryIndexCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<
@@ -100,7 +102,15 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
+            StudioTeamRosterFanoutMaterializer>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
             StudioTeamCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            StudioWorkflowDraftMemberEnsureMaterializer>();
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
@@ -129,10 +139,6 @@ public static class ServiceCollectionExtensions
             UserMemoryCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
-            IProjectionDocumentMetadataProvider<StreamingProxyParticipantCurrentStateDocument>,
-            StreamingProxyParticipantCurrentStateDocumentMetadataProvider>();
-
-        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<ChatHistoryIndexCurrentStateDocument>,
             ChatHistoryIndexCurrentStateDocumentMetadataProvider>();
 
@@ -156,14 +162,16 @@ public static class ServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<StudioWorkspaceCurrentStateDocument>,
             StudioWorkspaceCurrentStateDocumentMetadataProvider>();
 
-        // Projection scope activation port — required so Studio projectors
-        // actually subscribe to their actor streams and materialize events.
-        services.TryAddSingleton<StudioProjectionPort>();
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            StudioCommittedStateProjectionActivationPlanProvider>());
 
-        // Compile-time-safe bootstrap used by every Studio actor-backed
-        // store: "ensure actor + activate its projection scope" in one call,
-        // keyed off IProjectedActor.ProjectionKind so kind cannot drift from
-        // the agent type.
+        // Compile-time-safe actor provisioning used by every Studio actor-backed
+        // store. Projection activation is driven by committed-state plans.
         services.TryAddSingleton<IStudioActorBootstrap, StudioActorBootstrap>();
 
         // Query ports (read side)
@@ -178,6 +186,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<IStudioMemberPlatformBindingCommandPort, ScopeBindingStudioMemberPlatformBindingCommandService>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
+        services.TryAddSingleton(sp => new StudioWorkflowDraftMemberRepairService(
+            sp.GetRequiredService<IStudioWorkspaceQueryPort>(),
+            sp.GetRequiredService<IStudioActorBootstrap>(),
+            sp.GetRequiredService<StudioProjectionActorCommandDispatch>(),
+            sp.GetRequiredService<StudioWorkflowDraftMemberEnsureCommandFactory>()));
 
         return services;
     }

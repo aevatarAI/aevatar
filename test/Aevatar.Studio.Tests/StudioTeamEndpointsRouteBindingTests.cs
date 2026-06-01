@@ -56,13 +56,13 @@ public sealed class StudioTeamEndpointsRouteBindingTests
             string scopeId, string teamId, CancellationToken ct = default) =>
             Task.FromException<StudioTeamSummaryResponse>(new NotImplementedException());
 
-        public Task<StudioTeamSummaryResponse> UpdateAsync(
+        public Task<StudioTeamCommandResponse> UpdateAsync(
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default) =>
-            Task.FromException<StudioTeamSummaryResponse>(new NotImplementedException());
+            Task.FromException<StudioTeamCommandResponse>(new NotImplementedException());
 
-        public Task<StudioTeamSummaryResponse> ArchiveAsync(
+        public Task<StudioTeamCommandResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) =>
-            Task.FromException<StudioTeamSummaryResponse>(new NotImplementedException());
+            Task.FromException<StudioTeamCommandResponse>(new NotImplementedException());
 
         public Task SetEntryMemberAsync(
             string scopeId,

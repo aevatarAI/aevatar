@@ -1,16 +1,23 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
+using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Ornn;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.Telegram;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;
@@ -30,6 +37,7 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
@@ -44,6 +52,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
+// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
+//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
+//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public static class MainnetHostBuilderExtensions
 {
     public static WebApplicationBuilder AddAevatarMainnetHost(
@@ -101,11 +112,17 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStatusDashboard(builder.Configuration);
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHealthProbeExecutor, AevatarCoreLoopStatusProbeExecutor>());
         // Ingress layer v1: registers the ChatRoutePolicy current-state readmodel
         // document store (Elasticsearch in prod, InMemory otherwise — same
         // selection pattern as AddScheduledAgents / AddDeviceRegistration).
         builder.Services.AddChatRoutingAgents(builder.Configuration);
         builder.Services.AddChatRoutingCore();
+        builder.Services.Configure<ChatRoutingOptions>(options =>
+        {
+            options.Defaults.DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault;
+        });
         // Implement (issue #695):
         //   Behavior: gate explicit /ws/voice/{actorId} bypass behind voice:bypass or admin.
         //   Why this shape: policy-aware /ws/voice owns normal routing; actor-id bypass stays dev/admin only.
@@ -119,6 +136,14 @@ public static class MainnetHostBuilderExtensions
             });
         });
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
+        builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
+        builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
+        builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
+        builder.Services.TryAddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
+        builder.Services.TryAddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
+        builder.Services.TryAddSingleton<ResponsesWebSubstituteToolExecutionService>();
+        builder.Services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        builder.Services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
         //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
@@ -155,6 +180,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelInteractiveReplyTools();
         builder.Services.AddChannelAdminTools();
         builder.Services.AddAgentCatalogTools();
+        builder.Services.AddAevatarInvocationTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
         builder.Services.AddNyxIdTools(o =>
@@ -172,7 +198,13 @@ public static class MainnetHostBuilderExtensions
                 o.EnableSshExecTool = enableSsh;
             else
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
+            o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
         });
+        // Keep the canonical yielding local handler for approval-required tools.
+        // mainnet bypasses ssh_exec locally above, but other tools can still yield to
+        // actor-owned remote continuation (NyxIdRemoteToolApprovalPort submit/status
+        // -> RoleGAgent.HandleRemoteApprovalStatusCheck). See iter23/cluster-001.
+        builder.Services.TryAddSingleton<IToolApprovalHandler, YieldApprovalHandler>();
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
@@ -196,9 +228,42 @@ public static class MainnetHostBuilderExtensions
                                 ?? builder.Configuration["Aevatar:Web:SearchSlug"];
             o.SearchApiBaseUrl = builder.Configuration["Aevatar:Web:SearchApiBaseUrl"];
         });
+        builder.Services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                [
+                    CreateToolSource<InvokeGAgentToolSource>,
+                    CreateToolSource<InvokeTeamToolSource>,
+                    CreateToolSource<StartWorkflowToolSource>,
+                    CreateToolSource<ObserveRunToolSource>,
+                    CreateToolSource<QueryReadModelToolSource>,
+                    CreateToolSource<ResponsesAevatarToolProvider>,
+                    CreateToolSource<ChannelInteractiveReplyToolSource>,
+                    CreateToolSource<ChannelRegistrationToolSource>,
+                    CreateToolSource<AgentDeliveryTargetToolSource>,
+                    CreateToolSource<NyxIdAgentToolSource>,
+                    CreateToolSource<LarkAgentToolSource>,
+                    CreateToolSource<TelegramAgentToolSource>,
+                    CreateToolSource<ChronoStorageAgentToolSource>,
+                    CreateToolSource<WebAgentToolSource>,
+                    CreateToolSource<SkillsAgentToolSource>,
+                    CreateToolSource<OrnnAgentToolSource>,
+                ],
+                "Default /v1/responses workspace tool composition.");
+            options.AddToolSet(
+                ToolSetNames.LarkSelfNotify,
+                [ToolSetNames.WorkspaceDefault],
+                [],
+                "Lark route tool composition with the default workspace tools.");
+        });
 
         return builder;
     }
+
+    private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
+        where TSource : class, IAgentToolSource
+        => ActivatorUtilities.CreateInstance<TSource>(serviceProvider);
 
     public static WebApplication MapAevatarMainnetHost(this WebApplication app)
     {
@@ -216,6 +281,7 @@ public static class MainnetHostBuilderExtensions
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
+        app.MapChatCompletionsApiEndpoints();
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();

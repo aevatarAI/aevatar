@@ -1,3 +1,5 @@
+using Aevatar.Foundation.Abstractions;
+
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>

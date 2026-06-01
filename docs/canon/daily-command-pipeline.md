@@ -162,24 +162,25 @@ QA 关注点：
    - `TrySendImmediateLarkReactionAsync()`（line 58 附近）→ fire-and-forget 发 ✓ emoji，不等待成功；前置条件不满足时静默跳过
    - 路由到 `TryHandleAgentBuilderAsync()`
 
-2. `NyxRelayAgentBuilderFlow.TryResolve(evt, out decision)`
-   - 文件：`agents/Aevatar.GAgents.Authoring.Lark/NyxRelayAgentBuilderFlow.cs`
+2. `AgentBuilderCardFlow.TryResolveAsync(evt, userConfigQueryPort, ct)`
+   - 文件：`agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderCardFlow.cs`
    - 校验：`evt.Text` 必须以 `/` 开头；`chat_type == "p2p"`（私聊）；命令必须在已知列表里
    - 已知命令：`/agents /agent-status /run-agent /disable-agent /enable-agent /delete-agent`
-   - `/daily` 是 Ornn skill shortcut：本路由显式放行给 LLM reply path，不走 `agent_builder`
-   - 不在白名单 → 直接回 `BuildUnknownCommandReply()` 文案（不走 LLM）
+   - `/daily` 与其他未知 slash（如 `/goal`）是 Ornn skill shortcut：本路由放行给 LLM reply path，不走 `agent_builder`
+   - 不在白名单 → fall through；由 `BuildLlmRequestActivity(...)` 强制走 Ornn skill 搜索/加载，而不是本地 Unknown command 回复
    - 非私聊 → 回 `BuildPrivateChatRestrictionReply()`，不创建 agent、不执行 tool
 
 3. `ChannelConversationTurnRunner.BuildLlmRequestActivity(...)`
    - 文件：`agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs`
-   - `TryBuildDailySkillInvocationPrompt()` 识别 `/daily` 或 `/daily ...`
+   - `TryBuildSkillInvocationPrompt()` 识别 `/daily` 或 `/daily ...`
    - 输出 LLM prompt：要求先调用 `use_skill`，`skill="chrono-ai-daily"`，`args` 为 `/daily` 后面的原始参数文本
+   - 其他非本地 slash（如 `/goal`）输出 LLM prompt：要求先调用 `ornn_search_skills(query="<command>")`，再 `use_skill` 最匹配的 skill，并把 slash 后面的原始参数作为 `args`
    - 原始命令文本保留在 prompt 中，便于 skill 按自己的契约解析参数
 
 4. `NyxIdConversationReplyGenerator.GenerateReplyAsync(...)`
    - 文件：`agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs`
    - 构造 `ChatRuntime.ChatStreamAsync` 主链；`use_skill` 与 `ornn_search_skills` 作为工具注入
-   - `UseSkillTool` 从本地 registry 或远程 `IRemoteSkillFetcher` 加载 skill；远程路径由 `OrnnRemoteSkillFetcher` / `OrnnSkillClient` 通过 NyxID proxy 访问 Ornn
+   - `UseSkillTool` 从本地 `LocalSkillCatalog` 或远程 `IRemoteSkillFetcher` 加载 skill；远程路径由 `OrnnRemoteSkillFetcher` / `OrnnSkillClient` 通过 NyxID proxy 访问 Ornn
    - skill 指令负责 GitHub daily 的后续工具调用、格式与错误文案；aevatar 本地不再复制一套 daily 创建/调度语义
 
 5. `AgentBuilderTool.ExecuteAsync(argumentsJson, ct)` 只管理 catalog 中已有 agents
@@ -194,7 +195,7 @@ QA 关注点：
 | d | `delete_agent` 先要求 `confirm=true`，再 disable runner、撤销 NyxID API key、通过 `IUserAgentCatalogCommandPort.TombstoneAsync` 派发 tombstone | 未确认 / agent 不存在 / command dispatch failure |
 | e | 所有 lifecycle/delete command ACK 都是 accepted-only；状态变化、删除可见性与执行结果通过后续 `/agent-status`、`/agents` 或推送观察 | — |
 
-6. `NyxRelayAgentBuilderFlow.FormatToolResult(...)` / `AgentBuilderCardFlow.FormatToolResult(...)`
+6. `AgentBuilderCardFlow.FormatToolResult(...)`
    - 把 agent management tool JSON 渲染成 Lark 可接受的 `MessageContent`
    - lifecycle 文案明确使用 accepted / propagating 语义，不承诺 readmodel 已刷新
 
@@ -202,9 +203,9 @@ QA 关注点：
 
 **Skill 加载**：
 - `UseSkillTool` 参数：`skill="chrono-ai-daily"`，`args` 为 `/daily` 后面的原始参数文本。
-- 本地 registry 缓存未命中或远程缓存超过 `RemoteSkillCacheTtl=5m` 时，`OrnnRemoteSkillFetcher.FetchSkillAsync()` 调 `OrnnSkillClient.GetSkillJsonAsync(token, "chrono-ai-daily")`。
+- 本地 `LocalSkillCatalog` 未命中时，`UseSkillTool` 每次按当前 NyxID token 调用 `OrnnRemoteSkillFetcher.FetchSkillAsync()`，再由 `OrnnSkillClient.GetSkillJsonAsync(token, "chrono-ai-daily")` 经 NyxID proxy 拉取远程 skill；远程 skill 不写入进程级缓存。
 - `OrnnSkillClient` 使用当前 NyxID access token，经 `NyxIdApiClient.ProxyRequestAsync` 访问 Ornn API；默认 NyxID service slug 来自 Ornn options，可由 `Aevatar:Ornn:NyxIdSlug` 覆盖。
-- 单次 Ornn 拉取有 30s per-call timeout；timeout 或 proxy error 会返回 skill not found / loading failure，让 LLM 走错误说明路径，而不是阻塞 actor turn 到外层超时。
+- 单次 Ornn 拉取有 30s per-call timeout；timeout 或 proxy error 会返回 skill not found / loading failure，让 LLM 走错误说明路径。外层 reply generation 不再用固定 120s 之类的硬超时截断长 skill workflow。
 - `../chrono-ornn` 不在本 worktree 同级目录时，本文只描述 aevatar 可验证的 skill bridge 契约，不复制 Ornn skill 内部实现。
 
 ### 阶段 ⑤ SkillRunner 执行 → NyxID → GitHub
@@ -226,7 +227,7 @@ try {
     PersistDomainEventAsync(SkillRunnerExecutionCompletedEvent { Output = output });
     CancelRetryLeaseAsync();
     Scheduler.ScheduleNextRunAsync(now);
-    // runner committed state is projected into UserAgentCatalogDocument
+    // runner committed state is projected into SkillRunnerExecutionDocument
 }
 catch (Exception ex) {
     if (RetryAttempt < MaxRetryAttempts /*=1*/)
@@ -234,7 +235,7 @@ catch (Exception ex) {
     PersistDomainEventAsync(SkillRunnerExecutionFailedEvent { Error = ex.Message });
     TrySendFailureAsync(ex.Message);
     Scheduler.ScheduleNextRunAsync(now);
-    // failure facts are owned by the runner and projected into the catalog document
+    // failure facts are owned by the runner and projected into the execution document
 }
 ```
 
@@ -281,7 +282,7 @@ catch (Exception ex) {
 文件：`agents/Aevatar.GAgents.Channel.Runtime/protos/channel_bot_registration.proto`、`agents/Aevatar.GAgents.Scheduled/protos/skill_runner.proto`、`agents/Aevatar.GAgents.Scheduled/protos/user_agent_catalog.proto`
 
 ### `ChannelInboundEvent`（入站规范化消息）
-- `text`、`sender_id`、`sender_name`、`conversation_id`、`chat_type`、`platform`、`registration_token`、`nyx_provider_slug`、`registration_scope_id`
+- `text`、`sender_id`、`sender_name`、`conversation_id`、`chat_type`、`platform`、`nyx_provider_slug`、`registration_scope_id`
 - **重点**：`sender_id` 实质是 Lark `open_id`（`ou_*`），**只在单个 Lark App 内唯一**——同一个真人在不同 Lark app 下会有不同 `open_id`，跨 app 不能直接拿来对账（这是 PR #409 引入 `union_id`/`on_*` 入站和 `chat_id`-first delivery fallback 的原因，详见 [LarkConversationTargets.cs](../../agents/platforms/Aevatar.GAgents.Platform.Lark/LarkConversationTargets.cs)）。`registration_scope_id` 是 bot 维度。下面 issue #436/#437 的 cross-user leak bug 就源自只用 `registration_scope_id` 当 user-config key，丢了 `sender_id`。
 
 ### `SkillRunnerOutboundConfig`
@@ -309,7 +310,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 ### `UserAgentCatalogEntry`（well-known 注册表条目）
 - 关键字段：`agent_id`、`agent_type="skill_runner"`、`template_name="daily"`、`platform="lark"`、`conversation_id`、`scope_id`、`lark_receive_id*`
-- 不承载执行事实：`status`、`last_run_at`、`next_run_at`、`error_count`、`last_error` 由 `SkillRunnerState` 拥有，并由 `UserAgentCatalogProjector` 从 runner committed state 合并进 `UserAgentCatalogDocument`。
+- 不承载执行事实：`status`、`last_run_at`、`next_run_at`、`error_count`、`last_error` 由 `SkillRunnerState` 拥有，并由 `SkillRunnerExecutionProjector` 从 runner committed state 物化进 `SkillRunnerExecutionDocument`。
 - `nyx_api_key` / `api_key_id`：actor state 内的 catalog entry 保留这两个字段；公开 `UserAgentCatalogDocument` 不再暴露 `nyx_api_key`，运行时出站读取单独的 `UserAgentCatalogNyxCredentialDocument`。
 
 ### 命令 / 事件
@@ -356,7 +357,9 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 **事实源**：`SkillRunnerGAgent` actor state（每个 agent 一个 actor，拥有执行事实）+ `UserAgentCatalogGAgent`（well-known，全局唯一注册表 actor，只拥有成员集合与静态属性）
 
-**Projection**：`UserAgentCatalogProjector` 消费 catalog committed state 与 runner committed state → 合并物化到 `UserAgentCatalogDocument`。catalog membership 字段来自 `UserAgentCatalogState`；执行字段来自 `SkillRunnerState`。
+**Projection**：`UserAgentCatalogProjector` 只消费 catalog committed state → 物化 catalog membership-only `UserAgentCatalogDocument`，`StateVersion` 来自 `UserAgentCatalogGAgent` committed version。`SkillRunnerExecutionProjector` 只消费 runner committed state → 物化 runner-owned `SkillRunnerExecutionDocument`，`StateVersion` 来自对应 `SkillRunnerGAgent` committed version。`/agents` 与 `/agent-status` 在 query/consumer 层 join 两个 readmodel，并暴露 catalog/runner 双水位，不合成单一版本。
+
+**Presentation join 约束**：`/agents` 与 `/agent-status` 的 catalog + execution join 只是对外 presentation response 装配，用于展示 caller 可见 agent 的执行快照。它不得作为内部 lifecycle command 准入事实源，不得形成可复用 aggregate query contract，也不得反向声明 catalog/execution 的统一业务状态。`run_agent` / `disable_agent` / `enable_agent` 同步准入只依赖 catalog authority（caller visible、agent exists、agent type supports managed lifecycle）；runner `Enabled/Disabled` 只在 `SkillRunnerGAgent` 自身 turn 内判定，拒绝执行时发布 runner-owned state event，再由 `/agent-status` 或 `/agents` 观察。
 
 **查询端口**：`IUserAgentCatalogQueryPort`
 - `QueryByCallerAsync(owner_scope)`：`/agents` 命令的数据源
@@ -364,7 +367,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 **关键不变量 / 测试关注**：
 - `UpsertRegistryAsync` 在 `HandleInitializeAsync` 末尾只注册 membership；它不写执行字段。
-- runner 执行完成、失败、启停后的 committed state 是 `/agent-status` 的执行事实来源；projection 必须从 runner state 合并 `status` / `last_run_at` / `next_run_at` / `error_count` / `last_error`。
+- runner 执行完成、失败、启停后的 committed state 是 `/agent-status` 的执行事实来源；projection 必须从 runner state 物化 `status` / `last_run_at` / `next_run_at` / `error_count` / `last_error` 到 `SkillRunnerExecutionDocument`。
 - 创建、启停、删除与手动运行命令的同步结果只承诺 accepted；readmodel 是否已经反映，需要通过后续 `/agent-status`、`/agents` 或推送事件观察。
 
 ---
@@ -450,7 +453,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 | ~~#437~~ ✅ | 高（数据隔离） | `/daily` binding causes cross-user data leakage（用户视角） | UserConfigGAgent scope key | **已由 [#438](https://github.com/aevatarAI/aevatar/pull/438) 修复**（composite scope `{regScope}:lark:{senderId}`）；下表 12.6 #8 / 12.8 E11 转为回归测试 |
 | ~~#436~~ ✅ | 高（同上 #437 的工程分析） | GitHub username binding shared across all Lark users（last writer wins） | 同上 | 同上 |
 | #439 | 高（语义错） | SkillRunner masks GitHub tool failures as silent "no activity" success | prompt + nyxid_proxy 工具 + runner 的"非空即成功"路径 | 强制 GitHub 接口返回 4xx/5xx，验证报告必须显式标错而不是出 `No X surfaced` |
-| #440 | 中（运维可见性） | `/agent-status` 首次执行不刷新 `Last run`/`Next run` | runner committed state → `UserAgentCatalogProjector` 合并路径 | `/daily X`（run_immediately）→ 30s 后 `/agent-status <id>` 看 `Last run` 应非 n/a |
+| #440 | 中（运维可见性） | `/agent-status` 首次执行不刷新 `Last run`/`Next run` | runner committed state → `SkillRunnerExecutionProjector` execution readmodel 路径 | `/daily X`（run_immediately）→ 30s 后 `/agent-status <id>` 看 `Last run` 应非 n/a |
 | ~~#423~~ ✅ | 中（增强 + 失败通知短板） | richer report content + progressive delivery + chunked + 失败通知旁路 | prompt（§A，#458 已合）+ streaming-edit（§B，#469 已合）+ chunked + failure-notification slug（§C，本 PR） | 已落地：`/daily` 报告流式编辑、>30K 自动分段、出站失败时优先经入站 channel-bot 投递失败通知 |
 | #398 | 高（链路断） | Lark relay callbacks never reach aevatar | NyxID 侧 callback_url 配置 / 多副本 ingress / Lark 订阅状态 | 用户发消息无任何反应，aevatar 日志只有 K8s liveness |
 
@@ -462,14 +465,14 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 ### 12.1 单元测试 — 命令解析层（已有底子）
 
-文件：`test/Aevatar.GAgents.ChannelRuntime.Tests/NyxRelayAgentBuilderFlowTests.cs`
+文件：`test/Aevatar.GAgents.ChannelRuntime.Tests/AgentBuilderCardFlowTests.cs`
 
 应覆盖：
 - ✅ `/daily` 不带任何参数 → agent-builder router fall through，由 LLM reply path 处理 Ornn skill shortcut
 - ✅ `/daily alice` / `/DAILY alice schedule_time=09:00` → agent-builder router fall through
 - ✅ `ChannelConversationTurnRunner` 把 `/daily alice` 改写成包含 `use_skill`、`chrono-ai-daily`、`alice`、原始命令文本的 LLM request
+- ✅ 未知 slash 命令 `/goal ...` → agent-builder router fall through；`ChannelConversationTurnRunner` 改写成先 `ornn_search_skills` 再 `use_skill`
 - ✅ 非私聊（`chat_type != "p2p"`）→ `BuildPrivateChatRestrictionReply`，**不**产生 ToolCall
-- ✅ 未知 slash 命令 `/foo` → `BuildUnknownCommandReply`
 - ❌ 边界：Ornn skill load 失败 → 用户看到 skill loading / unavailable 说明，不创建本地 runner
 - ❌ 边界：`/daily` 参数非法 → 由 `chrono-ai-daily` skill 返回参数错误文案
 
@@ -493,7 +496,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 - `HandleInitializeAsync`：`SkillContent` 为空 → 直接返回不持久化（仅 LogWarning）
 - `HandleInitializeAsync` 正常 → 持久化 `SkillRunnerInitializedEvent` + `Scheduler.ScheduleNextRunAsync` + `UpsertRegistryAsync`
 - `HandleTriggerAsync`：`State.Enabled=false` → 跳过
-- `HandleTriggerAsync` 成功 → `Completed` 事件 + retry lease 取消 + 下次调度；执行字段由 runner committed state 投影到 catalog document
+- `HandleTriggerAsync` 成功 → `Completed` 事件 + retry lease 取消 + 下次调度；执行字段由 runner committed state 投影到 `SkillRunnerExecutionDocument`
 - `HandleTriggerAsync` 失败：`RetryAttempt < 1` → `ScheduleRetryAsync(2)` 不发 `Failed`
 - `HandleTriggerAsync` 失败：`RetryAttempt >= 1` → 持久化 `Failed` + `TrySendFailureAsync` + 下次调度（仍按 cron）+ status=error
 - `Disable` → `Enabled=false`，下次 trigger 跳过
@@ -506,8 +509,8 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 应覆盖：
 - `Upsert` → entry 进 state；同 agent 再次 `Upsert` → 覆盖且不重复
-- `SkillRunnerExecutionCompletedEvent` / `SkillRunnerExecutionFailedEvent` → projector 合并 `last_run_at` / `next_run_at` / `status` / `error_count` / `last_error`
-- **#440 应加测**：membership upsert 与 runner execution committed state 在 projection 后共同体现在 `UserAgentCatalogDocument` 上。
+- `SkillRunnerExecutionCompletedEvent` / `SkillRunnerExecutionFailedEvent` → execution projector 物化 `last_run_at` / `next_run_at` / `status` / `error_count` / `last_error`
+- **#440 应加测**：membership upsert 与 runner execution committed state 分别物化到 `UserAgentCatalogDocument` / `SkillRunnerExecutionDocument`，查询层 join 后共同体现在 `/agent-status` DTO 上。
 - `Tombstone` → entry 标 `tombstoned=true`，`/agents` 列表里隐藏
 - Projector：每种事件 → readmodel 对应字段被覆盖（projector 是单调覆盖语义，不累加）
 
@@ -669,7 +672,7 @@ Lark 开发者后台：
 | 关注点 | 文件 |
 |--------|------|
 | Webhook ingress | `agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs` |
-| 命令解析与路由 | `agents/Aevatar.GAgents.Authoring.Lark/NyxRelayAgentBuilderFlow.cs` |
+| 命令解析与路由 | `agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderCardFlow.cs` |
 | `/daily` shortcut 改写 | `agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs` |
 | Conversation LLM reply | `agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs` |
 | Ornn skill bridge | `src/Aevatar.AI.ToolProviders.Ornn/`、`src/Aevatar.AI.ToolProviders.Skills/UseSkillTool.cs` |

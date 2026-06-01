@@ -5,21 +5,21 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
-using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
-using Aevatar.Presentation.AGUI;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -65,6 +65,8 @@ public sealed class MainnetResponsesEndpointsTests
             """),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -118,6 +120,14 @@ public sealed class MainnetResponsesEndpointsTests
         // Tool providers read the bearer from AgentToolRequestContext (separate path).
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("secret-token");
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<StubResponsesCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "secret-token",
+            "identity-token",
+            "delegation-token"));
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
@@ -125,7 +135,7 @@ public sealed class MainnetResponsesEndpointsTests
         sessions.Registered[0].OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
         var snapshot = await sessions.GetByResponseIdAsync(responseId);
         snapshot!.ActorId.Should().NotContain(responseId);
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "pong");
     }
 
     [Fact]
@@ -174,7 +184,7 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("stream-secret");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
+        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "pong");
     }
 
     [Fact]
@@ -233,7 +243,10 @@ public sealed class MainnetResponsesEndpointsTests
         output[1].GetProperty("arguments").GetString().Should().Be("""{"city":"Singapore"}""");
 
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().ContainSingle();
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["get_weather", "aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow"]);
         sessions.ForwardedToolCalls.Should().ContainSingle();
         var persisted = sessions.ForwardedToolCalls[0].Call;
         persisted.CallId.Should().Be("call_weather_1");
@@ -304,11 +317,13 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.StreamCallCount.Should().Be(2);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().HaveCount(2);
-        provider.LastRequest.Tools![0].Name.Should().Be("Task");
-        provider.LastRequest.Tools[0].Description.Should().Be("Aevatar task dispatcher");
-        provider.LastRequest.Tools[0].ParametersSchema.Should().Be("""{"type":"object","properties":{}}""");
-        provider.LastRequest.Tools[1].Name.Should().Be("aevatar_notes");
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["Task", "aevatar_notes", "aevatar_invoke_gagent"]);
+        var taskTool = provider.LastRequest.Tools.Single(static tool => tool.Name == "Task");
+        taskTool.Description.Should().Be("Aevatar task dispatcher");
+        taskTool.ParametersSchema.Should().Be("""{"type":"object","properties":{}}""");
         provider.LastRequest.Messages.Should().HaveCount(3);
         provider.LastRequest.Messages[1].ToolCalls.Should().ContainSingle()
             .Which.Name.Should().Be("Task");
@@ -324,14 +339,10 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task AevatarSubstituteTools_ShouldPersistTodoAndTaskThroughAgentToolStatePort()
+    public async Task AevatarSubstituteTools_ShouldPersistTodoWithoutRegisteringFakeTask()
     {
         var commandPort = new RecordingResponsesAgentToolStatePort();
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -340,7 +351,7 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
-        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+        var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
@@ -352,11 +363,11 @@ public sealed class MainnetResponsesEndpointsTests
             var todoResult = await todoTool.ExecuteAsync(
                 """{"todos":[{"id":"todo-1","content":"Ship prototype","status":"in_progress"}]}""");
 
-            var taskTool = substituteTools.Single(x => x.Name == "Task");
-            var taskResult = await taskTool.ExecuteAsync("""{"prompt":"summarize state"}""");
-
             todoResult.Should().Contain("stored");
-            taskResult.Should().Contain("accepted");
+            substituteTools.Select(static tool => tool.Name)
+                .Should()
+                .Contain("TodoWrite")
+                .And.NotContain(["Task", "task"]);
         }
         finally
         {
@@ -367,8 +378,6 @@ public sealed class MainnetResponsesEndpointsTests
         commandPort.TodoWrites[0].ScopeId.Should().Be("scope-1");
         commandPort.TodoWrites[0].OwnerSubject.Should().Be("owner-1");
         commandPort.TodoWrites[0].SourceResponseId.Should().Be("resp_1");
-        commandPort.Tasks.Should().ContainSingle();
-        commandPort.Tasks[0].ArgumentsJson.Should().Contain("summarize state");
     }
 
     [Fact]
@@ -379,11 +388,7 @@ public sealed class MainnetResponsesEndpointsTests
             "WebFetch",
             "https://example.com/docs",
             """{"url":"https://example.com/docs","content":"cached"}""");
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -393,7 +398,7 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
-        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+        var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
@@ -423,11 +428,7 @@ public sealed class MainnetResponsesEndpointsTests
             "WebSearch",
             "aevatar docs\n3",
             """{"results":[{"title":"cached docs"}]}""");
-        var provider = new ResponsesAevatarToolProvider(
-            commandPort,
-            commandPort,
-            new Aevatar.AI.ToolProviders.Web.WebApiClient(new Aevatar.AI.ToolProviders.Web.WebToolOptions()),
-            new Aevatar.AI.ToolProviders.Web.WebToolOptions());
+        var provider = CreateResponsesAevatarToolProvider(commandPort);
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -437,7 +438,7 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
-        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+        var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
@@ -477,7 +478,7 @@ public sealed class MainnetResponsesEndpointsTests
         var toolProvider = provider.GetRequiredService<ResponsesUserSkillsToolProvider>();
 
         var tools = await toolProvider.GetAdditiveToolsAsync(
-            ResponsesApiEndpoints.BuildToolProviderContext(
+            BuildToolProviderContext(
                 new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
                 "resp_1",
                 "token"));
@@ -772,9 +773,144 @@ public sealed class MainnetResponsesEndpointsTests
             .Should()
             .Be("""{"temperature":28}""");
         provider.LastRequest.Should().BeNull();
-        sessions.Registered.Should().BeEmpty();
+        sessions.Registered.Should().ContainSingle()
+            .Which.PreviousResponseId.Should().Be("resp_previous");
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.Completion.OutputText.Should().Be("""{"temperature":28}""");
         sessions.ToolResults.Should().BeEmpty();
         sessions.ResolvedToolResults.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithExpiredForwardedToolCall_ShouldReturnToolCallNotAvailable_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            3,
+            "resp_previous:tool:call_1:expired",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Expired,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    """{"error":"tool_call_expired","call_id":"call_1"}""",
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("tool_call_not_available");
+        body.Should().NotContain("secret-token");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithCancelledForwardedToolCall_ShouldReturnToolCallNotAvailable_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            3,
+            "resp_previous:tool:call_1:cancelled",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Cancelled,
+                    DateTimeOffset.UtcNow.AddMinutes(30),
+                    null,
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    null,
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("tool_call_not_available");
+        body.Should().NotContain("secret-token");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -887,6 +1023,10 @@ public sealed class MainnetResponsesEndpointsTests
         doc.RootElement.GetProperty("previous_response_id").GetString().Should().Be("resp_previous");
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].PreviousResponseId.Should().Be("resp_previous");
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Messages.Should().ContainSingle();
+        provider.LastRequest.Messages[0].Role.Should().Be("user");
+        provider.LastRequest.Messages[0].Content.Should().Be("continue");
     }
 
     [Fact]
@@ -920,7 +1060,44 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
-        body.Should().Contain("previous_response_expired");
+        GetErrorCode(body).Should().Be("previous_response_expired");
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithCancelledPreviousResponse_ShouldReturnStructuredNotAvailableError_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Cancelled,
+            DateTimeOffset.UtcNow.AddMinutes(-10),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            2,
+            "resp_previous:status:cancelled"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"continue","previous_response_id":"resp_previous"}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("previous_response_not_available");
+        body.Should().NotContain("secret-token");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -956,9 +1133,81 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("response_scope_mismatch");
+        GetErrorCode(body).Should().Be("response_scope_mismatch");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithPreviousResponseAfterBearerScopeRotation_ShouldReResolveCurrentBearerAndRejectBeforeRegistrationOrProviderCall()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "old-scope",
+            "owner-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            2,
+            "resp_previous:tool:call_1:emitted",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Pending,
+                    DateTimeOffset.UtcNow.AddHours(1),
+                    null,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    null,
+                    null),
+            ]));
+        var callerScopeResolver = new TokenAwareResponsesCallerScopeResolver(
+            new ResponsesCallerScope("new-scope", "owner-1", LlmSessionOriginKind.ApiKey));
+        await using var app = await CreateAppAsync(provider, sessions, callerScopeResolver);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "rotated-secret");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        GetErrorCode(body).Should().Be("response_scope_mismatch");
+        callerScopeResolver.ResolvedTokens.Should().Equal("rotated-secret");
+        sessions.Registered.Should().BeEmpty();
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.ForwardedToolCalls.Should().BeEmpty();
+        sessions.RecordedCompletions.Should().BeEmpty();
+        sessions.StatusUpdates.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+        provider.StreamCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -992,7 +1241,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("response_origin_mismatch");
+        GetErrorCode(body).Should().Be("response_origin_mismatch");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -1033,6 +1282,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_previous/cancel");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -1046,6 +1297,48 @@ public sealed class MainnetResponsesEndpointsTests
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
             .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<StubResponsesCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "secret-token",
+            "identity-token",
+            "delegation-token"));
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponsesCancel_WithExpiredResponse_ShouldReturnStructuredExpiredError()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_expired",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Expired,
+            DateTimeOffset.UtcNow.AddHours(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_expired",
+            2,
+            "resp_expired:status:5"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_expired/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("response_expired");
+        body.Should().NotContain("secret-token");
+        sessions.StatusUpdates.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
 
@@ -1098,15 +1391,31 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
+        builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
+        builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
+        builder.Services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                [
+                    _ => new StubAgentToolSource(
+                    [
+                        new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
+                        new StubAgentTool("aevatar_invoke_team", "Invoke a team"),
+                        new StubAgentTool("aevatar_start_workflow", "Start a workflow"),
+                    ]),
+                ]);
+        });
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
-        builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new StaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
-        builder.Services.AddSingleton<ITeamEntryMemberResolver>(StubTeamEntryMemberResolver.NotFound());
-        builder.Services.AddSingleton<IMemberPublishedServiceResolver>(StubMemberPublishedServiceResolver.Identity());
-        builder.Services.AddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>>(
-            RecordingStaticGAgentStreamInvocationPort.Empty());
 
         await using var app = builder.Build();
         app.UseAuthentication();
@@ -1133,23 +1442,26 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenHostAuthEnabledAndChatRouteForwardsToGAgent_ResolvesAndInvokesThroughFullPipeline()
+    public async Task PostResponses_WhenHostAuthEnabledAndChatRouteForwardsToGAgent_UsesToolFirstPipeline()
     {
         // Companion to the AllowAnonymous test: that one proves the JwtBearer
         // FallbackPolicy doesn't short-circuit before our handler runs. This
-        // one proves the POSITIVE path also threads through correctly — under
-        // the real AddAevatarAuthentication pipeline, with a valid bearer, a
-        // ForwardToGAgent chat-route rule resolves via IMemberPublishedServiceResolver
-        // and reaches the static invocation port. Catches regressions where
-        // someone adds a new DI dependency to HandleCreateResponseAsync but
-        // forgets to register it in the hardened production-auth fixture.
-        var provider = new RecordingLLMProvider();
+        // one proves the POSITIVE path also threads through correctly under
+        // the real AddAevatarAuthentication pipeline. Route policy pins the
+        // workspace invocation tool; actor-bound direct forwarding is not part
+        // of /v1/responses.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_auth_gagent",
+                "aevatar_invoke_gagent",
+                """{"payload":{"prompt":"hi via auth pipeline"}}""",
+                "auth ok"),
+        };
         var sessions = new RecordingResponseSessionStore();
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("auth-pipeline-member"),
+            GAgentToolHintAction("auth-pipeline-member"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-auth-member");
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("auth ok");
 
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -1163,14 +1475,32 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
+        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<ResponsesCommandFacade>();
+        builder.Services.AddSingleton<IResponsesCommandFacade, CompletingResponsesCommandFacade>();
+        builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
+        builder.Services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                [
+                    _ => new StubAgentToolSource(
+                    [
+                        new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
+                        new StubAgentTool("aevatar_invoke_team", "Invoke a team"),
+                        new StubAgentTool("aevatar_start_workflow", "Start a workflow"),
+                    ]),
+                ]);
+        });
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(queryPort);
-        builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new StaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
-        builder.Services.AddSingleton<ITeamEntryMemberResolver>(StubTeamEntryMemberResolver.NotFound());
-        builder.Services.AddSingleton<IMemberPublishedServiceResolver>(memberResolver);
-        builder.Services.AddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>>(staticPort);
 
         await using var app = builder.Build();
         app.UseAuthentication();
@@ -1188,11 +1518,10 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        provider.LastRequest.Should().BeNull(
-            "ForwardToGAgent must bypass the LLM provider even under production auth");
-        staticPort.LastRequest.Should().NotBeNull();
-        staticPort.LastRequest!.Identity!.ServiceId.Should().Be("published-svc-auth-member");
-        staticPort.LastRequest.EndpointId.Should().Be("chat");
+        provider.StreamCallCount.Should().Be(2);
+        var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent");
+        AssertToolArgument(argumentsJson, "actor_id", "auth-pipeline-member");
+        sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "auth ok");
         body.Should().Contain("\"text\":\"auth ok\"");
 
         await app.StopAsync();
@@ -1324,9 +1653,7 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Model.Should().Be("qwen-3");
-        provider.LastRequest.Metadata!
-            .Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("/api/v1/proxy/s/chrono-llm");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
 
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("model").GetString().Should().Be("chrono-llm/qwen-3");
@@ -1358,9 +1685,7 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         provider.LastRequest!.Model.Should().Be("claude-opus-4-7");
-        provider.LastRequest.Metadata!
-            .Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("/api/v1/llm/anthropic/v1");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
     }
 
     [Fact]
@@ -1447,8 +1772,11 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        // Only the function-typed tool reaches the LLM provider; built-ins are dropped.
-        provider.LastRequest!.Tools.Should().ContainSingle();
+        // Built-ins are dropped; function-typed tools and default route tools reach the LLM provider.
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["Bash", "aevatar_invoke_gagent"]);
     }
 
     [Fact]
@@ -1618,6 +1946,10 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Model.Should().Be("routed-tool-model");
+        provider.LastRequest.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["do_thing", "aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow"]);
     }
 
     [Fact]
@@ -1646,25 +1978,24 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenChatRouteForwardsToGAgent_InvokesMemberPublishedServiceAndAggregatesAguiText()
+    public async Task PostResponses_WhenChatRouteForwardsToGAgent_UsesWorkspaceInvokeTool()
     {
-        // Mirrors ForwardToTeam shape: the chat-route policy returns ForwardToGAgent
-        // with the proto's `actor_id` field, /v1/responses interprets it as a Studio
-        // memberId, resolves it via IMemberPublishedServiceResolver, then invokes the
-        // resolved publishedServiceId through IStaticGAgentStreamInvocationPort. The
-        // raw-actor interpretation used by Voice / NyxIdChat-relay does not apply on
-        // the LLM facade (no raw-actor binding path).
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_gagent_1",
+                "aevatar_invoke_gagent",
+                """{"payload":{"prompt":"hi gagent"}}""",
+                "hello agent"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("member-7"),
+            GAgentToolHintAction("member-7"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-member-7");
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("hello", " ", "agent");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            memberPublishedServiceResolver: memberResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -1676,18 +2007,16 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        provider.LastRequest.Should().BeNull(
-            "ForwardToGAgent must bypass the LLM provider entirely");
-        staticPort.LastRequest.Should().NotBeNull();
-        // ForwardToGAgent has no endpoint_id, so the handler steers to the default
-        // chat endpoint convention.
-        staticPort.LastRequest!.EndpointId.Should().Be("chat");
-        staticPort.LastRequest.Identity!.ServiceId.Should().Be("published-svc-member-7");
-        staticPort.LastRequest.Input.Prompt.Should().Be("hi gagent");
-        var headers = staticPort.LastRequest.Input.Headers;
-        headers.Should().NotBeNull();
-        headers![LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("gagent-secret");
-        headers[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer gagent-secret");
+        responseSessions.Registered.Should().ContainSingle();
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "hello agent");
+        provider.StreamCallCount.Should().Be(2);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools!.Select(static tool => tool.Name)
+            .Should().Contain("aevatar_invoke_gagent");
+        var argumentsJson = RouteToolArgumentsJson(provider.LastRequest, "aevatar_invoke_gagent");
+        AssertToolArgument(argumentsJson, "actor_id", "member-7");
+        AssertToolArgument(argumentsJson, "payload.prompt", "hi gagent");
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
@@ -1702,19 +2031,24 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_StreamWhenChatRouteForwardsToGAgent_EmitsResponsesSseFromAguiEvents()
+    public async Task PostResponses_StreamWhenChatRouteForwardsToGAgent_StreamsToolFirstResponse()
     {
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_gagent_stream",
+                "aevatar_invoke_gagent",
+                "{}",
+                "alpha beta"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("member-stream"),
+            GAgentToolHintAction("member-stream"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-stream");
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("alpha ", "beta");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            memberPublishedServiceResolver: memberResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -1729,98 +2063,121 @@ public sealed class MainnetResponsesEndpointsTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: response.created");
         body.Should().Contain("event: response.output_text.delta");
-        body.Should().Contain("\"delta\":\"alpha \"");
-        body.Should().Contain("\"delta\":\"beta\"");
+        body.Should().Contain("\"delta\":\"alpha beta\"");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"alpha beta\"");
         body.Should().Contain("event: response.completed");
-        provider.LastRequest.Should().BeNull();
-        staticPort.LastRequest!.Identity!.ServiceId.Should().Be("published-svc-stream");
+        var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent");
+        AssertToolArgument(argumentsJson, "actor_id", "member-stream");
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "alpha beta");
     }
 
     [Fact]
-    public async Task PostResponses_StreamWhenForwardToGAgentEmitsRunError_UsesGenericGAgentFailureDefaults()
+    public async Task PostResponses_StreamWhenChatRouteForwardToolArgumentsConflict_ReturnsToolErrorToSecondRound()
     {
-        // AGUIEventToResponsesSseAdapter is shared by ForwardToTeam and
-        // ForwardToGAgent. If the upstream run error omits a code/message, the
-        // fallback must stay target-neutral instead of leaking the older
-        // ForwardToTeam-only naming.
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches =
+            [
+                [
+                    new LLMStreamChunk
+                    {
+                        DeltaToolCall = new ToolCall
+                        {
+                            Id = "call_gagent_conflict",
+                            Name = "aevatar_invoke_gagent",
+                            ArgumentsJson = """{"actor_id":"model-chosen"}""",
+                        },
+                        IsLast = true,
+                    },
+                ],
+                [new LLMStreamChunk { DeltaContent = "handled", IsLast = true }],
+            ],
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("member-run-error"),
+            GAgentToolHintAction("member-trusted"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-run-error");
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingRunError();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            memberPublishedServiceResolver: memberResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
             Content = JsonContent("""{"model":"original-model","input":"stream me","stream":true}"""),
         };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "gagent-error-stream-secret");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "gagent-tool-stream-secret");
 
         var response = await app.GetTestClient().SendAsync(request, HttpCompletionOption.ResponseContentRead);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
-        body.Should().Contain("event: response.failed");
-        body.Should().Contain("\"code\":\"gagent_invocation_failed\"");
-        body.Should().Contain("\"message\":\"GAgent invocation failed.\"");
-        body.Should().NotContain("event: response.completed");
-        body.Should().NotContain("team_invocation_failed");
-        body.Should().NotContain("Team invocation failed");
-        provider.LastRequest.Should().BeNull();
+        body.Should().Contain("\"delta\":\"handled\"");
+        body.Should().Contain("event: response.completed");
+        responseSessions.ForwardedToolCalls.Should().BeEmpty();
+        provider.LastRequest!.Messages[1].ToolCalls.Should().ContainSingle()
+            .Which.ArgumentsJson.Should().Contain("tool_choice_prefill_conflict");
+        provider.LastRequest.Messages[2].Content.Should().Contain("tool_choice_prefill_conflict");
     }
 
     [Fact]
-    public async Task PostResponses_WhenForwardToGAgentEmitsRunError_ReturnsFailureInsteadOfCompletedResponse()
+    public async Task PostResponses_WhenChatRouteForwardsToGAgentWithToolCall_AppliesPrefilledActor()
     {
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_gagent_sync",
+                "aevatar_invoke_gagent",
+                """{"payload":{"prompt":"sync me"}}""",
+                "done"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("member-run-error"),
+            GAgentToolHintAction("member-sync"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.ForPublishedService("published-svc-run-error");
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingRunError();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            memberPublishedServiceResolver: memberResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
             Content = JsonContent("""{"model":"original-model","input":"sync me","stream":false}"""),
         };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "gagent-error-sync-secret");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "gagent-sync-secret");
 
         var response = await app.GetTestClient().SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError, body);
-        using var doc = JsonDocument.Parse(body);
-        var err = doc.RootElement.GetProperty("error");
-        err.GetProperty("code").GetString().Should().Be("gagent_invocation_failed");
-        err.GetProperty("message").GetString().Should().Be("GAgent invocation failed.");
-        provider.LastRequest.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("\"text\":\"done\"");
+        responseSessions.ForwardedToolCalls.Should().BeEmpty();
+        var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent");
+        AssertToolArgument(argumentsJson, "actor_id", "member-sync");
+        AssertToolArgument(argumentsJson, "payload.prompt", "sync me");
     }
 
     [Fact]
-    public async Task PostResponses_WhenChatRouteForwardsToGAgentWithEmptyActorId_Returns500WithoutInvokingResolver()
+    public async Task PostResponses_WhenChatRouteForwardsToGAgentWithEmptyActorId_PrefillsEmptyActorId()
     {
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_gagent_empty",
+                "aevatar_invoke_gagent",
+                "{}",
+                "done"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction(string.Empty),
+            GAgentToolHintAction(string.Empty),
             []));
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.Empty();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -1831,35 +2188,31 @@ public sealed class MainnetResponsesEndpointsTests
         var response = await app.GetTestClient().SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError, body);
-        using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("error").GetProperty("code").GetString()
-            .Should().Be("chat_route_invalid");
-        staticPort.LastRequest.Should().BeNull();
-        provider.LastRequest.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        responseSessions.ForwardedToolCalls.Should().BeEmpty();
+        var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent");
+        AssertToolArgument(argumentsJson, "actor_id", string.Empty);
     }
 
     [Fact]
-    public async Task PostResponses_WhenForwardToGAgentTargetServiceNotFound_Returns404WithResolvedKey()
+    public async Task PostResponses_WhenGAgentToolTargetDoesNotExist_DoesNotResolveDuringRoute()
     {
-        // The resolver normalizes memberId fine, but the downstream
-        // IStaticGAgentStreamInvocationPort's resolution layer raises
-        // InvalidOperationException("Service '<scope>:<app>:<ns>:<serviceId>'
-        // was not found.") when no Studio service binding exists for the
-        // resolved publishedServiceId. The handler maps that to a structured
-        // 404 + `gagent_target_not_found` so chat-route policy authors can
-        // distinguish "policy points at unbound member" from runtime crashes.
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_ghost_gagent",
+                "aevatar_invoke_gagent",
+                "{}",
+                "queued"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("ghost-member"),
+            GAgentToolHintAction("ghost-member"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.Identity();
-        var staticPort = ThrowingStaticGAgentStreamInvocationPort.ServiceNotFound("user-1:default:default:ghost-member");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            memberPublishedServiceResolver: memberResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -1870,28 +2223,31 @@ public sealed class MainnetResponsesEndpointsTests
         var response = await app.GetTestClient().SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.NotFound, body);
-        using var doc = JsonDocument.Parse(body);
-        var err = doc.RootElement.GetProperty("error");
-        err.GetProperty("code").GetString().Should().Be("gagent_target_not_found");
-        err.GetProperty("message").GetString().Should().Contain("ghost-member");
-        provider.LastRequest.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent")
+            .Should().Contain("\"actor_id\":\"ghost-member\"");
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "queued");
     }
 
     [Fact]
-    public async Task PostResponses_StreamWhenForwardToGAgentTargetServiceNotFound_EmitsResponseFailedFrame()
+    public async Task PostResponses_StreamWhenGAgentToolTargetDoesNotExist_DoesNotResolveDuringRoute()
     {
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_ghost_gagent_stream",
+                "aevatar_invoke_gagent",
+                "{}",
+                "queued"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("ghost-member"),
+            GAgentToolHintAction("ghost-member"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.Identity();
-        var staticPort = ThrowingStaticGAgentStreamInvocationPort.ServiceNotFound("user-1:default:default:ghost-member");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            memberPublishedServiceResolver: memberResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -1905,30 +2261,31 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: response.created");
-        body.Should().Contain("event: response.failed");
-        body.Should().Contain("\"code\":\"gagent_target_not_found\"");
-        body.Should().Contain("ghost-member");
-        provider.LastRequest.Should().BeNull();
+        body.Should().Contain("event: response.completed");
+        body.Should().NotContain("event: response.failed");
+        RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent")
+            .Should().Contain("\"actor_id\":\"ghost-member\"");
     }
 
     [Fact]
-    public async Task PostResponses_WhenForwardToGAgentResolverThrows_ReturnsBadRequestWithoutInvokingStaticPort()
+    public async Task PostResponses_WhenGAgentActorIdWouldBreakDirectResolver_DoesNotUseDirectResolver()
     {
-        // The resolver normalizes memberId and throws InvalidOperationException for
-        // disallowed separator chars. Surface as structured 400 chat_route_invalid
-        // rather than a generic 500.
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_bad_gagent",
+                "aevatar_invoke_gagent",
+                "{}",
+                "queued"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToGAgentAction("bad/member"),
+            GAgentToolHintAction("bad/member"),
             []));
-        var memberResolver = StubMemberPublishedServiceResolver.Throwing(
-            "memberId must not contain ':', '/', '\\\\', '?' or '#'.");
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.Empty();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            memberPublishedServiceResolver: memberResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -1939,28 +2296,31 @@ public sealed class MainnetResponsesEndpointsTests
         var response = await app.GetTestClient().SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
-        using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("error").GetProperty("code").GetString()
-            .Should().Be("chat_route_invalid");
-        staticPort.LastRequest.Should().BeNull();
-        provider.LastRequest.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_gagent")
+            .Should().Contain("\"actor_id\":\"bad/member\"");
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "queued");
     }
 
     [Fact]
-    public async Task PostResponses_WhenChatRouteForwardsToTeam_InvokesEntryMemberAndAggregatesAguiText()
+    public async Task PostResponses_WhenChatRouteForwardsToTeam_UsesWorkspaceInvokeTool()
     {
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_team_1",
+                "aevatar_invoke_team",
+                """{"payload":{"prompt":"hi team"}}""",
+                "hello world"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToTeamAction("team-1", "chat"),
+            TeamToolHintAction("team-1", "chat"),
             []));
-        var teamResolver = StubTeamEntryMemberResolver.ForResolution("published-svc-1");
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("hel", "lo", " world");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            teamEntryMemberResolver: teamResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -1972,16 +2332,13 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        provider.LastRequest.Should().BeNull(
-            "ForwardToTeam must bypass the LLM provider entirely");
-        staticPort.LastRequest.Should().NotBeNull();
-        staticPort.LastRequest!.EndpointId.Should().Be("chat");
-        staticPort.LastRequest.Identity!.ServiceId.Should().Be("published-svc-1");
-        staticPort.LastRequest.Input.Prompt.Should().Be("hi team");
-        var headers = staticPort.LastRequest.Input.Headers;
-        headers.Should().NotBeNull();
-        headers![LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("team-secret");
-        headers[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer team-secret");
+        responseSessions.Registered.Should().ContainSingle();
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "hello world");
+        provider.StreamCallCount.Should().Be(2);
+        var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_team");
+        AssertToolArgument(argumentsJson, "team_id", "team-1");
+        AssertToolArgument(argumentsJson, "endpoint_id", "chat");
+        AssertToolArgument(argumentsJson, "payload.prompt", "hi team");
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
@@ -1996,19 +2353,24 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_StreamWhenChatRouteForwardsToTeam_EmitsResponsesSseFromAguiEvents()
+    public async Task PostResponses_StreamWhenChatRouteForwardsToTeam_StreamsToolFirstResponse()
     {
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_team_stream",
+                "aevatar_invoke_team",
+                "{}",
+                "alpha beta"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToTeamAction("team-2", "chat"),
+            TeamToolHintAction("team-2", "chat"),
             []));
-        var teamResolver = StubTeamEntryMemberResolver.ForResolution("published-svc-2");
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.EmittingText("alpha ", "beta");
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            teamEntryMemberResolver: teamResolver,
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2023,27 +2385,35 @@ public sealed class MainnetResponsesEndpointsTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("event: response.created");
         body.Should().Contain("event: response.output_text.delta");
-        body.Should().Contain("\"delta\":\"alpha \"");
-        body.Should().Contain("\"delta\":\"beta\"");
+        body.Should().Contain("\"delta\":\"alpha beta\"");
         body.Should().Contain("event: response.output_text.done");
         body.Should().Contain("\"text\":\"alpha beta\"");
         body.Should().Contain("event: response.completed");
-        provider.LastRequest.Should().BeNull();
+        var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_team");
+        AssertToolArgument(argumentsJson, "team_id", "team-2");
+        AssertToolArgument(argumentsJson, "endpoint_id", "chat");
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "alpha beta");
     }
 
     [Fact]
-    public async Task PostResponses_WhenChatRouteForwardsToUnknownTeam_ReturnsResolverErrorWithoutInvokingStaticPort()
+    public async Task PostResponses_WhenChatRouteForwardsToUnknownTeam_DoesNotResolveDuringRoute()
     {
-        var provider = new RecordingLLMProvider();
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches = ToolThenTextBatches(
+                "call_missing_team",
+                "aevatar_invoke_team",
+                "{}",
+                "queued"),
+        };
         var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
-            ForwardToTeamAction("missing-team", "chat"),
+            TeamToolHintAction("missing-team", "chat"),
             []));
-        var staticPort = RecordingStaticGAgentStreamInvocationPort.Empty();
+        var responseSessions = new RecordingResponseSessionStore();
         await using var app = await CreateAppAsync(
             provider,
-            chatRoutePolicyQueryPort: queryPort,
-            teamEntryMemberResolver: StubTeamEntryMemberResolver.NotFound(),
-            staticGAgentStreamInvocationPort: staticPort);
+            responseSessions,
+            chatRoutePolicyQueryPort: queryPort);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2054,11 +2424,11 @@ public sealed class MainnetResponsesEndpointsTests
         var response = await app.GetTestClient().SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.NotFound, body);
-        using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("error").GetProperty("code").GetString()
-            .Should().Be(TeamEntryMemberErrorCodes.TeamNotFound);
-        staticPort.LastRequest.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        var argumentsJson = RouteToolArgumentsJson(provider.LastRequest!, "aevatar_invoke_team");
+        AssertToolArgument(argumentsJson, "team_id", "missing-team");
+        AssertToolArgument(argumentsJson, "endpoint_id", "chat");
+        responseSessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "queued");
     }
 
     [Fact]
@@ -2095,10 +2465,7 @@ public sealed class MainnetResponsesEndpointsTests
         IResponsesToolProvider? responsesToolProvider = null,
         IResponsesModelsAggregator? modelsAggregator = null,
         IResponsesRouteResolver? routeResolver = null,
-        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
-        ITeamEntryMemberResolver? teamEntryMemberResolver = null,
-        IMemberPublishedServiceResolver? memberPublishedServiceResolver = null,
-        IStaticGAgentStreamInvocationPort<AGUIEvent>? staticGAgentStreamInvocationPort = null)
+        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -2110,11 +2477,32 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(responseSessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(responseSessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(responseSessions);
+        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<ResponsesCommandFacade>();
+        builder.Services.AddSingleton<IResponsesCommandFacade, CompletingResponsesCommandFacade>();
+        builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
+        builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
+        builder.Services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                [
+                    _ => new StubAgentToolSource(
+                    [
+                        new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
+                        new StubAgentTool("aevatar_invoke_team", "Invoke a team"),
+                        new StubAgentTool("aevatar_start_workflow", "Start a workflow"),
+                    ]),
+                ]);
+        });
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
-        builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(new ChatRouteResolver(
+            new StaticChatRouteFallbackProvider(string.Empty),
+            DefaultToolSetRoutingOptions()));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(modelsAggregator ?? new RecordingResponsesModelsAggregator());
         builder.Services.AddSingleton(routeResolver ?? new RecordingResponsesRouteResolver
         {
@@ -2129,12 +2517,6 @@ public sealed class MainnetResponsesEndpointsTests
         });
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
-        builder.Services.AddSingleton(teamEntryMemberResolver
-            ?? StubTeamEntryMemberResolver.NotFound());
-        builder.Services.AddSingleton(memberPublishedServiceResolver
-            ?? StubMemberPublishedServiceResolver.Identity());
-        builder.Services.AddSingleton(staticGAgentStreamInvocationPort
-            ?? RecordingStaticGAgentStreamInvocationPort.Empty());
 
         var app = builder.Build();
         app.MapResponsesApiEndpoints();
@@ -2144,6 +2526,242 @@ public sealed class MainnetResponsesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private sealed class AcceptedOnlyActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+
+    private sealed class CompletingResponsesCommandFacade(
+        ResponsesCommandFacade inner,
+        ILLMProviderFactory providerFactory,
+        IResponsesCompletionApplicationService completionService,
+        ILlmSessionRegistrationPort sessionRegistrationPort) : IResponsesCommandFacade
+    {
+        public async Task<ResponsesCreateCommandResult> CreateAsync(
+            ResponsesCommandRequest request,
+            ResponsesCallerScopeResolutionContext callerScopeContext,
+            CancellationToken ct = default)
+        {
+            if (request.Stream == true)
+                return await inner.CreateAsync(request, callerScopeContext, ct);
+
+            var planRequest = request with { Stream = true };
+            var result = await inner.CreateAsync(planRequest, callerScopeContext, ct);
+            if (result.Error is not null || result.StreamPlan is null)
+                return result;
+
+            var plan = result.StreamPlan with
+            {
+                Normalized = result.StreamPlan.Normalized with { Stream = false },
+            };
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                var completion = await completionService.CollectAsync(
+                    providerFactory.GetDefault(),
+                    plan.LlmRequest,
+                    plan.ToolContext,
+                    plan.ToolClassification,
+                    ct);
+                var snapshot = BuildCompletionSnapshot(completion);
+                await RecordForwardedToolCallsAsync(plan, completion, ct);
+                await ResolveIncomingToolResultsAsync(plan, ct);
+                await RecordCompletionAsync(plan.Session, snapshot, ct);
+                return ResponsesCreateCommandResult.FromCompleted(
+                    new ResponsesCreateCompletedCommandResult(
+                        plan.Normalized,
+                        plan.CreatedAt.ToUnixTimeSeconds(),
+                        snapshot));
+            }
+        }
+
+        public Task<ResponsesCancelCommandResult> CancelAsync(
+            string responseId,
+            ResponsesCallerScopeResolutionContext callerScopeContext,
+            CancellationToken ct = default) =>
+            inner.CancelAsync(responseId, callerScopeContext, ct);
+
+        public async Task<ResponsesStreamCommandResult> StreamAsync(
+            ResponsesCreateCommandPlan plan,
+            Func<string, CancellationToken, ValueTask> onTextDelta,
+            CancellationToken ct = default)
+        {
+            _ = await inner.StreamAsync(plan, onTextDelta, ct);
+            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
+            {
+                var completion = await completionService.StreamAsync(
+                    providerFactory.GetDefault(),
+                    plan.LlmRequest,
+                    plan.ToolContext,
+                    plan.ToolClassification,
+                    onTextDelta,
+                    ct);
+                var snapshot = BuildCompletionSnapshot(completion);
+                await RecordForwardedToolCallsAsync(plan, completion, ct);
+                await ResolveIncomingToolResultsAsync(plan, ct);
+                await RecordCompletionAsync(plan.Session, snapshot, ct);
+                return ResponsesStreamCommandResult.FromCompleted(snapshot);
+            }
+        }
+
+        private async Task RecordForwardedToolCallsAsync(
+            ResponsesCreateCommandPlan plan,
+            ResponsesCompletionResult completion,
+            CancellationToken ct)
+        {
+            foreach (var toolCall in completion.ForwardedToolCalls)
+            {
+                var declaration = plan.ToolClassification.ForwardedTools
+                    .FirstOrDefault(tool => string.Equals(tool.Name, toolCall.Name, StringComparison.Ordinal));
+                await sessionRegistrationPort.RecordForwardedToolCallAsync(
+                    plan.Session.ActorId,
+                    plan.Session.ResponseId,
+                    new LlmSessionForwardedToolCall
+                    {
+                        CallId = toolCall.Id,
+                        ToolName = toolCall.Name,
+                        SchemaHash = declaration?.SchemaHash ?? string.Empty,
+                        Arguments = ResponsesJsonValues.ParseBoundaryPayload(
+                            string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
+                        Status = LlmSessionForwardedToolCallStatus.Pending,
+                        EmittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                        Expiry = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(24)),
+                    },
+                    ct);
+            }
+        }
+
+        private async Task ResolveIncomingToolResultsAsync(
+            ResponsesCreateCommandPlan plan,
+            CancellationToken ct)
+        {
+            if (plan.PreviousSnapshot is null || plan.Normalized.ToolResults.Count == 0)
+                return;
+
+            foreach (var callId in plan.Normalized.ToolResults
+                         .Select(static result => result.CallId)
+                         .Where(static callId => !string.IsNullOrWhiteSpace(callId))
+                         .Distinct(StringComparer.Ordinal))
+            {
+                await sessionRegistrationPort.ResolveForwardedToolResultAsync(
+                    plan.PreviousSnapshot.ActorId,
+                    plan.PreviousSnapshot.ResponseId,
+                    callId,
+                    ct);
+            }
+        }
+
+        private async Task RecordCompletionAsync(
+            LlmSessionRegistrationResult session,
+            LlmSessionCompletionSnapshot snapshot,
+            CancellationToken ct)
+        {
+            await sessionRegistrationPort.RecordCompletionAsync(
+                session.ActorId,
+                session.ResponseId,
+                ToCompletion(snapshot),
+                ct);
+        }
+    }
+
+    private static LlmSessionCompletionSnapshot BuildCompletionSnapshot(ResponsesCompletionResult completion) =>
+        new(
+            completion.Text,
+            completion.ForwardedToolCalls
+                .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                    call.Id,
+                    call.Name,
+                    string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson))
+                .ToArray(),
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            completion.Usage);
+
+    private static LlmSessionCompletion ToCompletion(LlmSessionCompletionSnapshot snapshot)
+    {
+        var completion = new LlmSessionCompletion
+        {
+            OutputText = snapshot.OutputText,
+            CompletedAt = Timestamp.FromDateTimeOffset(snapshot.CompletedAt ?? DateTimeOffset.UtcNow),
+        };
+        if (snapshot.Usage is not null)
+        {
+            completion.Usage = new LlmSessionTokenUsage
+            {
+                PromptTokens = snapshot.Usage.PromptTokens,
+                CompletionTokens = snapshot.Usage.CompletionTokens,
+                TotalTokens = snapshot.Usage.TotalTokens,
+            };
+        }
+
+        foreach (var call in snapshot.ToolCalls)
+        {
+            completion.ToolCalls.Add(new LlmSessionCompletedToolCall
+            {
+                CallId = call.CallId,
+                ToolName = call.ToolName,
+                Result = ResponsesJsonValues.ParseBoundaryPayload(call.ResultJson),
+            });
+        }
+
+        return completion;
+    }
+
+    private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
+        Microsoft.Extensions.Options.Options.Create(new ChatRoutingOptions
+        {
+            Defaults = new ChatRoutingDefaultsOptions
+            {
+                DefaultForwardToModelToolSetName = ToolSetNames.WorkspaceDefault,
+            },
+        });
+
+    private static string? GetErrorCode(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("error").GetProperty("code").GetString();
+    }
+
+    private static IReadOnlyList<IReadOnlyList<LLMStreamChunk>> ToolThenTextBatches(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string finalText) =>
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = callId,
+                        Name = toolName,
+                        ArgumentsJson = argumentsJson,
+                    },
+                    IsLast = true,
+                },
+            ],
+            [new LLMStreamChunk { DeltaContent = finalText, IsLast = true }],
+        ];
+
+    private static string RouteToolArgumentsJson(LLMRequest request, string toolName)
+    {
+        request.Messages.Should().HaveCountGreaterThanOrEqualTo(2);
+        var toolCall = request.Messages[1].ToolCalls.Should().ContainSingle().Subject;
+        toolCall.Name.Should().Be(toolName);
+        return toolCall.ArgumentsJson;
+    }
+
+    private static void AssertToolArgument(string argumentsJson, string path, string expected)
+    {
+        using var doc = JsonDocument.Parse(argumentsJson);
+        var current = doc.RootElement;
+        foreach (var segment in path.Split('.'))
+            current = current.GetProperty(segment);
+
+        current.GetString().Should().Be(expected);
+    }
 
     private sealed class RecordingLLMProvider : ILLMProvider, ILLMProviderFactory
     {
@@ -2247,179 +2865,39 @@ public sealed class MainnetResponsesEndpointsTests
         Reject = new Reject { Reason = message },
     };
 
-    private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
-    {
-        ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
-    };
+    private static ChatRouteAction GAgentToolHintAction(string actorId) =>
+        ToolHintAction(
+            "aevatar_invoke_gagent",
+            [new("actor_id", actorId)]);
 
-    private static ChatRouteAction ForwardToTeamAction(string teamId, string endpointId) => new()
-    {
-        ForwardToTeam = new ForwardToTeam { TeamId = teamId, EndpointId = endpointId },
-    };
+    private static ChatRouteAction TeamToolHintAction(string teamId, string endpointId) =>
+        ToolHintAction(
+            "aevatar_invoke_team",
+            [
+                new("team_id", teamId),
+                new("endpoint_id", endpointId),
+            ]);
 
-    private sealed class StubTeamEntryMemberResolver : ITeamEntryMemberResolver
+    private static ChatRouteAction ToolHintAction(
+        string toolName,
+        IReadOnlyList<(string Name, string Value)> arguments)
     {
-        private readonly Func<string, string, TeamEntryMemberResolution> _resolve;
+        var prefilledArguments = new Struct();
+        foreach (var (name, value) in arguments)
+            prefilledArguments.Fields[name] = Google.Protobuf.WellKnownTypes.Value.ForString(value);
 
-        private StubTeamEntryMemberResolver(Func<string, string, TeamEntryMemberResolution> resolve)
+        return new ChatRouteAction
         {
-            _resolve = resolve;
-        }
-
-        public static StubTeamEntryMemberResolver ForResolution(string publishedServiceId, string entryMemberId = "entry-member") =>
-            new((scopeId, teamId) => new TeamEntryMemberResolution(scopeId, teamId, entryMemberId, publishedServiceId));
-
-        public static StubTeamEntryMemberResolver NotFound() =>
-            new((scopeId, teamId) => throw new TeamEntryMemberResolutionException(
-                TeamEntryMemberErrorCodes.TeamNotFound,
-                scopeId,
-                teamId,
-                $"team '{teamId}' not found in test fixture default resolver."));
-
-        public Task<TeamEntryMemberResolution> ResolveAsync(string scopeId, string teamId, CancellationToken ct = default) =>
-            Task.FromResult(_resolve(scopeId, teamId));
-    }
-
-    private sealed class StubMemberPublishedServiceResolver : IMemberPublishedServiceResolver
-    {
-        private readonly Func<MemberPublishedServiceResolveRequest, MemberPublishedServiceResolution> _resolve;
-
-        private StubMemberPublishedServiceResolver(
-            Func<MemberPublishedServiceResolveRequest, MemberPublishedServiceResolution> resolve)
-        {
-            _resolve = resolve;
-        }
-
-        /// <summary>
-        /// Default test fixture: mirrors <see cref="DefaultMemberPublishedServiceResolver"/>
-        /// behavior — publishedServiceId == memberId. Use this when the test doesn't care
-        /// about the Studio member catalog and only asserts that the resolver was called.
-        /// </summary>
-        public static StubMemberPublishedServiceResolver Identity() =>
-            new(request => new MemberPublishedServiceResolution(
-                request.ScopeId,
-                request.MemberId,
-                request.MemberId));
-
-        public static StubMemberPublishedServiceResolver ForPublishedService(string publishedServiceId) =>
-            new(request => new MemberPublishedServiceResolution(
-                request.ScopeId,
-                request.MemberId,
-                publishedServiceId));
-
-        public static StubMemberPublishedServiceResolver Throwing(string message) =>
-            new(_ => throw new InvalidOperationException(message));
-
-        public Task<MemberPublishedServiceResolution> ResolveAsync(
-            MemberPublishedServiceResolveRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(_resolve(request));
-    }
-
-    private sealed class RecordingStaticGAgentStreamInvocationPort : IStaticGAgentStreamInvocationPort<AGUIEvent>
-    {
-        private readonly IReadOnlyList<AGUIEvent> _events;
-        private readonly GAgentDraftRunStartError _startError;
-
-        public RecordingStaticGAgentStreamInvocationPort(IReadOnlyList<AGUIEvent> events, GAgentDraftRunStartError startError)
-        {
-            _events = events;
-            _startError = startError;
-        }
-
-        public StaticGAgentStreamInvocationRequest? LastRequest { get; private set; }
-
-        public static RecordingStaticGAgentStreamInvocationPort Empty() =>
-            new([], GAgentDraftRunStartError.None);
-
-        public static RecordingStaticGAgentStreamInvocationPort EmittingText(params string[] textDeltas)
-        {
-            var events = new List<AGUIEvent>();
-            events.Add(new AGUIEvent { RunStarted = new RunStartedEvent { ThreadId = "t1", RunId = "r1" } });
-            events.Add(new AGUIEvent { TextMessageStart = new TextMessageStartEvent { MessageId = "msg-1", Role = "assistant" } });
-            foreach (var delta in textDeltas)
+            ForwardToModel = new ForwardToModel
             {
-                events.Add(new AGUIEvent
+                ToolSetRef = new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault },
+                ToolChoiceHint = new ChatRouteToolChoiceHint
                 {
-                    TextMessageContent = new TextMessageContentEvent { MessageId = "msg-1", Delta = delta },
-                });
-            }
-            events.Add(new AGUIEvent { TextMessageEnd = new TextMessageEndEvent { MessageId = "msg-1" } });
-            events.Add(new AGUIEvent { RunFinished = new RunFinishedEvent { ThreadId = "t1", RunId = "r1" } });
-            return new RecordingStaticGAgentStreamInvocationPort(events, GAgentDraftRunStartError.None);
-        }
-
-        public static RecordingStaticGAgentStreamInvocationPort EmittingRunError() =>
-            new([
-                new AGUIEvent { RunStarted = new RunStartedEvent { ThreadId = "t1", RunId = "r1" } },
-                new AGUIEvent { RunError = new RunErrorEvent() },
-            ], GAgentDraftRunStartError.None);
-
-        public async Task<StaticGAgentStreamInvocationResult> InvokeAsync(
-            StaticGAgentStreamInvocationRequest request,
-            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
-            Func<StaticGAgentStreamAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
-            CancellationToken ct = default)
-        {
-            LastRequest = request;
-            if (_startError != GAgentDraftRunStartError.None)
-            {
-                return new StaticGAgentStreamInvocationResult(
-                    Accepted: null,
-                    StartError: _startError,
-                    CompletionStatus: GAgentDraftRunCompletionStatus.Unknown,
-                    CompletionObserved: false);
-            }
-
-            var gagentReceipt = new GAgentDraftRunAcceptedReceipt(
-                ActorId: "actor-1",
-                ActorTypeName: "TestStaticGAgent",
-                CommandId: "cmd-1",
-                CorrelationId: "corr-1");
-            var serviceReceipt = new ServiceInvocationAcceptedReceipt
-            {
-                CommandId = gagentReceipt.CommandId,
-                CorrelationId = gagentReceipt.CorrelationId,
-                TargetActorId = gagentReceipt.ActorId,
-                EndpointId = request.EndpointId,
-            };
-            var accepted = new StaticGAgentStreamAcceptedReceipt(serviceReceipt, gagentReceipt);
-            if (onAcceptedAsync != null)
-                await onAcceptedAsync(accepted, ct);
-
-            foreach (var evt in _events)
-                await emitAsync(evt, ct);
-
-            return new StaticGAgentStreamInvocationResult(
-                accepted,
-                StartError: GAgentDraftRunStartError.None,
-                CompletionStatus: GAgentDraftRunCompletionStatus.RunFinished,
-                CompletionObserved: true);
-        }
-    }
-
-    private sealed class ThrowingStaticGAgentStreamInvocationPort : IStaticGAgentStreamInvocationPort<AGUIEvent>
-    {
-        private readonly Func<Exception> _throwFactory;
-
-        private ThrowingStaticGAgentStreamInvocationPort(Func<Exception> throwFactory)
-        {
-            _throwFactory = throwFactory;
-        }
-
-        /// <summary>
-        /// Mirrors the wire signature of <c>ServiceInvocationResolutionService</c>
-        /// raising <c>InvalidOperationException("Service '...' was not found.")</c>
-        /// when the resolved publishedServiceId has no Studio binding.
-        /// </summary>
-        public static ThrowingStaticGAgentStreamInvocationPort ServiceNotFound(string serviceKey) =>
-            new(() => new InvalidOperationException($"Service '{serviceKey}' was not found."));
-
-        public Task<StaticGAgentStreamInvocationResult> InvokeAsync(
-            StaticGAgentStreamInvocationRequest request,
-            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
-            Func<StaticGAgentStreamAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
-            CancellationToken ct = default) => throw _throwFactory();
+                    ToolName = toolName,
+                    PrefilledArguments = prefilledArguments,
+                },
+            },
+        };
     }
 
     private sealed class StubResponsesCallerScopeResolver : IResponsesCallerScopeResolver
@@ -2434,11 +2912,29 @@ public sealed class MainnetResponsesEndpointsTests
             _scope = new ResponsesCallerScope(scopeId, ownerSubject, originKind);
         }
 
+        public ResponsesCallerScopeResolutionContext? LastContext { get; private set; }
+
         public Task<ResponsesCallerScope> ResolveAsync(
-            string nyxIdAccessToken,
-            HttpContext http,
-            CancellationToken ct = default) =>
-            Task.FromResult(_scope);
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default)
+        {
+            LastContext = context;
+            return Task.FromResult(_scope);
+        }
+    }
+
+    private sealed class TokenAwareResponsesCallerScopeResolver(ResponsesCallerScope scope)
+        : IResponsesCallerScopeResolver
+    {
+        public List<string> ResolvedTokens { get; } = [];
+
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default)
+        {
+            ResolvedTokens.Add(context.InboundBearerToken);
+            return Task.FromResult(scope);
+        }
     }
 
     private sealed class RecordingResponsesToolProvider : IResponsesToolProvider
@@ -2479,6 +2975,57 @@ public sealed class MainnetResponsesEndpointsTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
     }
 
+    private static ResponsesToolProviderContext BuildToolProviderContext(
+        ResponsesCallerScope callerScope,
+        string responseId,
+        string bearerToken)
+    {
+        return new ResponsesToolProviderContext(
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity(responseId, null),
+                Credentials = new AgentToolCredentials(bearerToken, null, null),
+                Caller = new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+                Channel = new AgentToolChannelContext(
+                    callerScope.OriginKind.ToString(),
+                    null,
+                    callerScope.ScopeId,
+                    null,
+                    null),
+            });
+    }
+
+    private static ResponsesAevatarToolProvider CreateResponsesAevatarToolProvider(
+        RecordingResponsesAgentToolStatePort port)
+    {
+        var service = new ResponsesWebSubstituteToolExecutionService(
+            port,
+            port,
+            new StubResponsesWebSubstituteBackend());
+        return new ResponsesAevatarToolProvider(port, service);
+    }
+
+    private sealed class StubResponsesWebSubstituteBackend : IResponsesWebSubstituteBackend
+    {
+        public int DefaultMaxSearchResults => 10;
+
+        public Task<ResponsesWebFetchBoundaryResult> ExecuteWebFetchAsync(
+            ResponsesWebFetchBoundaryInput input,
+            CancellationToken ct) =>
+            Task.FromResult(new ResponsesWebFetchBoundaryResult(
+                input.Url,
+                200,
+                "text/plain",
+                "body",
+                string.Empty));
+
+        public Task<ResponsesWebSearchBoundaryResult> ExecuteWebSearchAsync(
+            ResponsesWebSearchBoundaryInput input,
+            CancellationToken ct) =>
+            Task.FromResult(new ResponsesWebSearchBoundaryResult(
+                new ResponsesWebSearchToolOutput()));
+    }
+
     private sealed class StubAgentTool : IAgentTool
     {
         public StubAgentTool(string name, string description)
@@ -2506,8 +3053,6 @@ public sealed class MainnetResponsesEndpointsTests
 
         public List<(string ScopeId, string OwnerSubject, string SourceResponseId, string ArgumentsJson)> TodoWrites { get; } = [];
 
-        public List<(string ScopeId, string OwnerSubject, string SourceResponseId, string ArgumentsJson)> Tasks { get; } = [];
-
         public List<(string ScopeId, string OwnerSubject, string SourceResponseId, ResponsesWebTraceInput Trace)> WebTraces { get; } = [];
 
         public string SeedWebCache(string toolName, string value, string resultJson)
@@ -2518,7 +3063,7 @@ public sealed class MainnetResponsesEndpointsTests
                 toolName,
                 value,
                 string.Empty,
-                resultJson,
+                ResponsesWebResultMigration.FromLegacyValue(ResponsesJsonValues.ParseBoundaryPayload(resultJson)),
                 DateTimeOffset.UtcNow,
                 null,
                 0);
@@ -2547,22 +3092,6 @@ public sealed class MainnetResponsesEndpointsTests
                 ]));
         }
 
-        public Task<ResponsesTaskDispatchResult> RecordTaskAsync(
-            string scopeId,
-            string ownerSubject,
-            string sourceResponseId,
-            string argumentsJson,
-            CancellationToken ct = default)
-        {
-            Tasks.Add((scopeId, ownerSubject, sourceResponseId, argumentsJson));
-            return Task.FromResult(new ResponsesTaskDispatchResult(
-                "responses-agent-tools-test",
-                "task_1",
-                "responses-agent-tools-test-task-1",
-                "accepted",
-                """{"status":"accepted"}"""));
-        }
-
         public Task<ResponsesWebTraceResult> RecordWebTraceAsync(
             string scopeId,
             string ownerSubject,
@@ -2576,7 +3105,7 @@ public sealed class MainnetResponsesEndpointsTests
                 trace.TraceId,
                 trace.CacheKey,
                 trace.CacheHit,
-                trace.ResultJson));
+                trace.Result.Clone()));
         }
 
         public Task<ResponsesAgentToolStateSnapshot?> GetAsync(
@@ -2615,6 +3144,8 @@ public sealed class MainnetResponsesEndpointsTests
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
 
         public List<(string ActorId, string ResponseId, LlmSessionForwardedToolCall Call)> ForwardedToolCalls { get; } = [];
+
+        public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
 
         public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
 
@@ -2702,6 +3233,46 @@ public sealed class MainnetResponsesEndpointsTests
                     ForwardedToolCalls = calls,
                     StateVersion = current.StateVersion + 1,
                     LastEventId = $"{responseId}:tool:{clone.CallId}:emitted",
+                };
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task RecordCompletionAsync(
+            string sessionActorId,
+            string responseId,
+            LlmSessionCompletion completion,
+            CancellationToken ct = default)
+        {
+            var clone = completion.Clone();
+            RecordedCompletions.Add((sessionActorId, responseId, clone));
+            if (_snapshots.TryGetValue(responseId, out var current))
+            {
+                _snapshots[responseId] = current with
+                {
+                    Status = string.IsNullOrWhiteSpace(clone.FailureCode)
+                        ? LlmSessionStatus.Completed
+                        : LlmSessionStatus.Failed,
+                    StateVersion = current.StateVersion + 1,
+                    LastEventId = $"{responseId}:completion",
+                    Completion = new LlmSessionCompletionSnapshot(
+                        clone.OutputText ?? string.Empty,
+                        clone.ToolCalls
+                            .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                                call.CallId,
+                                call.ToolName,
+                                ResponsesJsonValues.ToBoundaryJson(call.Result)))
+                            .ToArray(),
+                        clone.CompletedAt?.ToDateTimeOffset(),
+                        string.IsNullOrWhiteSpace(clone.FailureCode) ? null : clone.FailureCode,
+                        string.IsNullOrWhiteSpace(clone.FailureMessage) ? null : clone.FailureMessage,
+                        clone.Usage is null
+                            ? null
+                            : new TokenUsage(
+                                clone.Usage.PromptTokens,
+                                clone.Usage.CompletionTokens,
+                                clone.Usage.TotalTokens)),
                 };
             }
 

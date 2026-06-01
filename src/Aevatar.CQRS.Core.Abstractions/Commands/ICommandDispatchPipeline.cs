@@ -7,7 +7,7 @@ public interface ICommandDispatchPipeline<in TCommand, TTarget, TReceipt, TError
         TCommand command,
         CancellationToken ct = default);
 
-    Task DispatchPreparedAsync(
+    Task<DispatchAdmission> DispatchPreparedAsync(
         CommandDispatchExecution<TTarget, TReceipt> execution,
         CancellationToken ct = default);
 

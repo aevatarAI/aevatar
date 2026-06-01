@@ -70,8 +70,8 @@ flowchart TB
     CMD --> RES["WorkflowRunCommandTargetResolver"]
     CMD --> BND["WorkflowRunObservationLifecycle"]
     BND --> LIF["IWorkflowExecutionProjectionPort"]
-    LIF --> LEASE["WorkflowExecutionRuntimeLease"]
-    LIF --> SUB["AttachLiveSinkAsync(lease, sink)"]
+    LIF --> LEASE["Deterministic existing lease\nactorId + commandId"]
+    LIF --> SUB["AttachLiveSinkAsync(lease, sink)\n(no ensure/activate)"]
     CMD --> FAC["WorkflowChatRequestEnvelopeFactory"]
     FAC --> DSP["ActorCommandTargetDispatcher / IActorDispatchPort"]
     DSP --> ACT["WorkflowRunGAgent / RoleGAgent"]
@@ -269,9 +269,10 @@ flowchart LR
 
 | 标识 | 生成位置 | 语义范围 | 事实源 | 主要消费点 |
 |---|---|---|---|---|
-| `actorId` | `WorkflowRunActorResolver` | Workflow Actor 维度 | Actor Runtime | 投影上下文、查询接口 |
-| `commandId` | `DefaultCommandContextPolicy` | 一次 run 命令维度 | Application CommandContext | `workflow-run:{actorId}:{commandId}` 会话流 |
-| `correlationId` | `DefaultCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.Propagation.CorrelationId` |
+| `actorId` | `WorkflowRunActorResolver` / run control request | Workflow Actor 地址维度；run control 中只用于定位目标 Actor | Actor Runtime / `WorkflowActorBinding.ActorId` | 投影上下文、查询接口、run control dispatch target |
+| `runId` | Workflow run binding / run control request | Workflow run 业务执行维度；不作为 Actor 地址或 command/session identity | `WorkflowActorBinding.RunId` | `WorkflowRunControlCommandTarget.RunId`、`WorkflowResumedEvent.RunId`、`SignalReceivedEvent.RunId`、`WorkflowStoppedEvent.RunId` |
+| `commandId` | `DefaultCommandContextPolicy` | 一次 run 命令维度；run control 中作为 accepted command / envelope identity | Application CommandContext | `workflow-run:{actorId}:{commandId}` 会话流、`WorkflowRunControlAcceptedReceipt.CommandId`、`EventEnvelope.Id` |
+| `correlationId` | `DefaultCommandContextPolicy` | 命令追踪维度；默认可与 `commandId` 同值，但语义独立 | Application CommandContext | `EventEnvelope.Propagation.CorrelationId`、`WorkflowRunControlAcceptedReceipt.CorrelationId` |
 | `sessionId` | `WorkflowChatRunRequest.SessionId` + `WorkflowChatRequestEnvelopeFactory` fallback | 本次 chat 会话维度 | Command payload | `ChatRequestEvent.SessionId` |
 | `chatSessionId` | `ChatSessionKeys.CreateWorkflowStepSessionId` | 单 workflow step 维度 | `scopeId:stepId` 规则 | `LLMCallModule` pending 匹配 |
 | `messageId` | run-event mapper | 单消息流维度 | `msg:{sessionId}` 或 `msg:{envelopeId}` | 文本增量拼装 |
@@ -287,7 +288,7 @@ flowchart LR
 
 ### 7.2 运行态约束
 
-1. live sink 订阅通过 `lease + sink` 显式绑定，订阅对象保存在 `WorkflowExecutionRuntimeLease` 的运行态集合。
+1. live sink 订阅通过 `lease + sink` 显式绑定；command binder 只 attach 到 deterministic existing session，不在 dispatch 前 ensure/activate projection。
 2. 会话事件分发按 `scopeId=session actorId` 和 `sessionId=commandId` 二元键，不依赖中间层全局 `actorId->context` 映射。
 3. sink 写入失败会按策略 detach，并尝试发布 run error 遥测事件。
 

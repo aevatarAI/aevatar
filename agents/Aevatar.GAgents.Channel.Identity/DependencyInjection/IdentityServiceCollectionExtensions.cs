@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -5,13 +6,17 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.Slash;
+using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgents.Channel.Identity.DependencyInjection;
 
@@ -26,7 +31,7 @@ public static class IdentityServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the Channel.Identity stack: per-binding projection +
-    /// query / readiness ports, the cluster-singleton OAuth client
+    /// query port, the cluster-singleton OAuth client
     /// projection + provider, the production NyxID broker, the OAuth
     /// client bootstrap service, and the slash-command handlers.
     /// Document stores are NOT wired here — the host composition root
@@ -39,6 +44,9 @@ public static class IdentityServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration? configuration = null)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         ArgumentNullException.ThrowIfNull(services);
 
         // Guard against accidental double-registration. Most calls below use
@@ -55,6 +63,13 @@ public static class IdentityServiceCollectionExtensions
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton(sp => TimeProvider.System);
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            CommittedStateProjectionActivationHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionActivationPlanProvider,
+            ChannelIdentityCommittedStateProjectionActivationPlanProvider>());
 
         // ─── Per-binding projection (one document per ExternalSubjectRef) ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -74,20 +89,14 @@ public static class IdentityServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>,
             ExternalIdentityBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IExternalIdentityBindingQueryPort, ExternalIdentityBindingProjectionQueryPort>();
-        services.TryAddSingleton<IProjectionReadinessPort, ExternalIdentityBindingProjectionReadinessPort>();
-        // Projection scope activator for the per-binding actor — callback
-        // handler calls EnsureProjectionForActorAsync(bindingActorId) before
-        // dispatching CommitBindingCommand so the projector subscribes to
-        // the actor's committed events and the readmodel materializes.
-        // Without this the binding readmodel stays empty, the readiness
-        // wait in /api/oauth/nyxid-callback times out, and the next
-        // inbound message's gate keeps re-sending the binding card. See
-        // issue #549 follow-up observed 2026-05-01.
-        services.TryAddSingleton<ExternalIdentityBindingProjectionPort>();
-        services.TryAddSingleton<IExternalIdentityBindingProjectionPort>(
-            sp => sp.GetRequiredService<ExternalIdentityBindingProjectionPort>());
 
         // ─── Cluster-singleton OAuth client projection ───
+        // Refactor (iter97/cluster-526): Old pattern: AevatarOAuthClientDocument
+        // carries state-token HMAC bytes but ES startup did not require an
+        // explicit ACL assertion. New principle: when ChannelIdentity uses ES,
+        // AevatarOAuthClientEsAclStartupGuard fails closed unless the host
+        // declares the aevatar-oauth-clients index grant matches grain/event-store
+        // internal read access.
         services.AddProjectionMaterializationRuntimeCore<
             AevatarOAuthClientMaterializationContext,
             AevatarOAuthClientMaterializationRuntimeLease,
@@ -105,19 +114,35 @@ public static class IdentityServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>,
             AevatarOAuthClientDocumentMetadataProvider>();
         services.TryAddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
-        // Projection scope activator — bootstrap calls EnsureProjectionForActorAsync
-        // before dispatching the provisioning command so the projector
-        // subscribes to the actor's committed event stream and materializes
-        // the readmodel. Without this the OAuth-client document never
-        // appears and the provider keeps throwing
-        // AevatarOAuthClientNotProvisionedException even after DCR succeeds
-        // (production regression observed 2026-04-30 in aismart-app-mainnet).
-        services.TryAddSingleton<AevatarOAuthClientProjectionPort>();
+        var aclOptions = services.AddOptions<AevatarOAuthClientEsAclOptions>();
+        if (configuration is not null)
+            aclOptions.Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
 
         // Endpoint filter for the operator /rebuild path — rejects unauthenticated
         // callers before model binding/DI resolution kicks in.
         services.TryAddTransient<Endpoints.IdentityOAuthEndpoints.RebuildAuthEndpointFilter>();
-        services.TryAddSingleton<Endpoints.IdentityOAuthEndpoints.AevatarOAuthClientRebuildCoordinator>();
+
+        services.AddIdentityOAuthCommandDispatch<CommitBindingCommand, ExternalIdentityBindingGAgent>(
+            static command => new ChannelIdentityOAuthCommandTarget(
+                command.ExternalSubject.ToActorId(),
+                "channel-identity.oauth-callback"));
+        services.AddIdentityOAuthCommandDispatch<RevokeBindingCommand, ExternalIdentityBindingGAgent>(
+            static command => new ChannelIdentityOAuthCommandTarget(
+                command.ExternalSubject.ToActorId(),
+                "channel-identity.broker-revocation"));
+        services.AddIdentityOAuthCommandDispatch<ObserveBrokerCapabilityCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-callback"));
+        services.AddIdentityOAuthCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-bootstrap"));
+        services.AddIdentityOAuthCommandDispatch<ProvisionAevatarOAuthClientCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-rebuild"));
 
         // ─── Operator admin surface (rebuild endpoint, issue #549) ───
         // Bound from configuration when present; absence keeps the rebuild
@@ -165,6 +190,22 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, WhoamiChannelSlashCommandHandler>());
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
 
+        return services;
+    }
+
+    private static IServiceCollection AddIdentityOAuthCommandDispatch<TCommand, TAgent>(
+        this IServiceCollection services,
+        Func<TCommand, ChannelIdentityOAuthCommandTarget> resolveTarget)
+        where TCommand : class, IMessage
+        where TAgent : IAgent
+    {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
+        services.TryAddSingleton(new ChannelIdentityOAuthCommandRoute<TCommand>(resolveTarget));
+        services.TryAddSingleton<
+            ICommandDispatchService<TCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>,
+            ChannelIdentityOAuthCommandDispatch<TCommand, TAgent>>();
         return services;
     }
 

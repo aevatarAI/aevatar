@@ -21,17 +21,14 @@ public sealed class WorkflowProjectionMaterializationTests
     public void WorkflowRunInsightReportArtifactProjector_Ctor_ShouldThrow_WhenDependencyMissing()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
 
-        Action noReader = () => new WorkflowRunInsightReportArtifactProjector(null!, reportStore, timelineStore, graphWriter);
-        Action noReportWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, null!, timelineStore, graphWriter);
-        Action noTimelineWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, null!, graphWriter);
-        Action noGraphWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, timelineStore, null!);
+        Action noReader = () => new WorkflowRunInsightReportArtifactProjector(null!, reportStore, graphWriter);
+        Action noReportWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, null!, graphWriter);
+        Action noGraphWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, null!);
 
         noReader.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportReader");
         noReportWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportWriter");
-        noTimelineWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("timelineWriter");
         noGraphWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("graphWriter");
     }
 
@@ -100,12 +97,127 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowCatalogCurrentStateProjector_ShouldProjectDefinitionReadModelWithFreshness()
+    {
+        var store = new RecordingDocumentStore<WorkflowCatalogCurrentStateDocument>(x => x.Id);
+        var projector = new WorkflowCatalogCurrentStateProjector(
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
+        var context = new WorkflowBindingProjectionContext
+        {
+            RootActorId = "workflow-definition:repo_install",
+            ProjectionKind = "workflow-binding",
+        };
+
+        await projector.ProjectAsync(context, new EventEnvelope());
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                7,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "repo_install",
+                    WorkflowYaml = BuildDefinitionYaml("repo_install"),
+                    SourceKind = "repo",
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "repo_install",
+                    WorkflowYaml = BuildDefinitionYaml("repo_install"),
+                    SourceKind = "repo",
+                    Compiled = true,
+                }));
+
+        store.UpsertCount.Should().Be(1);
+        store.Stored.Should().ContainKey("repo_install");
+        var document = store.Stored["repo_install"];
+        document.ActorId.Should().Be("workflow-definition:repo_install");
+        document.StateVersion.Should().Be(7);
+        document.LastEventId.Should().Be("definition-evt-7");
+        document.UpdatedAt.Should().Be(DateTimeOffset.Parse("2026-03-17T11:07:00+00:00"));
+        document.Source.Should().Be("repo");
+        document.Primitives.Should().Contain("assign");
+        document.Steps.Should().ContainSingle(step => step.Id == "bootstrap");
+    }
+
+    [Fact]
+    public async Task WorkflowCatalogCurrentStateProjector_ShouldProjectGraphAndDependencyBranches()
+    {
+        var store = new RecordingDocumentStore<WorkflowCatalogCurrentStateDocument>(x => x.Id);
+        var projector = new WorkflowCatalogCurrentStateProjector(
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
+        var context = new WorkflowBindingProjectionContext
+        {
+            RootActorId = "workflow-definition:complex",
+            ProjectionKind = "workflow-binding",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                8,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "complex",
+                    WorkflowYaml = BuildComplexDefinitionYaml("complex"),
+                },
+                new WorkflowState
+                {
+                    WorkflowName = " complex ",
+                    WorkflowYaml = BuildComplexDefinitionYaml("complex"),
+                    Compiled = true,
+                }));
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                9,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "blank",
+                    WorkflowYaml = "",
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "   ",
+                    WorkflowYaml = BuildComplexDefinitionYaml("blank"),
+                }));
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                10,
+                new WorkflowCompletedEvent(),
+                new WorkflowState
+                {
+                    WorkflowName = "ignored",
+                    WorkflowYaml = BuildComplexDefinitionYaml("ignored"),
+                }));
+
+        store.UpsertCount.Should().Be(1);
+        var document = store.Stored["complex"];
+        document.Source.Should().Be("builtin");
+        document.Category.Should().Be("llm");
+        document.RequiresLlmProvider.Should().BeFalse();
+        document.Primitives.Should().Contain(["conditional", "connector_call", "foreach", "llm_call", "workflow_call"]);
+        document.RequiredConnectors.Should().Equal("aevatar_cli", "mcp_tools");
+        document.WorkflowCalls.Should().Equal("child_workflow");
+        document.Roles.Should().ContainSingle(role => role.Id == "operator");
+        document.Roles[0].EventModules.Should().Equal("audit", "trace");
+        document.Steps.Should().Contain(step => step.Id == "child_llm" && step.TargetRole == "operator");
+        document.Steps.Should().Contain(step =>
+            step.Id == "fanout" &&
+            step.Children.Single().Id == "child_llm");
+        document.Edges.Should().Contain(edge => edge.From == "decide" && edge.To == "call_connector" && edge.Label == "true");
+        document.Edges.Should().Contain(edge => edge.From == "call_connector" && edge.To == "call_child");
+        document.Edges.Should().Contain(edge => edge.From == "fanout" && edge.To == "child_llm" && edge.Label == "child");
+    }
+
+    [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackLifecycleReplyAndCompletionBranches()
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, timelineStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -217,9 +329,8 @@ public sealed class WorkflowProjectionMaterializationTests
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackSuspensionSignalAndStoppedBranches()
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, timelineStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -295,9 +406,8 @@ public sealed class WorkflowProjectionMaterializationTests
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldIgnoreInvalidEnvelope_AndMissingStateRoot()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, timelineStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -329,7 +439,6 @@ public sealed class WorkflowProjectionMaterializationTests
             });
 
         reportStore.UpsertCount.Should().Be(0);
-        timelineStore.UpsertCount.Should().Be(0);
         graphWriter.UpsertCount.Should().Be(0);
     }
 
@@ -337,9 +446,8 @@ public sealed class WorkflowProjectionMaterializationTests
     public async Task WorkflowArtifactProjector_ShouldTrackStepAndTopologyEvents_AndSkipDuplicates()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, timelineStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -419,9 +527,8 @@ public sealed class WorkflowProjectionMaterializationTests
                 eventId: "evt-5"));
 
         reportStore.UpsertCount.Should().Be(5);
-        timelineStore.UpsertCount.Should().Be(5);
         graphWriter.UpsertCount.Should().Be(5);
-        timelineStore.Stored["actor-1"].Timeline.Select(x => x.Stage).Should().Contain(["step.request", "step.completed"]);
+        reportStore.Stored["actor-1"].Timeline.Select(x => x.Stage).Should().Contain(["step.request", "step.completed"]);
         graphWriter.Stored["actor-1"].Steps.Should().ContainSingle();
         graphWriter.Stored["actor-1"].Steps[0].TargetRole.Should().Be("assistant");
         graphWriter.Stored["actor-1"].Steps[0].SuspensionType.Should().Be("human_input");
@@ -430,21 +537,8 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
-    public async Task WorkflowExecutionMaterializationPort_And_Codecs_ShouldCoverLifecycleBranches()
+    public void WorkflowMaterializationLeases_And_Codecs_ShouldCoverLifecycleBranches()
     {
-        var activation = new RecordingMaterializationActivationService();
-        var release = new RecordingMaterializationReleaseService();
-        var port = new WorkflowExecutionMaterializationPort(
-            new Aevatar.Workflow.Projection.Configuration.WorkflowExecutionProjectionOptions { Enabled = true },
-            activation,
-            release);
-
-        (await port.ActivateAsync("")).Should().BeFalse();
-        (await port.ActivateAsync("actor-2")).Should().BeTrue();
-
-        activation.Requests.Should().ContainSingle();
-        activation.Requests[0].ProjectionKind.Should().Be("workflow-execution-materialization");
-
         var materializationLease = new WorkflowExecutionMaterializationRuntimeLease(new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-2",
@@ -489,6 +583,7 @@ public sealed class WorkflowProjectionMaterializationTests
         {
             Id = $"outer-{version}",
             Timestamp = Timestamp.FromDateTimeOffset(timestamp),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("actor-1"),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
                 StateEvent = new StateEvent
@@ -502,6 +597,95 @@ public sealed class WorkflowProjectionMaterializationTests
             }),
         };
     }
+
+    private static EventEnvelope BuildDefinitionCommittedEnvelope(
+        long version,
+        IMessage payload,
+        WorkflowState state)
+    {
+        var timestamp = DateTimeOffset.Parse($"2026-03-17T11:{version:00}:00+00:00");
+        return new EventEnvelope
+        {
+            Id = $"definition-outer-{version}",
+            Timestamp = Timestamp.FromDateTimeOffset(timestamp),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = $"definition-evt-{version}",
+                    Version = version,
+                    Timestamp = Timestamp.FromDateTimeOffset(timestamp),
+                    EventData = Any.Pack(payload),
+                },
+                StateRoot = Any.Pack(state),
+            }),
+        };
+    }
+
+    private static string BuildDefinitionYaml(string name) =>
+        $"""
+        name: {name}
+        description: Bootstrap runtime.
+        roles:
+          - id: operator
+            name: Operator
+            system_prompt: ""
+        steps:
+          - id: bootstrap
+            type: assign
+            parameters:
+              target: result
+              value: "ok"
+        """;
+
+    private static string BuildComplexDefinitionYaml(string name) =>
+        $"""
+        name: {name}
+        description: Complex runtime.
+        roles:
+          - id: operator
+            name: Operator
+            system_prompt: "Operate."
+            provider: openai
+            model: gpt-test
+            temperature: 0.2
+            max_tokens: 128
+            max_tool_rounds: 2
+            max_history_messages: 3
+            event_modules: "audit, trace, audit"
+            event_routes: "route:*"
+            connectors:
+              - aevatar_cli
+        steps:
+          - id: decide
+            type: conditional
+            parameters:
+              condition: "ready"
+            branches:
+              true:
+                next: call_connector
+              false:
+                next: fanout
+          - id: call_connector
+            type: connector_call
+            target_role: operator
+            parameters:
+              connector: mcp_tools
+              operation: search
+            next: call_child
+          - id: call_child
+            type: workflow_call
+            workflow: child_workflow
+            next: fanout
+          - id: fanout
+            type: foreach
+            sub_step_type: llm_call
+            children:
+              - id: child_llm
+                type: llm_call
+                target_role: operator
+                prompt: "Summarize."
+        """;
 
     private static WorkflowRunState BuildState(
         string status,
@@ -597,28 +781,4 @@ public sealed class WorkflowProjectionMaterializationTests
         }
     }
 
-    private sealed class RecordingMaterializationActivationService
-        : IProjectionScopeActivationService<WorkflowExecutionMaterializationRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public Task<WorkflowExecutionMaterializationRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(new WorkflowExecutionMaterializationRuntimeLease(new WorkflowExecutionMaterializationContext
-            {
-                RootActorId = request.RootActorId,
-                ProjectionKind = request.ProjectionKind,
-            }));
-        }
-    }
-
-    private sealed class RecordingMaterializationReleaseService
-        : IProjectionScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease>
-    {
-        public Task ReleaseIfIdleAsync(WorkflowExecutionMaterializationRuntimeLease lease, CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
 }

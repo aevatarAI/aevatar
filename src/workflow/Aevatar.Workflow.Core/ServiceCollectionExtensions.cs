@@ -1,7 +1,9 @@
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -26,6 +28,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowConnectorResolver, RegistryBackedWorkflowConnectorResolver>();
         services.TryAddSingleton<WorkflowStepTargetAgentResolver>();
         services.TryAddTransient<WorkflowScheduleGAgent>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            WorkflowRunCommittedStateRedactionHook>());
         return services;
     }
 

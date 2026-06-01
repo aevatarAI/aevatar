@@ -11,6 +11,10 @@ using Aevatar.Foundation.Abstractions.Streaming;
 
 namespace Aevatar.Foundation.Runtime.Streaming;
 
+// DEV/TEST ONLY transport - production must use a durable Orleans/Kafka stream provider.
+// Refactor (iter109/cluster-109-inmemory-stream-inline-dispatch):
+//   Old pattern: Local stream runtime keeps actor-id stream registries and can fan out subscribers via fire-and-forget background work.
+//   New principle: InMemoryStream is dev/test-only transport (usage proves no production registration); keep stream/forwarding registry but remove concurrent subscriber fire-and-forget dispatch; no new admission abstraction.
 /// <summary>In-memory event stream for actor-to-actor delivery and broadcast.</summary>
 public sealed class InMemoryStream : IStream
 {
@@ -19,8 +23,8 @@ public sealed class InMemoryStream : IStream
     private volatile Func<EventEnvelope, Task>[] _subscribers = [];
     private readonly Lock _lock = new();
     private readonly CancellationTokenSource _cts = new();
-    private readonly Task _pumpLoop;
-    private readonly Task _dispatchLoop;
+    private Task _pumpLoop;
+    private Task _dispatchLoop;
     private readonly InMemoryStreamOptions _options;
     private readonly ILogger<InMemoryStream> _logger;
     private readonly Func<EventEnvelope, Task>? _onDispatchedAsync;
@@ -40,7 +44,8 @@ public sealed class InMemoryStream : IStream
         Func<EventEnvelope, Task>? onDispatchedAsync = null,
         Func<StreamForwardingBinding, CancellationToken, Task>? upsertRelayAsync = null,
         Func<string, CancellationToken, Task>? removeRelayAsync = null,
-        Func<CancellationToken, Task<IReadOnlyList<StreamForwardingBinding>>>? listRelaysAsync = null)
+        Func<CancellationToken, Task<IReadOnlyList<StreamForwardingBinding>>>? listRelaysAsync = null,
+        bool autoStart = true)
     {
         _options = options ?? new InMemoryStreamOptions();
         var capacity = _options.Capacity > 0 ? _options.Capacity : 4096;
@@ -61,8 +66,22 @@ public sealed class InMemoryStream : IStream
         _upsertRelayAsync = upsertRelayAsync ?? ((_, _) => Task.CompletedTask);
         _removeRelayAsync = removeRelayAsync ?? ((_, _) => Task.CompletedTask);
         _listRelaysAsync = listRelaysAsync ?? (_ => Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]));
-        _pumpLoop = Task.Run(PumpLoopAsync);
-        _dispatchLoop = Task.Run(DispatchLoopAsync);
+        _pumpLoop = Task.CompletedTask;
+        _dispatchLoop = Task.CompletedTask;
+        if (autoStart)
+            Start();
+    }
+
+    internal void Start()
+    {
+        lock (_lock)
+        {
+            if (!_pumpLoop.IsCompleted || !_dispatchLoop.IsCompleted || _cts.IsCancellationRequested)
+                return;
+
+            _pumpLoop = Task.Run(PumpLoopAsync);
+            _dispatchLoop = Task.Run(DispatchLoopAsync);
+        }
     }
 
     /// <summary>Writes message into stream; non-EventEnvelope messages are auto-wrapped.</summary>
@@ -171,19 +190,6 @@ public sealed class InMemoryStream : IStream
             await foreach (var envelope in _dispatchChannel.Reader.ReadAllAsync(_cts.Token))
             {
                 var subs = _subscribers;
-                if (_options.DispatchSubscribersConcurrently)
-                {
-                    foreach (var sub in subs)
-                    {
-                        _ = Task.Run(() => InvokeSubscriberAsync(sub, envelope), CancellationToken.None);
-                    }
-
-                    if (!await InvokePostDispatchAsync(envelope))
-                        return;
-
-                    continue;
-                }
-
                 foreach (var sub in subs)
                 {
                     try
@@ -211,26 +217,6 @@ public sealed class InMemoryStream : IStream
         }
         catch (OperationCanceledException) { }
         catch (ChannelClosedException) { }
-    }
-
-    private async Task InvokeSubscriberAsync(Func<EventEnvelope, Task> sub, EventEnvelope envelope)
-    {
-        try
-        {
-            await sub(envelope);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "In-memory stream subscriber failed. stream={StreamId}",
-                StreamId);
-
-            if (_options.ThrowOnSubscriberError)
-            {
-                StopWithError(ex);
-            }
-        }
     }
 
     private async Task<bool> InvokePostDispatchAsync(EventEnvelope envelope)

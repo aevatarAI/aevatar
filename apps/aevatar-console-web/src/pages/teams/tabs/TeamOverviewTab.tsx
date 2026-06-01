@@ -1,4 +1,4 @@
-import { Space, Typography, theme } from "antd";
+import { Button, Space, Typography, theme } from "antd";
 import React from "react";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
 import {
@@ -18,6 +18,7 @@ type OverviewCompositionRow = {
 type OverviewConfigurationRow = {
   readonly label: string;
   readonly note: string;
+  readonly noteTooltip?: string;
   readonly value: string;
 };
 
@@ -28,6 +29,9 @@ type TeamOverviewTabProps = {
   readonly currentDeploymentPillText: string;
   readonly currentHeaderStatusFriendly: string;
   readonly currentHeaderStatusStyle: React.CSSProperties;
+  readonly currentMemberCardCaption: string;
+  readonly currentMemberCardTooltip: string;
+  readonly currentMemberLabel: string;
   readonly currentRunCardCaption: string;
   readonly currentRunCardTooltip: string;
   readonly currentRunFriendly: string;
@@ -38,8 +42,12 @@ type TeamOverviewTabProps = {
   readonly currentServiceFriendly: string;
   readonly currentServicePillStyle: React.CSSProperties;
   readonly currentServicePillText: string;
+  readonly entryMemberId?: string | null;
+  readonly entryMemberLabel?: string;
+  readonly entryMemberUpdating?: boolean;
   readonly latestVisibleUpdateLabel: string;
   readonly latestVisibleUpdateNote: string;
+  readonly onClearEntryMember?: () => void;
 };
 
 const surfaceStyle = (
@@ -62,6 +70,9 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   currentDeploymentPillText,
   currentHeaderStatusFriendly,
   currentHeaderStatusStyle,
+  currentMemberCardCaption,
+  currentMemberCardTooltip,
+  currentMemberLabel,
   currentRunCardCaption,
   currentRunCardTooltip,
   currentRunFriendly,
@@ -72,10 +83,15 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   currentServiceFriendly,
   currentServicePillStyle,
   currentServicePillText,
+  entryMemberId,
+  entryMemberLabel,
+  entryMemberUpdating = false,
   latestVisibleUpdateLabel,
   latestVisibleUpdateNote,
+  onClearEntryMember,
 }) => {
   const { token } = theme.useToken();
+  const hasEntryMember = Boolean(entryMemberId?.trim());
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -120,6 +136,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           }}
         >
           <SignalCard
+            label="当前成员"
+            value={currentMemberLabel}
+            caption={currentMemberCardCaption}
+            captionTooltip={currentMemberCardTooltip}
+          />
+          <SignalCard
             label="当前服务"
             value={currentServiceFriendly}
             caption={currentServiceCardCaption}
@@ -136,7 +158,27 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             value={latestVisibleUpdateLabel}
             caption={latestVisibleUpdateNote}
           />
+          <SignalCard
+            label="入口成员"
+            value={entryMemberLabel || entryMemberId || "未配置"}
+            caption={
+              hasEntryMember
+                ? "调用这支 Team 时会先路由到这个成员。"
+                : "测试或调用前，请先设置一个入口成员。"
+            }
+          />
         </div>
+        {hasEntryMember && onClearEntryMember ? (
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Button
+              loading={entryMemberUpdating}
+              onClick={onClearEntryMember}
+              size="small"
+            >
+              清除入口成员
+            </Button>
+          </div>
+        ) : null}
       </section>
 
       <div
@@ -205,7 +247,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                   </Typography.Text>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
                     <Typography.Text strong>{row.value}</Typography.Text>
-                    <FactLine rows={2} secondary text={row.note} />
+                    <FactLine
+                      rows={2}
+                      secondary
+                      text={row.note}
+                      tooltipText={row.noteTooltip}
+                    />
                   </div>
                 </div>
               ))}

@@ -1,9 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Household;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -21,9 +19,6 @@ public sealed class DeviceEventOptions
 
 public static class DeviceEventEndpoints
 {
-    private const string DeviceCallbackPublisherActorId = "device-events.callback";
-    private const string DeviceRegistrationPublisherActorId = "device-events.registration";
-
     public static IEndpointRouteBuilder MapDeviceEventEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/device-events").WithTags("DeviceEvents");
@@ -48,16 +43,18 @@ public static class DeviceEventEndpoints
     /// Receives a device event callback from NyxID relay.
     /// 1. Lookup registration from projection read model.
     /// 2. HMAC verification (configurable).
-    /// 3. Parse CallbackPayload → DeviceInbound.
-    /// 4. Synchronous dispatch to HouseholdEntity actor.
+    /// 3. Parse CallbackPayload → DeviceInbound known typed payload.
+    /// 4. Reject unknown event_type values before command facade dispatch.
     /// 5. Return 202 Accepted (or 502 on dispatch failure — NyxID retries at transport level).
     /// </summary>
+    // Refactor (iter47/issue-873-device-endpoint-direct-runtime-dispatch):
+    //   Old pattern: Device HTTP endpoint resolves/creates actors, builds EventEnvelope directly, and dispatches through runtime/dispatch ports.
+    //   New principle: Endpoint delegates to typed application command facade; target resolution, envelope construction, dispatch receipt, and resource ownership live behind command skeleton contracts. No callback-time auto-create.
     private static async Task<IResult> HandleDeviceCallbackAsync(
         HttpContext http,
         string registrationId,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IDeviceRegistrationQueryPort queryPort,
+        [FromServices] IDeviceCallbackCommandService callbackCommandService,
         [FromServices] IOptions<DeviceEventOptions> options,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -85,7 +82,8 @@ public static class DeviceEventEndpoints
             return Results.Unauthorized();
         }
 
-        // Parse callback payload
+        // Parse callback payload into the v1 typed DeviceInbound allowlist.
+        // Unknown event_type values are rejected here, before actor/read-model/projection dispatch.
         DeviceInbound inbound;
         try
         {
@@ -101,13 +99,34 @@ public static class DeviceEventEndpoints
             "Device event received: event_id={EventId}, source={Source}, type={EventType}",
             inbound.EventId, inbound.Source, inbound.EventType);
 
-        // Resolve HouseholdEntity actor
-        var householdActorId = $"household-{registration.ScopeId}";
-
-        // Synchronous dispatch — failure returns 502 so NyxID retries at transport level
+        // Dispatch admission + target resolution live behind the typed command facade.
         try
         {
-            await DispatchToHouseholdAsync(inbound, householdActorId, actorRuntime, dispatchPort, loggerFactory, ct);
+            var dispatch = await callbackCommandService.DispatchCallbackAsync(
+                new DeviceCallbackDispatchCommand(registrationId, inbound),
+                ct);
+            if (!dispatch.Succeeded)
+            {
+                return dispatch.Error switch
+                {
+                    DeviceCallbackCommandStartError.RegistrationNotFound =>
+                        Results.NotFound(new { error = "Registration not found" }),
+                    DeviceCallbackCommandStartError.RegistrationNotAdmitted =>
+                        Results.Conflict(new { error = "Registration is not admitted for device callbacks" }),
+                    DeviceCallbackCommandStartError.TargetActorUnavailable =>
+                        Results.Conflict(new { error = "Device callback target is unavailable" }),
+                    _ => Results.StatusCode(502),
+                };
+            }
+
+            return Results.Accepted(value: new
+            {
+                status = "accepted",
+                actor_id = dispatch.Receipt!.ActorId,
+                command_id = dispatch.Receipt.CommandId,
+                correlation_id = dispatch.Receipt.CorrelationId,
+                registration_id = dispatch.Receipt.RegistrationId,
+            });
         }
         catch (Exception ex)
         {
@@ -115,22 +134,6 @@ public static class DeviceEventEndpoints
             logger2.LogError(ex, "Device event dispatch failed: event_id={EventId}", inbound.EventId);
             return Results.StatusCode(502);
         }
-
-        return Results.Accepted();
-    }
-
-    /// <summary>
-    /// Gets or creates the well-known DeviceRegistrationGAgent singleton actor.
-    /// Lifecycle: created on first request, never destroyed (long-lived fact owner per CLAUDE.md).
-    /// Thread safety: Orleans grain runtime guarantees single-activation, so concurrent
-    /// CreateAsync calls from multiple requests safely converge to the same grain.
-    /// </summary>
-    private static async Task<IActor> GetOrCreateRegistrationActorAsync(
-        IActorRuntime actorRuntime,
-        CancellationToken ct)
-    {
-        return await actorRuntime.GetAsync(DeviceRegistrationGAgent.WellKnownId)
-               ?? await actorRuntime.CreateAsync<DeviceRegistrationGAgent>(DeviceRegistrationGAgent.WellKnownId, ct);
     }
 
     internal static bool VerifyHmacSignature(
@@ -177,7 +180,7 @@ public static class DeviceEventEndpoints
         using var doc = JsonDocument.Parse(bodyBytes);
         var root = doc.RootElement;
 
-        // content.text contains the raw device event JSON (same in both old and new format)
+        // content.text contains the raw device event JSON at the adapter boundary.
         var contentText = root.GetProperty("content").GetProperty("text").GetString()
                           ?? throw new JsonException("content.text is required");
 
@@ -190,68 +193,103 @@ public static class DeviceEventEndpoints
                      : string.Empty;
         }
 
-        // Parse the inner device event JSON from content.text
+        // Refactor (issue1485/first-slice): Old pattern: pass content.text through as DeviceInbound.PayloadJson.
+        // New principle: terminate NyxID callback JSON at the Host/Adapter boundary.
+        // Known device events are allowlisted and mapped to typed Protobuf payload cases.
+        // Unknown or malformed content is rejected before any EventEnvelope dispatch can happen.
+        // This endpoint does not accept a raw payload bag for later actor-side interpretation.
         using var innerDoc = JsonDocument.Parse(contentText);
         var inner = innerDoc.RootElement;
+        if (inner.ValueKind != JsonValueKind.Object)
+            throw new JsonException("content.text must contain a device event object");
 
         var eventId = inner.TryGetProperty("event_id", out var eid) ? eid.GetString() ?? string.Empty : string.Empty;
         var source = inner.TryGetProperty("source", out var src) ? src.GetString() ?? string.Empty : string.Empty;
         var eventType = inner.TryGetProperty("event_type", out var et) ? et.GetString() ?? string.Empty : string.Empty;
         var timestamp = inner.TryGetProperty("timestamp", out var ts) ? ts.GetString() ?? string.Empty : string.Empty;
 
-        return new DeviceInbound
+        var inbound = new DeviceInbound
         {
             EventId = eventId,
             Source = source,
             EventType = eventType,
             Timestamp = timestamp,
-            PayloadJson = contentText,
             DeviceId = senderId,
         };
+
+        ApplyKnownPayload(inbound, inner);
+        return inbound;
     }
 
-    /// <summary>
-    /// Dispatches a device event to the HouseholdEntity actor (single attempt).
-    /// On failure the caller returns 502, allowing NyxID to retry at transport level.
-    /// Lifecycle: the household actor is created on first request for a given scope,
-    /// never destroyed (long-lived fact owner per CLAUDE.md).
-    /// Thread safety: Orleans grain runtime guarantees single-activation, so concurrent
-    /// CreateAsync calls from multiple requests safely converge to the same grain.
-    /// </summary>
-    private static async Task DispatchToHouseholdAsync(
-        DeviceInbound inbound,
-        string householdActorId,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
-        ILoggerFactory loggerFactory,
-        CancellationToken ct)
+    private static void ApplyKnownPayload(DeviceInbound inbound, JsonElement inner)
     {
-        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.DeviceEvent");
-
-        var actor = await actorRuntime.GetAsync(householdActorId)
-                    ?? await actorRuntime.CreateAsync<HouseholdEntity>(householdActorId, ct);
-
-        var envelope = new EventEnvelope
+        switch (inbound.EventType)
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(inbound),
-            Route = EnvelopeRouteSemantics.CreateDirect(DeviceCallbackPublisherActorId, actor.Id),
-        };
+            case "temperature_change":
+                inbound.Sensor = new SensorDeviceInboundPayload
+                {
+                    Temperature = GetOptionalDouble(inner, "temperature"),
+                    Humidity = GetOptionalDouble(inner, "humidity"),
+                    LightLevel = GetOptionalDouble(inner, "light_level"),
+                    MotionDetected = GetOptionalBoolean(inner, "motion_detected",
+                        GetOptionalBoolean(inner, "motion")),
+                };
+                break;
+            case "person_detected":
+            case "scene_summary":
+            case "camera_scene":
+                inbound.Camera = new CameraDeviceInboundPayload
+                {
+                    SceneDescription = GetOptionalString(inner, "description"),
+                };
+                break;
+            case "motion_detected":
+                inbound.Motion = new MotionDeviceInboundPayload
+                {
+                    Detected = GetOptionalBoolean(inner, "detected",
+                        GetOptionalBoolean(inner, "motion", defaultValue: true)),
+                };
+                break;
+            case "speech_detected":
+                inbound.Speech = new SpeechDeviceInboundPayload
+                {
+                    Text = GetOptionalString(inner, "text"),
+                };
+                break;
+            default:
+                throw new JsonException($"Unsupported device event_type '{inbound.EventType}'");
+        }
+    }
 
-        await dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+    private static string GetOptionalString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+    }
 
-        logger.LogInformation(
-            "Device event dispatched: event_id={EventId}, target={HouseholdActorId}",
-            inbound.EventId, householdActorId);
+    private static double GetOptionalDouble(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetDouble()
+            : 0;
+    }
+
+    private static bool GetOptionalBoolean(JsonElement root, string propertyName, bool defaultValue = false)
+    {
+        return root.TryGetProperty(propertyName, out var value)
+            ? value.GetBoolean()
+            : defaultValue;
     }
 
     // ─── Registration CRUD ───
 
+    // Refactor (iter47/issue-873-device-endpoint-direct-runtime-dispatch):
+    //   Old pattern: Device HTTP endpoint resolves/creates actors, builds EventEnvelope directly, and dispatches through runtime/dispatch ports.
+    //   New principle: Endpoint delegates to typed application command facade; target resolution, envelope construction, dispatch receipt, and resource ownership live behind command skeleton contracts. No callback-time auto-create.
     private static async Task<IResult> HandleRegisterDeviceAsync(
         HttpContext http,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort dispatchPort,
+        [FromServices] DeviceRegistrationCommandFacade registrationCommandFacade,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -273,34 +311,35 @@ public static class DeviceEventEndpoints
             return Results.BadRequest(new { error = "scope_id is required" });
         }
 
-        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime, ct);
+        if (string.IsNullOrWhiteSpace(request.DeviceEventTargetActorId))
+        {
+            return Results.BadRequest(new { error = "device_event_target_actor_id is required" });
+        }
 
-        // Dispatch register command to actor
+        var scopeId = request.ScopeId.Trim();
+        var targetActorId = request.DeviceEventTargetActorId.Trim();
+
         var cmd = new DeviceRegisterCommand
         {
-            ScopeId = request.ScopeId.Trim(),
+            ScopeId = scopeId,
             HmacKey = request.HmacKey?.Trim() ?? string.Empty,
             NyxConversationId = request.NyxConversationId?.Trim() ?? string.Empty,
             Description = request.Description?.Trim() ?? string.Empty,
+            DeviceEventTargetActorId = targetActorId,
         };
 
-        var cmdEnvelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(cmd),
-            Route = EnvelopeRouteSemantics.CreateDirect(DeviceRegistrationPublisherActorId, actor.Id),
-        };
-
-        await dispatchPort.DispatchAsync(actor.Id, cmdEnvelope, ct);
+        var receipt = await registrationCommandFacade.RegisterAsync(cmd, ct);
 
         // Command accepted — the projection pipeline will materialize the read model.
         // Return accepted with the command details (eventual consistency).
         return Results.Accepted(value: new
         {
             status = "accepted",
-            scope_id = request.ScopeId.Trim(),
+            scope_id = scopeId,
             description = request.Description?.Trim() ?? string.Empty,
+            device_event_target_actor_id = targetActorId,
+            command_id = receipt.CommandId,
+            correlation_id = receipt.CorrelationId,
         });
     }
 
@@ -322,32 +361,27 @@ public static class DeviceEventEndpoints
 
     private static async Task<IResult> HandleDeleteDeviceRegistrationAsync(
         string registrationId,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IDeviceRegistrationQueryPort queryPort,
+        [FromServices] DeviceRegistrationCommandFacade registrationCommandFacade,
         CancellationToken ct)
     {
         var exists = await queryPort.GetAsync(registrationId, ct);
         if (exists is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime, ct);
-        var cmd = new DeviceUnregisterCommand { RegistrationId = registrationId };
-        var cmdEnvelope = new EventEnvelope
+        var receipt = await registrationCommandFacade.UnregisterAsync(registrationId, ct);
+        return Results.Ok(new
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(cmd),
-            Route = EnvelopeRouteSemantics.CreateDirect(DeviceRegistrationPublisherActorId, actor.Id),
-        };
-
-        await dispatchPort.DispatchAsync(actor.Id, cmdEnvelope, ct);
-        return Results.Ok(new { status = "deleted" });
+            status = "deleted",
+            command_id = receipt.CommandId,
+            correlation_id = receipt.CorrelationId,
+        });
     }
 
     private sealed record DeviceRegistrationRequest(
         string? ScopeId,
         string? HmacKey,
         string? NyxConversationId,
-        string? Description);
+        string? Description,
+        string? DeviceEventTargetActorId);
 }

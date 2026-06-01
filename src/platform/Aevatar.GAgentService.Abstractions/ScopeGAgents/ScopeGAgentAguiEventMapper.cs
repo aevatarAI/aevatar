@@ -129,6 +129,20 @@ public static class ScopeGAgentAguiEventMapper
         return null;
     }
 
+    public static AGUIEvent? TryMapExplicitSessionObservation(EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        // Refactor (iter164/cluster-003-draft-run):
+        //   Old pattern: draft-run projection reused the broad live AI/tool mapper and treated raw frames as AGUI observations.
+        //   New principle: draft-run session projection only treats a wrapped AGUIEvent as an explicit observation contract.
+        var payload = envelope.Payload;
+        if (payload?.Is(AGUIEvent.Descriptor) != true)
+            return null;
+
+        return payload.Unpack<AGUIEvent>();
+    }
+
     private static AGUIEvent MapTextCompletion(string sessionId, string? content)
     {
         if (!string.IsNullOrEmpty(content))
@@ -152,7 +166,7 @@ public static class ScopeGAgentAguiEventMapper
                 {
                     RunError = new RunErrorEvent
                     {
-                        Message = content.Trim(),
+                        Message = NormalizeLlmFailureMessage(content),
                     },
                 };
             }
@@ -165,6 +179,25 @@ public static class ScopeGAgentAguiEventMapper
                 MessageId = sessionId,
             },
         };
+    }
+
+    public static string NormalizeLlmFailureMessage(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return "LLM request failed.";
+
+        var trimmed = content.Trim();
+        const string toolAnnotatedPrefix = "LLM request failed [tools=";
+        if (!trimmed.StartsWith(toolAnnotatedPrefix, StringComparison.Ordinal))
+            return trimmed;
+
+        var marker = "]: ";
+        var markerIndex = trimmed.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+            return trimmed;
+
+        var message = trimmed[(markerIndex + marker.Length)..].Trim();
+        return string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message;
     }
 
     public static Struct BuildToolApprovalStruct(Any payload)

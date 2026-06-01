@@ -182,7 +182,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
 
         report.ReportVersion.Should().Be("3.0");
         report.ProjectionScope.Should().Be(WorkflowExecutionProjectionScope.RunIsolated);
-        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.RuntimeSnapshot);
+        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.CommittedProjection);
         report.WorkflowName.Should().BeEmpty();
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Unknown);
         report.Success.Should().BeNull();
@@ -333,9 +333,15 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     SuspensionType = "human_input",
                     Prompt = "Need approval",
                     VariableName = "approval",
+                    Secure = true,
+                    RedactedOutput = "[captured]",
                     Metadata =
                     {
                         ["channel"] = "ui",
+                        ["variable"] = "legacy_approval",
+                        ["secure"] = "false",
+                        ["input_mode"] = "password",
+                        ["redacted_output"] = "[legacy]",
                     },
                 },
                 6,
@@ -489,7 +495,12 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Timeline.Should().Contain(x => x.Stage == "workflow.start" && x.Message == "command=cmd-1");
         report.Timeline.Should().Contain(x => x.Stage == "step.request" && x.StepId == "step-1");
         report.Timeline.Should().Contain(x => x.Stage == "step.failed" && x.StepId == "step-1");
-        report.Timeline.Should().Contain(x => x.Stage == "workflow.suspended" && x.StepId == "step-1");
+        var suspendedTimeline = report.Timeline.Single(x => x.Stage == "workflow.suspended" && x.StepId == "step-1");
+        suspendedTimeline.Data.Should().ContainKey("channel").WhoseValue.Should().Be("ui");
+        suspendedTimeline.Data.Should().ContainKey("variable").WhoseValue.Should().Be("approval");
+        suspendedTimeline.Data.Should().ContainKey("secure").WhoseValue.Should().Be("true");
+        suspendedTimeline.Data.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[captured]");
+        suspendedTimeline.Data.Should().NotContainKey("input_mode");
         report.Timeline.Should().Contain(x => x.Stage == "signal.waiting" && x.Data["timeout_ms"] == "900");
         report.Timeline.Should().Contain(x => x.Stage == "signal.buffered");
         report.Timeline.Count(x => x.Stage == "tool.call").Should().Be(2);
@@ -548,6 +559,48 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Success.Should().BeTrue();
         report.FinalOutput.Should().Be("workflow done");
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldIgnoreLegacyOnlySecureInputMetadataReservedKeys()
+    {
+        var report = new WorkflowRunInsightReportDocument
+        {
+            Id = "root-actor",
+            RootActorId = "root-actor",
+            CommandId = "cmd-legacy-secure",
+        };
+        var timestamp = new DateTimeOffset(2026, 3, 18, 5, 10, 0, TimeSpan.Zero);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "secure-input",
+                    SuspensionType = "secure_input",
+                    Prompt = "enter secret",
+                    Metadata =
+                    {
+                        ["variable"] = "api_key",
+                        ["secure"] = "true",
+                        ["input_mode"] = "password",
+                        ["redacted_output"] = "[legacy captured]",
+                        ["source"] = "legacy-test",
+                    },
+                },
+                30,
+                "evt-legacy-secure"),
+            timestamp);
+
+        var suspendedTimeline = report.Timeline.Single(x =>
+            x.Stage == "workflow.suspended" &&
+            x.StepId == "secure-input");
+        suspendedTimeline.Data.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
+        suspendedTimeline.Data.Should().NotContainKey("variable");
+        suspendedTimeline.Data.Should().NotContainKey("secure");
+        suspendedTimeline.Data.Should().NotContainKey("redacted_output");
+        suspendedTimeline.Data.Should().NotContainKey("input_mode");
     }
 
     [Fact]
@@ -702,7 +755,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
-    public void BuildTimelineAndGraphDocuments_ShouldCloneCollections()
+    public void ReportArtifact_ShouldOwnTimelineAndGraphMaterializationInputs()
     {
         var report = new WorkflowRunInsightReportDocument
         {
@@ -738,18 +791,13 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             ],
         };
 
-        var timelineDocument = WorkflowExecutionArtifactMaterializationSupport.BuildTimelineDocument(report);
-        var graphDocument = WorkflowExecutionArtifactMaterializationSupport.BuildGraphDocument(report);
-
-        timelineDocument.Timeline[0].Data["key"] = "changed";
-        graphDocument.Steps[0].RequestParameters["temperature"] = "0.9";
-        graphDocument.Topology.Add(new WorkflowExecutionTopologyEdge("root-actor", "child-2"));
-
         report.Timeline[0].Data["key"].Should().Be("value");
         report.Steps[0].RequestParameters["temperature"].Should().Be("0.2");
         report.Topology.Should().ContainSingle();
-        timelineDocument.RootActorId.Should().Be("root-actor");
-        graphDocument.WorkflowName.Should().Be("wf-clone");
+
+        var graph = new WorkflowRunInsightReportGraphMaterializer().Materialize(report);
+        graph.Nodes.Should().Contain(x => x.NodeId == "root-actor");
+        graph.Edges.Should().Contain(x => x.ToNodeId == "child-1");
     }
 
     [Theory]
@@ -817,9 +865,36 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
-    public void WorkflowRunGraphArtifactMaterializer_ShouldNormalizeTokensAndDeduplicateNodesAndEdges()
+    public async Task WorkflowExecutionCurrentStateProjector_WhenCommittedStateIsRelayedFromChild_ShouldSkipWrite()
     {
-        var readModel = new WorkflowRunGraphArtifactDocument
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 3, 18, 7, 45, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent
+                {
+                    Success = true,
+                    Output = "z\ny",
+                },
+                new WorkflowRunState
+                {
+                    WorkflowName = "child-level2",
+                    Status = "completed",
+                    FinalOutput = "z\ny",
+                },
+                publisherActorId: "child-run-actor"));
+
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void WorkflowRunGraphArtifactMaterializer_ShouldDeriveFromReportAndDeduplicateNodesAndEdges()
+    {
+        var readModel = new WorkflowRunInsightReportDocument
         {
             RootActorId = " ",
             CommandId = " ",
@@ -886,9 +961,49 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         {
             WorkflowName = "wf-report",
             CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal,
+            ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
+            TopologySource = (WorkflowExecutionTopologySource)999,
             Success = true,
             FinalOutput = "done",
             FinalError = "ignored",
+            Steps =
+            [
+                new WorkflowExecutionStepTrace
+                {
+                    StepId = "step-1",
+                    RequestedAt = new DateTimeOffset(2026, 3, 18, 7, 59, 0, TimeSpan.Zero),
+                    CompletedAt = new DateTimeOffset(2026, 3, 18, 8, 0, 0, TimeSpan.Zero),
+                    SuspensionTimeoutSeconds = 30,
+                },
+                new WorkflowExecutionStepTrace
+                {
+                    StepId = "step-2",
+                },
+            ],
+            RoleReplies =
+            [
+                new WorkflowExecutionRoleReply
+                {
+                    Timestamp = new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero),
+                    RoleId = "assistant",
+                },
+                new WorkflowExecutionRoleReply
+                {
+                    RoleId = "system",
+                },
+            ],
+            Timeline =
+            [
+                new WorkflowExecutionTimelineEvent
+                {
+                    Timestamp = new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero),
+                    Stage = "started",
+                },
+                new WorkflowExecutionTimelineEvent
+                {
+                    Stage = "finished",
+                },
+            ],
             Summary = new WorkflowExecutionSummary
             {
                 TotalSteps = 3,
@@ -898,26 +1013,26 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             },
         };
 
-        var snapshot = mapper.ToActorSnapshot(currentState, report);
+        var snapshot = mapper.ToActorSnapshot(currentState);
         var unknownSnapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
         {
             RootActorId = "actor-2",
             Status = "mystery",
         });
-        var timelineItem = mapper.ToActorTimelineItem(new WorkflowExecutionTimelineEvent
+        var timelineItem = mapper.ToWorkflowRunTimelineExportItem(new WorkflowExecutionTimelineEvent
         {
             Timestamp = new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero),
             Stage = "signal.waiting",
             Data = { ["signal_name"] = "continue" },
         });
-        var node = mapper.ToActorGraphNode(new ProjectionGraphNode
+        var node = mapper.ToWorkflowRunGraphExportNode(new ProjectionGraphNode
         {
             NodeId = "node-1",
             NodeType = "Actor",
             Properties = { ["key"] = "value" },
             UpdatedAt = new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero),
         });
-        var edge = mapper.ToActorGraphEdge(new ProjectionGraphEdge
+        var edge = mapper.ToWorkflowRunGraphExportEdge(new ProjectionGraphEdge
         {
             EdgeId = "edge-1",
             FromNodeId = "node-1",
@@ -926,7 +1041,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             Properties = { ["kind"] = "runtime" },
             UpdatedAt = new DateTimeOffset(2026, 3, 18, 8, 3, 0, TimeSpan.Zero),
         });
-        var subgraph = mapper.ToActorGraphSubgraph(
+        var subgraph = mapper.ToWorkflowRunGraphExportSubgraph(
             "node-1",
             new ProjectionGraphSubgraph
             {
@@ -950,12 +1065,12 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             });
 
         snapshot.ActorId.Should().Be("actor-1");
-        snapshot.WorkflowName.Should().Be("wf-report");
+        snapshot.WorkflowName.Should().BeEmpty();
         snapshot.CompletionStatus.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunCompletionStatus.Running);
-        snapshot.LastSuccess.Should().BeTrue();
-        snapshot.LastOutput.Should().Be("done");
-        snapshot.TotalSteps.Should().Be(3);
-        snapshot.RoleReplyCount.Should().Be(4);
+        snapshot.LastSuccess.Should().BeNull();
+        snapshot.LastOutput.Should().BeEmpty();
+        snapshot.TotalSteps.Should().Be(0);
+        snapshot.RoleReplyCount.Should().Be(0);
 
         unknownSnapshot.CompletionStatus.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunCompletionStatus.Unknown);
         timelineItem.Data.Should().Contain(new KeyValuePair<string, string>("signal_name", "continue"));
@@ -964,6 +1079,30 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         subgraph.RootNodeId.Should().Be("node-1");
         subgraph.Nodes.Should().ContainSingle();
         subgraph.Edges.Should().ContainSingle();
+
+        var mappedReport = mapper.ToRunReport(report);
+        mappedReport.ProjectionScope.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunProjectionScope.RunIsolated);
+        mappedReport.TopologySource.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunTopologySource.Unknown);
+        mappedReport.Steps.Should().HaveCount(2);
+        mappedReport.Steps[0].RequestedAt.Should().NotBeNull();
+        mappedReport.Steps[0].CompletedAt.Should().NotBeNull();
+        mappedReport.Steps[0].SuspensionTimeoutSeconds.Should().Be(30);
+        mappedReport.Steps[1].RequestedAt.Should().BeNull();
+        mappedReport.Steps[1].CompletedAt.Should().BeNull();
+        mappedReport.Steps[1].SuspensionTimeoutSeconds.Should().BeNull();
+        mappedReport.RoleReplies[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero));
+        mappedReport.RoleReplies[1].Timestamp.Should().Be(default);
+        mappedReport.Timeline[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero));
+        mappedReport.Timeline[1].Timestamp.Should().Be(default);
+        mapper.ToRunReport(new WorkflowRunInsightReportDocument
+        {
+            ProjectionScope = (WorkflowExecutionProjectionScope)999,
+            TopologySource = WorkflowExecutionTopologySource.CommittedProjection,
+            SummaryValue = null,
+        }).Should().Match<Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunReport>(mapped =>
+            mapped.ProjectionScope == Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunProjectionScope.Unknown &&
+            mapped.TopologySource == Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunTopologySource.CommittedProjection &&
+            mapped.Summary.TotalSteps == 0);
     }
 
     public static IEnumerable<object?[]> CurrentStateStatusCases()
@@ -999,6 +1138,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         WorkflowRunState state,
         long version = 1,
         string eventId = "evt-1",
+        string publisherActorId = "root-actor",
         bool includeEnvelopeTimestamp = true)
     {
         return new EventEnvelope
@@ -1007,7 +1147,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             Timestamp = includeEnvelopeTimestamp
                 ? Timestamp.FromDateTime(DateTime.UtcNow)
                 : null,
-            Route = EnvelopeRouteSemantics.CreateObserverPublication("root-actor"),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(publisherActorId),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
                 StateEvent = new StateEvent

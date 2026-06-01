@@ -38,6 +38,10 @@ import { servicesApi } from "@/shared/api/servicesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import { buildPlatformDeploymentsHref } from "@/shared/navigation/platformRoutes";
+import {
+  invalidateServiceResourceQueries,
+  serviceResourceQueryKeys,
+} from "@/shared/query/serviceResourceQueryKeys";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
 import { studioApi } from "@/shared/studio/api";
 import type {
@@ -74,7 +78,6 @@ import {
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import {
   cardStackStyle,
-  codeBlockStyle,
   summaryFieldLabelStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
@@ -164,6 +167,29 @@ function buildScopePreview(
   namespace: string,
 ): string {
   return `${truncateMiddle(tenantId)}/${appId}/${namespace}`;
+}
+
+function formatDeploymentScopeLabel(query: ServiceIdentityQuery): string {
+  const segments = [
+    query.tenantId?.trim() || "未设置团队",
+    query.appId?.trim() || "未设置应用",
+    query.namespace?.trim() || "未设置命名空间",
+  ];
+  const resultWindow = query.take && query.take > 0 ? query.take : 200;
+
+  return `${segments.join(" / ")} · ${resultWindow} 条`;
+}
+
+function isSameDeploymentScope(
+  left: ServiceIdentityQuery,
+  right: ServiceIdentityQuery,
+): boolean {
+  return (
+    (left.tenantId?.trim() ?? "") === (right.tenantId?.trim() ?? "") &&
+    (left.appId?.trim() ?? "") === (right.appId?.trim() ?? "") &&
+    (left.namespace?.trim() ?? "") === (right.namespace?.trim() ?? "") &&
+    (left.take ?? 200) === (right.take ?? 200)
+  );
 }
 
 const CompactIdentifierText: React.FC<{
@@ -486,12 +512,20 @@ const DetailFieldCard: React.FC<{
 
 const DeploymentsScopeCard: React.FC<{
   draft: ServiceQueryDraft;
+  draftScopeLabel: string;
+  isDirty: boolean;
+  isLoading?: boolean;
+  loadedScopeLabel: string;
   onChange: (draft: ServiceQueryDraft) => void;
   onLoad: () => void;
   onReset: () => void;
   scopeLabel: string;
 }> = ({
   draft,
+  draftScopeLabel,
+  isDirty,
+  isLoading = false,
+  loadedScopeLabel,
   onChange,
   onLoad,
   onReset,
@@ -513,12 +547,17 @@ const DeploymentsScopeCard: React.FC<{
     <div
       style={{
         alignItems: "center",
-        display: "grid",
+        display: "flex",
+        flexWrap: "wrap",
         gap: 12,
-        gridTemplateColumns: "minmax(0, 1fr) auto",
+        justifyContent: "space-between",
       }}
     >
-      <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+      <Space
+        orientation="vertical"
+        size={2}
+        style={{ flex: "1 1 160px", minWidth: 160 }}
+      >
         <span
           style={{
             color: "var(--ant-color-primary)",
@@ -550,12 +589,13 @@ const DeploymentsScopeCard: React.FC<{
             borderRadius: 999,
             color: "var(--ant-color-primary)",
             display: "inline-flex",
+            flex: "0 1 auto",
             fontSize: 12,
             fontWeight: 600,
-            minHeight: 30,
             maxWidth: "100%",
+            minHeight: 30,
+            overflowWrap: "anywhere",
             padding: "0 12px",
-            whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
@@ -622,6 +662,22 @@ const DeploymentsScopeCard: React.FC<{
 
     </div>
 
+    {isDirty ? (
+      <Alert
+        description={`当前服务指标和列表仍来自已加载范围：${loadedScopeLabel}。草稿范围是：${draftScopeLabel}。`}
+        message="范围已编辑但尚未加载"
+        showIcon
+        type="warning"
+      />
+    ) : (
+      <Alert
+        description={`下方服务指标和列表基于这个已加载范围：${loadedScopeLabel}。`}
+        message="已加载范围已锁定"
+        showIcon
+        type="info"
+      />
+    )}
+
     <div
       style={{
         alignItems: "center",
@@ -666,11 +722,16 @@ const DeploymentsScopeCard: React.FC<{
       </div>
 
       <Space size={8}>
-        <Button size="small" onClick={onReset}>
+        <Button aria-label="重置" size="small" onClick={onReset}>
           重置
         </Button>
-        <Button size="small" type="primary" onClick={onLoad}>
-          加载发布列表
+        <Button
+          loading={isLoading}
+          size="small"
+          type="primary"
+          onClick={onLoad}
+        >
+          {isDirty ? "加载范围变更" : "加载发布列表"}
         </Button>
       </Space>
     </div>
@@ -885,38 +946,38 @@ const DeploymentsPage: React.FC = () => {
 
   const servicesQuery = useQuery({
     queryFn: () => servicesApi.listServices(query),
-    queryKey: ["deployments", "services", query],
+    queryKey: serviceResourceQueryKeys.list(query),
   });
 
   const serviceDetailQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getService(selectedServiceId, query),
-    queryKey: ["deployments", "service", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.detail(query, selectedServiceId),
   });
   const revisionsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getRevisions(selectedServiceId, query),
-    queryKey: ["deployments", "revisions", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.revisions(query, selectedServiceId),
   });
   const deploymentsQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getDeployments(selectedServiceId, query),
-    queryKey: ["deployments", "catalog", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.deployments(query, selectedServiceId),
   });
   const servingQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getServingSet(selectedServiceId, query),
-    queryKey: ["deployments", "serving", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.serving(query, selectedServiceId),
   });
   const rolloutQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getRollout(selectedServiceId, query),
-    queryKey: ["deployments", "rollout", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.rollout(query, selectedServiceId),
   });
   const trafficQuery = useQuery({
     enabled: selectedServiceId.trim().length > 0,
     queryFn: () => servicesApi.getTraffic(selectedServiceId, query),
-    queryKey: ["deployments", "traffic", query, selectedServiceId],
+    queryKey: serviceResourceQueryKeys.traffic(query, selectedServiceId),
   });
 
   const selectedService = useMemo(
@@ -1127,6 +1188,21 @@ const DeploymentsPage: React.FC = () => {
     );
   }, [deploymentsQuery.data?.deployments, inspectorState]);
 
+  const draftScopeLabel = useMemo(
+    () => formatDeploymentScopeLabel(trimServiceQuery(draft)),
+    [draft],
+  );
+
+  const loadedScopeLabel = useMemo(
+    () => formatDeploymentScopeLabel(query),
+    [query],
+  );
+
+  const isScopeDirty = useMemo(
+    () => !isSameDeploymentScope(trimServiceQuery(draft), query),
+    [draft, query],
+  );
+
   const currentScopeLabel = useMemo(() => {
     const segments = [
       query.tenantId?.trim() ?? draft.tenantId.trim(),
@@ -1179,15 +1255,7 @@ const DeploymentsPage: React.FC = () => {
   );
 
   const invalidateDetailQueries = useCallback(async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["deployments", "service"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "revisions"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "catalog"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "serving"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "rollout"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "traffic"] }),
-      queryClient.invalidateQueries({ queryKey: ["deployments", "services"] }),
-    ]);
+    await invalidateServiceResourceQueries(queryClient);
   }, [queryClient]);
 
   const openDrawer = useCallback((tab: DeploymentDrawerTab) => {
@@ -1595,22 +1663,31 @@ const DeploymentsPage: React.FC = () => {
   }, []);
 
   const handleReset = useCallback(() => {
-    const nextDraft = resolvedScope?.scopeId?.trim()
+    const nextDraft = isScopeDirty
       ? {
-          ...readServiceQueryDraft(""),
-          appId: defaultScopeServiceAppId,
-          namespace: defaultScopeServiceNamespace,
-          tenantId: resolvedScope.scopeId.trim(),
+          appId: query.appId?.trim() ?? "",
+          namespace: query.namespace?.trim() ?? "",
+          take: query.take && query.take > 0 ? query.take : 200,
+          tenantId: query.tenantId?.trim() ?? "",
         }
-      : readServiceQueryDraft("");
+      : resolvedScope?.scopeId?.trim()
+        ? {
+            ...readServiceQueryDraft(""),
+            appId: defaultScopeServiceAppId,
+            namespace: defaultScopeServiceNamespace,
+            tenantId: resolvedScope.scopeId.trim(),
+          }
+        : readServiceQueryDraft("");
     setDraft(nextDraft);
-    setQuery(trimServiceQuery(nextDraft));
+    if (!isScopeDirty) {
+      setQuery(trimServiceQuery(nextDraft));
+    }
     setSelectedServiceId("");
     setSelectedDeploymentId("");
     setCandidateRevisionId("");
     setDrawerReason("");
     setView("catalog");
-  }, [resolvedScope?.scopeId]);
+  }, [isScopeDirty, query, resolvedScope?.scopeId]);
 
   const drawerSubtitle = selectedService
     ? `${selectedService.tenantId}/${selectedService.appId}/${selectedService.namespace}`
@@ -1635,6 +1712,10 @@ const DeploymentsPage: React.FC = () => {
 
         <DeploymentsScopeCard
           draft={draft}
+          draftScopeLabel={draftScopeLabel}
+          isDirty={isScopeDirty}
+          isLoading={servicesQuery.isFetching}
+          loadedScopeLabel={loadedScopeLabel}
           onChange={handleDraftChange}
           onLoad={() => setQuery(trimServiceQuery(draft))}
           onReset={handleReset}
@@ -1707,6 +1788,14 @@ const DeploymentsPage: React.FC = () => {
               <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
                 扫描 serving、deployment 和入口规模，再进入某个服务的发布详情。
               </Typography.Text>
+              <Space wrap size={[8, 8]}>
+                <Tag color={isScopeDirty ? "gold" : "blue"}>
+                  {isScopeDirty ? "显示上次加载范围" : "显示已加载范围"}
+                </Tag>
+                <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
+                  {loadedScopeLabel}
+                </Typography.Text>
+              </Space>
             </Space>
           </div>
 

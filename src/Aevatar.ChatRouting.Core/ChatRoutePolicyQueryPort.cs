@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.ChatRouting.Core;
 
@@ -84,25 +85,25 @@ public sealed class ChatRoutePolicyQueryPort : IChatRoutePolicyQueryPort
     [
         new ProjectionDocumentFilter
         {
-            FieldPath = $"{nameof(ChatRoutePolicyCurrentStateDocument.OwnerScope)}.{nameof(ChatRouteCallerScope.NyxUserId)}",
+            FieldPath = $"{nameof(ChatRoutePolicyCurrentStateDocument.OwnerScope)}.{nameof(OwnerScope.NyxUserId)}",
             Operator = ProjectionDocumentFilterOperator.Eq,
             Value = ProjectionDocumentValue.FromString(callerScope.NyxUserId),
         },
         new ProjectionDocumentFilter
         {
-            FieldPath = $"{nameof(ChatRoutePolicyCurrentStateDocument.OwnerScope)}.{nameof(ChatRouteCallerScope.Platform)}",
+            FieldPath = $"{nameof(ChatRoutePolicyCurrentStateDocument.OwnerScope)}.{nameof(OwnerScope.Platform)}",
             Operator = ProjectionDocumentFilterOperator.Eq,
             Value = ProjectionDocumentValue.FromString(callerScope.Platform),
         },
         new ProjectionDocumentFilter
         {
-            FieldPath = $"{nameof(ChatRoutePolicyCurrentStateDocument.OwnerScope)}.{nameof(ChatRouteCallerScope.RegistrationScopeId)}",
+            FieldPath = $"{nameof(ChatRoutePolicyCurrentStateDocument.OwnerScope)}.{nameof(OwnerScope.RegistrationScopeId)}",
             Operator = ProjectionDocumentFilterOperator.Eq,
             Value = ProjectionDocumentValue.FromString(callerScope.RegistrationScopeId),
         },
         new ProjectionDocumentFilter
         {
-            FieldPath = $"{nameof(ChatRoutePolicyCurrentStateDocument.OwnerScope)}.{nameof(ChatRouteCallerScope.SenderId)}",
+            FieldPath = $"{nameof(ChatRoutePolicyCurrentStateDocument.OwnerScope)}.{nameof(OwnerScope.SenderId)}",
             Operator = ProjectionDocumentFilterOperator.Eq,
             Value = ProjectionDocumentValue.FromString(callerScope.SenderId),
         },

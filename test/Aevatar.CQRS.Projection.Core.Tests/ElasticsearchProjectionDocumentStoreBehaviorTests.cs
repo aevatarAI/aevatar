@@ -905,46 +905,33 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task UpsertAsync_WhenAliasMatchesExpectedFingerprint_ShouldSkipIndexCreate()
+    public async Task UpsertAsync_WhenAliasFingerprintDrifts_ShouldThrowWithoutReindexing()
     {
-        // Steady state: alias exists and points at expected physical → no index create, no reindex.
-        // We don't know the fingerprint up front, so script the alias resolution to echo whatever
-        // physical the manager is about to ask for via two probe rounds.
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(req =>
         {
-            // Extract the alias name from the path /_alias/<alias>
             var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
-            // For this test we declare the alias points at a physical with the exact
-            // fingerprint the manager will compute (any -vXXXXXXXX suffix matching the
-            // expected physical). We achieve that by capturing the manager's first
-            // probe — but since we cannot inspect future requests, we return any
-            // suffix and let the manager treat it as drift if mismatched. For a clean
-            // "no-op" assertion we instead pre-probe via a sibling first call to learn
-            // the fingerprint. Simpler: test the "drift" path instead — see below.
             return CreateJsonResponse(HttpStatusCode.OK, $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
         });
-        // Drift detected: PUT new physical, POST _reindex, POST _aliases.
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"took":1,"timed_out":false,"total":0,"updated":0,"created":0,"failures":[]}"""));
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
-        // Then the data op.
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
 
         using var store = CreateStore(
             new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
             handler);
 
-        await store.UpsertAsync(new TestStoreReadModel { Id = "actor-1", ActorId = "actor-1" });
+        // Refactor (iter98/cluster-743): Old pattern: drifted alias fingerprints
+        // triggered PUT physical + _reindex + _aliases repair. New principle:
+        // lifecycle drift is a configuration error and projection refuses writes.
+        var act = () => store.UpsertAsync(new TestStoreReadModel { Id = "actor-1", ActorId = "actor-1" });
 
-        // Verify the migration path fired: a _reindex call appears between alias probe and data op.
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*schema drift detected*");
+        handler.CapturedRequests.Should().ContainSingle();
         handler.CapturedRequests
             .Any(r => r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal))
-            .Should().BeTrue("a fingerprint mismatch should trigger a reindex");
+            .Should().BeFalse("drift must fail loud instead of repairing through reindex");
         handler.CapturedRequests
             .Any(r => r.PathAndQuery == "/_aliases" && r.Method == "POST")
-            .Should().BeTrue("the migration should atomically swap aliases via POST /_aliases");
+            .Should().BeFalse("drift must not swap aliases from the projection write path");
     }
 
     [Fact]

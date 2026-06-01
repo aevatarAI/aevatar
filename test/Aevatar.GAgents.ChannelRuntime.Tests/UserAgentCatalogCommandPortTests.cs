@@ -183,7 +183,7 @@ public sealed class UserAgentCatalogCommandPortTests
 
     private sealed class Fixture
     {
-        public UserAgentCatalogProjectionPort ProjectionPort { get; }
+        public UserAgentCatalogProjectionBootstrapActivator ProjectionPort { get; }
         public IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease> Activation { get; }
         public IActorRuntime Runtime { get; }
         public IActorDispatchPort Dispatch { get; }
@@ -201,13 +201,13 @@ public sealed class UserAgentCatalogCommandPortTests
                     new UserAgentCatalogMaterializationContext
                     {
                         RootActorId = UserAgentCatalogGAgent.WellKnownId,
-                        ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+                        ProjectionKind = UserAgentCatalogProjectionBootstrapActivator.ProjectionKind,
                     })));
-            ProjectionPort = new UserAgentCatalogProjectionPort(activation);
+            ProjectionPort = new UserAgentCatalogProjectionBootstrapActivator(activation);
             Activation = activation;
 
             Dispatch.DispatchAsync(Arg.Any<string>(), Arg.Do<EventEnvelope>(env => Captured.Add(env)), Arg.Any<CancellationToken>())
-                .Returns(Task.CompletedTask);
+                .Returns(call => Task.FromResult(DispatchAdmissionFactory.Create(call.ArgAt<string>(0), call.ArgAt<EventEnvelope>(1))));
 
             Port = new UserAgentCatalogCommandPort(
                 Runtime,
