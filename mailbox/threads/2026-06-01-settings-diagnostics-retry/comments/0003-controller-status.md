@@ -1,0 +1,8 @@
+phase from design-solving to blocked
+
+evolve failed; automatic flow moved to blocked
+
+failure_class=solver-artifact-fail
+step=solver_artifact_solver_minimal
+reason=failure_class=solver-artifact-fail step=solver_artifact_solver_minimal reason=failure_class=solver-artifact-fail step=solver_artifact_solver_minimal reason=codex failed exit_code=-1 artifact=artifact-missing missing artifact: /Users/potter/.local/state/fkst/runtime/Users-potter-Desktop-sbt_project-aevatar/pipeline/2026-06-01-settings-diagnostics-retry/approach/round-1/solver-minimal.md
+⟦AI:FKST⟧
