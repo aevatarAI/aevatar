@@ -183,6 +183,8 @@ disown
 ```bash
 # 标准 merge 流程(必须 chain issue close 且 verify merge 成功)
 # 2026-05-30 修复:merge 失败仍 close issue 是严重 bug;必须 verify $? == 0
+# 2026-06-01 强制:PR 默认 draft,merge 前必须先 gh pr ready 转正(per Auric "提pr都提草稿")
+gh pr ready $PR 2>&1 | tail -1
 if gh pr merge $PR --squash --delete-branch 2>&1; then
   ISSUE=$(gh pr view $PR --json body --jq '.body' | grep -oE 'closes #[0-9]+' | grep -oE '[0-9]+' | head -1)
   if [ -n "$ISSUE" ]; then
@@ -817,11 +819,14 @@ For each `pass` cluster, serially:
     ```bash
     cd "$REPO_ROOT" && \
     gh pr create \
+      --draft \
       --base "<base_branch>" \
       --head "refactor/iterN-<cluster-id>" \
       --title "<cluster id>: <short imperative title — same English title; PR title is not bilingual since GitHub UI truncates>" \
       --body-file <generated_body_file>
     ```
+
+    **强制 `--draft`(per Auric 2026-06-01 "提pr都提草稿, 防止人工误合并")**:所有 controller 开的 PR 必须以 draft 状态创建,防止 maintainer 误手动 merge。Phase 8 reviewer 3/3 共识 + CI 绿后,controller **`gh pr ready <PR>`** 转出 draft 再 `gh pr merge`。`gh pr ready` 与 `gh pr merge` 必须 chain 在同一 controller turn 内 完成。
 
     Controller must run the equivalence test (SKILL.md Bilingual rule §"Equivalence test") on the generated body before `gh pr create`. If 中文 section is missing or visibly shorter than English, regenerate or fall back to a one-paragraph machine-translation as last resort (and PushNotification flagging the legacy fallback so operator can fix).
 
@@ -2690,6 +2695,28 @@ Bash(
     **例外**:`audit` codex 不跑 test(它只 inspect 不改 code)。`verify` codex 跑 full test 是 verify 职责本身。
 
 11. **controller commit 前 self-verify**(强制,per Auric 2026-05-27 与规则 10 同源). 即使 codex marker `tests-pass`,controller 在 `git commit --amend` / `git push --force-with-lease` 前**必须**自己跑一次 `dotnet test aevatar.slnx --nologo --no-build` 兜底。fail → 拒绝 push,派 r+1 fix。双保险防 codex marker 不诚实 / filter 窄漏 module。
+
+12. **所有 controller 开的 PR 必须 `--draft` 创建**(强制,per Auric 2026-06-01 "提pr都提草稿, 防止人工误合并"). 防止 maintainer 在 reviewer 共识达成 + CI 绿前手动 merge 不完整 PR。
+
+    适用范围:
+    - cluster PR(Phase 4b open)— 必须 `--draft`
+    - rollup PR(integration → review_base_branch)— 必须 `--draft`
+    - dev_sync_daemon reverse sync PR(auto-refact-dev → dev)— 必须 `--draft`(maintainer 手动 review)
+
+    例外:
+    - dev_sync_daemon forward sync PR(dev → auto-refact-dev)— **不** `--draft`,因 daemon 立即 `gh pr merge --auto`,draft 会阻塞 auto-merge
+
+    Merge 前必须 chain `gh pr ready <PR>` 再 `gh pr merge`,顺序固定:
+    ```bash
+    gh pr ready $PR 2>&1 | tail -1   # 转出 draft
+    gh pr merge $PR --squash --delete-branch  # 再 merge
+    ```
+    `controller_lib.sh` `merge_pr` 已封装此顺序。手写 merge 必须 `gh pr ready` 前置,否则 `gh pr merge` 报 "Pull request is not mergeable: it is in draft state"。
+
+    **反面禁止**:
+    - ❌ `gh pr create` 缺 `--draft`(除 forward sync 例外)
+    - ❌ `gh pr merge` 直接调用未先 `gh pr ready` → fail with "draft state" error
+    - ❌ controller 自己 `gh pr ready` 但不立即 merge → 留出 maintainer 误 merge 窗口;`gh pr ready` 必须与 `gh pr merge` 在同一 controller turn 内 chain
 
 ## 工作语言规则(默认中文)
 

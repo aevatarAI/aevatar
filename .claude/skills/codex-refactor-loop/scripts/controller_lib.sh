@@ -49,6 +49,8 @@ merge_pr() {
   if [ -z "$linked_issue" ]; then
     linked_issue=$(gh pr view "$pr" --json body --jq '.body' 2>/dev/null | grep -oE "Closes #[0-9]+" | head -1 | grep -oE "[0-9]+")
   fi
+  # gh pr ready 转出 draft 状态(per Auric 2026-06-01 "提pr都提草稿");忽略已是 ready 的 idempotent error
+  gh pr ready "$pr" 2>&1 | tail -1
   gh pr merge "$pr" --admin --squash --delete-branch 2>&1 | tail -1
   # Cleanup PR labels: in-flight → merged
   gh pr edit "$pr" \
@@ -91,7 +93,8 @@ open_pr_with_label() {
     return 1
   fi
   local pr_url
-  pr_url=$(gh pr create --base "$base" --head "$head" --title "$title" --body-file "$body_file" 2>&1 | tail -1)
+  # --draft per Auric 2026-06-01 "提pr都提草稿, 防止人工误合并"; controller 在 Phase 8 共识 + CI 绿后 gh pr ready 再 merge
+  pr_url=$(gh pr create --draft --base "$base" --head "$head" --title "$title" --body-file "$body_file" 2>&1 | tail -1)
   PR_NUM=$(echo "$pr_url" | grep -oE "pull/[0-9]+" | grep -oE "[0-9]+")
   if [ -z "$PR_NUM" ]; then
     echo "open_pr_with_label: failed to extract PR num from: $pr_url" >&2

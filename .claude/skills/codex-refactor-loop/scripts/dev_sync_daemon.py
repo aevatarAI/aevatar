@@ -152,9 +152,14 @@ def create_sync_pr(source: str, target: str, branch_prefix: str, ahead: int, lab
             f"CI 绿后 GitHub auto-merge。冲突或 CI fail 由 daemon 写 pending event,"
             f"再由 controller 派 codex 在独立 worktree 解决。"
             f"\n\n⟦AI:AUTO-LOOP⟧\n")
-    r = run(["gh", "pr", "create", "--base", target, "--head", new_branch,
-             "--title", f"chore: {source} → {target} 自动同步 ({ahead} commits)",
-             "--body", body], cwd=MAIN_REPO)
+    # forward(dev→trunk)非 draft 因 enable auto-merge;reverse(trunk→dev)用 draft 防止 maintainer 误手动 merge
+    # per Auric 2026-06-01 "提pr都提草稿, 防止人工误合并"
+    create_args = ["gh", "pr", "create", "--base", target, "--head", new_branch,
+                   "--title", f"chore: {source} → {target} 自动同步 ({ahead} commits)",
+                   "--body", body]
+    if label != "forward":
+        create_args.insert(3, "--draft")
+    r = run(create_args, cwd=MAIN_REPO)
     if r.returncode != 0:
         log(f"{label}: FAIL pr create: {r.stderr.strip()[:200]}")
         return
