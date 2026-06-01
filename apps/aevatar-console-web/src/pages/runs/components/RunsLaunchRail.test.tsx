@@ -59,9 +59,14 @@ describe("RunsLaunchRail", () => {
       />
     );
 
+    expect(screen.getByText("Target: direct")).toBeInTheDocument();
+    expect(screen.getByText("Workspace, route, prompt")).toBeInTheDocument();
     expect(
       screen.getByLabelText("Chat route (optional)")
     ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Endpoint")).toBeNull();
+    expect(screen.queryByLabelText("Binding override (optional)")).toBeNull();
+    fireEvent.click(screen.getByText("Advanced endpoint and payload options"));
     expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
     expect(screen.getByLabelText("Binding override (optional)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Presets (1)" }));
@@ -127,5 +132,57 @@ describe("RunsLaunchRail", () => {
 
     expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
     expect(screen.getByLabelText("Binding override (optional)")).toBeInTheDocument();
+  });
+
+  it("keeps command endpoint payload controls behind advanced options", () => {
+    const composerFormRef = {
+      current: undefined,
+    } as React.RefObject<ProFormInstance<RunFormValues> | undefined>;
+
+    render(
+      <RunsLaunchRail
+        catalogSearch=""
+        activeEndpointId="submit"
+        activeEndpointKind="command"
+        composerFormRef={composerFormRef}
+        initialFormValues={{
+          prompt: "",
+          endpointId: "submit",
+          endpointKind: "command",
+          scopeId: "scope-1",
+          serviceOverrideId: "service-1",
+          transport: "sse",
+          routeName: "",
+        }}
+        recentRunRows={[]}
+        selectedTransport="sse"
+        selectedRouteDetailsPrimitives={[]}
+        streaming={false}
+        submitPathLabel="/api/scopes/{scopeId}/members/{memberId}/invoke/submit"
+        transportOptions={[{ label: "Service SSE stream", value: "sse" }]}
+        visiblePresets={[]}
+        workflowCatalogLoading={false}
+        routeOptions={[]}
+        onAbortRun={jest.fn()}
+        onCatalogSearchChange={jest.fn()}
+        onClearRecentRuns={jest.fn()}
+        onEndpointChange={jest.fn()}
+        onEndpointKindChange={jest.fn()}
+        onSelectRouteName={jest.fn()}
+        onScopeIdChange={jest.fn()}
+        onSubmitRun={async () => {}}
+        onTransportChange={jest.fn()}
+        onUsePreset={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("Target: submit")).toBeInTheDocument();
+    expect(screen.getAllByText("Command invoke").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByLabelText("Payload base64 (advanced)")).toBeNull();
+
+    fireEvent.click(screen.getByText("Advanced endpoint and payload options"));
+
+    expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
+    expect(screen.getByLabelText("Payload base64 (advanced)")).toBeInTheDocument();
   });
 });

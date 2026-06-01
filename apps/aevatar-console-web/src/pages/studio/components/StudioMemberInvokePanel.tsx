@@ -524,6 +524,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(endpointContract?.revisionId) ||
     trimOptional(memberRevision?.revisionId);
   const lifecycleLabel = getLifecycleLabel(memberRevision);
+  const invokeBlockedReason = !scopeId
+    ? 'Missing workspace scope.'
+    : !normalizedMemberId
+      ? 'Missing Team member target.'
+      : !selectedService
+        ? 'Select a published member service before invoking.'
+        : !selectedEndpoint
+          ? 'Select an endpoint before invoking.'
+          : '';
   const runViewMode = selectedHistoryId ? 'historical' : 'latest';
 
   useEffect(() => {
@@ -1356,18 +1365,34 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             data-testid="studio-invoke-target-summary"
             style={targetSummaryStyle}
           >
-            <div style={{ minWidth: 0 }}>
-              <div title={currentMemberLabel} style={targetTitleStyle}>
-                {currentMemberLabel}
+              <div style={{ minWidth: 0 }}>
+                <div title={currentMemberLabel} style={targetTitleStyle}>
+                  {currentMemberLabel}
+                </div>
+                <div style={targetMetaStyle}>
+                  {normalizedTeamId ? (
+                    <>
+                      <span>Team: {normalizedTeamId}</span>
+                      <span>·</span>
+                    </>
+                  ) : null}
+                  <span>Member: {normalizedMemberId || 'not selected'}</span>
+                  <span>·</span>
+                  <span>Service: {selectedService?.displayName || selectedServiceId || 'not selected'}</span>
+                  <span>·</span>
+                  <span>Endpoint: {endpointSummaryLabel}</span>
+                  <span>·</span>
+                  <span>{currentImplementationKind}</span>
+                  <span>·</span>
+                  <span>Lifecycle: {lifecycleLabel}</span>
+                  {invokeBlockedReason ? (
+                    <>
+                      <span>·</span>
+                      <span>{invokeBlockedReason}</span>
+                    </>
+                  ) : null}
+                </div>
               </div>
-              <div style={targetMetaStyle}>
-                <span>Endpoint: {endpointSummaryLabel}</span>
-                <span>·</span>
-                <span>{currentImplementationKind}</span>
-                <span>·</span>
-                <span>Lifecycle: {lifecycleLabel}</span>
-              </div>
-            </div>
             <div style={targetPillStyle}>
               <span
                 style={{
@@ -1385,6 +1410,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             style={invokeComposerDockStyle}
           >
             <StudioMemberInvokeComposerPanel
+              blockedReason={invokeBlockedReason}
               canInvoke={canInvoke}
               defaultPrompt={effectiveDefaultPrompt}
               formError={formError}
