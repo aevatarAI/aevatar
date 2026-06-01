@@ -19,7 +19,7 @@ internal readonly record struct ChatRunRequestNormalizationResult(
 
 internal static class ChatRunRequestNormalizer
 {
-    private const string LegacyConnectorHttpAuthorizationMetadataKey = "connector.http.authorization";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
 
     // Refactor (iter112/cluster-3): Old pattern: Host adapters populated Application mirror fields beside typed source. New principle: Host keeps wire aliases but normalizes them once into typed WorkflowChatSource.
     // Refactor (iter15/cluster-029):
@@ -329,7 +329,7 @@ internal static class ChatRunRequestNormalizer
     // Refactor (iter169/cluster-issue1551): Old pattern: public metadata could carry connector authorization. New principle: only trusted adapter code can set the typed ConnectorHttpAuthorization command field.
     private static bool IsReservedMetadataKey(string key) =>
         IsScopeMetadataKey(key) ||
-        string.Equals(key, LegacyConnectorHttpAuthorizationMetadataKey, StringComparison.Ordinal);
+        string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal);
 
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.OrdinalIgnoreCase) ||

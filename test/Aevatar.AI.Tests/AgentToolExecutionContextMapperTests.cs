@@ -260,9 +260,6 @@ public sealed class AgentToolExecutionContextMapperTests
             .EnumerateFiles(Path.Combine(repositoryRoot, "src"), "*.cs", SearchOption.AllDirectories)
             .Concat(Directory.EnumerateFiles(Path.Combine(repositoryRoot, "agents"), "*.cs", SearchOption.AllDirectories))
             .Where(static path => !IsGeneratedFile(path))
-            .Where(static path => !path.EndsWith(
-                Path.Combine("ToolProviders", "AgentToolRequestContext.cs"),
-                StringComparison.Ordinal))
             .Order(StringComparer.Ordinal)
             .ToArray();
 
@@ -275,6 +272,7 @@ public sealed class AgentToolExecutionContextMapperTests
         source.Should().NotContain("AgentToolRequestContext.CurrentMetadata");
         source.Should().NotContain("AgentToolRequestContext.TryGet(");
         source.Should().NotContain(".ToLegacyMetadata(");
+        source.Should().NotContain("HttpAuthorizationMetadataKey");
     }
 
     private static string FindRepositoryRoot()

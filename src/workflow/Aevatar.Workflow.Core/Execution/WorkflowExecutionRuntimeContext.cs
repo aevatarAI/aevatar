@@ -52,11 +52,11 @@ internal sealed class WorkflowExecutionRuntimeContext
 //                  durable control/security keys.
 internal sealed class WorkflowRequestPassthroughMetadata
 {
-    private const string LegacyConnectorHttpAuthorizationMetadataKey = "connector.http.authorization";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
 
     private static readonly HashSet<string> BlockedKeys =
     [
-        LegacyConnectorHttpAuthorizationMetadataKey,
+        LegacyConnectorHttpAuthorizationBlockedKey,
         LLMRequestMetadataKeys.NyxIdAccessToken,
         LLMRequestMetadataKeys.ModelOverride,
         LLMRequestMetadataKeys.NyxIdRoutePreference,

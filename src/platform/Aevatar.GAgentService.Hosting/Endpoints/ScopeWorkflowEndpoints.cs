@@ -21,7 +21,7 @@ namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 public static class ScopeWorkflowEndpoints
 {
-    private const string LegacyConnectorHttpAuthorizationMetadataKey = "connector.http.authorization";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
 
     public static IEndpointRouteBuilder MapScopeWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
@@ -554,7 +554,7 @@ public static class ScopeWorkflowEndpoints
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        scopedHeaders.Remove(LegacyConnectorHttpAuthorizationMetadataKey);
+        scopedHeaders.Remove(LegacyConnectorHttpAuthorizationBlockedKey);
         // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses WorkflowChatRunRequest.ConnectorHttpAuthorization.
 
         return scopedHeaders;
