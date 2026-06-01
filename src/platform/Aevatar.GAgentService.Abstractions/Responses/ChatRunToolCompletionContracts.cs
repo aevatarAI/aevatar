@@ -2,7 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.GAgentService.Abstractions.Responses;
 
-// Refactor (iter290/cluster001): Old pattern: wait=complete routed through ChatRun
+// Refactor (iter290/cluster-001): Old pattern: wait=complete routed through ChatRun
 // actor/coordinator continuation scaffolding. New principle: invocation tools return
 // accepted/streaming receipt fields on the live tool execution path; completion is
 // observed through read models instead of a ChatRun continuation shim.
