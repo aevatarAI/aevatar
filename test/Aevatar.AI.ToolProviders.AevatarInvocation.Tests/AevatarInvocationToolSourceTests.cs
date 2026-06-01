@@ -226,6 +226,40 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeGAgent_ShouldNotResolveCallerScopeFromExternalMetadata()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = AgentToolContextScope.Push(new AgentToolExecutionContext(
+            new AgentToolRequestIdentity("request-1", "call-gagent-no-scope"),
+            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCallerContext(null, "owner-1", "response-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolSenderBindingContext("binding-1"),
+            new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
+            new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["scope_id"] = "metadata-scope",
+                [LLMRequestMetadataKeys.ScopeId] = "metadata-aevatar-scope",
+                ["external"] = "value",
+            }));
+
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_id": "actor-1",
+              "payload": { "prompt": "hello" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        harness.ActorRegistry.LastScopeId.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task InvokeGAgent_ShouldRejectPayloadHeaderCredentialOverrides()
     {
         var harness = new Harness();
