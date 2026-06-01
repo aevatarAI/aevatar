@@ -69,14 +69,19 @@ def count_ahead(base: str, head: str, cwd: Path = MAIN_REPO) -> int:
 
 
 def find_open_pr(base: str, head_prefix: str) -> tuple[int | None, str | None]:
+    """returns (pr_num, head). On API error returns ("API_ERROR", None) — caller
+    must skip the tick to avoid falsely creating a duplicate PR/branch when an
+    open one already exists. Fix for issue #1648 (2026-06-01)."""
     r = run(["gh", "pr", "list", "--state", "open", "--base", base,
              "--json", "number,headRefName"], cwd=MAIN_REPO)
     if r.returncode != 0:
-        return None, None
+        log(f"find_open_pr({base}): API error, skip: {r.stderr.strip()[:160]}")
+        return "API_ERROR", None
     try:
         prs = json.loads(r.stdout)
     except json.JSONDecodeError:
-        return None, None
+        log(f"find_open_pr({base}): json decode fail, skip: {r.stdout[:160]}")
+        return "API_ERROR", None
     for p in prs:
         if p.get("headRefName", "").startswith(head_prefix):
             return p["number"], p["headRefName"]
@@ -304,6 +309,10 @@ def sync_direction(source: str, target: str, wt: Path, branch_prefix: str, label
         return
 
     pr_num, sync_branch = find_open_pr(target, branch_prefix)
+
+    if pr_num == "API_ERROR":
+        log(f"{label}: skip tick — find_open_pr API error, wait for recovery")
+        return
 
     if pr_num is None:
         create_sync_pr(source, target, branch_prefix, ahead, label)
