@@ -82,7 +82,7 @@ public static class LarkConversationTargets
     ///
     /// <para>
     /// If none of the typed identifiers are available (no chat_id, no union_id, no senderId),
-    /// returning a typed pair would silently re-create the original /daily 400 (typing the
+    /// returning a typed pair would silently re-create the original relay 400 (typing the
     /// conversation_id as <c>chat_id</c>). Instead return an empty typed pair with
     /// <c>FellBackToPrefixInference=true</c> so <see cref="Resolve"/> falls back to the legacy
     /// prefix path and call sites emit a Debug breadcrumb.

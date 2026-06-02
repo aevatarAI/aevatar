@@ -934,12 +934,12 @@ Agent:
 User: "写一个 script 监听 OrderCreated 事件，累加每日订单总额到 read model"
 
 Agent:
-  [script_compile script_id="daily-order-total"
+  [script_compile script_id="periodic-order-total"
     source_files={
-      "DailyOrderTotalBehavior.cs": "...生成的 C#...",
+      "PeriodicOrderTotalBehavior.cs": "...生成的 C#...",
     }
     proto_files={
-      "daily_order_total.proto": "...生成的 proto..."
+      "periodic_order_total.proto": "...生成的 proto..."
     }]
     → ToolApproval → 用户确认
     → 返回: success=true, revision="rev-1", diagnostics=[]
@@ -947,9 +947,9 @@ Agent:
 User: "promote 然后绑定"
 
 Agent:
-  [script_promote script_id="daily-order-total" revision="rev-1"]
+  [script_promote script_id="periodic-order-total" revision="rev-1"]
     → ToolApproval → 用户确认
-  [binding_bind kind=scripting script_id=daily-order-total display_name="每日订单统计"]
+  [binding_bind kind=scripting script_id=periodic-order-total display_name="周期订单统计"]
     → ToolApproval → 用户确认
 ```
 

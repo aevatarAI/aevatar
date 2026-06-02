@@ -2655,9 +2655,9 @@ Bash(
    - `git fetch origin`
    - `git merge origin/<base-branch>`(包括 `--abort` 恢复)
    - `git add <resolved-file>`(只 add resolved files,不 add 其他)
-   
+
    仍禁止:`git commit`、`git push`、`git checkout`、新 file 创建、对 conflict file 外的文件改动。这些由 controller 主控。
-   
+
    事故记录:2026-05-30 conflict-resolve v1 prompt 没说允许 git add → codex 保守按 hard rule 4 全拒,输出 `CONFLICT_BLOCKED:git_commit_forbidden_by_shared_hard_rules`。本次例外补齐;`prompts/conflict-resolve-*.md` 模板用此例外措辞即可,不用每个 PR override。
 5. **No `Task.Delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
@@ -2682,11 +2682,11 @@ Bash(
     dotnet test aevatar.slnx --nologo --no-build 2>&1 | tail -30  # full test 必通过
     ```
     **不允许**用 `--filter "FullyQualifiedName~..."` 跑窄范围 verify。filter 只能用于 **iterative fix loop 内部快速反馈**,**最后 marker DONE 之前必须 full slnx test**。
-    
+
     **失败处理**:full test 仍 fail → codex **不出** `IMPLEMENT_DONE:ok` / `FIX_DONE:applied-N:tests-pass`,改用 `IMPLEMENT_DONE:partial:<fail-count>` / `FIX_DONE:partial:<fail-count>:<top-failing-modules>` 让 controller 决策(派 r+1 / re-cluster / drop)。
-    
+
     **事故**:2026-05-27 PR1106 sync codex 只跑 `dotnet build` 不跑 `dotnet test` → 50-commit dev sync push 后 CI 暴露 30+ test fail。Fix r1 用 narrow filter 跑 hosting tests 68 pass 就 marker tests-pass → push 后 CI 仍暴露 74 fail in channel/runtime/AI module。3-round push-test-fix loop 浪费 ~2h CI + 多轮 force-push。本规则强制本地 full test verify 防再犯。
-    
+
     **例外**:`audit` codex 不跑 test(它只 inspect 不改 code)。`verify` codex 跑 full test 是 verify 职责本身。
 
 11. **controller commit 前 self-verify**(强制,per Auric 2026-05-27 与规则 10 同源). 即使 codex marker `tests-pass`,controller 在 `git commit --amend` / `git push --force-with-lease` 前**必须**自己跑一次 `dotnet test aevatar.slnx --nologo --no-build` 兜底。fail → 拒绝 push,派 r+1 fix。双保险防 codex marker 不诚实 / filter 窄漏 module。

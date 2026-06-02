@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -128,7 +130,24 @@ public sealed record WorkflowChatRunRequest(
     string? ScopeId = null,
     LLMControlContext? LlmControl = null,
     // Refactor (issue1332): Old pattern: workflow chat commands could only carry tool controls through metadata/LlmControl. New principle: reuse typed AgentToolExecutionContext as the workflow ToolContext control surface.
-    AgentToolExecutionContext? ToolContext = null);
+    AgentToolExecutionContext? ToolContext = null,
+    IReadOnlyDictionary<string, string>? Headers = null,
+    string? CommandIdSeed = null,
+    string? CorrelationIdSeed = null,
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+{
+    string? ICommandContextSeed.CommandId => CommandIdSeed;
+
+    string? ICommandContextSeed.CorrelationId => CorrelationIdSeed;
+
+    IReadOnlyDictionary<string, string>? ICommandContextSeed.Headers => Headers;
+}
+
+public sealed record WorkflowRunTargetSeed(
+    string ActorId,
+    string WorkflowNameForRun,
+    IReadOnlyList<string>? CreatedActorIds = null,
+    WorkflowChatSource? Source = null);
 
 public enum WorkflowChatRunStartError
 {
@@ -142,6 +161,7 @@ public enum WorkflowChatRunStartError
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
     PromptRequired = 9,
+    ProjectionUnavailable = 10,
 }
 
 public enum WorkflowProjectionCompletionStatus

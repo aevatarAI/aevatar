@@ -36,7 +36,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Only static GAgent services support stream invocation*");
-        interaction.Commands.Should().BeEmpty();
+        interaction.Requests.Should().BeEmpty();
         registration.Records.Should().BeEmpty();
     }
 
@@ -114,19 +114,20 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         accepted.ServiceReceipt.TargetActorId.Should().Be(receipt.ActorId);
         accepted.GAgentReceipt.Should().Be(receipt);
 
-        interaction.Commands.Should().ContainSingle();
-        var command = interaction.Commands[0];
-        command.ScopeId.Should().Be(identity.TenantId);
-        command.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
-        command.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
-        command.Prompt.Should().Be("hello static");
-        command.PreferredActorId.Should().Be("preferred-actor");
-        command.SessionId.Should().Be("session-1");
-        command.Headers.Should().Contain("x-trace", "trace-1");
-        command.InputParts.Should().ContainSingle()
+        interaction.Requests.Should().ContainSingle();
+        var delegated = interaction.Requests[0];
+        delegated.ScopeId.Should().Be(identity.TenantId);
+        delegated.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
+        delegated.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
+        delegated.Prompt.Should().Be("hello static");
+        delegated.PreferredActorId.Should().Be("preferred-actor");
+        delegated.SessionId.Should().Be("session-1");
+        delegated.Headers.Should().Contain("x-trace", "trace-1");
+        delegated.UseCorrelationIdAsFallbackSessionId.Should().BeFalse();
+        delegated.InputParts.Should().ContainSingle()
             .Which.Text.Should().Be("part-1");
-        command.ToolContext.Should().BeEquivalentTo(NewToolContext());
-        command.LlmControl.Should().BeEquivalentTo(NewLlmControl());
+        delegated.ToolContext.Should().BeEquivalentTo(NewToolContext());
+        delegated.LlmControl.Should().BeEquivalentTo(NewLlmControl());
     }
 
     [Fact]
@@ -213,7 +214,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Only chat endpoints support static GAgent stream invocation*");
-        interaction.Commands.Should().BeEmpty();
+        interaction.Requests.Should().BeEmpty();
         registration.Records.Should().BeEmpty();
     }
 
@@ -238,7 +239,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*expects payload 'type.googleapis.com/test.other'*");
-        interaction.Commands.Should().BeEmpty();
+        interaction.Requests.Should().BeEmpty();
         registration.Records.Should().BeEmpty();
     }
 
@@ -261,7 +262,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
-        interaction.Commands.Should().ContainSingle()
+        interaction.Requests.Should().ContainSingle()
             .Which.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
     }
 
@@ -286,7 +287,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Static GAgent service has no agent kind configured*");
-        interaction.Commands.Should().BeEmpty();
+        interaction.Requests.Should().BeEmpty();
         registration.Records.Should().BeEmpty();
     }
 
@@ -328,6 +329,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             new AgentToolSenderBindingContext("binding-1"),
             new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
             new AgentToolConnectedServicesContext("connected"),
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external"] = "value",
@@ -451,9 +453,9 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
     }
 
     private sealed class RecordingGAgentDraftRunInteractionService
-        : ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>
+        : IGAgentDraftRunInteractionPort
     {
-        public List<GAgentDraftRunCommand> Commands { get; } = [];
+        public List<GAgentDraftRunInteractionRequest> Requests { get; } = [];
 
         public IReadOnlyList<AGUIEvent> Frames { get; init; } = [];
 
@@ -466,12 +468,12 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         public GAgentDraftRunStartError? Failure { get; init; }
 
         public async Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>> ExecuteAsync(
-            GAgentDraftRunCommand command,
+            GAgentDraftRunInteractionRequest request,
             Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
             Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
-            Commands.Add(command);
+            Requests.Add(request);
             if (Failure.HasValue)
                 return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
                     .Failure(Failure.Value);

@@ -25,6 +25,10 @@ message ConversationGAgentState {
   //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
   //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
   repeated ConversationReplyLifecycleState active_reply_lifecycles = 11;
+  // Conversation-owned LLM transcript window. Each normal channel LLM run receives
+  // this snapshot as prior context and, after successful user-visible delivery,
+  // appends the new turn entries through ConversationTurnCompletedEvent.
+  repeated ConversationHistoryEntry retained_history = 12;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):
@@ -54,6 +58,7 @@ message ConversationReplyLifecycleState {
   int64 nyx_relay_in_flight_sequence = 21;
   int64 nyx_relay_operation_generation = 22;
   LlmReplyTerminalState pending_nyx_relay_terminal_state = 23;
+  repeated ConversationHistoryEntry pending_appended_history = 24;
 }
 
 // Channel-sink ack tracking for the most recent reply turn. Carries either

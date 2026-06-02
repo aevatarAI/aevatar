@@ -163,7 +163,7 @@ public sealed class MessagesCommandFacade(
         }
 
         var action = routeDecision.Action.Clone();
-        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
+        var routedModel = ShouldUseRouteModel(routeDecision, normalized.Model)
             ? action.ForwardToModel.ModelName.Trim()
             : normalized.Model;
         if (action.ForwardToModel is null)
@@ -173,6 +173,21 @@ public sealed class MessagesCommandFacade(
 
         action.ForwardToModel.ModelName = routedModel;
         return RouteTargetResult.FromModel(routedModel, action);
+    }
+
+    private static bool ShouldUseRouteModel(ChatRouteDecision routeDecision, string requestModel)
+    {
+        var routeModel = routeDecision.Action.ForwardToModel?.ModelName;
+        if (string.IsNullOrWhiteSpace(routeModel))
+            return false;
+
+        if (!routeDecision.UsedFallback)
+        {
+            return !string.IsNullOrWhiteSpace(routeDecision.MatchedRuleId) ||
+                   ResponsesModelRouteParser.Parse(requestModel).RouteSlug is null;
+        }
+
+        return ResponsesModelRouteParser.Parse(requestModel).RouteSlug is null;
     }
 
     private async Task<SessionRegistrationResult> RegisterSessionAsync(
@@ -391,6 +406,7 @@ public sealed class MessagesCommandFacade(
             AgentToolSenderBindingContext.Empty,
             new LLMRequestRoutingContext(null, routePreference, null, null),
             AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal));
 
     private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(

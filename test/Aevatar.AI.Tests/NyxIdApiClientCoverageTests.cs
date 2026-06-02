@@ -185,7 +185,7 @@ public sealed class NyxIdApiClientCoverageTests
         // with a 403 "Request forbidden by administrative rules". .NET's `HttpClient` doesn't
         // send one by default, and NyxID proxies whatever the .NET client sends — so without
         // this default, every agent-builder GitHub call lands as a spurious 403 (root cause of
-        // production /daily failures captured under PR #420 diagnostic logs).
+        // production /summary failures captured under PR #420 diagnostic logs).
         var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("{}", Encoding.UTF8, "application/json"),

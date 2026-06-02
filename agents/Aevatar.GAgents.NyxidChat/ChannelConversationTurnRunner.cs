@@ -26,7 +26,6 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 {
-    private const string DailySkillName = "chrono-ai-daily";
     private static readonly HashSet<string> LocalSlashCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "approve",
@@ -1416,6 +1415,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkChatId))
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
 
+        var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorUserId))
+            metadata[ChannelMetadataKeys.LarkOperatorUserId] = larkOperatorUserId;
+
+        var larkOperatorOpenId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorOpenId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorOpenId))
+            metadata[ChannelMetadataKeys.LarkOperatorOpenId] = larkOperatorOpenId;
+
+        var larkOperatorUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUnionId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
+            metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
+
         return metadata;
     }
 
@@ -1550,6 +1561,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
 
+        if (TryBuildSkillRecoveryContext(inboundEvent.Text, out var skillRecovery))
+        {
+            request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+            {
+                SkillRecovery = skillRecovery,
+            }).ToPayload();
+        }
+
         request.LlmControl = (await BuildOwnerLlmControlAsync(
                 inboundEvent,
                 LLMControlContextMapper.FromPayload(request.LlmControl),
@@ -1582,6 +1601,32 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return request;
+    }
+
+    private bool TryBuildSkillRecoveryContext(string? text, out AgentSkillRecoveryContext context)
+    {
+        context = AgentSkillRecoveryContext.Empty;
+        if (!TryParseSlashCommand(text, out var commandName, out _))
+            return false;
+
+        var normalizedCommand = commandName.Trim().TrimStart('/');
+        if (string.IsNullOrWhiteSpace(normalizedCommand))
+            return false;
+
+        if (LocalSlashCommands.Contains(normalizedCommand) ||
+            ResolveSlashCommandHandler(normalizedCommand) is not null)
+        {
+            return false;
+        }
+
+        context = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: normalizedCommand,
+            OriginalCommand: (text ?? string.Empty).Trim(),
+            PrimarySkillName: null,
+            MaxOrnnSearchAttempts: 2);
+        return true;
     }
 
     private async Task<LLMControlContext> BuildOwnerLlmControlAsync(
@@ -1624,29 +1669,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return false;
         }
 
-        if (string.Equals(commandName, "daily", StringComparison.OrdinalIgnoreCase))
-            return TryBuildDailySkillInvocationPrompt(text, argumentText, out prompt);
-
         return TryBuildSlashSkillDiscoveryPrompt(text, commandName, argumentText, out prompt);
-    }
-
-    private static bool TryBuildDailySkillInvocationPrompt(
-        string? text,
-        string argumentText,
-        out string prompt)
-    {
-        var argsJson = JsonSerializer.Serialize(argumentText);
-        var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
-        prompt =
-            "The user invoked the Lark `/daily` shortcut.\n" +
-            $"This is a deterministic command execution, not an open-ended chat answer. Route this turn through the Ornn skill `{DailySkillName}`.\n" +
-            $"First call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}. Do not search for this skill first.\n" +
-            "After the skill is loaded, follow its instructions exactly and continue using tools until the final daily report is ready.\n" +
-            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
-            "If the loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
-            "The only final user-visible answer should be the completed daily report or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
-            $"Original command: {originalJson}";
-        return true;
     }
 
     private bool TryBuildSlashSkillDiscoveryPrompt(
@@ -1674,12 +1697,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         prompt =
             $"The user invoked the Lark `/{normalizedCommand}` shortcut.\n" +
             "This slash command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
-            $"First call `ornn_search_skills` with `query` = {queryJson} and `scope` = `mixed`.\n" +
-            $"Then call `use_skill` for the best matching skill and pass `args` = {argsJson}. Prefer an exact or near-exact command/skill name match when available.\n" +
-            "After the skill is loaded, follow its instructions exactly and continue using tools until the command's final result is ready.\n" +
-            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
-            "If no matching skill is found, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
+            $"Aevatar has already executed `ornn_search_skills` (query = {queryJson}) and `use_skill` for the best matching skill before this turn (their tool results are in the messages above); the loaded skill's instructions are the only source of truth for this command.\n" +
+            $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
+            "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
+            "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
             "If a loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
+            "Do not narrate intermediate work, path guesses, or partial findings as the user-visible reply.\n" +
             "The only final user-visible answer should be the completed command result or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
             $"Original command: {originalJson}";
         return true;

@@ -830,6 +830,7 @@ public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
             AgentToolSenderBindingContext.Empty,
             new LLMRequestRoutingContext(null, NormalizeOptional(command.RoutePreference), null, null),
             AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal));
 
     private static IReadOnlyDictionary<string, string> BuildProviderMetadata(LlmRunRequested command) =>

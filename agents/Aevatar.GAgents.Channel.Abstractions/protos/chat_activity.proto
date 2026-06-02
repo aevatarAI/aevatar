@@ -351,6 +351,15 @@ message TransportExtras {
   // alike) without re-resolving inside the actor turn. Empty when the relay payload did not
   // surface a user access token or when `/me` resolution failed at ingress.
   string nyx_sender_user_id = 10;
+  // The Lark operator `user_id` (`ou_*`) for card action callbacks. This identifies the user
+  // who clicked or submitted the card action. Empty for non-Lark traffic and ordinary messages.
+  string nyx_lark_operator_user_id = 11;
+  // The Lark operator `open_id` (`ou_*`) for card action callbacks when the event supplies it.
+  // Empty for non-Lark traffic and ordinary messages.
+  string nyx_lark_operator_open_id = 12;
+  // The Lark operator `union_id` (`on_*`) for card action callbacks. Kept separate from the
+  // sender union id so prompts can distinguish card operator facts from ordinary message senders.
+  string nyx_lark_operator_union_id = 13;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

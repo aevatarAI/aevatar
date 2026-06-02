@@ -338,6 +338,7 @@ public sealed class RoleGAgentStateCoverageTests
                 new AgentToolSenderBindingContext("binding-a"),
                 new LLMRequestRoutingContext("model-a", "route-a", 3, "remember-a"),
                 new AgentToolConnectedServicesContext("""{"service":"lark"}"""),
+                AgentSkillRecoveryContext.Empty,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["trace-id"] = "trace-1",
@@ -420,6 +421,7 @@ public sealed class RoleGAgentStateCoverageTests
                 AgentToolSenderBindingContext.Empty,
                 new LLMRequestRoutingContext("typed-model", "typed-route", 6, "typed-memory"),
                 AgentToolConnectedServicesContext.Empty,
+                AgentSkillRecoveryContext.Empty,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["typed-trace"] = "typed-value",
@@ -1118,6 +1120,7 @@ public sealed class RoleGAgentStateCoverageTests
                 new AgentToolSenderBindingContext("binding-a"),
                 new LLMRequestRoutingContext("model-a", "route-a", 5, "remember-a"),
                 new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
+                AgentSkillRecoveryContext.Empty,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["trace-id"] = "trace-from-context",

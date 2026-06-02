@@ -196,6 +196,7 @@ public sealed class LarkCoverageTests
                 "approve",
                 "inst-1",
                 "task-1",
+                "lark-user-1",
                 "looks good",
                 """{"field":"value"}""",
                 null,
@@ -210,7 +211,7 @@ public sealed class LarkCoverageTests
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("reject", "inst-1", "task-1", null, null, null, null),
+            new LarkApprovalTaskActionRequest("reject", "inst-1", "task-1", "lark-user-1", null, null, null, null),
             CancellationToken.None);
 
         handler.LastRequest!.RequestUri!.ToString()
@@ -219,7 +220,7 @@ public sealed class LarkCoverageTests
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("transfer", "inst-1", "task-1", null, null, "ou_target", null),
+            new LarkApprovalTaskActionRequest("transfer", "inst-1", "task-1", "lark-user-1", null, null, "ou_target", null),
             CancellationToken.None);
 
         handler.LastRequest!.RequestUri!.ToString()
@@ -228,7 +229,7 @@ public sealed class LarkCoverageTests
 
         var unsupported = () => client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("escalate", "inst-1", "task-1", null, null, null, null),
+            new LarkApprovalTaskActionRequest("escalate", "inst-1", "task-1", "lark-user-1", null, null, null, null),
             CancellationToken.None);
 
         await unsupported.Should().ThrowAsync<InvalidOperationException>()

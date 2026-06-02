@@ -44,7 +44,10 @@ public static class AgentToolExecutionContextMapper
         ArgumentNullException.ThrowIfNull(request);
 
         if (request.ToolContext is { } typedContext)
-            return request.LlmControl?.ToToolContext(typedContext) ?? typedContext;
+        {
+            var mergedContext = MergeExternalMetadata(typedContext, request.Metadata);
+            return request.LlmControl?.ToToolContext(mergedContext) ?? mergedContext;
+        }
 
         var mapped = FromMetadata(request.Metadata);
         mapped = request.LlmControl?.ToToolContext(mapped) ?? mapped;
@@ -79,6 +82,23 @@ public static class AgentToolExecutionContextMapper
         return FromRequest(request).WithCallId(callId);
     }
 
+    public static AgentToolExecutionContext MergeExternalMetadata(
+        AgentToolExecutionContext context,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var incoming = StripOwnedControlKeys(metadata);
+        if (incoming.Count == 0)
+            return context;
+
+        var merged = new Dictionary<string, string>(incoming, StringComparer.Ordinal);
+        foreach (var pair in context.ExternalMetadata)
+            merged[pair.Key] = pair.Value;
+
+        return context with { ExternalMetadata = merged };
+    }
+
     public static AgentToolExecutionContext FromPayload(AgentToolExecutionContextPayload? payload)
     {
         if (payload == null)
@@ -109,6 +129,7 @@ public static class AgentToolExecutionContextMapper
                 payload.Routing?.HasMaxToolRoundsOverride == true ? payload.Routing.MaxToolRoundsOverride : null,
                 AgentToolExecutionContext.Normalize(payload.Routing?.UserMemoryPrompt)),
             new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
+            FromSkillRecoveryPayload(payload.SkillRecovery),
             StripOwnedControlKeys(payload.ExternalMetadata));
     }
 
@@ -157,6 +178,7 @@ public static class AgentToolExecutionContextMapper
             {
                 ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
             },
+            SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
         };
 
         if (context.Routing.MaxToolRoundsOverride.HasValue)
@@ -199,8 +221,34 @@ public static class AgentToolExecutionContextMapper
                 int.TryParse(maxToolRounds, out var parsedMaxToolRounds) ? parsedMaxToolRounds : null,
                 TryGet(metadata, LLMRequestMetadataKeys.UserMemoryPrompt)),
             new AgentToolConnectedServicesContext(TryGet(metadata, LLMRequestMetadataKeys.ConnectedServicesContext)),
+            AgentSkillRecoveryContext.Empty,
             StripOwnedControlKeys(metadata));
     }
+
+    private static AgentSkillRecoveryContext FromSkillRecoveryPayload(AgentSkillRecoveryContextPayload? payload)
+    {
+        if (payload == null)
+            return AgentSkillRecoveryContext.Empty;
+
+        return new AgentSkillRecoveryContext(
+            payload.RequireInitialOrnnSearch,
+            payload.RequireOrnnSearchOnBlocker,
+            AgentToolExecutionContext.Normalize(payload.CommandName),
+            AgentToolExecutionContext.Normalize(payload.OriginalCommand),
+            AgentToolExecutionContext.Normalize(payload.PrimarySkillName),
+            payload.MaxOrnnSearchAttempts);
+    }
+
+    private static AgentSkillRecoveryContextPayload ToSkillRecoveryPayload(AgentSkillRecoveryContext context) =>
+        new()
+        {
+            RequireInitialOrnnSearch = context.RequireInitialOrnnSearch,
+            RequireOrnnSearchOnBlocker = context.RequireOrnnSearchOnBlocker,
+            CommandName = context.CommandName ?? string.Empty,
+            OriginalCommand = context.OriginalCommand ?? string.Empty,
+            PrimarySkillName = context.PrimarySkillName ?? string.Empty,
+            MaxOrnnSearchAttempts = context.MaxOrnnSearchAttempts,
+        };
 
     public static IReadOnlyDictionary<string, string> StripOwnedControlKeys(IReadOnlyDictionary<string, string>? metadata)
     {

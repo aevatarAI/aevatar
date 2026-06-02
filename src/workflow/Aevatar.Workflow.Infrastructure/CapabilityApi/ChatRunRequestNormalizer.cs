@@ -25,6 +25,7 @@ internal static class ChatRunRequestNormalizer
     //   New principle: scope is owned by the typed field; metadata only carries open extension entries.
     private readonly record struct NormalizedChatContext(
         IReadOnlyDictionary<string, string> Metadata,
+        IReadOnlyDictionary<string, string>? Headers,
         string? ScopeId);
 
     public static ChatRunRequestNormalizationResult Normalize(
@@ -41,7 +42,7 @@ internal static class ChatRunRequestNormalizer
         if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
-        var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, defaultMetadata);
+        var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, input.Headers, defaultMetadata);
         var normalizedMetadata = normalizedContext.Metadata;
         var sourceResult = NormalizeSource(input);
         if (!sourceResult.Succeeded)
@@ -60,7 +61,8 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
-                ToolContext: input.ToolContext));
+                ToolContext: input.ToolContext,
+                Headers: normalizedContext.Headers));
     }
 
     private static LLMControlContext? NormalizeLlmControl(ChatLlmControlInput? source)
@@ -284,9 +286,11 @@ internal static class ChatRunRequestNormalizer
     private static NormalizedChatContext NormalizeContext(
         string? explicitScopeId,
         IDictionary<string, string>? metadata,
+        IDictionary<string, string>? headers,
         IReadOnlyDictionary<string, string>? defaultMetadata)
     {
         var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        var normalizedHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
         var normalizedScopeId = NormalizeScopeId(explicitScopeId);
         if (defaultMetadata is { Count: > 0 })
         {
@@ -300,7 +304,16 @@ internal static class ChatRunRequestNormalizer
                 AddNormalizedMetadataEntry(normalized, key, value);
         }
 
-        return new NormalizedChatContext(normalized, normalizedScopeId);
+        if (headers is { Count: > 0 })
+        {
+            foreach (var (key, value) in headers)
+                AddNormalizedMetadataEntry(normalizedHeaders, key, value);
+        }
+
+        return new NormalizedChatContext(
+            normalized,
+            normalizedHeaders.Count == 0 ? null : normalizedHeaders,
+            normalizedScopeId);
     }
 
     // Refactor (iter15/cluster-029):

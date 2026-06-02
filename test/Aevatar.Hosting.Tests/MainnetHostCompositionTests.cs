@@ -118,6 +118,8 @@ public sealed class MainnetHostCompositionTests
         var toolSources = app.Services.GetServices<IAgentToolSource>().ToList();
         toolSources.Should().Contain(source => source is LarkAgentToolSource);
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
+        toolSources.Should().Contain(source => source is SkillsAgentToolSource);
+        toolSources.Should().Contain(source => source is OrnnAgentToolSource);
 
         await app.StopAsync();
     }

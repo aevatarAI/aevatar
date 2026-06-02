@@ -557,7 +557,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     [Fact]
     public async Task SendOutputAsync_ShouldThrowCrossTenantHint_When_LarkCodeNestedInHttp400Body()
     {
-        // Same envelope shape as the production /daily failure log: NyxID wraps the Lark
+        // Same envelope shape as the production /summary failure log: NyxID wraps the Lark
         // 99992364 as a string body inside an HTTP-400 Nyx envelope. The cross-tenant
         // recreate-the-agent hint (PR #412) only fires when the parser surfaces the nested
         // Lark code; previously it never did. Pin both the recovery hint and the nested-body
@@ -853,7 +853,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     [Fact]
     public async Task BuildExecutionLlmControl_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig()
     {
-        // Regression for the "/daily failed: Provider 'openai' not connected" report:
+        // Regression for the "/summary failed: Provider 'openai' not connected" report:
         // skill runners must honor the bot owner's pre-configured model + NyxID route + tool
         // cap — same shape AgentRunGAgent applies for nyxid-chat. Without it,
         // every scheduled run falls through to NyxIdLLMProvider's compile-time `gpt-5.4` +
@@ -1220,9 +1220,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private static InitializeSkillRunnerCommand CreateInitializeCommand() => new()
     {
-        SkillName = "daily",
-        TemplateName = "daily",
-        SkillContent = "You are a daily report runner.",
+        SkillName = "summary",
+        TemplateName = "summary",
+        SkillContent = "You are a summary report runner.",
         ExecutionPrompt = "Run the report.",
         ScheduleCron = string.Empty,
         ScheduleTimezone = SkillRunnerDefaults.DefaultTimezone,

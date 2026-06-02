@@ -90,6 +90,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                 lastFinishReason = update.FinishReason.Value.ToString();
 
             var emittedTextFromContents = false;
+            var emittedReasoningFromContents = false;
             if (update.Contents is { Count: > 0 })
             {
                 foreach (var part in update.Contents)
@@ -105,6 +106,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                             };
                             break;
                         case TextReasoningContent reasoningContent when !string.IsNullOrEmpty(reasoningContent.Text):
+                            emittedReasoningFromContents = true;
                             emittedStreamChunk = true;
                             yield return new LLMStreamChunk
                             {
@@ -144,6 +146,16 @@ public sealed class MEAILLMProvider : ILLMProvider
                     DeltaContent = update.Text,
                 };
             }
+
+            if (!emittedReasoningFromContents &&
+                TryExtractOpenAIReasoningDelta(update, out var reasoningDelta))
+            {
+                emittedStreamChunk = true;
+                yield return new LLMStreamChunk
+                {
+                    DeltaReasoningContent = reasoningDelta,
+                };
+            }
         }
 
         // Some providers may terminate a streaming call without emitting any chunk at all.
@@ -162,6 +174,46 @@ public sealed class MEAILLMProvider : ILLMProvider
 
         // The final chunk marks the end
         yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
+    }
+
+    private static bool TryExtractOpenAIReasoningDelta(
+        ChatResponseUpdate update,
+        out string reasoningDelta)
+    {
+        reasoningDelta = string.Empty;
+        if (update.RawRepresentation is not OpenAI.Chat.StreamingChatCompletionUpdate rawUpdate)
+            return false;
+
+#pragma warning disable SCME0001
+        return TryGetStringFromPatch(rawUpdate.Patch, "$.choices[0].delta.reasoning_content"u8, out reasoningDelta) ||
+               TryGetStringFromPatch(rawUpdate.Patch, "$.delta.reasoning_content"u8, out reasoningDelta);
+#pragma warning restore SCME0001
+    }
+
+#pragma warning disable SCME0001
+    private static bool TryGetStringFromPatch(
+        System.ClientModel.Primitives.JsonPatch patch,
+        ReadOnlySpan<byte> path,
+        out string value)
+#pragma warning restore SCME0001
+    {
+        try
+        {
+            if (patch.TryGetValue(path, out string? patchValue) &&
+                !string.IsNullOrEmpty(patchValue))
+            {
+                value = patchValue;
+                return true;
+            }
+
+            value = string.Empty;
+            return false;
+        }
+        catch (Exception)
+        {
+            value = string.Empty;
+            return false;
+        }
     }
 
     private static IEnumerable<LLMStreamChunk> MapResponseToStreamChunks(LLMResponse fallback)

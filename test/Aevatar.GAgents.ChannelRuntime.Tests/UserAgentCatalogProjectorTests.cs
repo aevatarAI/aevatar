@@ -44,7 +44,7 @@ public sealed class UserAgentCatalogProjectorTests
                     NyxApiKey = "nyx-key-1",
                     OwnerNyxUserId = "user-1",
                     AgentType = "skill_runner",
-                    TemplateName = "daily",
+                    TemplateName = "summary",
                     ScopeId = "scope-1",
                     ApiKeyId = "key-1",
                     ScheduleCron = "0 9 * * *",
@@ -68,7 +68,7 @@ public sealed class UserAgentCatalogProjectorTests
         document.NyxProviderSlug.Should().Be("api-lark-bot");
         document.OwnerNyxUserId.Should().Be("user-1");
         document.AgentType.Should().Be("skill_runner");
-        document.TemplateName.Should().Be("daily");
+        document.TemplateName.Should().Be("summary");
         document.ScopeId.Should().Be("scope-1");
         document.ApiKeyId.Should().Be("key-1");
         document.ScheduleCron.Should().Be("0 9 * * *");
@@ -131,7 +131,7 @@ public sealed class UserAgentCatalogProjectorTests
     {
         var state = new SkillRunnerState
         {
-            TemplateName = "daily",
+            TemplateName = "summary",
             ScopeId = "scope-1",
             ScheduleCron = "0 9 * * *",
             ScheduleTimezone = "UTC",
