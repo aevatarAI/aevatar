@@ -666,7 +666,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.StepId.Should().Be("approval-1");
-        suspended.SuspensionType.Should().Be("human_approval");
+        suspended.SuspensionType.Should().Be(WorkflowSuspensionType.HumanApproval);
         suspended.Content.Should().Be("original");
         suspended.DeliveryTargetId.Should().Be("agent-approval-1");
         ctx.Published.Clear();
@@ -1318,7 +1318,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
-        suspended.SuspensionType.Should().Be("secure_input");
+        suspended.SuspensionType.Should().Be(WorkflowSuspensionType.SecureInput);
         suspended.VariableName.Should().Be("api_key");
         suspended.Secure.Should().BeTrue();
         suspended.RedactedOutput.Should().Be("[api key captured]");

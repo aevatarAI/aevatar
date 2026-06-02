@@ -1425,7 +1425,7 @@ public class WorkflowGAgentCoverageTests
             new WorkflowSuspendedEvent
             {
                 StepId = "step-1",
-                SuspensionType = "human_input",
+                SuspensionType = WorkflowSuspensionType.HumanInput,
             },
             agent.Id,
             TopologyAudience.Self));

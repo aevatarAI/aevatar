@@ -273,7 +273,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         DateTimeOffset observedAt)
     {
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
-        step.SuspensionType = evt.SuspensionType ?? string.Empty;
+        var suspensionWireName = evt.SuspensionType.ToWireName();
+        step.SuspensionType = suspensionWireName;
         step.SuspensionPrompt = evt.Prompt ?? string.Empty;
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
         step.RequestedVariableName = evt.VariableName ?? string.Empty;
@@ -286,7 +287,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             readModel.Timeline,
             observedAt,
             "workflow.suspended",
-            $"{evt.StepId} ({evt.SuspensionType})",
+            $"{evt.StepId} ({suspensionWireName})",
             readModel.RootActorId,
             evt.StepId,
             step.StepType,

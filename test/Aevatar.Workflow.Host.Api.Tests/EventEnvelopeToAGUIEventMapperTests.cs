@@ -314,7 +314,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         {
             RunId = "run-1",
             StepId = "get_context",
-            SuspensionType = "human_input",
+            SuspensionType = WorkflowSuspensionType.HumanInput,
             Prompt = "请提供补充信息",
             Content = "已有上下文",
             TimeoutSeconds = 1800,
@@ -366,7 +366,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         {
             RunId = "run-legacy",
             StepId = "secure-legacy",
-            SuspensionType = "secure_input",
+            SuspensionType = WorkflowSuspensionType.SecureInput,
             Prompt = "provide secret",
             Metadata =
             {

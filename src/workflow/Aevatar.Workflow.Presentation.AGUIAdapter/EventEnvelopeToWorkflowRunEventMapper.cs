@@ -618,6 +618,22 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
         var secure = evt.Secure;
         var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.RedactedOutput);
 
+        var customPayload = new WorkflowHumanInputRequestCustomPayload
+        {
+            StepId = evt.StepId,
+            RunId = evt.RunId,
+            SuspensionType = evt.SuspensionType.ToWireName(),
+            Prompt = evt.Prompt,
+            TimeoutSeconds = evt.TimeoutSeconds,
+            VariableName = variableName,
+            Content = evt.Content,
+            DeliveryTargetId = evt.DeliveryTargetId,
+            Secure = secure,
+            RedactedOutput = redactedOutput,
+            Metadata = { metadata },
+        };
+        customPayload.Options.Add(evt.ExpectedOptions);
+
         events =
         [
             new WorkflowRunEventEnvelope
@@ -626,20 +642,7 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                 Custom = new WorkflowCustomEventPayload
                 {
                     Name = "aevatar.human_input.request",
-                    Payload = Any.Pack(new WorkflowHumanInputRequestCustomPayload
-                    {
-                        StepId = evt.StepId,
-                        RunId = evt.RunId,
-                        SuspensionType = evt.SuspensionType,
-                        Prompt = evt.Prompt,
-                        TimeoutSeconds = evt.TimeoutSeconds,
-                        VariableName = variableName,
-                        Content = evt.Content,
-                        DeliveryTargetId = evt.DeliveryTargetId,
-                        Secure = secure,
-                        RedactedOutput = redactedOutput,
-                        Metadata = { metadata },
-                    }),
+                    Payload = Any.Pack(customPayload),
                 },
             },
         ];
