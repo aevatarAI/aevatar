@@ -159,6 +159,7 @@ public sealed class MainnetHostCompositionTests
 
         registry.GetRegisteredNames().Should().Equal(
             ToolSetNames.LarkSelfNotify,
+            ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.WorkspaceDefault);
 
         var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
@@ -187,6 +188,10 @@ public sealed class MainnetHostCompositionTests
         larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is QueryReadModelToolSource);
+
+        var nyxIdConnectedServices = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.NyxIdConnectedServices });
+        nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
+        nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
 
         var voice = registry.Resolve(new ChatRouteToolSetRef { Name = "voice.realtime" });
         voice.IsSuccess.Should().BeFalse();

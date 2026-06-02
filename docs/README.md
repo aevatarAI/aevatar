@@ -6,6 +6,7 @@
 
 Authoritative architecture and developer guides. Each covers one topic.
 
+- [Actor Evolution Canon Matrix](canon/actor-evolution.md)
 - [[RFC] Aevatar Chat — Multi-Channel Adapter Architecture](canon/aevatar-channel-architecture.md)
 - [Architecture Vocabulary](canon/architecture-vocabulary.md)
 - [Aevatar Foundation](canon/architecture.md)
@@ -17,6 +18,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
 - [Lark Reply Chain Completion Semantics](canon/lark-reply-completion-semantics.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
+- [NyxID Connected-Service LLM Tools](canon/nyxid-connected-service-tools.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
 - [NyxID Responses 直连](canon/nyxid-responses-direct.md)
 - [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
@@ -55,6 +57,10 @@ Immutable records of architectural choices and their rationale.
 - [0023 — Two-tier Inspector architecture (canonical readmodel vs observation OTel)](adr/0023-two-tier-inspector-architecture.md)
 - [Chat Route Policy — Config Actor + Boundary Resolver](adr/0024-chat-route-policy.md)
 - [Voice Router Integration - Policy-Aware WebSocket Boundary](adr/0025-voice-router-integration.md)
+- [Tool-First Chat Ingress — Collapse Forward Actions to Model + Tools](adr/0026-tool-first-chat-ingress.md)
+- [Lark Reply Run Dispatcher Plain Task Handoff](adr/0027-lark-reply-run-dispatcher-plain-task-handoff.md)
+- [Studio Team Accepted Receipt Semantics](adr/0028-studio-team-accepted-receipt-semantics.md)
+- [Identity OAuth Accepted ACK Semantics](adr/0029-identity-oauth-accepted-ack-semantics.md)
 
 ## History
 
