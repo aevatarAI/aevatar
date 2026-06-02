@@ -17,7 +17,6 @@ using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Infrastructure.Adapters;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
@@ -64,7 +63,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceCommandTargetProvisioner, DefaultServiceCommandTargetProvisioner>();
-        services.TryAddSingleton<IServiceRevisionArtifactStore, ConfiguredServiceRevisionArtifactStore>();
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
@@ -119,9 +117,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>,
             WorkflowCatalogCurrentStateDocumentMetadataProvider>();
-        services.TryAddSingleton<
-            IProjectionDocumentMetadataProvider<WorkflowCapabilitiesStartupArtifact>,
-            WorkflowCapabilitiesStartupArtifactMetadataProvider>();
 
         if (documentProvider.ElasticsearchEnabled)
         {
@@ -138,7 +133,6 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
-            TryAddElasticsearchDocumentProjectionStore<WorkflowCapabilitiesStartupArtifact>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
@@ -155,7 +149,6 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
-            TryAddInMemoryDocumentProjectionStore<WorkflowCapabilitiesStartupArtifact>(services, static readModel => readModel.Id);
         }
 
         return services;
@@ -177,8 +170,7 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<WorkflowCapabilitiesStartupArtifact>(services, providerKind);
+               && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)

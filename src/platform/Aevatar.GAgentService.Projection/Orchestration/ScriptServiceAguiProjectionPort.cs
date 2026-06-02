@@ -20,13 +20,11 @@ public sealed class ScriptServiceAguiProjectionPort
 
     public ScriptServiceAguiProjectionPort(
         ServiceProjectionOptions options,
-        IProjectionScopeActivationService<ScriptServiceAguiRuntimeLease> activationService,
         IProjectionScopeReleaseService<ScriptServiceAguiRuntimeLease> releaseService,
         IProjectionSessionEventHub<AGUIEvent> sessionEventHub,
         IProjectionScopeAttachExistingLeaseLookup<ScriptServiceAguiRuntimeLease> attachExistingLeaseLookup)
         : base(
             () => options.Enabled,
-            activationService,
             releaseService,
             sessionEventHub)
     {
@@ -42,6 +40,7 @@ public sealed class ScriptServiceAguiProjectionPort
         IEventSink<AGUIEvent> sink,
         CancellationToken ct = default)
     {
+        // Refactor (iter101/cluster-104): Old event-sink lifecycle base could be used as an external ensure surface; this port now only attaches to existing projection-owned sessions.
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
 

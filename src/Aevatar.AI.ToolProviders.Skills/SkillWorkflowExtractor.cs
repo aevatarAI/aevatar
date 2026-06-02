@@ -10,7 +10,7 @@ namespace Aevatar.AI.ToolProviders.Skills;
 /// </summary>
 public sealed class SkillWorkflowExtractionResult
 {
-    public required IReadOnlyList<SkillWorkflow> Workflows { get; init; }
+    public required IReadOnlyList<SkillWorkflowDescriptor> Workflows { get; init; }
 
     /// <summary>
     /// 去除工作流文件之后的关联文件；若无剩余则为 null。
@@ -40,7 +40,7 @@ public sealed class SkillWorkflowExtractor
             .Where(kv => HasDirectoryPrefix(kv.Key, WorkflowsDir) && IsYamlFile(kv.Key))
             .ToList();
 
-        List<SkillWorkflow> workflows;
+        List<SkillWorkflowDescriptor> workflows;
         HashSet<string> consumedKeys;
 
         if (workflowsCandidates.Count > 0)
@@ -92,7 +92,7 @@ public sealed class SkillWorkflowExtractor
     /// <summary>
     /// 扫描本地 skill 目录，从 <c>workflows/</c>（缺席则 <c>assets/</c>）中抽取工作流。
     /// </summary>
-    public IReadOnlyList<SkillWorkflow> ExtractFromDirectory(string skillDir)
+    public IReadOnlyList<SkillWorkflowDescriptor> ExtractFromDirectory(string skillDir)
     {
         if (string.IsNullOrWhiteSpace(skillDir))
             return [];
@@ -108,12 +108,12 @@ public sealed class SkillWorkflowExtractor
         return [];
     }
 
-    private static IReadOnlyList<SkillWorkflow> EnumerateYaml(
+    private static IReadOnlyList<SkillWorkflowDescriptor> EnumerateYaml(
         string dir,
         bool requireWorkflowShape,
         string skillRoot)
     {
-        var results = new List<SkillWorkflow>();
+        var results = new List<SkillWorkflowDescriptor>();
         foreach (var path in Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly))
         {
             if (!IsYamlFile(path))
@@ -137,7 +137,7 @@ public sealed class SkillWorkflowExtractor
         return results;
     }
 
-    private static SkillWorkflow? TryParse(string fileName, string yaml, bool requireWorkflowShape)
+    private static SkillWorkflowDescriptor? TryParse(string fileName, string yaml, bool requireWorkflowShape)
     {
         var meta = ReadTopLevelMetadata(yaml);
         if (string.IsNullOrWhiteSpace(meta.Name))
@@ -145,13 +145,10 @@ public sealed class SkillWorkflowExtractor
         if (requireWorkflowShape && !meta.HasSteps)
             return null;
 
-        return new SkillWorkflow
+        return new SkillWorkflowDescriptor
         {
-            Name = meta.Name!,
-            Description = NullIfEmpty(meta.Description),
-            WhenToUse = NullIfEmpty(meta.WhenToUse),
-            FileName = fileName,
-            Yaml = yaml,
+            WorkflowId = meta.Name!,
+            WorkflowYamls = [yaml.Trim()],
         };
     }
 

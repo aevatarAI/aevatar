@@ -29,6 +29,56 @@ public sealed class StudioTeamEntryMemberResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_ShouldUseTeamAndMemberReadModelsOnlyForCommandTargetAdmission()
+    {
+        var teamPort = new TeamQueryPort(NewTeam());
+        var memberPort = new MemberQueryPort(NewMember());
+        var resolver = new StudioTeamEntryMemberResolver(teamPort, memberPort);
+
+        var result = await resolver.ResolveAsync(ScopeId, TeamId);
+
+        result.Should().Be(new TeamEntryMemberResolution(
+            ScopeId,
+            TeamId,
+            EntryMemberId,
+            PublishedServiceId));
+        teamPort.GetCalls.Should().Be(1);
+        teamPort.ListCalls.Should().Be(0);
+        memberPort.GetCalls.Should().Be(1);
+        memberPort.ListCalls.Should().Be(0);
+        teamPort.GetRequests.Should().ContainSingle()
+            .Which.Should().Be((ScopeId, TeamId));
+        memberPort.GetRequests.Should().ContainSingle()
+            .Which.Should().Be((ScopeId, EntryMemberId));
+    }
+
+    [Fact]
+    public void TeamEntryMemberResolution_ShouldRemainNarrowCommandTargetContract()
+    {
+        var propertyNames = typeof(TeamEntryMemberResolution)
+            .GetProperties()
+            .Select(static property => property.Name)
+            .ToArray();
+
+        propertyNames.Should().BeEquivalentTo(
+            [
+                nameof(TeamEntryMemberResolution.ScopeId),
+                nameof(TeamEntryMemberResolution.TeamId),
+                nameof(TeamEntryMemberResolution.EntryMemberId),
+                nameof(TeamEntryMemberResolution.PublishedServiceId),
+            ],
+            options => options.WithStrictOrdering(),
+            "this resolver is command target resolution, not a composite team readiness/status read model");
+        propertyNames.Should().NotContain(static name =>
+            name.Contains("Status", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Readiness", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Ready", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("StateVersion", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Version", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("UpdatedAt", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ResolveAsync_ShouldThrowTeamNotFound_WhenTeamMissing()
     {
         var resolver = new StudioTeamEntryMemberResolver(
@@ -160,31 +210,53 @@ public sealed class StudioTeamEntryMemberResolverTests
 
     private sealed class TeamQueryPort(StudioTeamSummaryResponse? team) : IStudioTeamQueryPort
     {
+        public int ListCalls { get; private set; }
+        public int GetCalls { get; private set; }
+        public List<(string ScopeId, string TeamId)> GetRequests { get; } = [];
+
         public Task<StudioTeamRosterResponse> ListAsync(
             string scopeId,
             StudioTeamRosterPageRequest? page = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new StudioTeamRosterResponse(scopeId, team == null ? [] : [team]));
+            CancellationToken ct = default)
+        {
+            ListCalls++;
+            return Task.FromResult(new StudioTeamRosterResponse(scopeId, team == null ? [] : [team]));
+        }
 
         public Task<StudioTeamSummaryResponse?> GetAsync(
             string scopeId,
             string teamId,
-            CancellationToken ct = default) =>
-            Task.FromResult(team);
+            CancellationToken ct = default)
+        {
+            GetCalls++;
+            GetRequests.Add((scopeId, teamId));
+            return Task.FromResult(team);
+        }
     }
 
     private sealed class MemberQueryPort(StudioMemberDetailResponse? member) : IStudioMemberQueryPort
     {
+        public int ListCalls { get; private set; }
+        public int GetCalls { get; private set; }
+        public List<(string ScopeId, string MemberId)> GetRequests { get; } = [];
+
         public Task<StudioMemberRosterResponse> ListAsync(
             string scopeId,
             StudioMemberRosterPageRequest? page = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new StudioMemberRosterResponse(scopeId, member == null ? [] : [member.Summary]));
+            CancellationToken ct = default)
+        {
+            ListCalls++;
+            return Task.FromResult(new StudioMemberRosterResponse(scopeId, member == null ? [] : [member.Summary]));
+        }
 
         public Task<StudioMemberDetailResponse?> GetAsync(
             string scopeId,
             string memberId,
-            CancellationToken ct = default) =>
-            Task.FromResult(member);
+            CancellationToken ct = default)
+        {
+            GetCalls++;
+            GetRequests.Add((scopeId, memberId));
+            return Task.FromResult(member);
+        }
     }
 }

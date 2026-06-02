@@ -19,8 +19,8 @@ internal static partial class MessagesApiEndpoints
         ArgumentNullException.ThrowIfNull(app);
 
         // Path B (Anthropic Messages) is a stateless facade over the same
-        // LlmSessionGAgent / NyxIdLLMProvider / IResponsesCompletionApplicationService
-        // pipeline as /v1/responses. AllowAnonymous matches the Responses
+        // LlmSessionGAgent / NyxIdLLMProvider typed run pipeline as /v1/responses.
+        // AllowAnonymous matches the Responses
         // endpoint — NyxID issues opaque api keys, not JWTs, so the JwtBearer
         // fallback policy would 401 valid callers.
         app.MapPost("/v1/messages", HandleCreateMessageAsync).AllowAnonymous();
@@ -56,7 +56,8 @@ internal static partial class MessagesApiEndpoints
                 commandRequest.ErrorMessage ?? "Invalid request.");
         }
 
-        var result = await commandFacade.CreateAsync(commandRequest.Request!, bearerToken, ct);
+        var callerScopeContext = ResponsesApiEndpoints.BuildCallerScopeResolutionContext(http, bearerToken);
+        var result = await commandFacade.CreateAsync(commandRequest.Request!, callerScopeContext, ct);
         if (result.Error is not null)
             return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 
@@ -68,6 +69,14 @@ internal static partial class MessagesApiEndpoints
                 result.StreamPlan,
                 ct);
             return Results.Empty;
+        }
+
+        if (result.Accepted is not null)
+        {
+            return Results.Json(
+                BuildAcceptedMessage(result.Accepted.Normalized),
+                JsonOptions,
+                statusCode: StatusCodes.Status200OK);
         }
 
         if (result.Completed is not null)
@@ -147,6 +156,29 @@ internal static partial class MessagesApiEndpoints
             return;
         }
 
+        if (completion.Accepted is not null)
+        {
+            await WriteSseFrameAsync(response, "message_delta", new
+            {
+                type = "message_delta",
+                delta = new
+                {
+                    stop_reason = (string?)null,
+                    stop_sequence = (string?)null,
+                },
+                usage = new
+                {
+                    output_tokens = 0,
+                },
+            }, CancellationToken.None);
+
+            await WriteSseFrameAsync(response, "message_stop", new
+            {
+                type = "message_stop",
+            }, CancellationToken.None);
+            return;
+        }
+
         if (textStarted)
         {
             await WriteSseFrameAsync(response, "content_block_stop", new
@@ -211,6 +243,23 @@ internal static partial class MessagesApiEndpoints
             type = "message_stop",
         }, ct);
     }
+
+    private static object BuildAcceptedMessage(NormalizedMessagesRequest normalized) =>
+        new
+        {
+            id = normalized.MessageId,
+            type = "message",
+            role = "assistant",
+            model = normalized.Model,
+            content = Array.Empty<object>(),
+            stop_reason = (string?)null,
+            stop_sequence = (string?)null,
+            usage = new
+            {
+                input_tokens = 0,
+                output_tokens = 0,
+            },
+        };
 
     private static object BuildCompletedMessage(
         NormalizedMessagesRequest normalized,

@@ -3,7 +3,6 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -16,8 +15,8 @@ public sealed class ServiceInvocationResolutionServiceTests
     public async Task ResolveAsync_ShouldUseTrafficViewTargetAndArtifactEndpoint()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r2",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -49,7 +48,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                     ],
                     DateTimeOffset.UtcNow),
             },
-            artifactStore);
+            revisionCatalog);
 
         var resolved = await service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -84,7 +83,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                     [],
                     DateTimeOffset.UtcNow),
             },
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -103,7 +102,7 @@ public sealed class ServiceInvocationResolutionServiceTests
         var service = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader(),
             new RecordingTrafficViewQueryReader(),
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -121,7 +120,7 @@ public sealed class ServiceInvocationResolutionServiceTests
         var service = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader(),
             new RecordingTrafficViewQueryReader(),
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -141,7 +140,7 @@ public sealed class ServiceInvocationResolutionServiceTests
         var service = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader(),
             new RecordingTrafficViewQueryReader(),
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -164,7 +163,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                 GetResult = CreateCatalogSnapshot(identity),
             },
             new RecordingTrafficViewQueryReader(),
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -181,8 +180,8 @@ public sealed class ServiceInvocationResolutionServiceTests
     public async Task ResolveAsync_ShouldFallbackToServingSet_WhenTrafficViewIsMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r2",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -212,7 +211,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                     ],
                     DateTimeOffset.UtcNow),
             },
-            artifactStore);
+            revisionCatalog);
 
         var resolved = await service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -258,7 +257,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                     ],
                     DateTimeOffset.UtcNow),
             },
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -275,15 +274,15 @@ public sealed class ServiceInvocationResolutionServiceTests
     public async Task ResolveAsync_ShouldHonorExplicitRevisionSelection()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
-        await artifactStore.SaveAsync(
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r1",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
                 identity,
                 "r1",
                 GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
-        await artifactStore.SaveAsync(
+        await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r2",
             GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -321,7 +320,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                     ],
                     DateTimeOffset.UtcNow),
             },
-            artifactStore);
+            revisionCatalog);
 
         var resolved = await service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -365,7 +364,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                     ],
                     DateTimeOffset.UtcNow),
             },
-            new ConfiguredServiceRevisionArtifactStore());
+            new FakeServiceRevisionCatalogQueryReader());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {

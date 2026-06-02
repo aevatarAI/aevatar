@@ -19,8 +19,10 @@ namespace Aevatar.Presentation.AGUI;
 public sealed class AGUISseWriter : IAsyncDisposable
 {
     // Refactor (iter57/cluster-067-942): old per-request channel/sink removed; new active path writes CQRS/projection AGUI events to SSE.
+    // Refactor (iter98/cluster-790): Old: SSE Any registry only knew AGUI base files, so typed RunFinished.result payloads rendered opaquely. New: register GAgentDraftRunResultPayload for JSON result.output fallback.
     private static readonly TypeRegistry DefaultTypeRegistry = TypeRegistry.FromFiles(
         AGUIEvent.Descriptor.File,
+        GAgentDraftRunResultPayload.Descriptor.File,
         AnyReflection.Descriptor,
         StructReflection.Descriptor,
         WrappersReflection.Descriptor);

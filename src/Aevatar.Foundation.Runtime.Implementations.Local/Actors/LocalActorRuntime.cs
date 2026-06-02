@@ -229,6 +229,7 @@ public sealed class LocalActorRuntime : IActorRuntime
                 parent.RemoveChild(id);
 
             await _streams.GetStream(parentId).RemoveRelayAsync(id, ct);
+            await _streams.GetStream(id).RemoveRelayAsync(parentId, ct);
             await actor.UnsubscribeFromParentAsync();
         }
 
@@ -239,6 +240,7 @@ public sealed class LocalActorRuntime : IActorRuntime
                 await child.UnsubscribeFromParentAsync();
 
             await _streams.GetStream(id).RemoveRelayAsync(childId, ct);
+            await _streams.GetStream(childId).RemoveRelayAsync(id, ct);
         }
 
         using var activity = AevatarActivitySource.StartAgentDeactivate(
@@ -295,6 +297,13 @@ public sealed class LocalActorRuntime : IActorRuntime
         await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
+        // Refactor (iter164/cluster-002-first):
+        // Old pattern: workflow modules inferred completion from presentation frame descriptors.
+        // New principle: committed child state is observed through runtime-owned stream relay.
+        // Local runtime registers the same child-to-parent committed observation path as Orleans.
+        await _streams.GetStream(childId).UpsertRelayAsync(
+            StreamForwardingRules.CreateCommittedObservationBinding(childId, parentId),
+            ct);
 
         using var activity = AevatarActivitySource.StartAgentLink(parentId, childId);
         AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
@@ -316,6 +325,7 @@ public sealed class LocalActorRuntime : IActorRuntime
                 parent.RemoveChild(childId);
 
             await _streams.GetStream(parentId).RemoveRelayAsync(childId, ct);
+            await _streams.GetStream(childId).RemoveRelayAsync(parentId, ct);
         }
 
         await child.UnsubscribeFromParentAsync();

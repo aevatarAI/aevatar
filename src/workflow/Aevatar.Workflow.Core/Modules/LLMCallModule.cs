@@ -21,6 +21,11 @@ namespace Aevatar.Workflow.Core.Modules;
 // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
 //   Old pattern: Information log included raw value/prompt/input preview
 //   New principle: only stable id + length + status + redaction marker
+// Refactor (iter164/cluster-002-first):
+//   Old pattern: module listened to TextMessageEndEvent / ChatResponseEvent (presentation frames)
+//                and converted them to StepCompletedEvent.
+//   New principle: module reads completion from WorkflowRoleReplyRecordedEvent
+//                  (actor-owned committed event), removing dependency on presentation stream.
 public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
@@ -41,10 +46,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
+        // Refactor (iter170/cluster-1247-first):
+        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames completed workflow steps.
+        //   New principle: only committed WorkflowRoleReplyRecordedEvent can complete pending LLM steps.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor) ||
+                payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor) ||
                 payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor));
     }
 
@@ -60,15 +67,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        if (payload.Is(TextMessageEndEvent.Descriptor))
+        if (payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
         {
-            await HandleTextMessageEndAsync(payload.Unpack<TextMessageEndEvent>(), envelope, ctx, ct);
-            return;
-        }
-
-        if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            await HandleChatResponseAsync(payload.Unpack<ChatResponseEvent>(), ctx, ct);
+            await HandleRoleReplyRecordedAsync(payload.Unpack<WorkflowRoleReplyRecordedEvent>(), envelope, ctx, ct);
             return;
         }
 
@@ -162,8 +163,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private async Task HandleTextMessageEndAsync(
-        TextMessageEndEvent evt,
+    private async Task HandleRoleReplyRecordedAsync(
+        WorkflowRoleReplyRecordedEvent evt,
         EventEnvelope envelope,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
@@ -177,7 +178,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
-        var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
+        var publisherActorId = !string.IsNullOrWhiteSpace(evt.RoleActorId)
+            ? evt.RoleActorId
+            : envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (TryExtractLlmFailure(evt.Content, out var error))
         {
             await PublishFailedCompletionAsync(pending, error, publisherActorId, ctx, ct);
@@ -200,48 +203,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Success = true,
                 Output = evt.Content ?? string.Empty,
                 WorkerId = publisherActorId,
-            },
-            TopologyAudience.Self,
-            ct);
-        await RemovePendingAsync(sessionId, pending, ctx, ct);
-    }
-
-    private async Task HandleChatResponseAsync(
-        ChatResponseEvent evt,
-        IWorkflowExecutionContext ctx,
-        CancellationToken ct)
-    {
-        var sessionId = evt.SessionId;
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return;
-
-        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pending))
-            return;
-
-        await StopWatchdogAsync(pending, ctx, ct);
-        if (TryExtractLlmFailure(evt.Content, out var error))
-        {
-            await PublishFailedCompletionAsync(pending, error, ctx.AgentId, ctx, ct);
-            await RemovePendingAsync(sessionId, pending, ctx, ct);
-            return;
-        }
-
-        ctx.Logger.LogInformation(
-            "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed_non_streaming output_len={OutputLen} output_redacted=true",
-            pending.RunId,
-            pending.StepId,
-            sessionId,
-            evt.Content?.Length ?? 0);
-
-        await ctx.PublishAsync(
-            new StepCompletedEvent
-            {
-                StepId = pending.StepId,
-                RunId = pending.RunId,
-                Success = true,
-                Output = evt.Content ?? string.Empty,
-                WorkerId = ctx.AgentId,
             },
             TopologyAudience.Self,
             ct);
@@ -333,32 +294,22 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
+    // Refactor (iter159/cluster-613-first):
+    //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+    //   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
     private static void ApplyTypedLlmControl(
         IWorkflowExecutionContext ctx,
         ChatRequestEvent chatRequest)
     {
-        if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
+        if (!WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
             return;
-
-        var overrides = runtimeAccessor.RuntimeContext.LlmOverrides;
-        if (string.IsNullOrWhiteSpace(overrides.NyxIdAccessToken) &&
-            string.IsNullOrWhiteSpace(overrides.ModelOverride) &&
-            string.IsNullOrWhiteSpace(overrides.NyxIdRoutePreference))
-        {
-            return;
-        }
 
         chatRequest.LlmControl = new LLMControlContext(
-            NyxIdAccessToken: Normalize(overrides.NyxIdAccessToken),
+            NyxIdAccessToken: null,
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
-            ModelOverride: Normalize(overrides.ModelOverride),
-            NyxIdRoutePreference: Normalize(overrides.NyxIdRoutePreference),
+            ModelOverride: Normalize(llm.ModelOverride),
+            NyxIdRoutePreference: Normalize(llm.NyxidRoutePreference),
             MaxToolRoundsOverride: null,
             UserMemoryPrompt: null).ToPayload();
     }

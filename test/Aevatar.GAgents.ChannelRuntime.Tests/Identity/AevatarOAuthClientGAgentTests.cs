@@ -34,13 +34,11 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     private ServiceProvider _serviceProvider = null!;
     private RecordingDcrClient _registrar = null!;
     private IdentityGAgentTestHarness.NoopCallbackScheduler _callbackScheduler = null!;
-    private RecordingCommittedStateActivationService _activation = null!;
 
     public async Task InitializeAsync()
     {
         _registrar = new RecordingDcrClient();
         _callbackScheduler = new IdentityGAgentTestHarness.NoopCallbackScheduler();
-        _activation = new RecordingCommittedStateActivationService();
 
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore, IdentityGAgentTestHarness.InMemoryEventStore>();
@@ -50,7 +48,6 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             typeof(DefaultEventSourcingBehaviorFactory<>));
         services.AddSingleton<Aevatar.Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>(
             _callbackScheduler);
-        services.AddSingleton<IChannelIdentityCommittedStateActivationService>(_activation);
         // The actor resolves the registrar by abstract NyxIdDynamicClientRegistrationClient
         // type; tests inject a recording stub so HandleEnsureProvisioned exercises the
         // full code path without a real HTTP call.
@@ -119,10 +116,6 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             "already-provisioned ensure must not mutate OAuth client facts");
         _agent.EventSourcing!.CurrentVersion.Should().Be(beforeRefreshVersion,
             "already-provisioned ensure must not append a projection-only no-op event");
-        _activation.OAuthClientRequests.Should().ContainSingle(request =>
-            request.ActorId == AevatarOAuthClientGAgent.WellKnownId &&
-            request.State.ClientId == firstClientId &&
-            request.StateVersion == beforeRefreshVersion);
     }
 
     [Fact]
@@ -818,30 +811,10 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         method.Invoke(agent, new object[] { id });
     }
 
-    private sealed class RecordingCommittedStateActivationService : IChannelIdentityCommittedStateActivationService
-    {
-        public List<OAuthClientActivationRequest> OAuthClientRequests { get; } = [];
-
-        public Task EnsureExternalIdentityCommittedStateActivatedAsync(
-            string actorId,
-            ExternalIdentityBindingState state,
-            long stateVersion,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task EnsureAevatarOAuthClientCommittedStateActivatedAsync(
-            string actorId,
-            AevatarOAuthClientState state,
-            long stateVersion,
-            CancellationToken ct = default)
-        {
-            OAuthClientRequests.Add(new OAuthClientActivationRequest(actorId, state.Clone(), stateVersion));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed record OAuthClientActivationRequest(
-        string ActorId,
-        AevatarOAuthClientState State,
-        long StateVersion);
+    // Refactor (iter97/cluster-097): Old pattern: tests injected a hidden
+    // committed-state activation service and expected the already-provisioned
+    // no-op branch to side-dispatch projection envelopes. New principle:
+    // OAuth identity commands only preserve/commit actor facts; committed-state
+    // hook/plan provider own materialization, and repair is explicit
+    // maintenance/admin.
 }

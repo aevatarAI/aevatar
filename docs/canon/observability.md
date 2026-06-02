@@ -254,9 +254,9 @@ implemented: `channel.ingress.verify`, `channel.ingress.commit`,
 
 - 生产部署的 sampler 由部署侧决定；本文档不强制。建议生产用
   `ParentBased(TraceIdRatioBased)`，开发用 `AlwaysOn`。
-- Inspector demo（[demos/Aevatar.Demos.Inspector](../../demos/Aevatar.Demos.Inspector)，
-  详见 ADR [0023](../adr/0023-two-tier-inspector-architecture.md)）在
-  注册时显式覆盖为 `AlwaysOn`，仅本地生效。
+- 本地 Inspector-style consumer（详见 ADR
+  [0023](../adr/0023-two-tier-inspector-architecture.md)）可在注册时显式覆盖为
+  `AlwaysOn`，仅本地生效。
 - Activity emit **必须 infallible**：tag set 失败 / listener 抛错 **不**
   传播到业务路径。`AevatarActivitySource` 的 helper 方法内置 try/catch
   swallow。
@@ -293,7 +293,7 @@ the `aevatar.channel.*` family listed above.
 
 ## 8. 消费者：ActivityListener pattern
 
-Inspector demo 的最小消费实现：
+Inspector-style 本地 consumer 的最小消费实现：
 
 ```csharp
 var listener = new ActivityListener
@@ -332,7 +332,7 @@ CLAUDE.md "Protobuf 优先" 适用于：
 - 跨节点 RPC 内部传输
 - actor 持久态、event store、readmodel doc 等仓库内部存储
 
-**例外**：Host → browser demo 边界（即 Inspector REST / SSE endpoint
+**例外**：Host → browser demo 边界（例如 Inspector REST / SSE endpoint
 对前端 React 的传输）允许 JSON。具体规则：
 
 - Tier 1 REST：readmodel `state_root`（Protobuf `Any`）在 host 端用
@@ -351,8 +351,8 @@ SSE 通道，由 `WorkflowExecutionRunEventProjector` 派发。本文档新增�
 
 | 消费者 | 通道 | 数据形式 |
 |--------|------|----------|
-| Workflow Studio (yaml editor + run viewer) | 原 `WorkflowEvent` SSE | `WorkflowOutputFrame` envelope (Protobuf) |
-| Inspector demo (live actor system viz) | OTel `Aevatar.Agents` activities | OTel activity + tags（observation） |
+| Workflow Studio (yaml editor + run viewer) | 原 `WorkflowEvent` SSE | `WorkflowRunEventEnvelope` proto（JSON 仅在 wire boundary） |
+| Inspector-style live actor system viz | OTel `Aevatar.Agents` activities | OTel activity + tags（observation） |
 | 外部 trace stack (Jaeger / Tempo) | OTel exporter | OTel spans |
 
 三个消费者读同一份 committed 事实源（workflow committed events），

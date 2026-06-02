@@ -32,7 +32,10 @@ public sealed class DefaultServiceRuntimeActivatorTests
 
         result.DeploymentId.Should().Be("deployment-actor:r2");
         result.PrimaryActorId.Should().Be("static:r2:deployment-actor:r2");
-        runtime.CreateCalls.Should().ContainSingle(x => x.actorId == "static:r2:deployment-actor:r2");
+        runtime.CreateByKindCalls.Should().ContainSingle(x =>
+            x.agentKind == GAgentServiceTestKit.TestStaticServiceAgentKind &&
+            x.actorId == "static:r2:deployment-actor:r2");
+        runtime.CreateCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -290,7 +293,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
     }
 
     [Fact]
-    public async Task ActivateAsync_ShouldThrow_WhenStaticActorTypeCannotBeResolved()
+    public async Task ActivateAsync_ShouldThrow_WhenStaticAgentKindIsMissing()
     {
         var activator = new DefaultServiceRuntimeActivator(
             new RecordingActorRuntime(),
@@ -298,7 +301,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             new RecordingScriptRuntimeProvisioningPort(),
             new RecordingWorkflowRunActorPort());
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(revisionId: "r2");
-        artifact.DeploymentPlan.StaticPlan.ActorTypeName = "Missing.StaticActor, Missing.Assembly";
+        artifact.DeploymentPlan.StaticPlan.AgentKind = string.Empty;
 
         var act = () => activator.ActivateAsync(
             new ServiceRuntimeActivationRequest(
@@ -308,7 +311,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 "deployment-actor"));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Missing.StaticActor, Missing.Assembly*was not found*");
+            .WithMessage("Static agent_kind is required.");
     }
 
     [Fact]
@@ -347,6 +350,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         private readonly HashSet<string> _existingWithoutActor = new(StringComparer.Ordinal);
 
         public List<(Type actorType, string actorId)> CreateCalls { get; } = [];
+        public List<(string agentKind, string actorId)> CreateByKindCalls { get; } = [];
         public List<string> DestroyCalls { get; } = [];
 
         public void MarkExisting(string actorId)
@@ -367,6 +371,15 @@ public sealed class DefaultServiceRuntimeActivatorTests
         {
             var actorId = id ?? $"created:{agentType.Name}";
             CreateCalls.Add((agentType, actorId));
+            var actor = new RecordingActor(actorId);
+            _actors[actorId] = actor;
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? $"created:{agentKind}";
+            CreateByKindCalls.Add((agentKind, actorId));
             var actor = new RecordingActor(actorId);
             _actors[actorId] = actor;
             return Task.FromResult<IActor>(actor);

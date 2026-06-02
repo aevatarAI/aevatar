@@ -62,7 +62,8 @@ public sealed class ActorOwnedVoicePresenceSessionResolver : IVoicePresenceSessi
                         HostOwnerId,
                         capability.StateVersion,
                         capability.LeaseExpiresAt ?? _timeProvider.GetUtcNow(),
-                        capability.RemoteAudioSupport),
+                        capability.RemoteAudioSupport,
+                        capability.ActiveTransportLeaseId),
                     _leasePort,
                     _transportAttachmentPort);
 

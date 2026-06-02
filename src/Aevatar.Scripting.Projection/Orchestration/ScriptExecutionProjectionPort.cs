@@ -13,12 +13,10 @@ public sealed class ScriptExecutionProjectionPort
 {
     public ScriptExecutionProjectionPort(
         ScriptExecutionProjectionOptions options,
-        IProjectionScopeActivationService<ScriptExecutionRuntimeLease> activationService,
         IProjectionScopeReleaseService<ScriptExecutionRuntimeLease> releaseService,
         IProjectionSessionEventHub<EventEnvelope> sessionEventHub)
         : base(
             () => options?.Enabled ?? false,
-            activationService,
             releaseService,
             sessionEventHub)
     {

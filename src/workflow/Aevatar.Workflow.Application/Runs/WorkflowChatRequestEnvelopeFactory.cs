@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -24,16 +25,22 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
         AppendMetadata(chatRequest.Headers, context.Headers);
-        chatRequest.Headers[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         AppendMetadata(chatRequest.Metadata, command.Metadata);
+        if (command.ToolContext != null)
+            chatRequest.ToolContext = ToDurableToolContextPayload(command.ToolContext);
         if (command.LlmControl != null)
-            chatRequest.LlmControl = command.LlmControl.ToPayload();
+            chatRequest.LlmControl = ToDurableLlmControlPayload(command.LlmControl);
 
         var envelope = new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
+            // Refactor (iter163/cluster-002-first):
+            //   Old pattern: workflow command id was written into ChatRequestEvent.Headers[workflow.command_id]
+            //                while Headers also carried transport context.
+            //   New principle: EventEnvelope.Id carries the workflow command identity;
+            //                  Headers stay transport-only.
+            Id = context.CommandId,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(chatRequest),
             Route = EnvelopeRouteSemantics.CreateDirect("api", context.TargetId),
@@ -90,4 +97,24 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
+
+    // Refactor (iter159/cluster-613-first):
+    //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
+    //   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
+    private static LLMControlContextPayload ToDurableLlmControlPayload(LLMControlContext control) =>
+        new LLMControlContext(
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: null,
+            ModelOverride: control.ModelOverride,
+            NyxIdRoutePreference: control.NyxIdRoutePreference,
+            MaxToolRoundsOverride: control.MaxToolRoundsOverride,
+            UserMemoryPrompt: control.UserMemoryPrompt).ToPayload();
+
+    // Refactor (issue1332): Old pattern: workflow chat command envelope dropped typed ToolContext and relied on metadata/LlmControl. New principle: reuse AgentToolExecutionContext payload and scrub bearer fields before durable workflow state.
+    private static AgentToolExecutionContextPayload ToDurableToolContextPayload(AgentToolExecutionContext context) =>
+        (context with
+        {
+            Credentials = AgentToolCredentials.Empty,
+        }).ToPayload();
 }

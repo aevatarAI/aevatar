@@ -879,6 +879,9 @@ describe("TeamDetailPage", () => {
     const configurationHeading = screen.getByText("配置明细");
     expect(screen.getByRole("button", { name: "测试团队" })).toBeTruthy();
     expect(currentPostureHeading).toBeTruthy();
+    expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
+    expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
+    expect(await screen.findByText("运行 · 等待处理")).toBeTruthy();
     expect(compositionHeading).toBeTruthy();
     expect(configurationHeading).toBeTruthy();
     expect(screen.queryByLabelText("Team test prompt")).toBeNull();
@@ -907,6 +910,7 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "处理等待 Run" })).toBeNull();
     expect(screen.queryByRole("button", { name: "治理绑定" })).toBeNull();
     expect(screen.queryByRole("button", { name: "部署记录" })).toBeNull();
+    expect(screen.queryByText("稳定")).toBeNull();
     expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
   });
 
@@ -938,6 +942,9 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
+    expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
     expect(screen.queryByText("Comparing run run-current against baseline run-good.")).toBeNull();
     expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();
@@ -1152,6 +1159,33 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
   });
 
+  it("marks the route-selected member in the members tab", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(screen.getByText("当前选中")).toBeTruthy();
+  });
+
+  it("shows the route-selected member in the overview status cards", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-team-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("当前成员")).toBeTruthy();
+    expect(screen.getAllByText("member-team-alpha").length).toBeGreaterThan(0);
+    expect(screen.getByText("memberId · member-team-alpha")).toBeTruthy();
+  });
+
   it("shows the configured Team entry member without treating it as the service target", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -1261,6 +1295,24 @@ describe("TeamDetailPage", () => {
     });
     expect(await screen.findByText("Team response")).toBeTruthy();
     expect(await screen.findByText(/上次测试/)).toBeTruthy();
+  });
+
+  it("explains when Team Test uses the entry member instead of the selected member", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-support&testTeam=1",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await screen.findByTestId("team-test-modal-body");
+
+    expect(
+      within(dialog).getByText(
+        "当前页面选中的是 member-support，Team 测试仍通过入口成员发起。",
+      ),
+    ).toBeTruthy();
   });
 
   it("auto-opens Team Test from the Team Detail route intent", async () => {

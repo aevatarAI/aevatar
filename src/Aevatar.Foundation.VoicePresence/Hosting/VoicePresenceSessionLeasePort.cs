@@ -71,4 +71,30 @@ public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePo
                 }),
             ct);
     }
+
+    public Task CompleteTransportLifetimeAsync(
+        VoicePresenceSessionLeaseHandle handle,
+        string transportLeaseId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        ArgumentException.ThrowIfNullOrWhiteSpace(transportLeaseId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        return _dispatchPort.DispatchAsync(
+            handle.ActorId,
+            VoicePresenceSessionDispatch.BuildDirectEnvelope(
+                handle.ActorId,
+                handle.ModuleName,
+                new VoiceTransportLifetimeCompleted
+                {
+                    SessionId = handle.SessionId,
+                    OwnerId = handle.OwnerId,
+                    TransportLeaseId = transportLeaseId,
+                    LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    Reason = reason,
+                }),
+            ct);
+    }
 }

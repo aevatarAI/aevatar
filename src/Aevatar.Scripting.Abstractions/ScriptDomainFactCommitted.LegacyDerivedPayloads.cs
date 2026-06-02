@@ -5,6 +5,7 @@ namespace Aevatar.Scripting.Abstractions;
 
 public sealed partial class ScriptDomainFactCommitted
 {
+    // Refactor (issue1289): keep removed derived payload fields readable only as legacy unknown-field data.
     // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
     //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
     //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root

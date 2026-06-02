@@ -18,7 +18,7 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
 //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
 //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
-public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGenerator
+public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationReplyGenerator
 {
     private const int MaxToolRounds = 40;
     private const int MaxHistoryMessages = 100;
@@ -35,13 +35,18 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
     private sealed record EffectiveReplyPlan(
         IReadOnlyDictionary<string, string> Primary,
         LLMControlContext PrimaryControl,
         AgentToolExecutionContext? PrimaryToolContext,
         IReadOnlyDictionary<string, string>? OwnerFallback,
         LLMControlContext? OwnerFallbackControl,
-        AgentToolExecutionContext? OwnerFallbackToolContext);
+        AgentToolExecutionContext? OwnerFallbackToolContext,
+        bool DisableTools);
 
     private sealed record SenderPreferenceApplication(bool AnyApplied, bool RouteApplied);
 
@@ -135,7 +140,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         }
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
-        var primaryTools = await BuildTurnToolsAsync(ct);
+        var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, ct);
 
         try
         {
@@ -161,7 +166,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
                 "Sender LLM route failed; retrying with bot owner LLM config. activity={ActivityId}",
                 activity.Id);
 
-            var fallbackTools = await BuildTurnToolsAsync(ct);
+            var fallbackTools = await BuildTurnToolsAsync(disableTools: true, ct);
             return await GenerateWithMetadataAsync(
                     activity,
                     replyPlan.OwnerFallback,
@@ -173,6 +178,48 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
                     ct)
                 .ConfigureAwait(false);
         }
+    }
+
+    public async Task<AgentRunReplyStepPlan> BuildStepPlanAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+        bool forceDisableTools,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(activity);
+        ArgumentNullException.ThrowIfNull(metadata);
+
+        var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
+        var disableTools = forceDisableTools || replyPlan.DisableTools;
+        var tools = await BuildTurnToolsAsync(disableTools, ct);
+        var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
+            replyPlan.PrimaryToolContext ?? AgentToolExecutionContextMapper.FromMetadata(replyPlan.Primary));
+        var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
+        var runtime = BuildRuntime(
+            activity,
+            replyPlan.PrimaryControl,
+            effectiveToolContext,
+            externalMetadata,
+            tools);
+
+        var initialMessages = new List<ChatMessage>
+        {
+            ChatMessage.System(BuildSystemPrompt(externalMetadata)),
+        };
+        initialMessages.AddRange((priorHistory ?? []).Select(ToChatMessage));
+        initialMessages.Add(ChatMessage.User([ContentPart.TextPart(activity.Content.Text)], activity.Content.Text));
+
+        return new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(),
+            externalMetadata,
+            replyPlan.PrimaryControl,
+            effectiveToolContext,
+            initialMessages,
+            ResolveMaxToolRounds(replyPlan.PrimaryControl),
+            disableTools);
     }
 
     /// <summary>
@@ -208,9 +255,16 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
                || lowered.Contains("proxy", StringComparison.Ordinal);
     }
 
-    private async Task<ToolManager> BuildTurnToolsAsync(CancellationToken ct)
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    private async Task<ToolManager> BuildTurnToolsAsync(bool disableTools, CancellationToken ct)
     {
         var tools = new ToolManager();
+        if (disableTools)
+            return tools;
+
         foreach (var tool in await DiscoverToolsAsync(ct))
             tools.Register(tool);
 
@@ -429,6 +483,50 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         return effective;
     }
 
+    private ChatRuntime BuildRuntime(
+        ChatActivity activity,
+        LLMControlContext llmControl,
+        AgentToolExecutionContext toolContext,
+        IReadOnlyDictionary<string, string> externalMetadata,
+        ToolManager tools)
+    {
+        var history = new global::Aevatar.AI.Core.Chat.ChatHistory
+        {
+            MaxMessages = MaxHistoryMessages,
+        };
+        return new ChatRuntime(
+            providerFactory: ResolveProvider,
+            history: history,
+            toolLoop: new ToolCallLoop(
+                tools,
+                hooks: null,
+                toolMiddlewares: BuildToolMiddlewaresForTurn(),
+                llmMiddlewares: _llmMiddlewares),
+            hooks: null,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages =
+                [
+                    ChatMessage.System(BuildSystemPrompt(externalMetadata)),
+                ],
+                Metadata = externalMetadata,
+                ToolContext = toolContext,
+                LlmControl = llmControl,
+                RoutingContext = llmControl.ToRoutingContext(),
+                Tools = FilterValidTools(tools),
+            },
+            agentMiddlewares: _agentMiddlewares,
+            llmMiddlewares: _llmMiddlewares,
+            agentId: activity.Conversation?.CanonicalKey,
+            agentName: "NyxIdConversationReply",
+            suppressToolCallRoundText: true);
+    }
+
+    private static int ResolveMaxToolRounds(LLMControlContext llmControl) =>
+        llmControl.MaxToolRoundsOverride is > 0
+            ? llmControl.MaxToolRoundsOverride.Value
+            : MaxToolRounds;
+
     private async Task<EffectiveReplyPlan> BuildEffectiveReplyPlanAsync(
         IReadOnlyDictionary<string, string> metadata,
         LLMControlContext? llmControl,
@@ -453,6 +551,7 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         // the bot owner's route from the upstream-pinned metadata. If a
         // sender-owned attempt fails, we retry once with this owner snapshot.
         var senderBindingId = toolContext?.SenderBinding.BindingId?.Trim();
+        var disableTools = IsChannelTurn(effective) && string.IsNullOrWhiteSpace(senderBindingId);
         if (_preferencesStore is not null && !string.IsNullOrWhiteSpace(senderBindingId))
         {
             var ownerSnapshot = CreateOwnerFallbackSnapshot(effective);
@@ -520,7 +619,8 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
             effectiveToolContext,
             ownerFallback,
             ownerFallbackControl,
-            ownerFallbackToolContext);
+            ownerFallbackToolContext,
+            disableTools);
     }
 
     /// <summary>
@@ -579,6 +679,11 @@ public sealed class NyxIdConversationReplyGenerator : ITypedConversationReplyGen
         context == null
             ? null
             : context with { SenderBinding = AgentToolSenderBindingContext.Empty };
+
+    private static bool IsChannelTurn(IReadOnlyDictionary<string, string> metadata) =>
+        metadata.ContainsKey(ChannelMetadataKeys.Platform) &&
+        metadata.ContainsKey(ChannelMetadataKeys.SenderId) &&
+        metadata.ContainsKey(ChannelMetadataKeys.MessageId);
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)
     {

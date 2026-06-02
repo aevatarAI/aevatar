@@ -45,6 +45,27 @@ public sealed class UserAgentCatalogStartupServiceTests
         actorRuntime.DestroyedActorIds.Should().ContainSingle().Which.Should().Be(legacyScopeActorId);
     }
 
+    [Fact]
+    public async Task StartAsync_WhenActivationFails_DispatchesOnlyOneActivationAttempt()
+    {
+        var operations = new ConcurrentQueue<string>();
+        var activationService = new FailingActivationService(operations);
+        var projectionActivator = new UserAgentCatalogProjectionBootstrapActivator(activationService);
+        var actorRuntime = new RecordingActorRuntime(operations, legacyScopeExists: false);
+        var streamProvider = new RecordingStreamProvider(operations);
+        var service = new UserAgentCatalogStartupService(
+            projectionActivator,
+            actorRuntime,
+            streamProvider,
+            NullLogger<UserAgentCatalogStartupService>.Instance);
+
+        await service.StartAsync(CancellationToken.None);
+
+        activationService.AttemptCount.Should().Be(1);
+        operations.Should().ContainSingle(operation =>
+            operation == $"projection:ensure:{UserAgentCatalogGAgent.WellKnownId}:{UserAgentCatalogProjectionBootstrapActivator.ProjectionKind}");
+    }
+
     private sealed class RecordingActivationService(ConcurrentQueue<string> operations)
         : IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease>
     {
@@ -62,6 +83,21 @@ public sealed class UserAgentCatalogStartupServiceTests
                     RootActorId = request.RootActorId,
                     ProjectionKind = request.ProjectionKind,
                 }));
+        }
+    }
+
+    private sealed class FailingActivationService(ConcurrentQueue<string> operations)
+        : IProjectionScopeActivationService<UserAgentCatalogMaterializationRuntimeLease>
+    {
+        public int AttemptCount { get; private set; }
+
+        public Task<UserAgentCatalogMaterializationRuntimeLease> EnsureAsync(
+            ProjectionScopeStartRequest request,
+            CancellationToken ct = default)
+        {
+            AttemptCount++;
+            operations.Enqueue($"projection:ensure:{request.RootActorId}:{request.ProjectionKind}");
+            throw new InvalidOperationException("boom");
         }
     }
 

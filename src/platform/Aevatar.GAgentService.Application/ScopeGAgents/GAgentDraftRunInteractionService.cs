@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Presentation.AGUI;
 using Microsoft.Extensions.Logging;
@@ -19,6 +20,7 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
     private readonly IScopeResourceAdmissionPort _admissionPort;
     private readonly ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> _interactionService;
     private readonly IGAgentDraftRunObservationScopeActivationPort _observationScopeActivationPort;
+    private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ILogger<GAgentDraftRunInteractionService>? _logger;
 
     public GAgentDraftRunInteractionService(
@@ -27,6 +29,7 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         IScopeResourceAdmissionPort admissionPort,
         ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
         IGAgentDraftRunObservationScopeActivationPort observationScopeActivationPort,
+        IAgentKindRegistry? agentKindRegistry = null,
         ILogger<GAgentDraftRunInteractionService>? logger = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
@@ -35,6 +38,7 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
         _observationScopeActivationPort = observationScopeActivationPort
             ?? throw new ArgumentNullException(nameof(observationScopeActivationPort));
+        _agentKindRegistry = agentKindRegistry;
         _logger = logger;
     }
 
@@ -69,6 +73,8 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         var accepted = false;
         try
         {
+            // Refactor (iter1353/cluster-001): Old pattern: the port forwarded only legacy scalar control fields.
+            // New principle: the port preserves typed ToolContext and LlmControl into the command boundary.
             var command = new GAgentDraftRunCommand(
                 ScopeId: request.ScopeId.Trim(),
                 ActorTypeName: actor.ActorTypeName,
@@ -80,6 +86,9 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
                 PreferredLlmRoute: NormalizeOptional(request.PreferredLlmRoute),
                 Headers: request.Headers,
                 InputParts: request.InputParts,
+                AgentKind: NormalizeOptional(request.AgentKind),
+                ToolContext: request.ToolContext,
+                LlmControl: request.LlmControl,
                 UseCorrelationIdAsFallbackSessionId: request.UseCorrelationIdAsFallbackSessionId,
                 CommandIdSeed: commandId,
                 CorrelationIdSeed: correlationId);
@@ -117,7 +126,11 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         CancellationToken ct)
     {
         var scopeId = request.ScopeId.Trim();
-        var actorTypeName = request.ActorTypeName.Trim();
+        var agentKind = NormalizeOptional(request.AgentKind);
+        var actorTypeName = ResolveActorTypeName(agentKind, request.ActorTypeName);
+        if (string.IsNullOrWhiteSpace(actorTypeName))
+            return PreparationResult.Failure(GAgentDraftRunStartError.UnknownActorType);
+
         var actorType = ScopeGAgentActorTypeResolver.Resolve(actorTypeName);
         if (actorType is null)
             return PreparationResult.Failure(GAgentDraftRunStartError.UnknownActorType);
@@ -149,7 +162,9 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         IActor? createdActor = null;
         try
         {
-            createdActor = await _actorRuntime.CreateAsync(actorType, actorId, ct);
+            createdActor = string.IsNullOrWhiteSpace(agentKind)
+                ? await _actorRuntime.CreateAsync(actorType, actorId, ct)
+                : await _actorRuntime.CreateByKindAsync(agentKind, actorId, ct);
             var receipt = await _registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, actorTypeName, actorId),
                 ct);
@@ -178,6 +193,26 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
             actorTypeName,
             actorId,
             RequiresRollbackOnFailure: true));
+    }
+
+    private string? ResolveActorTypeName(string? agentKind, string actorTypeName)
+    {
+        if (!string.IsNullOrWhiteSpace(agentKind))
+        {
+            try
+            {
+                var implementation = _agentKindRegistry?.Resolve(agentKind);
+                if (implementation != null)
+                    return implementation.Metadata.ImplementationClrTypeName;
+            }
+            catch (UnknownAgentKindException)
+            {
+                return null;
+            }
+        }
+
+        var normalizedActorTypeName = actorTypeName.Trim();
+        return string.IsNullOrWhiteSpace(normalizedActorTypeName) ? null : normalizedActorTypeName;
     }
 
     private async Task RollbackAsync(

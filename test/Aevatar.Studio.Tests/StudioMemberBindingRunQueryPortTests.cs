@@ -23,6 +23,7 @@ public sealed class StudioMemberBindingRunQueryPortTests
                 ScopeId = "scope-1",
                 MemberId = "m-1",
                 Status = StudioMemberBindingRunStatusNames.PlatformBindingPending,
+                StateVersion = 7,
                 PlatformBindingCommandId = "platform-bind-1",
                 UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-30T08:00:00Z")),
             },
@@ -36,6 +37,7 @@ public sealed class StudioMemberBindingRunQueryPortTests
         run.ScopeId.Should().Be("scope-1");
         run.MemberId.Should().Be("m-1");
         run.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
+        run.StateVersion.Should().Be(7);
         run.PlatformBindingCommandId.Should().Be("platform-bind-1");
         run.UpdatedAt.Should().Be(DateTimeOffset.Parse("2026-04-30T08:00:00Z"));
     }

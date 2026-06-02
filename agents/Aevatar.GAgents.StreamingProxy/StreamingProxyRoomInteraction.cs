@@ -10,9 +10,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
-// Refactor (iter21/cluster-002-request-path-projection-session-priming):
-//   Old pattern: room chat endpoints created projection leases and inferred completion in handler code.
-//   New principle: room chat commands enter a shared interaction pipeline and bind observation by session.
+// Refactor (iter343/cluster-001-chat-session-command-identity):
+//   Old pattern: Chat interaction commands reuse SessionId as CommandId and CorrelationId.
+//   New principle: Generate or carry distinct command/correlation identifiers while keeping SessionId only as conversation/projection session identity.
 public sealed record StreamingProxyRoomChatCommand(
     string RoomId,
     string ScopeId,
@@ -20,11 +20,11 @@ public sealed record StreamingProxyRoomChatCommand(
     string SessionId,
     string? AccessToken = null,
     string? PreferredRoute = null,
-    string? DefaultModel = null)
+    string? DefaultModel = null,
+    string? CommandId = null,
+    string? CorrelationId = null)
     : ICommandContextSeed
 {
-    public string? CommandId => SessionId;
-    public string? CorrelationId => SessionId;
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
@@ -245,9 +245,9 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
 {
     public EventEnvelope CreateEnvelope(StreamingProxyRoomChatCommand command, CommandContext context)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+        // Refactor (iter343/cluster-001-chat-session-command-identity):
+        //   Old pattern: Chat interaction commands reuse SessionId as CommandId and CorrelationId.
+        //   New principle: Generate or carry distinct command/correlation identifiers while keeping SessionId only as conversation/projection session identity.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 

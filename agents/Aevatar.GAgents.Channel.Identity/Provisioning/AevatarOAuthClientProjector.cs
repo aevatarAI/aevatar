@@ -7,9 +7,13 @@ using Aevatar.Foundation.Abstractions;
 namespace Aevatar.GAgents.Channel.Identity;
 
 /// <summary>
+/// Refactor (iter97/cluster-526): Old pattern: HMAC key projection shared the
+/// generic document-store registration without an ES access-boundary guard.
+/// New principle: projector remains the committed-state materializer, while
+/// startup/CI guards fail closed if broader query layers can reach this document.
+///
 /// Projects the cluster-singleton <see cref="AevatarOAuthClientState"/> into
-/// one <see cref="AevatarOAuthClientDocument"/>. Backs the read seam exposed
-/// by <see cref="IAevatarOAuthClientProvider"/>.
+/// one <see cref="AevatarOAuthClientDocument"/>.
 /// </summary>
 public sealed class AevatarOAuthClientProjector
     : ICurrentStateProjectionMaterializer<AevatarOAuthClientMaterializationContext>

@@ -17,6 +17,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
 {
     private static readonly Duration DefaultIdleTtl = Duration.FromTimeSpan(TimeSpan.FromMinutes(30));
 
+    // Refactor (iter355/issue1438-first): Old pattern: ChatRun tool contracts persisted internal results as internal_result_json strings. New principle: typed Value fields are authoritative for new writes; legacy strings are read fallback only.
     public ChatRunActor()
     {
         InitializeId();
@@ -96,12 +97,14 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         EnsureActive();
 
         var observedAt = command.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        var internalResult = ResolveInternalResult(command.InternalResult, command.InternalResultJson);
         await PersistDomainEventAsync(new ChatRunToolCallSubmittedEvent
         {
             ToolCallId = NormalizeRequired(command.ToolCallId, nameof(command.ToolCallId)),
             ToolName = NormalizeRequired(command.ToolName, nameof(command.ToolName)),
             Arguments = command.Arguments?.Clone() ?? new Struct(),
-            ResultJson = command.ResultJson ?? string.Empty,
+            InternalResultJson = command.InternalResultJson ?? string.Empty,
+            InternalResult = internalResult,
             RunId = command.RunId ?? string.Empty,
             TargetKind = command.TargetKind,
             TargetId = command.TargetId ?? string.Empty,
@@ -127,27 +130,39 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         if (pending == null)
             return;
 
-        var resultJson = string.IsNullOrWhiteSpace(observed.ResultJson)
-            ? BuildDefaultResultJson(pending, observed)
-            : observed.ResultJson;
+        var internalResult = ResolveTerminalInternalResult(pending, observed);
+        var internalResultJson = InternalResultJson(internalResult, observed.InternalResultJson);
         await PersistDomainEventAsync(new ChatRunSubRunTerminalFoldedEvent
         {
             RunId = runId,
             CallerToolCallId = pending.CallerToolCallId,
             ToolName = pending.ToolName,
-            ResultJson = resultJson,
+            InternalResultJson = internalResultJson,
+            InternalResult = internalResult,
             LlmRound = pending.LlmRound,
+            Status = observed.Status ?? string.Empty,
+            ActorId = FirstNonEmpty(observed.ActorId, pending.ActorId),
+            ServiceId = FirstNonEmpty(observed.ServiceId, pending.ServiceId),
+            EndpointId = FirstNonEmpty(observed.EndpointId, pending.EndpointId),
+            CompletionObserved = observed.CompletionObserved,
             ObservedAt = observed.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
         });
 
+        // Refactor (iter290/cluster001): Old pattern: ready notifications required consumers to parse ResultJson for completion facts. New principle: ready notifications publish typed completion facts with the result payload.
         await PublishAsync(new ChatRunToolResultReady
         {
             ResponseId = State.ResponseId,
             RunId = runId,
             CallerToolCallId = pending.CallerToolCallId,
             ToolName = pending.ToolName,
-            ResultJson = resultJson,
+            InternalResultJson = internalResultJson,
+            InternalResult = internalResult.Clone(),
             LlmRound = pending.LlmRound,
+            Status = observed.Status ?? string.Empty,
+            ActorId = FirstNonEmpty(observed.ActorId, pending.ActorId),
+            ServiceId = FirstNonEmpty(observed.ServiceId, pending.ServiceId),
+            EndpointId = FirstNonEmpty(observed.EndpointId, pending.EndpointId),
+            CompletionObserved = observed.CompletionObserved,
         }, TopologyAudience.Self);
     }
 
@@ -180,14 +195,17 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         if (pending == null)
             return;
 
+        var internalResult = BuildGAgentTerminalInternalResult(pending, completed);
         await HandleSubRunTerminalAsync(new ChatRunSubRunTerminalObserved
         {
             RunId = pending.RunId,
             Status = ResolveGAgentTerminalStatus(completed),
-            ResultJson = BuildGAgentTerminalResultJson(pending, completed),
+            InternalResultJson = JsonFormatter.Default.Format(internalResult),
+            InternalResult = internalResult,
             ActorId = pending.ActorId,
             ServiceId = pending.ServiceId,
             EndpointId = pending.EndpointId,
+            CompletionObserved = true,
             ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
     }
@@ -255,7 +273,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         var next = current.Clone();
         var existingHistory = next.ToolCallHistory
             .LastOrDefault(call => string.Equals(call.ToolCallId, evt.ToolCallId, StringComparison.Ordinal));
-        var alreadyFolded = existingHistory != null && !string.IsNullOrWhiteSpace(existingHistory.ResultJson);
+        var alreadyFolded = existingHistory != null && HasInternalResult(existingHistory);
         if (existingHistory == null)
         {
             next.ToolCallHistory.Add(new ChatRunToolCallRecord
@@ -263,7 +281,8 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
                 ToolCallId = evt.ToolCallId,
                 ToolName = evt.ToolName,
                 Arguments = evt.Arguments?.Clone() ?? new Struct(),
-                ResultJson = evt.ResultJson,
+                InternalResultJson = evt.InternalResultJson,
+                InternalResult = evt.InternalResult?.Clone(),
                 LlmRound = evt.LlmRound,
                 RunId = evt.RunId,
                 ObservedAt = evt.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
@@ -302,7 +321,7 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         var next = current.Clone();
         var existingHistory = next.ToolCallHistory
             .LastOrDefault(call => string.Equals(call.ToolCallId, evt.ToolCallId, StringComparison.Ordinal));
-        if (existingHistory != null && !string.IsNullOrWhiteSpace(existingHistory.ResultJson))
+        if (existingHistory != null && HasInternalResult(existingHistory))
         {
             next.CurrentLlmRound = Math.Max(next.CurrentLlmRound, evt.LlmRound);
             next.LastActivityAt = evt.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
@@ -316,7 +335,8 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
                 ToolCallId = evt.ToolCallId,
                 ToolName = evt.ToolName,
                 Arguments = evt.Arguments?.Clone() ?? new Struct(),
-                ResultJson = string.Empty,
+                InternalResultJson = string.Empty,
+                InternalResult = new Value { StructValue = new Struct() },
                 LlmRound = evt.LlmRound,
                 RunId = evt.RunId,
                 ObservedAt = evt.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
@@ -354,13 +374,17 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         var history = next.ToolCallHistory
             .LastOrDefault(call => string.Equals(call.RunId, evt.RunId, StringComparison.Ordinal));
         if (history != null)
-            history.ResultJson = evt.ResultJson;
+        {
+            history.InternalResultJson = evt.InternalResultJson;
+            history.InternalResult = evt.InternalResult?.Clone();
+        }
 
+        var internalResultJson = InternalResultJson(evt.InternalResult, evt.InternalResultJson);
         next.Messages.Add(new ChatRunMessageRecord
         {
             Role = "tool",
             ToolCallId = evt.CallerToolCallId,
-            Content = evt.ResultJson,
+            Content = internalResultJson,
         });
         next.CurrentLlmRound = evt.LlmRound + 1;
         next.LastActivityAt = evt.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
@@ -482,7 +506,34 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
             state.ActiveSubRunSubscriptions.Add(subscription);
     }
 
-    private static string BuildDefaultResultJson(
+    // Refactor (iter355/issue1438-first): Old pattern: ChatRun terminal tool results used internal_result_json as the durable authority. New principle: typed Value is authoritative for new writes; internal_result_json remains read fallback.
+    private static Value ResolveTerminalInternalResult(
+        ChatRunSubRunSubscription pending,
+        ChatRunSubRunTerminalObserved observed)
+    {
+        if (IsMeaningfulValue(observed.InternalResult))
+        {
+            return observed.InternalResult.Clone();
+        }
+
+        if (!string.IsNullOrWhiteSpace(observed.InternalResultJson))
+            return ParseValue(observed.InternalResultJson);
+
+        return BuildDefaultInternalResult(pending, observed);
+    }
+
+    private static bool HasInternalResult(ChatRunToolCallRecord record) =>
+        IsMeaningfulValue(record.InternalResult) ||
+        !string.IsNullOrWhiteSpace(record.InternalResultJson);
+
+    private static Value ResolveInternalResult(Value? typed, string? legacyJson)
+    {
+        if (IsMeaningfulValue(typed))
+            return typed.Clone();
+        return ParseValue(legacyJson);
+    }
+
+    private static Value BuildDefaultInternalResult(
         ChatRunSubRunSubscription pending,
         ChatRunSubRunTerminalObserved observed)
     {
@@ -490,37 +541,69 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         var actorId = FirstNonEmpty(observed.ActorId, pending.ActorId);
         var serviceId = FirstNonEmpty(observed.ServiceId, pending.ServiceId);
         var endpointId = FirstNonEmpty(observed.EndpointId, pending.EndpointId);
-        return System.Text.Json.JsonSerializer.Serialize(new
-        {
-            run_id = pending.RunId,
-            status,
-            actor_id = EmptyToNull(actorId),
-            service_id = EmptyToNull(serviceId),
-            endpoint_id = EmptyToNull(endpointId),
-            wait = "complete",
-        }, new System.Text.Json.JsonSerializerOptions
-        {
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-        });
+        var result = new Struct();
+        SetString(result, "run_id", pending.RunId);
+        SetString(result, "status", status);
+        SetString(result, "actor_id", actorId);
+        SetString(result, "service_id", serviceId);
+        SetString(result, "endpoint_id", endpointId);
+        SetString(result, "wait", "complete");
+        return Value.ForStruct(result);
     }
 
-    private static string BuildGAgentTerminalResultJson(
+    private static Value BuildGAgentTerminalInternalResult(
         ChatRunSubRunSubscription pending,
         RoleChatSessionCompletedEvent completed)
     {
-        return System.Text.Json.JsonSerializer.Serialize(new
+        var result = new Struct();
+        SetString(result, "run_id", pending.RunId);
+        SetString(result, "status", ResolveGAgentTerminalStatus(completed));
+        SetString(result, "actor_id", pending.ActorId);
+        SetString(result, "content", completed.Content ?? string.Empty);
+        SetString(result, "reasoning_content", completed.ReasoningContent ?? string.Empty);
+        result.Fields["content_emitted"] = Value.ForBool(completed.ContentEmitted);
+        SetString(result, "wait", "complete");
+        return Value.ForStruct(result);
+    }
+
+    private static string InternalResultJson(Value? typed, string? fallbackJson)
+    {
+        if (IsMeaningfulValue(typed))
+            return JsonFormatter.Default.Format(typed);
+        return fallbackJson ?? string.Empty;
+    }
+
+    private static bool IsMeaningfulValue(Value? value) =>
+        value?.KindCase switch
         {
-            run_id = pending.RunId,
-            status = ResolveGAgentTerminalStatus(completed),
-            actor_id = EmptyToNull(pending.ActorId),
-            content = EmptyToNull(completed.Content ?? string.Empty),
-            reasoning_content = EmptyToNull(completed.ReasoningContent ?? string.Empty),
-            content_emitted = completed.ContentEmitted,
-            wait = "complete",
-        }, new System.Text.Json.JsonSerializerOptions
+            Value.KindOneofCase.StructValue => value.StructValue.Fields.Count > 0,
+            Value.KindOneofCase.ListValue => value.ListValue.Values.Count > 0,
+            Value.KindOneofCase.StringValue => !string.IsNullOrWhiteSpace(value.StringValue),
+            Value.KindOneofCase.NumberValue => true,
+            Value.KindOneofCase.BoolValue => true,
+            Value.KindOneofCase.NullValue => true,
+            _ => false,
+        };
+
+    private static Value ParseValue(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new Value { StructValue = new Struct() };
+
+        try
         {
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-        });
+            return JsonParser.Default.Parse<Value>(json);
+        }
+        catch
+        {
+            return Value.ForString(json);
+        }
+    }
+
+    private static void SetString(Struct result, string key, string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            result.Fields[key] = Value.ForString(value);
     }
 
     private static string ResolveGAgentTerminalStatus(RoleChatSessionCompletedEvent completed)
@@ -545,6 +628,4 @@ public sealed class ChatRunActor : GAgentBase<ChatRunState>
         !string.IsNullOrWhiteSpace(first) ? first.Trim() :
         !string.IsNullOrWhiteSpace(second) ? second.Trim() : string.Empty;
 
-    private static string? EmptyToNull(string value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value;
 }

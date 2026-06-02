@@ -14,6 +14,8 @@ namespace Aevatar.Foundation.VoicePresence.Tests;
 
 public class VoicePresenceModuleTests
 {
+    private const string DefaultModuleName = "voice_presence";
+
     [Fact]
     public async Task Transport_audio_actor_signal_should_forward_provider_inside_actor_turn()
     {
@@ -28,6 +30,7 @@ public class VoicePresenceModuleTests
             LeaseExpiresAt = expiresAt.Clone(),
             TransportAttached = true,
             ActiveTransportLeaseId = "transport-1",
+            LeaseEpoch = 9,
             Status = VoicePresenceRuntimeStatus.Idle,
             NextResponseId = 1,
             LastDrainAckResponseId = -1,
@@ -45,6 +48,7 @@ public class VoicePresenceModuleTests
                 OwnerId = "host-1",
                 TransportLeaseId = "transport-1",
                 LeaseExpiresAt = expiresAt.Clone(),
+                LeaseEpoch = 9,
                 Pcm16 = ByteString.CopyFrom([1, 2, 3]),
                 SampleRateHz = 24000,
             },
@@ -58,7 +62,7 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task InitializeAsync_should_be_idempotent_and_expose_priority()
+    public async Task InitializeAsync_should_be_idempotent_without_opening_provider_session()
     {
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(
@@ -73,8 +77,8 @@ public class VoicePresenceModuleTests
         await module.InitializeAsync(CancellationToken.None);
         await module.InitializeAsync(CancellationToken.None);
 
-        provider.ConnectCalls.ShouldBe(1);
-        provider.UpdateSessionCalls.ShouldBe(1);
+        provider.ConnectCalls.ShouldBe(0);
+        provider.UpdateSessionCalls.ShouldBe(0);
     }
 
     [Fact]
@@ -123,8 +127,8 @@ public class VoicePresenceModuleTests
         }), ctx, CancellationToken.None);
 
         provider.CancelCalls.ShouldBe(1);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.UserSpeaking);
-        module.StateMachine.CurrentResponseId.ShouldBe(1);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.UserSpeaking);
+        RoleVoiceState(ctx).CurrentResponseId.ShouldBe(1);
     }
 
     [Fact]
@@ -150,8 +154,8 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
-        module.StateMachine.IsSafeToInject.ShouldBeTrue();
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
+        IsSafeToInject(RoleVoiceState(ctx)).ShouldBeTrue();
     }
 
     [Fact]
@@ -169,7 +173,7 @@ public class VoicePresenceModuleTests
             ResponseDone = new VoiceResponseDone { ResponseId = 1 },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.AudioDraining);
     }
 
     [Fact]
@@ -187,7 +191,7 @@ public class VoicePresenceModuleTests
             ResponseCancelled = new VoiceResponseCancelled { ResponseId = 1 },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
     }
 
     [Fact]
@@ -200,13 +204,13 @@ public class VoicePresenceModuleTests
         {
             SpeechStarted = new VoiceSpeechStarted(),
         }), ctx, CancellationToken.None);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.UserSpeaking);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.UserSpeaking);
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
             SpeechStopped = new VoiceSpeechStopped(),
         }), ctx, CancellationToken.None);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.UserSpeaking);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.UserSpeaking);
     }
 
     [Fact]
@@ -224,7 +228,7 @@ public class VoicePresenceModuleTests
             Disconnected = new VoiceProviderDisconnected { Reason = "test" },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
     }
 
     [Fact]
@@ -237,19 +241,19 @@ public class VoicePresenceModuleTests
         {
             AudioReceived = new VoiceAudioReceived { Pcm16 = Google.Protobuf.ByteString.CopyFrom([1, 2]), SampleRateHz = 24000 },
         }), ctx, CancellationToken.None);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        ctx.Agent.ShouldBeOfType<RecordingRoleAgent>().State.VoicePresence.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
             FunctionCall = new VoiceFunctionCallRequested { CallId = "c1", ToolName = "t", ArgumentsJson = "{}", ResponseId = 1 },
         }), ctx, CancellationToken.None);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        ctx.Agent.ShouldBeOfType<RecordingRoleAgent>().State.VoicePresence.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
             Error = new VoiceProviderError { ErrorCode = "e", ErrorMessage = "msg" },
         }), ctx, CancellationToken.None);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        ctx.Agent.ShouldBeOfType<RecordingRoleAgent>().State.VoicePresence.ShouldBeEmpty();
     }
 
     [Fact]
@@ -355,7 +359,7 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        ctx.Agent.ShouldBeOfType<RecordingRoleAgent>().State.VoicePresence.ShouldBeEmpty();
     }
 
     [Fact]
@@ -385,8 +389,8 @@ public class VoicePresenceModuleTests
             ResponseDone = new VoiceResponseDone { ProviderResponseId = "provider-r1" },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.CurrentResponseId.ShouldBe(1);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
+        RoleVoiceState(ctx).CurrentResponseId.ShouldBe(1);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.AudioDraining);
         invoker.Calls.ShouldBe(1);
         provider.ToolResults.ShouldHaveSingleItem();
     }
@@ -407,16 +411,16 @@ public class VoicePresenceModuleTests
             ResponseCancelled = new VoiceResponseCancelled { ProviderResponseId = "provider-r1" },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.CurrentResponseId.ShouldBe(1);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        RoleVoiceState(ctx).CurrentResponseId.ShouldBe(1);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
             ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r2" },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.CurrentResponseId.ShouldBe(2);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.ResponseInProgress);
+        RoleVoiceState(ctx).CurrentResponseId.ShouldBe(2);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.ResponseInProgress);
     }
 
     [Fact]
@@ -440,8 +444,8 @@ public class VoicePresenceModuleTests
         }), ctx, CancellationToken.None);
 
         provider.CancelCalls.ShouldBe(1);
-        module.StateMachine.CurrentResponseId.ShouldBe(1);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.UserSpeaking);
+        RoleVoiceState(ctx).CurrentResponseId.ShouldBe(1);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.UserSpeaking);
     }
 
     [Fact]
@@ -484,6 +488,7 @@ public class VoicePresenceModuleTests
         var moduleSource = StripLineComments(File.ReadAllLines(moduleSourcePath));
 
         moduleSource.ShouldNotContain("VoicePresenceRuntimeState _runtimeState", Case.Sensitive);
+        moduleSource.ShouldNotContain("StateMachine", Case.Sensitive);
         moduleSource.ShouldNotContain("IVoiceTransport? _userTransport", Case.Sensitive);
         moduleSource.ShouldNotContain("CancellationTokenSource? _relayCts", Case.Sensitive);
         moduleSource.ShouldNotContain("Task? _userToProviderRelay", Case.Sensitive);
@@ -493,6 +498,15 @@ public class VoicePresenceModuleTests
         moduleSource.ShouldNotContain("IsActorAccepted", Case.Sensitive);
         moduleSource.ShouldNotContain("DispatchFireAndForget", Case.Sensitive);
         moduleSource.ShouldNotContain("VoiceTransportLease", Case.Sensitive);
+        moduleSource.ShouldNotContain("_transportPump", Case.Sensitive);
+        moduleSource.ShouldNotContain("_providerSession", Case.Sensitive);
+        moduleSource.ShouldNotContain("_providerSessionKey", Case.Sensitive);
+        moduleSource.ShouldNotContain("_volatileSelfSignalDispatcher", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportRelayKey", Case.Sensitive);
+        moduleSource.ShouldNotContain("VoiceTransportRelayPump", Case.Sensitive);
+        moduleSource.ShouldNotContain("AttachTransport(", Case.Sensitive);
+        moduleSource.ShouldNotContain("AttachTransportAsync(", Case.Sensitive);
+        moduleSource.ShouldNotContain("RunUserToProviderRelayAsync", Case.Sensitive);
     }
 
     [Fact]
@@ -509,6 +523,38 @@ public class VoicePresenceModuleTests
         moduleSource.ShouldNotContain("IAudioFastPath", Case.Sensitive);
         moduleSource.ShouldNotContain("CanHandleAudio", Case.Sensitive);
         moduleSource.ShouldNotContain("HandleAudioAsync", Case.Sensitive);
+    }
+
+    [Fact]
+    public void Voice_provider_must_not_reintroduce_legacy_OnEvent_callback_or_session_shim()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var providerInterface = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src/Aevatar.Foundation.VoicePresence.Abstractions/IRealtimeVoiceProvider.cs"));
+        providerInterface.ShouldNotContain(
+            "OnEvent",
+            Case.Sensitive,
+            "legacy mutable callback deleted per iter106/cluster-106 - typed event sink only");
+        providerInterface.ShouldNotContain(
+            "LegacyRealtimeVoiceProviderSession",
+            Case.Sensitive,
+            "legacy session shim deleted per Phase 8 r1 reject");
+
+        var providerSources = new[]
+        {
+            Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence.OpenAI/OpenAIRealtimeProvider.cs"),
+            Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence.MiniCPM/MiniCPMRealtimeProvider.cs"),
+        };
+
+        foreach (var sourcePath in providerSources)
+        {
+            var source = File.ReadAllText(sourcePath);
+            source.ShouldNotContain(
+                "OnEvent",
+                Case.Sensitive,
+                $"{Path.GetFileName(sourcePath)} must keep provider callbacks on typed event sinks");
+        }
     }
 
     [Fact]
@@ -990,97 +1036,129 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task Provider_audio_callback_should_self_signal_and_wait_for_actor_accepted_transport_before_byte_send()
+    public async Task Transport_lifetime_completed_signal_should_release_active_actor_owned_session()
     {
-        var provider = new RecordingVoiceProvider();
-        var module = CreateModule(provider);
-        var transport = new RecordingVoiceTransport();
-        var dispatched = new List<IMessage>();
-        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
-        await module.AttachTransportAsync(transport, (message, _) =>
-        {
-            dispatched.Add(message);
-            return Task.CompletedTask;
-        }, "lease-1", "host-1", expiresAt.Clone());
-
-        await provider.RaiseEventAsync(new VoiceProviderEvent
-        {
-            AudioReceived = new VoiceAudioReceived
-            {
-                Pcm16 = ByteString.CopyFrom([1, 2, 3]),
-                SampleRateHz = 24000,
-            },
-        }, CancellationToken.None);
-
-        transport.SentAudio.ShouldBeEmpty();
-        var providerSignal = dispatched.OfType<VoiceProviderEventReceived>()
-            .ShouldHaveSingleItem();
-        providerSignal.ProviderEvent.EventCase.ShouldBe(VoiceProviderEvent.EventOneofCase.AudioReceived);
-        var attachSignal = dispatched.OfType<VoiceTransportAttachRequested>().ShouldHaveSingleItem();
-
-        dispatched.Clear();
+        var module = CreateModule(new RecordingVoiceProvider());
         var roleAgent = new RecordingRoleAgent("voice-agent");
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
         roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
         {
-            ActiveSessionId = "lease-1",
-            ActiveLeaseOwnerId = "host-1",
+            ActiveSessionId = "lease-current",
+            ActiveLeaseOwnerId = "host-current",
             LeaseExpiresAt = expiresAt.Clone(),
+            TransportAttached = true,
+            ActiveTransportLeaseId = "transport-current",
+            Status = VoicePresenceRuntimeStatus.Idle,
+            CurrentResponseId = 0,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
         };
         var ctx = new StubEventHandlerContext(agent: roleAgent);
+
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
         {
             ModuleName = "voice_presence",
-            TransportAttachRequested = new VoiceTransportAttachRequested
+            TransportLifetimeCompleted = new VoiceTransportLifetimeCompleted
             {
-                SessionId = "lease-1",
-                OwnerId = "host-1",
-                TransportLeaseId = attachSignal.TransportLeaseId,
-                LeaseExpiresAt = roleAgent.State.VoicePresence["voice_presence"].LeaseExpiresAt.Clone(),
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseExpiresAt = expiresAt.Clone(),
+                Reason = "host_transport_completed",
             },
         }), ctx, CancellationToken.None);
 
-        await provider.RaiseEventAsync(new VoiceProviderEvent
-        {
-            AudioReceived = new VoiceAudioReceived
-            {
-                Pcm16 = ByteString.CopyFrom([4, 5]),
-                SampleRateHz = 24000,
-            },
-        }, CancellationToken.None);
-
-        transport.SentAudio.ShouldBeEmpty();
-        var actorTurnSignal = dispatched.OfType<VoiceProviderEventReceived>().ShouldHaveSingleItem();
-        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
-        {
-            ModuleName = "voice_presence",
-            ProviderEventReceived = actorTurnSignal,
-        }), ctx, CancellationToken.None);
-
-        transport.SentAudio.ShouldHaveSingleItem().ShouldBe([4, 5]);
+        var state = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        state.TransportAttached.ShouldBeFalse();
+        state.ActiveTransportLeaseId.ShouldBeEmpty();
+        state.ActiveSessionId.ShouldBeEmpty();
+        state.ActiveLeaseOwnerId.ShouldBeEmpty();
+        state.LeaseExpiresAt.ShouldBeNull();
     }
 
     [Fact]
-    public void Sync_leased_attach_should_reject_fire_and_forget_dispatch_shape()
+    public async Task Stale_transport_lifetime_completed_signal_should_not_release_active_actor_owned_session()
     {
         var module = CreateModule(new RecordingVoiceProvider());
-        var transport = new RecordingVoiceTransport();
-        var dispatched = new List<IMessage>();
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = "lease-current",
+            ActiveLeaseOwnerId = "host-current",
+            LeaseExpiresAt = expiresAt.Clone(),
+            TransportAttached = true,
+            ActiveTransportLeaseId = "transport-current",
+            Status = VoicePresenceRuntimeStatus.Idle,
+            CurrentResponseId = 0,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
 
-        var ex = Should.Throw<InvalidOperationException>(() =>
-            module.AttachTransport(
-                transport,
-                (message, _) =>
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLifetimeCompleted = new VoiceTransportLifetimeCompleted
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-stale",
+                LeaseExpiresAt = expiresAt.Clone(),
+                Reason = "host_transport_completed",
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldBeEmpty();
+        var state = roleAgent.State.VoicePresence["voice_presence"];
+        state.TransportAttached.ShouldBeTrue();
+        state.ActiveTransportLeaseId.ShouldBe("transport-current");
+        state.ActiveSessionId.ShouldBe("lease-current");
+    }
+
+    [Fact]
+    public async Task Provider_callback_with_stale_lease_epoch_should_be_rejected()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            ActiveSessionId = "lease-current",
+            ActiveLeaseOwnerId = "host-current",
+            TransportAttached = true,
+            ActiveTransportLeaseId = "transport-current",
+            LeaseEpoch = 12,
+            Status = VoicePresenceRuntimeStatus.Idle,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            ProviderEventReceived = new VoiceProviderEventReceived
+            {
+                SessionId = "lease-current",
+                OwnerId = "host-current",
+                TransportLeaseId = "transport-current",
+                LeaseEpoch = 11,
+                ProviderEvent = new VoiceProviderEvent
                 {
-                    dispatched.Add(message);
-                    return Task.CompletedTask;
+                    ResponseStarted = new VoiceResponseStarted
+                    {
+                        ProviderResponseId = "stale-response",
+                    },
                 },
-                "lease-1",
-                "host-1",
-                Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5))));
+            },
+        }), ctx, CancellationToken.None);
 
-        ex.Message.ShouldBe("Leased voice transport attach must observe attach signal dispatch.");
-        dispatched.ShouldBeEmpty();
-        module.HasVolatileTransportLease.ShouldBeFalse();
+        roleAgent.State.VoicePresence["voice_presence"].CurrentResponseId.ShouldBe(0);
+        provider.ConnectCalls.ShouldBe(0);
     }
 
     [Fact]
@@ -1173,13 +1251,43 @@ public class VoicePresenceModuleTests
             ResponseDone = new VoiceResponseDone { ProviderResponseId = "provider-r1" },
         }), ctx, CancellationToken.None);
 
-        module.StateMachine.CurrentResponseId.ShouldBe(7);
-        module.StateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
+        RoleVoiceState(ctx).CurrentResponseId.ShouldBe(7);
+        RoleVoiceState(ctx).Status.ShouldBe(VoicePresenceRuntimeStatus.AudioDraining);
         var persistedState = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
         persistedState.ProviderResponseBindings.ShouldBeEmpty();
         persistedState.CurrentResponseId.ShouldBe(7);
         persistedState.NextResponseId.ShouldBe(8);
         persistedState.Status.ShouldBe(VoicePresenceRuntimeStatus.AudioDraining);
+    }
+
+    [Fact]
+    public async Task Fresh_module_should_not_lose_voice_authority_state_after_module_restart()
+    {
+        var firstModule = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await firstModule.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+
+        var persistedByFirstModule = roleAgent.State.VoicePresence[DefaultModuleName].Clone();
+        persistedByFirstModule.Status.ShouldBe(VoicePresenceRuntimeStatus.ResponseInProgress);
+        persistedByFirstModule.CurrentResponseId.ShouldBe(1);
+
+        await firstModule.DisposeAsync();
+        var restartedModule = CreateModule(new RecordingVoiceProvider());
+
+        await restartedModule.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseDone = new VoiceResponseDone { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+
+        var persistedByRestartedModule = roleAgent.State.VoicePresence[DefaultModuleName];
+        persistedByRestartedModule.CurrentResponseId.ShouldBe(1);
+        persistedByRestartedModule.Status.ShouldBe(VoicePresenceRuntimeStatus.AudioDraining);
+        persistedByRestartedModule.ProviderResponseBindings.ShouldBeEmpty();
     }
 
     [Fact]
@@ -1314,7 +1422,6 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        module.HasVolatileTransportLease.ShouldBeFalse();
         provider.AudioFrames.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
@@ -1354,7 +1461,7 @@ public class VoicePresenceModuleTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         }, ctx, CancellationToken.None);
 
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        ctx.Agent.ShouldBeOfType<RecordingRoleAgent>().State.VoicePresence.ShouldBeEmpty();
     }
 
     [Fact]
@@ -1453,143 +1560,6 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task DisposeAsync_should_detach_and_dispose_attached_transport()
-    {
-        var provider = new RecordingVoiceProvider();
-        var module = CreateModule(provider);
-        var transport = new PassiveVoiceTransport();
-
-        await module.InitializeAsync(CancellationToken.None);
-        module.AttachTransport(transport, static (_, _) => Task.CompletedTask);
-
-        await module.DisposeAsync();
-
-        transport.Disposed.ShouldBeTrue();
-        module.HasVolatileTransportLease.ShouldBeFalse();
-        provider.Disposed.ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task AttachTransport_should_reject_only_when_local_byte_lease_is_already_attached()
-    {
-        var module = CreateModule(new RecordingVoiceProvider());
-        var firstTransport = new PassiveVoiceTransport();
-
-        module.AttachTransport(firstTransport, static (_, _) => Task.CompletedTask);
-        Should.Throw<InvalidOperationException>(() =>
-            module.AttachTransport(new PassiveVoiceTransport(), static (_, _) => Task.CompletedTask));
-
-        await module.DetachTransportAsync(firstTransport);
-
-        module.AttachTransport(new PassiveVoiceTransport(), static (_, _) => Task.CompletedTask);
-        await module.DetachTransportAsync();
-    }
-
-    [Fact]
-    public async Task AttachTransportAsync_should_surface_attach_signal_dispatch_failure()
-    {
-        var module = CreateModule(new RecordingVoiceProvider());
-        var transport = new PassiveVoiceTransport();
-
-        await Should.ThrowAsync<InvalidOperationException>(() =>
-            module.AttachTransportAsync(
-                transport,
-                static (_, _) => throw new InvalidOperationException("dispatch failed"),
-                "lease-1",
-                "host-1",
-                Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5))));
-
-        module.HasVolatileTransportLease.ShouldBeFalse();
-        transport.Disposed.ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task Relay_and_provider_audio_send_failures_should_be_swallowed()
-    {
-        var provider = new RecordingVoiceProvider();
-        var receiveThrowTransport = new ThrowingReceiveVoiceTransport();
-        var module = CreateModule(provider);
-
-        module.AttachTransport(receiveThrowTransport, static (_, _) => Task.CompletedTask);
-        await receiveThrowTransport.ReceiveAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await module.DetachTransportAsync(receiveThrowTransport);
-
-        var sendThrowTransport = new ThrowingSendVoiceTransport();
-        var dispatched = new List<IMessage>();
-        await module.AttachTransportAsync(sendThrowTransport, (message, _) =>
-        {
-            dispatched.Add(message);
-            return Task.CompletedTask;
-        }, "lease-1", "host-1", Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)));
-        await provider.RaiseEventAsync(new VoiceProviderEvent
-        {
-            AudioReceived = new VoiceAudioReceived
-            {
-                Pcm16 = ByteString.CopyFrom([7, 8]),
-                SampleRateHz = 24000,
-            },
-        }, CancellationToken.None);
-
-        sendThrowTransport.SendAttempts.ShouldBe(0);
-        dispatched.OfType<VoiceProviderEventReceived>().ShouldHaveSingleItem();
-        await module.DetachTransportAsync(sendThrowTransport);
-    }
-
-    [Fact]
-    public async Task Volatile_self_signal_dispatcher_should_use_context_dispatch_port_and_tolerate_dispatch_failures()
-    {
-        var dispatchPort = new RecordingDispatchPort();
-        var services = new ServiceCollection()
-            .AddSingleton<IActorDispatchPort>(dispatchPort)
-            .BuildServiceProvider();
-        var ctx = new StubEventHandlerContext(services);
-        var module = CreateModule(new RecordingVoiceProvider());
-        await module.InitializeAsync(CancellationToken.None);
-        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
-        {
-            ModuleName = "voice_presence",
-            RemoteSessionOpenRequested = new VoiceRemoteSessionOpenRequested
-            {
-                SessionId = "remote-1",
-            },
-        }), ctx, CancellationToken.None);
-        await providerRaise(module, new VoiceProviderEvent
-        {
-            SpeechStarted = new VoiceSpeechStarted(),
-        }, CancellationToken.None);
-
-        dispatchPort.Dispatches.ShouldHaveSingleItem();
-
-        var throwingServices = new ServiceCollection()
-            .AddSingleton<IActorDispatchPort>(new ThrowingDispatchPort())
-            .BuildServiceProvider();
-        var throwingCtx = new StubEventHandlerContext(throwingServices);
-        var throwingModule = CreateModule(new RecordingVoiceProvider());
-        await throwingModule.InitializeAsync(CancellationToken.None);
-        await throwingModule.HandleAsync(CreateEnvelope(new VoiceModuleSignal
-        {
-            ModuleName = "voice_presence",
-            RemoteSessionOpenRequested = new VoiceRemoteSessionOpenRequested
-            {
-                SessionId = "remote-2",
-            },
-        }), throwingCtx, CancellationToken.None);
-        await providerRaise(throwingModule, new VoiceProviderEvent
-        {
-            SpeechStarted = new VoiceSpeechStarted(),
-        }, CancellationToken.None);
-
-        static Task providerRaise(VoicePresenceModule target, VoiceProviderEvent evt, CancellationToken ct)
-        {
-            var providerField = typeof(VoicePresenceModule).GetField(
-                "_provider",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            var provider = (RecordingVoiceProvider)providerField.GetValue(target)!;
-            return provider.RaiseEventAsync(evt, ct);
-        }
-    }
-
-    [Fact]
     public async Task Remote_session_open_should_publish_closed_when_module_not_initialized_or_transport_is_busy()
     {
         var provider = new RecordingVoiceProvider();
@@ -1664,7 +1634,7 @@ public class VoicePresenceModuleTests
         }), ctx, CancellationToken.None);
 
         provider.AudioFrames.ShouldBeEmpty();
-        module.StateMachine.LastDrainAckResponseId.ShouldBe(-1);
+        RoleVoiceState(ctx).LastDrainAckResponseId.ShouldBe(-1);
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
@@ -1698,7 +1668,7 @@ public class VoicePresenceModuleTests
         }), ctx, CancellationToken.None);
 
         provider.AudioFrames.ShouldBeEmpty();
-        module.StateMachine.LastDrainAckResponseId.ShouldBe(8);
+        RoleVoiceState(ctx).LastDrainAckResponseId.ShouldBe(8);
         ctx.PublishedEvents.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
@@ -1719,7 +1689,7 @@ public class VoicePresenceModuleTests
     public async Task Function_call_should_return_error_when_tool_is_missing_or_throws()
     {
         var provider = new RecordingVoiceProvider();
-        var ctx = new StubEventHandlerContext();
+        var ctx = new StubEventHandlerContext(agent: new RecordingRoleAgent("voice-agent"));
         var moduleWithoutInvoker = CreateModule(provider);
 
         await moduleWithoutInvoker.HandleAsync(CreateEnvelope(new VoiceProviderEvent
@@ -1756,14 +1726,15 @@ public class VoicePresenceModuleTests
     {
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider, toolCatalog: new ThrowingVoiceToolCatalog());
-        var ctx = new StubEventHandlerContext();
+        var ctx = new StubEventHandlerContext(agent: new RecordingRoleAgent("voice-agent"));
 
         await module.InitializeAsync(CancellationToken.None);
+        await OpenLocalProviderSessionAsync(module, provider);
         await module.HandleAsync(CreateEnvelope(new VoiceControlFrame()), ctx, CancellationToken.None);
 
         provider.LastSession.ShouldNotBeNull();
         provider.LastSession.ToolDefinitions.ShouldBeEmpty();
-        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        ctx.Agent.ShouldBeOfType<RecordingRoleAgent>().State.VoicePresence.ShouldBeEmpty();
     }
 
     [Fact]
@@ -1800,13 +1771,15 @@ public class VoicePresenceModuleTests
             ResponseCancelled = new VoiceResponseCancelled { ResponseId = 1 },
         }), ctx, CancellationToken.None);
 
-        provider.InjectedEvents.ShouldBeEmpty();
+        provider.InjectedEvents.ShouldHaveSingleItem();
+        provider.InjectedEvents[0].PayloadJson.ShouldContain("valueBase64");
 
         var failureProvider = new RecordingVoiceProvider
         {
             ThrowOnInjectEvent = true,
         };
         var failureModule = CreateModule(failureProvider);
+        var failureCtx = new StubEventHandlerContext(agent: new RecordingRoleAgent("voice-agent"));
         await failureModule.InitializeAsync(CancellationToken.None);
 
         await failureModule.HandleAsync(new EventEnvelope
@@ -1819,7 +1792,7 @@ public class VoicePresenceModuleTests
                 Value = ByteString.CopyFrom([0x0A, 0xFF]),
             },
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("external-agent", TopologyAudience.Children),
-        }, ctx, CancellationToken.None);
+        }, failureCtx, CancellationToken.None);
 
         failureProvider.InjectEventCalls.ShouldBe(1);
     }
@@ -1841,6 +1814,7 @@ public class VoicePresenceModuleTests
             ]));
 
         await module.InitializeAsync(CancellationToken.None);
+        await OpenLocalProviderSessionAsync(module, provider);
 
         provider.LastSession.ShouldNotBeNull();
         provider.LastSession.ToolNames.ShouldContain("doorbell.open");
@@ -1878,6 +1852,39 @@ public class VoicePresenceModuleTests
             toolCatalog);
     }
 
+    private static async Task OpenLocalProviderSessionAsync(
+        VoicePresenceModule module,
+        RecordingVoiceProvider provider)
+    {
+        var ctx = new StubEventHandlerContext(agent: new RecordingRoleAgent("voice-agent"));
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            SessionLeaseRequested = new VoicePresenceSessionLeaseRequested
+            {
+                SessionId = "lease-config",
+                OwnerId = "host-config",
+                ExpiresAt = expiresAt,
+            },
+        }), ctx, CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            TransportAttachRequested = new VoiceTransportAttachRequested
+            {
+                SessionId = "lease-config",
+                OwnerId = "host-config",
+                TransportLeaseId = "transport-config",
+                LeaseExpiresAt = expiresAt,
+                LeaseEpoch = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.ConnectCalls.ShouldBeGreaterThan(0);
+    }
+
     private static EventEnvelope CreateEnvelope(IMessage payload)
     {
         return new EventEnvelope
@@ -1900,6 +1907,19 @@ public class VoicePresenceModuleTests
         };
     }
 
+    private static VoicePresenceRuntimeState RoleVoiceState(
+        StubEventHandlerContext ctx,
+        string moduleName = DefaultModuleName)
+    {
+        var roleAgent = ctx.Agent.ShouldBeOfType<RecordingRoleAgent>();
+        roleAgent.State.VoicePresence.TryGetValue(moduleName, out var state).ShouldBeTrue();
+        return state;
+    }
+
+    private static bool IsSafeToInject(VoicePresenceRuntimeState state) =>
+        state.Status == VoicePresenceRuntimeStatus.Idle &&
+        (state.CurrentResponseId == 0 || state.LastDrainAckResponseId == state.CurrentResponseId);
+
     private static string FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
@@ -1919,6 +1939,9 @@ public class VoicePresenceModuleTests
 
     private sealed class RecordingVoiceProvider : IRealtimeVoiceProvider
     {
+        private Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task>? _eventSink;
+        private VoiceProviderSessionKey _sessionKey = new(string.Empty, string.Empty, string.Empty, 0);
+
         public int ConnectCalls { get; private set; }
 
         public int UpdateSessionCalls { get; private set; }
@@ -1934,54 +1957,18 @@ public class VoicePresenceModuleTests
         public List<(string CallId, string ResultJson)> ToolResults { get; } = [];
         public List<VoiceConversationEventInjection> InjectedEvents { get; } = [];
 
-        public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
-
-        public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct)
+        public Task<RealtimeVoiceProviderSession> ConnectAsync(
+            VoiceProviderSessionKey sessionKey,
+            VoiceProviderConfig config,
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            CancellationToken ct)
         {
             _ = config;
             _ = ct;
             ConnectCalls++;
-            return Task.CompletedTask;
-        }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = ct;
-            AudioFrames.Add(pcm16.ToArray());
-            return Task.CompletedTask;
-        }
-
-        public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
-        {
-            _ = ct;
-            ToolResults.Add((callId, resultJson));
-            return Task.CompletedTask;
-        }
-
-        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
-        {
-            _ = ct;
-            InjectEventCalls++;
-            if (ThrowOnInjectEvent)
-                throw new InvalidOperationException("inject failed");
-
-            InjectedEvents.Add(injection.Clone());
-            return Task.CompletedTask;
-        }
-
-        public Task CancelResponseAsync(CancellationToken ct)
-        {
-            _ = ct;
-            CancelCalls++;
-            return Task.CompletedTask;
-        }
-
-        public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
-        {
-            _ = ct;
-            UpdateSessionCalls++;
-            LastSession = session.Clone();
-            return Task.CompletedTask;
+            _sessionKey = sessionKey;
+            _eventSink = eventSink;
+            return Task.FromResult<RealtimeVoiceProviderSession>(new RecordingProviderSession(this));
         }
 
         public ValueTask DisposeAsync()
@@ -1991,7 +1978,47 @@ public class VoicePresenceModuleTests
         }
 
         public Task RaiseEventAsync(VoiceProviderEvent evt, CancellationToken ct) =>
-            OnEvent?.Invoke(evt, ct) ?? Task.CompletedTask;
+            _eventSink?.Invoke(_sessionKey, evt, ct) ?? Task.CompletedTask;
+
+        private sealed class RecordingProviderSession(RecordingVoiceProvider provider) : RealtimeVoiceProviderSession
+        {
+            public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+            {
+                provider.AudioFrames.Add(pcm16.ToArray());
+                return Task.CompletedTask;
+            }
+
+            public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
+            {
+                provider.ToolResults.Add((callId, resultJson));
+                return Task.CompletedTask;
+            }
+
+            public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+            {
+                provider.InjectEventCalls++;
+                if (provider.ThrowOnInjectEvent)
+                    throw new InvalidOperationException("inject failed");
+
+                provider.InjectedEvents.Add(injection.Clone());
+                return Task.CompletedTask;
+            }
+
+            public override Task CancelResponseAsync(CancellationToken ct)
+            {
+                provider.CancelCalls++;
+                return Task.CompletedTask;
+            }
+
+            public override Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
+            {
+                provider.UpdateSessionCalls++;
+                provider.LastSession = session.Clone();
+                return Task.CompletedTask;
+            }
+
+            public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 
     private sealed class StaticVoiceToolCatalog(IReadOnlyList<VoiceToolDefinition> tools) : IVoiceToolCatalog
@@ -2189,155 +2216,4 @@ public class VoicePresenceModuleTests
         }
     }
 
-    private sealed class PassiveVoiceTransport : IVoiceTransport
-    {
-        public bool Disposed { get; private set; }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
-        {
-            _ = frame;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-        {
-            _ = ct;
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Disposed = true;
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingVoiceTransport : IVoiceTransport
-    {
-        public List<byte[]> SentAudio { get; } = [];
-        public bool Disposed { get; private set; }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = ct;
-            SentAudio.Add(pcm16.ToArray());
-            return Task.CompletedTask;
-        }
-
-        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
-        {
-            _ = frame;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-        {
-            _ = ct;
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Disposed = true;
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class ThrowingReceiveVoiceTransport : IVoiceTransport
-    {
-        public TaskCompletionSource ReceiveAttempted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
-        {
-            _ = frame;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-        {
-            ReceiveAttempted.TrySetResult();
-            await Task.Yield();
-            throw new InvalidOperationException("receive failed");
-#pragma warning disable CS0162
-            yield break;
-#pragma warning restore CS0162
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class ThrowingSendVoiceTransport : IVoiceTransport
-    {
-        public int SendAttempts { get; private set; }
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            SendAttempts++;
-            throw new InvalidOperationException("send failed");
-        }
-
-        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
-        {
-            _ = frame;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-        {
-            _ = ct;
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class RecordingDispatchPort : IActorDispatchPort
-    {
-        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
-
-        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = ct;
-            Dispatches.Add((actorId, envelope.Clone()));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
-        }
-    }
-
-    private sealed class ThrowingDispatchPort : IActorDispatchPort
-    {
-        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = actorId;
-            _ = envelope;
-            _ = ct;
-            throw new InvalidOperationException("dispatch failed");
-        }
-    }
 }

@@ -349,6 +349,7 @@ const TopologyMetricCard: React.FC<{
       flexDirection: "column",
       gap: compact ? 4 : 6,
       minHeight: compact ? 78 : 94,
+      minWidth: 0,
       padding: compact ? 14 : 16,
     }}
   >
@@ -1270,12 +1271,21 @@ export const TopologyExplorerPage: React.FC<{
           <div
             style={{
               alignItems: "flex-start",
-              display: "grid",
+              display: "flex",
+              flexWrap: "wrap",
               gap: 14,
-              gridTemplateColumns: "minmax(0, 1fr) auto",
+              justifyContent: "space-between",
             }}
           >
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div
+              style={{
+                display: "flex",
+                flex: "1 1 180px",
+                flexDirection: "column",
+                gap: 6,
+                minWidth: 180,
+              }}
+            >
               <Typography.Text
                 style={{
                   color: token.colorPrimary,
@@ -1295,8 +1305,10 @@ export const TopologyExplorerPage: React.FC<{
               style={{
                 alignItems: "flex-end",
                 display: "flex",
+                flex: "0 1 auto",
                 flexDirection: "column",
                 gap: 8,
+                maxWidth: "100%",
               }}
             >
               <div
@@ -1309,8 +1321,9 @@ export const TopologyExplorerPage: React.FC<{
                   display: "inline-flex",
                   fontSize: 12,
                   fontWeight: 600,
-                  minHeight: 32,
                   maxWidth: "100%",
+                  minHeight: 32,
+                  overflowWrap: "anywhere",
                   padding: "0 14px",
                 }}
               >
@@ -1401,7 +1414,7 @@ export const TopologyExplorerPage: React.FC<{
           style={{
             display: "grid",
             gap: 12,
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(128px, 1fr))",
           }}
         >
           {detailOnly ? (

@@ -171,6 +171,292 @@ public class BindingToolsTests
 
     #endregion
 
+    #region ScopeWorkflows tools
+
+    [Fact]
+    public async Task ScopeWorkflowsUpsertTool_CallsCommandPort()
+    {
+        ScopeWorkflowUpsertRequest? captured = null;
+        var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort(
+            captureRequest: r => captured = r));
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """
+                {
+                  "workflow_id":"summary-digest",
+                  "workflow_yaml":"name: summary-digest\nsteps: []\n",
+                  "workflow_name":"daily_digest",
+                  "display_name":"Summary Digest",
+                  "inline_workflow_yamls": { "child": "name: child\nsteps: []\n" },
+                  "revision_id":"rev-input"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+            doc.RootElement.GetProperty("workflow").GetProperty("workflow_id").GetString().Should().Be("summary-digest");
+            doc.RootElement.GetProperty("revision_id").GetString().Should().Be("rev-result");
+
+            captured.Should().NotBeNull();
+            captured!.ScopeId.Should().Be("scope-workflows");
+            captured.WorkflowId.Should().Be("summary-digest");
+            captured.WorkflowYaml.Should().Contain("summary-digest");
+            captured.WorkflowName.Should().Be("daily_digest");
+            captured.DisplayName.Should().Be("Summary Digest");
+            captured.InlineWorkflowYamls.Should().ContainKey("child");
+            captured.RevisionId.Should().Be("rev-input");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsUpsertTool_ValidatesTypedParameters()
+    {
+        var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var missingWorkflowId = await tool.ExecuteAsync("""{"workflow_yaml":"name: wf"}""");
+            ReadError(missingWorkflowId).Should().Be("'workflow_id' is required");
+
+            var missingYaml = await tool.ExecuteAsync("""{"workflow_id":"wf"}""");
+            ReadError(missingYaml).Should().Be("'workflow_yaml' is required");
+
+            var invalidInlineMap = await tool.ExecuteAsync(
+                """{"workflow_id":"wf","workflow_yaml":"name: wf","inline_workflow_yamls":{"child":42}}""");
+            invalidInlineMap.Should().Contain("inline_workflow_yamls");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsUpsertTool_ReturnsErrorOnCommandFailure()
+    {
+        var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort(
+            exception: new InvalidOperationException("bad request")));
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"workflow_id":"wf","workflow_yaml":"name: wf"}""");
+
+            result.Should().Contain("Workflow upsert failed");
+            result.Should().Contain("InvalidOperationException");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsListTool_ReturnsWorkflows()
+    {
+        var workflows = new[]
+        {
+            BuildWorkflowSummary("scope-workflows", "wf-1"),
+            BuildWorkflowSummary("scope-workflows", "wf-2"),
+        };
+        var tool = new ScopeWorkflowsListTool(
+            new StubScopeWorkflowQueryPort(listResult: workflows),
+            new BindingToolOptions { MaxListResults = 1 });
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"max_results":2}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("scope_id").GetString().Should().Be("scope-workflows");
+            doc.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+            doc.RootElement.GetProperty("total").GetInt32().Should().Be(2);
+            doc.RootElement.GetProperty("workflows")[0].GetProperty("workflow_id").GetString().Should().Be("wf-1");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsListTool_ValidatesScopeContext()
+    {
+        var tool = new ScopeWorkflowsListTool(
+            new StubScopeWorkflowQueryPort(),
+            new BindingToolOptions());
+
+        AgentToolRequestContext.CurrentMetadata = null;
+
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("scope_id not available");
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsListTool_ReturnsErrorOnQueryFailure()
+    {
+        var tool = new ScopeWorkflowsListTool(
+            new StubScopeWorkflowQueryPort(exception: new InvalidOperationException("query failed")),
+            new BindingToolOptions());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("{}");
+
+            result.Should().Contain("Workflow list failed");
+            result.Should().Contain("InvalidOperationException");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsGetTool_ReturnsWorkflow()
+    {
+        var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(
+            getResult: BuildWorkflowSummary("scope-workflows", "wf-1")));
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"workflow_id":"wf-1"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("available").GetBoolean().Should().BeTrue();
+            doc.RootElement.GetProperty("scope_id").GetString().Should().Be("scope-workflows");
+            doc.RootElement.GetProperty("workflow").GetProperty("workflow_id").GetString().Should().Be("wf-1");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsGetTool_ValidatesWorkflowId()
+    {
+        var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("{}");
+
+            ReadError(result).Should().Be("'workflow_id' is required");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsGetTool_ReturnsUnavailableWhenWorkflowMissing()
+    {
+        var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(getResult: null));
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"workflow_id":"missing"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("available").GetBoolean().Should().BeFalse();
+            doc.RootElement.GetProperty("workflow_id").GetString().Should().Be("missing");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScopeWorkflowsGetTool_ReturnsErrorOnQueryFailure()
+    {
+        var tool = new ScopeWorkflowsGetTool(new StubScopeWorkflowQueryPort(
+            exception: new InvalidOperationException("query failed")));
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "scope-workflows"
+        };
+
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"workflow_id":"wf-1"}""");
+
+            result.Should().Contain("Workflow get failed");
+            result.Should().Contain("InvalidOperationException");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task BindingAgentToolSource_RegistersScopeWorkflowToolsConditionally()
+    {
+        var source = new BindingAgentToolSource(
+            new BindingToolOptions(),
+            scopeWorkflowCommandPort: new StubScopeWorkflowCommandPort(),
+            scopeWorkflowQueryPort: new StubScopeWorkflowQueryPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().HaveCount(3);
+        tools.Should().Contain(t => t is ScopeWorkflowsUpsertTool);
+        tools.Should().Contain(t => t is ScopeWorkflowsListTool);
+        tools.Should().Contain(t => t is ScopeWorkflowsGetTool);
+    }
+
+    #endregion
+
     #region BindingUnbindTool
 
     [Fact]
@@ -295,6 +581,99 @@ public class BindingToolsTests
 
         public Task<ScopeBindingUnbindResult> UnbindAsync(string scopeId, string serviceId, CancellationToken ct = default) =>
             Task.FromResult(_result);
+    }
+
+    private sealed class StubScopeWorkflowCommandPort : IScopeWorkflowCommandPort
+    {
+        private readonly Action<ScopeWorkflowUpsertRequest>? _captureRequest;
+        private readonly Exception? _exception;
+
+        public StubScopeWorkflowCommandPort(
+            Action<ScopeWorkflowUpsertRequest>? captureRequest = null,
+            Exception? exception = null)
+        {
+            _captureRequest = captureRequest;
+            _exception = exception;
+        }
+
+        public Task<ScopeWorkflowUpsertResult> UpsertAsync(
+            ScopeWorkflowUpsertRequest request,
+            CancellationToken ct = default)
+        {
+            if (_exception is not null)
+                throw _exception;
+
+            _captureRequest?.Invoke(request);
+            var workflow = BuildWorkflowSummary(request.ScopeId, request.WorkflowId);
+            return Task.FromResult(new ScopeWorkflowUpsertResult(
+                workflow,
+                "rev-result",
+                "definition-prefix",
+                "expected-actor"));
+        }
+    }
+
+    private sealed class StubScopeWorkflowQueryPort : IScopeWorkflowQueryPort
+    {
+        private readonly IReadOnlyList<ScopeWorkflowSummary> _listResult;
+        private readonly ScopeWorkflowSummary? _getResult;
+        private readonly Exception? _exception;
+
+        public StubScopeWorkflowQueryPort(
+            IReadOnlyList<ScopeWorkflowSummary>? listResult = null,
+            ScopeWorkflowSummary? getResult = null,
+            Exception? exception = null)
+        {
+            _listResult = listResult ?? [];
+            _getResult = getResult;
+            _exception = exception;
+        }
+
+        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default)
+        {
+            if (_exception is not null)
+                throw _exception;
+
+            return Task.FromResult(_listResult);
+        }
+
+        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            if (_exception is not null)
+                throw _exception;
+
+            return Task.FromResult(_getResult);
+        }
+
+        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(
+            string scopeId,
+            string actorId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ScopeWorkflowSummary?>(null);
+    }
+
+    private static ScopeWorkflowSummary BuildWorkflowSummary(
+        string scopeId,
+        string workflowId) =>
+        new(
+            scopeId,
+            workflowId,
+            $"Display {workflowId}",
+            $"service-key-{workflowId}",
+            $"workflow-name-{workflowId}",
+            $"actor-{workflowId}",
+            "rev-active",
+            "deployment-1",
+            "active",
+            DateTimeOffset.Parse("2026-05-25T00:00:00Z"));
+
+    private static string? ReadError(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("error").GetString();
     }
 
     #endregion

@@ -61,6 +61,8 @@ const mockedHistory = history as unknown as {
   push: jest.Mock;
 };
 
+const resolveObservationProbeTick = () => Promise.resolve();
+
 const appContext = {
   mode: 'proxy',
   scopeId: 'scope-1',
@@ -312,38 +314,140 @@ describe('ScriptsWorkbenchPage', () => {
     });
   });
 
-  it('retries transient save-observation failures before surfacing an error', async () => {
-    mockedScriptsApi.observeSaveScript
-      .mockRejectedValueOnce(new Error('temporary timeout'))
-      .mockResolvedValueOnce({
-        scopeId: 'scope-1',
-        scriptId: 'script-1',
-        status: 'applied',
-        message: 'Revision active.',
-        currentScript: {
-          scopeId: 'scope-1',
-          scriptId: 'script-1',
-          catalogActorId: 'catalog-1',
-          definitionActorId: 'definition-1',
-          activeRevision: 'rev-1',
-          activeSourceHash: 'hash-1',
-          updatedAt: '2026-03-24T00:00:00Z',
-        },
-        isTerminal: true,
-      });
+  it('keeps save observation pending when the read model is not visible yet', async () => {
+    mockedScriptsApi.observeSaveScript.mockResolvedValue({
+      scopeId: 'scope-1',
+      scriptId: 'script-1',
+      status: 'pending',
+      message:
+        'Save accepted for script-1; observation is not available yet.',
+      currentScript: null,
+      isTerminal: false,
+    });
 
-    renderPage();
+    renderPage({}, { waitForObservationProbeTick: resolveObservationProbeTick });
 
     await screen.findByLabelText('Script ID');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
-      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(8);
     });
     expect(
-      await screen.findByText('Saved script-1 into workspace scope-1.'),
+      await screen.findByText(
+        /Save accepted for script-1; observation is not available yet./,
+      ),
     ).toBeTruthy();
+    expect(mockedScriptsApi.getScript).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      'stale',
+      () =>
+        mockedScriptsApi.getScriptCatalog.mockResolvedValueOnce({
+          scriptId: 'script-1',
+          activeRevision: 'rev-1',
+          activeDefinitionActorId: 'definition-1',
+          activeSourceHash: 'hash-1',
+          previousRevision: '',
+          revisionHistory: ['rev-1'],
+          lastProposalId: '',
+          catalogActorId: 'catalog-1',
+          scopeId: 'scope-1',
+          updatedAt: '2026-03-24T00:00:00Z',
+        }),
+    ],
+    [
+      'missing',
+      () => mockedScriptsApi.getScriptCatalog.mockResolvedValueOnce(null),
+    ],
+    [
+      'rejected',
+      () =>
+        mockedScriptsApi.getScriptCatalog.mockRejectedValueOnce(
+          new Error('read model is not visible yet'),
+        ),
+    ],
+  ])(
+    'keeps promotion pending when the catalog read model is %s',
+    async (_catalogState, arrangeCatalogRead) => {
+      window.localStorage.setItem(
+        'aevatar:console:scripts-studio:v1',
+        JSON.stringify([
+          {
+            key: 'draft-promotion',
+            scriptId: 'script-1',
+            revision: 'rev-2',
+            baseRevision: 'rev-1',
+            reason: 'Promote rev-2',
+            input: '',
+            package: {
+              csharpSources: [
+                {
+                  path: 'Behavior.cs',
+                  content: 'public sealed class DemoScript {}',
+                },
+              ],
+              protoFiles: [],
+              entryBehaviorTypeName: 'DraftBehavior',
+              entrySourcePath: 'Behavior.cs',
+            },
+            selectedFilePath: 'Behavior.cs',
+            definitionActorId: 'definition-1',
+            runtimeActorId: 'runtime-1',
+            updatedAtUtc: '2026-03-24T00:00:00Z',
+            lastSourceHash: 'hash-1',
+            scopeDetail: {
+              available: true,
+              scopeId: 'scope-1',
+              script: {
+                scopeId: 'scope-1',
+                scriptId: 'script-1',
+                catalogActorId: 'catalog-1',
+                definitionActorId: 'definition-1',
+                activeRevision: 'rev-1',
+                activeSourceHash: 'hash-1',
+                updatedAt: '2026-03-24T00:00:00Z',
+              },
+              source: {
+                sourceText: 'public sealed class DemoScript {}',
+                definitionActorId: 'definition-1',
+                revision: 'rev-1',
+                sourceHash: 'hash-1',
+              },
+            },
+          },
+        ]),
+      );
+      renderPage({}, { waitForObservationProbeTick: resolveObservationProbeTick });
+
+      await screen.findByLabelText('Script ID');
+      mockedScriptsApi.getScriptCatalog.mockClear();
+      arrangeCatalogRead();
+      fireEvent.click(screen.getByRole('button', { name: 'More script actions' }));
+      fireEvent.click(await screen.findByText('Promote'));
+      fireEvent.click(screen.getByRole('button', { name: 'Promote' }));
+
+      await waitFor(() => {
+        expect(mockedScriptsApi.proposeEvolution).toHaveBeenCalledWith(
+          'scope-1',
+          'script-1',
+          expect.objectContaining({
+            baseRevision: 'rev-1',
+            candidateRevision: 'rev-2',
+          }),
+        );
+      });
+      expect(
+        await screen.findByText(
+          'Promotion accepted for script-1 rev-2. Refresh the workspace catalog if the read model is still pending.',
+        ),
+      ).toBeTruthy();
+      expect(mockedScriptsApi.getScriptCatalog).toHaveBeenCalledTimes(8);
+      expect(mockedScriptsApi.getScript).not.toHaveBeenCalled();
+    },
+  );
 
   it('boots a fresh draft with the app script starter contract', async () => {
     renderPage();

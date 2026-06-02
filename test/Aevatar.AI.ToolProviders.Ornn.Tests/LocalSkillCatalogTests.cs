@@ -99,6 +99,52 @@ public sealed class LocalSkillCatalogTests
     }
 
     [Fact]
+    public async Task UseSkillTool_RendersWorkflowHandoffBeforeAssociatedFiles()
+    {
+        var catalog = new LocalSkillCatalog();
+        var tool = new UseSkillTool(catalog);
+        catalog.Register(MakeSkill(
+            "workflow-skill",
+            instructions: "run workflow",
+            workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "summary-report",
+                    WorkflowYamls = ["name: summary-report\nsteps: []"],
+                }
+            ],
+            associatedFiles: new Dictionary<string, string>
+            {
+                ["workflows/summary-report.yaml"] = "name: summary-report\nsteps: []",
+            }));
+
+        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
+
+        result.Should().Contain("## aevatar_start_workflow Handoff");
+        result.Should().Contain("\"workflow_id\": \"summary-report\"");
+        result.Should().Contain("\"workflow_yamls\"");
+        result.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
+            .Should().BeLessThan(result.IndexOf("## Associated Files", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SkillFrontmatterParser_ParsesWorkflowEntryScalar()
+    {
+        var parser = new SkillFrontmatterParser();
+
+        var parsed = parser.Parse("""
+            ---
+            name: workflow-skill
+            workflow_id: main-entry
+            ---
+            body
+            """);
+
+        parsed.WorkflowEntry.Should().Be("main-entry");
+    }
+
+    [Fact]
     public void SkillsSource_RemoteCacheRegressionTerms_DoNotAppearInExecutableCode()
     {
         var repoRoot = FindRepoRoot();
@@ -142,7 +188,12 @@ public sealed class LocalSkillCatalogTests
         }
     }
 
-    private static SkillDefinition MakeSkill(string name, string instructions = "body", string? remoteId = null)
+    private static SkillDefinition MakeSkill(
+        string name,
+        string instructions = "body",
+        string? remoteId = null,
+        IReadOnlyList<SkillWorkflowDescriptor>? workflows = null,
+        IReadOnlyDictionary<string, string>? associatedFiles = null)
     {
         return new SkillDefinition
         {
@@ -151,6 +202,8 @@ public sealed class LocalSkillCatalogTests
             Instructions = instructions,
             Source = remoteId is null ? SkillSource.Local : SkillSource.Remote,
             RemoteId = remoteId,
+            Workflows = workflows ?? [],
+            AssociatedFiles = associatedFiles,
         };
     }
 

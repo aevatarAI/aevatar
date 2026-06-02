@@ -28,7 +28,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily",
+                    TemplateName = "summary",
                     ApiKeyId = "key-1",
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                 }),
@@ -116,7 +116,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-stuck",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily",
+                TemplateName = "summary",
                 ApiKeyId = "key-stuck",
                 OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
             }));
@@ -198,7 +198,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily",
+                TemplateName = "summary",
             }));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -255,7 +255,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-join",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily",
+                TemplateName = "summary",
                 Status = string.Empty,
                 ErrorCount = 0,
                 CatalogAuthorityStateVersion = 7,
@@ -330,7 +330,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-list",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily",
+                    TemplateName = "summary",
                 },
             ]));
 
@@ -399,7 +399,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily",
+                TemplateName = "summary",
                 Status = SkillRunnerDefaults.StatusDisabled,
             }));
 
@@ -459,7 +459,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-fast",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily",
+                TemplateName = "summary",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -522,7 +522,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily",
+                TemplateName = "summary",
                 Status = SkillRunnerDefaults.StatusDisabled,
                 ScheduleCron = "0 9 * * *",
                 ScheduleTimezone = "UTC",
@@ -584,7 +584,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily",
+                TemplateName = "summary",
                 Status = SkillRunnerDefaults.StatusDisabled,
                 ScheduleCron = "0 9 * * *",
                 ScheduleTimezone = "UTC",
@@ -649,7 +649,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily",
+                TemplateName = "summary",
                 Status = string.Empty,
             }));
 

@@ -57,7 +57,7 @@ var request = new ChatRunRequest
 
 await foreach (var evt in client.StartRunStreamAsync(request, cancellationToken))
 {
-    Console.WriteLine($"{evt.Type} | message={evt.Frame.Message}");
+    Console.WriteLine($"{evt.Type} | message={evt.Frame.RunError?.Message}");
 }
 ```
 
