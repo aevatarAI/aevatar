@@ -1,0 +1,13 @@
+syntax = "proto3";
+package aevatar.workflow;
+option csharp_namespace = "Aevatar.Workflow.Application.Abstractions.Schedules";
+
+message WorkflowScheduledDispatchStartRequest
+{
+  string schedule_id = 1;
+  string workflow_name = 2;
+  string prompt = 3;
+  string scope_id = 4;
+  string actor_id = 5;
+  map<string, string> headers = 6;
+}

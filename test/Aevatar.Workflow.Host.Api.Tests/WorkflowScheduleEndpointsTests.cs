@@ -159,6 +159,54 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldReturnConflict_WhenScheduleCannotBePrepared()
+    {
+        var service = new RecordingScheduleService
+        {
+            CreateException = new WorkflowScheduleConflictException("schedule-1", "Schedule target cannot be prepared."),
+        };
+
+        var result = await WorkflowScheduleEndpoints.Create(
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                ScheduleId = "schedule-1",
+                WorkflowName = "daily",
+                Prompt = "hello",
+                CronExpression = "0 9 * * *",
+            },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+    }
+
+    [Fact]
+    public async Task Update_ShouldReturnConflict_WhenScheduleCannotBePrepared()
+    {
+        var service = new RecordingScheduleService
+        {
+            UpdateException = new WorkflowScheduleConflictException("schedule-1", "Schedule target cannot be prepared."),
+        };
+
+        var result = await WorkflowScheduleEndpoints.Update(
+            "schedule-1",
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                WorkflowName = "daily",
+                Prompt = "hello",
+                CronExpression = "0 9 * * *",
+            },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+    }
+
+    [Fact]
     public async Task Disable_ShouldReturnConflict_WhenScheduleCannotMutate()
     {
         var result = await WorkflowScheduleEndpoints.Disable(
@@ -419,6 +467,7 @@ public sealed class WorkflowScheduleEndpointsTests
         public int? LastListTake { get; private set; }
         public string? LastListCursor { get; private set; }
         public bool? LastListIncludeTotalCount { get; private set; }
+        public Exception? CreateException { get; set; }
         public Exception? UpdateException { get; set; }
 
         public override Task<WorkflowScheduleMutationReceipt> CreateAsync(
@@ -426,6 +475,9 @@ public sealed class WorkflowScheduleEndpointsTests
             CancellationToken ct = default)
         {
             Created.Add(configuration);
+            if (CreateException != null)
+                throw CreateException;
+
             return Task.FromResult(new WorkflowScheduleMutationReceipt(
                 configuration.ScheduleId,
                 $"actor:{configuration.ScheduleId}",

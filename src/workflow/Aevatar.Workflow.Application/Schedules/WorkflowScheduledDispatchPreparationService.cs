@@ -1,70 +1,47 @@
-using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
-using Aevatar.Workflow.Application.Runs;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Schedules;
 
 internal sealed class WorkflowScheduledDispatchPreparationService : IWorkflowScheduledDispatchPreparationService
 {
-    private readonly IWorkflowRunActorResolver _actorResolver;
-    private readonly ICommandEnvelopeFactory<WorkflowChatRunRequest> _envelopeFactory;
-
-    public WorkflowScheduledDispatchPreparationService(
-        IWorkflowRunActorResolver actorResolver,
-        ICommandEnvelopeFactory<WorkflowChatRunRequest> envelopeFactory)
-    {
-        _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
-        _envelopeFactory = envelopeFactory ?? throw new ArgumentNullException(nameof(envelopeFactory));
-    }
-
-    public async Task<ScheduledDispatchPreparation> PrepareAsync(
+    public Task<ScheduledDispatchPreparation> PrepareAsync(
         WorkflowScheduleConfiguration configuration,
         string commandId,
         string correlationId,
         CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(configuration);
-        var request = BuildWorkflowRunRequest(configuration, commandId);
-        var actorResolution = await _actorResolver.ResolveOrCreateAsync(request, ct);
-        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
+
+        var payload = new WorkflowScheduledDispatchStartRequest
         {
-            throw new WorkflowScheduleConflictException(
-                configuration.ScheduleId,
-                $"Workflow schedule '{configuration.ScheduleId}' target could not be prepared: {actorResolution.Error}.");
-        }
+            ScheduleId = configuration.ScheduleId,
+            WorkflowName = configuration.WorkflowName,
+            Prompt = configuration.Prompt,
+            ScopeId = string.IsNullOrWhiteSpace(configuration.ScopeId) ? string.Empty : configuration.ScopeId,
+            ActorId = string.IsNullOrWhiteSpace(configuration.ActorId) ? string.Empty : configuration.ActorId,
+        };
+        foreach (var (key, value) in configuration.Headers)
+            payload.Headers[key] = value;
+        payload.Headers["workflow.schedule_id"] = configuration.ScheduleId;
 
-        var context = new CommandContext(
-            actorResolution.Target.ActorId,
-            commandId,
-            correlationId,
-            request.Metadata ?? new Dictionary<string, string>(StringComparer.Ordinal));
-        var envelope = _envelopeFactory.CreateEnvelope(request, context);
-        envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-
-        return new ScheduledDispatchPreparation(
-            actorResolution.Target.ActorId,
-            envelope,
-            envelope.Payload?.TypeUrl ?? string.Empty);
-    }
-
-    private static WorkflowChatRunRequest BuildWorkflowRunRequest(
-        WorkflowScheduleConfiguration configuration,
-        string sessionId)
-    {
-        var headers = new Dictionary<string, string>(configuration.Headers, StringComparer.Ordinal)
+        var envelope = new EventEnvelope
         {
-            ["workflow.schedule_id"] = configuration.ScheduleId,
+            Id = commandId,
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect("workflow.schedule.adapter", configuration.ScheduleId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId,
+            },
         };
 
-        return new WorkflowChatRunRequest(
-            Prompt: configuration.Prompt,
-            Source: string.IsNullOrWhiteSpace(configuration.ActorId)
-                ? WorkflowChatSource.CatalogWorkflow(configuration.WorkflowName)
-                : WorkflowChatSource.DefinitionActor(configuration.ActorId, configuration.WorkflowName),
-            SessionId: sessionId,
-            Metadata: headers,
-            ScopeId: string.IsNullOrWhiteSpace(configuration.ScopeId) ? null : configuration.ScopeId);
+        return Task.FromResult(new ScheduledDispatchPreparation(
+            configuration.ScheduleId,
+            envelope,
+            envelope.Payload?.TypeUrl ?? string.Empty));
     }
 }

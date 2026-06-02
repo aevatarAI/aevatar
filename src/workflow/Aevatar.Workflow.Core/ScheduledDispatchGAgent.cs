@@ -3,6 +3,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -15,10 +17,17 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IWorkflowRunActorResolver? _workflowRunActorResolver;
+    private readonly ICommandEnvelopeFactory<WorkflowChatRunRequest>? _workflowChatEnvelopeFactory;
 
-    public ScheduledDispatchGAgent(IActorDispatchPort dispatchPort)
+    public ScheduledDispatchGAgent(
+        IActorDispatchPort dispatchPort,
+        IWorkflowRunActorResolver? workflowRunActorResolver = null,
+        ICommandEnvelopeFactory<WorkflowChatRunRequest>? workflowChatEnvelopeFactory = null)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _workflowRunActorResolver = workflowRunActorResolver;
+        _workflowChatEnvelopeFactory = workflowChatEnvelopeFactory;
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -69,13 +78,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         foreach (var (key, value) in NormalizeHeaders(command.Headers))
             configured.Headers[key] = value;
 
-        if (!command.Enabled)
-            await CancelNextFireLeaseAsync(CancellationToken.None);
-
+        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         await PersistDomainEventAsync(configured);
 
         if (command.Enabled)
             await EnsureNextFireScheduledAsync(now, CancellationToken.None);
+        else
+            await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
 
     [EventHandler]
@@ -101,12 +110,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     [EventHandler]
     public async Task HandleDisableAsync(ScheduledDispatchDisableCommand command)
     {
-        await CancelNextFireLeaseAsync(CancellationToken.None);
+        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         await PersistDomainEventAsync(new ScheduledDispatchDisabledEvent
         {
             Reason = NormalizeOptional(command.Reason),
             DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
+        await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -154,8 +164,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         try
         {
-            var envelope = BuildDispatchEnvelope(scheduledFireAt, idempotencyKey);
-            var admission = await _dispatchPort.DispatchAsync(State.TargetActorId, envelope, ct);
+            var prepared = await BuildDispatchEnvelopeAsync(scheduledFireAt, idempotencyKey, ct);
+            var envelope = prepared.Envelope;
+            var admission = await _dispatchPort.DispatchAsync(prepared.TargetActorId, envelope, ct);
             if (!admission.Accepted)
             {
                 await PersistFireFailedAsync(
@@ -172,7 +183,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
                     DispatchedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     IdempotencyKey = idempotencyKey,
-                    TargetActorId = admission.ActorId,
+                    TargetActorId = prepared.TargetActorId,
                     CommandId = admission.CommandId,
                     CorrelationId = admission.CorrelationId,
                     Manual = command.Manual,
@@ -206,12 +217,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }, ct);
     }
 
-    private EventEnvelope BuildDispatchEnvelope(DateTimeOffset scheduledFireAtUtc, string idempotencyKey)
+    private async Task<ScheduledDispatchEnvelope> BuildDispatchEnvelopeAsync(
+        DateTimeOffset scheduledFireAtUtc,
+        string idempotencyKey,
+        CancellationToken ct)
     {
         var envelope = State.TriggerEnvelope?.Clone()
             ?? throw new InvalidOperationException("Scheduled dispatch trigger envelope is not configured.");
         if (envelope.Payload == null)
             throw new InvalidOperationException("Scheduled dispatch trigger envelope payload is not configured.");
+
+        var headers = BuildFireHeaders(scheduledFireAtUtc, idempotencyKey);
+        if (envelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out var workflowStartRequest))
+            return await BuildWorkflowDispatchEnvelopeAsync(workflowStartRequest, headers, idempotencyKey, ct);
 
         envelope.Id = idempotencyKey;
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
@@ -221,23 +239,84 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (string.IsNullOrWhiteSpace(propagation.CorrelationId))
             propagation.CorrelationId = idempotencyKey;
 
-        var headers = new Dictionary<string, string>(State.Headers, StringComparer.Ordinal)
+        if (envelope.Payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
+        {
+            chatRequest.SessionId = idempotencyKey;
+            chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = idempotencyKey;
+            foreach (var (key, value) in headers)
+                chatRequest.Metadata[key] = value;
+            envelope.Payload = Any.Pack(chatRequest);
+        }
+        else
+        {
+            throw new NotSupportedException(
+                $"Scheduled dispatch payload type '{envelope.Payload.TypeUrl}' does not support scheduled fire headers.");
+        }
+
+        return new ScheduledDispatchEnvelope(State.TargetActorId, envelope);
+    }
+
+    private async Task<ScheduledDispatchEnvelope> BuildWorkflowDispatchEnvelopeAsync(
+        WorkflowScheduledDispatchStartRequest workflowStartRequest,
+        IReadOnlyDictionary<string, string> fireHeaders,
+        string idempotencyKey,
+        CancellationToken ct)
+    {
+        if (_workflowRunActorResolver == null || _workflowChatEnvelopeFactory == null)
+            throw new InvalidOperationException("Workflow scheduled dispatch adapter is not configured.");
+
+        var requestHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in workflowStartRequest.Headers)
+            requestHeaders[key] = value;
+        foreach (var (key, value) in fireHeaders)
+            requestHeaders[key] = value;
+
+        var request = new WorkflowChatRunRequest(
+            Prompt: workflowStartRequest.Prompt,
+            Source: string.IsNullOrWhiteSpace(workflowStartRequest.ActorId)
+                ? WorkflowChatSource.CatalogWorkflow(workflowStartRequest.WorkflowName)
+                : WorkflowChatSource.DefinitionActor(workflowStartRequest.ActorId, workflowStartRequest.WorkflowName),
+            SessionId: idempotencyKey,
+            Metadata: requestHeaders,
+            ScopeId: string.IsNullOrWhiteSpace(workflowStartRequest.ScopeId) ? null : workflowStartRequest.ScopeId);
+
+        var actorResolution = await _workflowRunActorResolver.ResolveOrCreateAsync(request, ct);
+        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
+        {
+            throw new WorkflowScheduleConflictException(
+                ResolveScheduleId(),
+                $"Workflow schedule '{ResolveScheduleId()}' target could not be prepared: {actorResolution.Error}.");
+        }
+
+        var context = new CommandContext(
+            actorResolution.Target.ActorId,
+            idempotencyKey,
+            idempotencyKey,
+            requestHeaders);
+        var envelope = _workflowChatEnvelopeFactory.CreateEnvelope(request, context);
+        envelope.Id = idempotencyKey;
+        envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
+        envelope.Route = EnvelopeRouteSemantics.CreateDirect(ResolveScheduleId(), actorResolution.Target.ActorId);
+        envelope.Runtime = null;
+        var propagation = envelope.EnsurePropagation();
+        propagation.CorrelationId = idempotencyKey;
+
+        return new ScheduledDispatchEnvelope(actorResolution.Target.ActorId, envelope);
+    }
+
+    private IReadOnlyDictionary<string, string> BuildFireHeaders(
+        DateTimeOffset scheduledFireAtUtc,
+        string idempotencyKey) =>
+        new Dictionary<string, string>(State.Headers, StringComparer.Ordinal)
         {
             [ScheduledDispatchMetadataKeys.ScheduleId] = ResolveScheduleId(),
             [ScheduledDispatchMetadataKeys.FireAtUtc] = scheduledFireAtUtc.ToUniversalTime().ToString("O"),
             [ScheduledDispatchMetadataKeys.IdempotencyKey] = idempotencyKey,
         };
 
-        if (envelope.Payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
-        {
-            chatRequest.SessionId = idempotencyKey;
-            foreach (var (key, value) in headers)
-                chatRequest.Metadata[key] = value;
-            envelope.Payload = Any.Pack(chatRequest);
-        }
-
-        return envelope;
-    }
+    private sealed record ScheduledDispatchEnvelope(
+        string TargetActorId,
+        EventEnvelope Envelope);
 
     private async Task EnsureNextFireScheduledAsync(DateTimeOffset fromUtc, CancellationToken ct)
     {
@@ -277,6 +356,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private async Task CancelNextFireLeaseAsync(CancellationToken ct)
     {
         var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        await CancelNextFireLeaseAsync(lease, ct);
+    }
+
+    private async Task CancelNextFireLeaseAsync(RuntimeCallbackLease? lease, CancellationToken ct)
+    {
         if (lease == null)
             return;
 
@@ -469,13 +553,21 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return;
 
         var keysToRemove = state.FireRecords
-            .OrderBy(static x => x.Value.CompletedAt?.Seconds ?? 0)
+            .OrderBy(static x => ResolveTimestampSeconds(x.Value.CompletedAt))
+            .ThenBy(static x => ResolveTimestampNanos(x.Value.CompletedAt))
+            .ThenBy(static x => x.Key, StringComparer.Ordinal)
             .Take(state.FireRecords.Count - MaxFireRecordCount)
             .Select(static x => x.Key)
             .ToArray();
         foreach (var key in keysToRemove)
             state.FireRecords.Remove(key);
     }
+
+    private static long ResolveTimestampSeconds(Timestamp? timestamp) =>
+        timestamp?.Seconds ?? 0;
+
+    private static int ResolveTimestampNanos(Timestamp? timestamp) =>
+        timestamp?.Nanos ?? 0;
 
     private static string NormalizeRequired(string? value, string parameterName)
     {

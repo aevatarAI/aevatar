@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Core;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
@@ -86,8 +87,9 @@ public sealed class WorkflowScheduleCurrentStateProjector
 
     private static WorkflowScheduleFireRecordDocument[] CreateFireRecords(ScheduledDispatchState state) =>
         state.FireRecords.Values
-            .OrderByDescending(static x => x.CompletedAt?.Seconds ?? 0)
-            .ThenByDescending(static x => x.CompletedAt?.Nanos ?? 0)
+            .OrderByDescending(static x => ResolveTimestampSeconds(x.CompletedAt))
+            .ThenByDescending(static x => ResolveTimestampNanos(x.CompletedAt))
+            .ThenByDescending(static x => x.IdempotencyKey ?? string.Empty, StringComparer.Ordinal)
             .Select(static x => new WorkflowScheduleFireRecordDocument
             {
                 ScheduledFireAtUtcValue = x.ScheduledFireAt?.Clone(),
@@ -100,4 +102,10 @@ public sealed class WorkflowScheduleCurrentStateProjector
                 Manual = x.Manual,
             })
             .ToArray();
+
+    private static long ResolveTimestampSeconds(Timestamp? timestamp) =>
+        timestamp?.Seconds ?? 0;
+
+    private static int ResolveTimestampNanos(Timestamp? timestamp) =>
+        timestamp?.Nanos ?? 0;
 }

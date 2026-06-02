@@ -160,8 +160,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         var scheduleId = string.IsNullOrWhiteSpace(configuration.ScheduleId)
             ? Guid.NewGuid().ToString("N")
             : NormalizeScheduleId(configuration.ScheduleId);
-        if (requireScheduleId)
-            scheduleId = NormalizeScheduleId(scheduleId);
+        if (requireScheduleId && string.IsNullOrWhiteSpace(scheduleId))
+            throw new ArgumentException("Schedule id is required.", nameof(configuration));
 
         return configuration with
         {

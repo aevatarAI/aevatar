@@ -13,11 +13,13 @@ public static class WorkflowScheduleEndpoints
         group.MapPost("/workflow-schedules", Create)
             .WithTags("Workflow schedules")
             .Produces<WorkflowScheduleMutationReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest);
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status409Conflict);
         group.MapPut("/workflow-schedules/{scheduleId}", Update)
             .WithTags("Workflow schedules")
             .Produces<WorkflowScheduleMutationReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest);
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status409Conflict);
         group.MapPost("/workflow-schedules/{scheduleId}/enable", Enable)
             .WithTags("Workflow schedules")
             .Produces<WorkflowScheduleMutationReceipt>(StatusCodes.Status202Accepted)
@@ -60,9 +62,9 @@ public static class WorkflowScheduleEndpoints
             var receipt = await schedules.CreateAsync(input.ToConfiguration(input.ScheduleId), ct);
             return Results.Accepted($"/api/workflow-schedules/{receipt.ScheduleId}", receipt);
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
-            return Results.BadRequest(new { error = ex.Message });
+            return result;
         }
     }
 
@@ -77,9 +79,9 @@ public static class WorkflowScheduleEndpoints
             var receipt = await schedules.UpdateAsync(scheduleId, input.ToConfiguration(scheduleId), ct);
             return Results.Accepted($"/api/workflow-schedules/{receipt.ScheduleId}", receipt);
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
-            return Results.BadRequest(new { error = ex.Message });
+            return result;
         }
     }
 

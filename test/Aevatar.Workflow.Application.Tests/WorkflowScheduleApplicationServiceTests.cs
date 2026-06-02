@@ -257,11 +257,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
-    public async Task PrepareAsync_ShouldCreateStoredEnvelopeWithWorkflowRequestMetadata()
+    public async Task PrepareAsync_ShouldCreateStoredWorkflowStartRequestWithoutResolvingRunActor()
     {
-        var resolver = new FakeWorkflowRunActorResolver();
-        var envelopeFactory = new RecordingWorkflowChatEnvelopeFactory();
-        var service = new WorkflowScheduledDispatchPreparationService(resolver, envelopeFactory);
+        var service = new WorkflowScheduledDispatchPreparationService();
         var configuration = new WorkflowScheduleConfiguration(
             ScheduleId: "schedule-1",
             DisplayName: "Daily",
@@ -282,49 +280,28 @@ public sealed class WorkflowScheduleApplicationServiceTests
             "command-1",
             "correlation-1");
 
-        preparation.TargetActorId.Should().Be("run-actor-1");
-        preparation.PayloadTypeUrl.Should().Be(Any.Pack(new ChatRequestEvent()).TypeUrl);
+        preparation.TargetActorId.Should().Be("schedule-1");
+        preparation.PayloadTypeUrl.Should().Be(Any.Pack(new WorkflowScheduledDispatchStartRequest()).TypeUrl);
         preparation.TriggerEnvelope.Id.Should().Be("command-1");
-        preparation.TriggerEnvelope.Route.GetTargetActorId().Should().Be("run-actor-1");
+        preparation.TriggerEnvelope.Route.GetTargetActorId().Should().Be("schedule-1");
         preparation.TriggerEnvelope.Propagation!.CorrelationId.Should().Be("correlation-1");
         preparation.TriggerEnvelope.Timestamp.Should().NotBeNull();
 
-        resolver.Requests.Should().ContainSingle();
-        var request = resolver.Requests.Single();
+        var request = preparation.TriggerEnvelope.Payload.Unpack<WorkflowScheduledDispatchStartRequest>();
         request.Prompt.Should().Be("run the daily workflow");
-        request.SessionId.Should().Be("command-1");
         request.ScopeId.Should().Be("scope-1");
-        request.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
-        request.Source.ActorId.Should().Be("definition-actor-1");
-        request.Source.WorkflowName.Should().Be("daily-workflow");
-        request.Metadata.Should().Contain(
+        request.ActorId.Should().Be("definition-actor-1");
+        request.WorkflowName.Should().Be("daily-workflow");
+        request.Headers.Should().Contain(
             new KeyValuePair<string, string>("x-trace", "trace-1"));
-        request.Metadata.Should().Contain(
+        request.Headers.Should().Contain(
             new KeyValuePair<string, string>("workflow.schedule_id", "schedule-1"));
-
-        envelopeFactory.Contexts.Should().ContainSingle()
-            .Which.Should().BeEquivalentTo(new CommandContext(
-                "run-actor-1",
-                "command-1",
-                "correlation-1",
-                request.Metadata!));
-        var chatRequest = preparation.TriggerEnvelope.Payload.Unpack<ChatRequestEvent>();
-        chatRequest.Prompt.Should().Be("run the daily workflow");
-        chatRequest.SessionId.Should().Be("command-1");
-        chatRequest.ScopeId.Should().Be("scope-1");
-        chatRequest.Metadata.Should().Contain(
-            new KeyValuePair<string, string>("workflow.schedule_id", "schedule-1"));
-        chatRequest.Metadata.Should().Contain(
-            new KeyValuePair<string, string>("x-trace", "trace-1"));
     }
 
     [Fact]
     public async Task PrepareAsync_ShouldUseCatalogSourceAndOmitBlankScopeAndActor()
     {
-        var resolver = new FakeWorkflowRunActorResolver();
-        var service = new WorkflowScheduledDispatchPreparationService(
-            resolver,
-            new RecordingWorkflowChatEnvelopeFactory());
+        var service = new WorkflowScheduledDispatchPreparationService();
         var configuration = new WorkflowScheduleConfiguration(
             ScheduleId: "schedule-1",
             DisplayName: string.Empty,
@@ -337,36 +314,12 @@ public sealed class WorkflowScheduleApplicationServiceTests
             ScopeId: " ",
             ActorId: " ");
 
-        await service.PrepareAsync(configuration, "command-1", "correlation-1");
+        var preparation = await service.PrepareAsync(configuration, "command-1", "correlation-1");
 
-        var request = resolver.Requests.Single();
-        request.ScopeId.Should().BeNull();
-        request.Source.Kind.Should().Be(WorkflowChatSourceKind.CatalogWorkflow);
-        request.Source.WorkflowName.Should().Be("catalog-workflow");
-        request.Source.ActorId.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task PrepareAsync_ShouldRaiseConflict_WhenResolverCannotPrepareTarget()
-    {
-        var resolver = new FakeWorkflowRunActorResolver
-        {
-            Result = new WorkflowActorResolutionResult(
-                null,
-                string.Empty,
-                WorkflowChatRunStartError.WorkflowBindingMismatch),
-        };
-        var service = new WorkflowScheduledDispatchPreparationService(
-            resolver,
-            new RecordingWorkflowChatEnvelopeFactory());
-
-        var act = () => service.PrepareAsync(
-            CreateConfiguration("schedule-1"),
-            "command-1",
-            "correlation-1");
-
-        await act.Should().ThrowAsync<WorkflowScheduleConflictException>()
-            .WithMessage("*WorkflowBindingMismatch*");
+        var request = preparation.TriggerEnvelope.Payload.Unpack<WorkflowScheduledDispatchStartRequest>();
+        request.ScopeId.Should().BeEmpty();
+        request.WorkflowName.Should().Be("catalog-workflow");
+        request.ActorId.Should().BeEmpty();
     }
 
     [Theory]
