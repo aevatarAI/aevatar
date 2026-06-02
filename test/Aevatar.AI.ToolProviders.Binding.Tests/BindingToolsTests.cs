@@ -202,12 +202,13 @@ public class BindingToolsTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             doc.RootElement.GetProperty("accepted").GetBoolean().Should().BeTrue();
-            doc.RootElement.GetProperty("workflow").GetProperty("workflow_id").GetString().Should().Be("summary-digest");
+            doc.RootElement.GetProperty("workflow_id").GetString().Should().Be("summary-digest");
             doc.RootElement.GetProperty("revision_id").GetString().Should().Be("rev-result");
-            doc.RootElement.GetProperty("read_model_url").GetString().Should().Be("/api/scopes/scope-workflows/workflows/daily-digest");
+            doc.RootElement.GetProperty("read_model_url").GetString().Should().Be("/api/scopes/scope-workflows/workflows/summary-digest");
             doc.RootElement.GetProperty("acceptance_stage").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("propagation_stage").GetString().Should().Be("readmodel_propagating");
             doc.RootElement.GetProperty("command_handles").GetArrayLength().Should().Be(1);
+            doc.RootElement.TryGetProperty("workflow", out _).Should().BeFalse();
 
             captured.Should().NotBeNull();
             captured!.ScopeId.Should().Be("scope-workflows");

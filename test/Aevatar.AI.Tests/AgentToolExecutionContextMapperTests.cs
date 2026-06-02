@@ -156,12 +156,15 @@ public sealed class AgentToolExecutionContextMapperTests
 
         var context = AgentToolExecutionContextMapper.FromRequest(request);
 
-        context.Should().BeSameAs(typedContext);
+        context.Should().NotBeSameAs(typedContext);
         context.Request.RequestId.Should().Be("typed-request");
         context.Request.CallId.Should().Be("typed-call");
         context.Credentials.NyxIdAccessToken.Should().Be("typed-token");
-        context.ExternalMetadata.Should().ContainSingle("typed-note", "kept");
-        context.ExternalMetadata.Should().NotContainKey("external-trace");
+        context.ExternalMetadata["typed-note"].Should().Be("kept");
+        context.ExternalMetadata["external-trace"].Should().Be("trace-1");
+        context.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        context.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.CallId);
+        context.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
     }
 
     [Fact]
