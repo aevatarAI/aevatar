@@ -437,7 +437,6 @@ const ChatPage: React.FC = () => {
   const backendEffectiveRouteLabel = trimConversationValue(
     userLlmSettingsQuery.data?.effectiveRouteLabel
   );
-  // Refactor (issue1525): Old pattern: default conversation route display recalculated a UI label from route options even when backend supplied the effective label。New principle: when the conversation has no override, show the backend effective label as the source of truth and derive labels only for overrides。
   const effectiveRouteLabel = useMemo(
     () =>
       conversationRoute === undefined && backendEffectiveRouteLabel
