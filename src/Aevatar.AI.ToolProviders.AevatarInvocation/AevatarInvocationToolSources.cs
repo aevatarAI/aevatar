@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.GAgentService.Abstractions.Responses;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -68,7 +67,7 @@ public sealed class QueryReadModelToolSource : IAgentToolSource
         Task.FromResult<IReadOnlyList<IAgentTool>>([new QueryReadModelTool(_dispatcher)]);
 }
 
-internal sealed class InvokeGAgentTool : IAevatarInvocationChatRunTool
+internal sealed class InvokeGAgentTool : IAevatarInvocationTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -86,14 +85,9 @@ internal sealed class InvokeGAgentTool : IAevatarInvocationChatRunTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeGAgentAsync(argumentsJson, ct);
-
-    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
-        ChatRunToolCompletionRequest request,
-        CancellationToken ct = default) =>
-        _dispatcher.InvokeGAgentForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
-internal sealed class InvokeTeamTool : IAevatarInvocationChatRunTool
+internal sealed class InvokeTeamTool : IAevatarInvocationTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -111,14 +105,9 @@ internal sealed class InvokeTeamTool : IAevatarInvocationChatRunTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeTeamAsync(argumentsJson, ct);
-
-    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
-        ChatRunToolCompletionRequest request,
-        CancellationToken ct = default) =>
-        _dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
-internal sealed class StartWorkflowTool : IAevatarInvocationChatRunTool
+internal sealed class StartWorkflowTool : IAevatarInvocationTool
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
 
@@ -137,11 +126,6 @@ internal sealed class StartWorkflowTool : IAevatarInvocationChatRunTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.StartWorkflowAsync(argumentsJson, ct);
-
-    public Task<ChatRunToolCompletionRequest> ExecuteForChatRunAsync(
-        ChatRunToolCompletionRequest request,
-        CancellationToken ct = default) =>
-        _dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson, ct);
 }
 
 internal sealed class ObserveRunTool : IAevatarInvocationTool

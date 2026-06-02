@@ -188,7 +188,6 @@ message LlmSessionRuntimeChatMessage {
 message LlmSessionRuntimeToolCall {
   string call_id = 1;
   string tool_name = 2;
-  // Refactor (iter355/issue1438-first): Old pattern: durable LlmSession runtime tool calls persisted arguments only as arguments_json. New principle: arguments is the typed write path; arguments_json remains legacy read fallback.
   string arguments_json = 3;
   google.protobuf.Struct arguments = 4;
 }
@@ -196,7 +195,6 @@ message LlmSessionRuntimeToolCall {
 message LlmSessionRuntimeToolDeclaration {
   string tool_name = 1;
   string description = 2;
-  // Refactor (iter355/issue1438-first): Old pattern: forwarded tool schemas entered actor commands as parameters_json. New principle: parameters is the typed write path; parameters_json remains legacy read fallback.
   string parameters_json = 3;
   string schema_hash = 4;
   google.protobuf.Struct parameters = 5;
@@ -207,7 +205,6 @@ message LlmSessionRuntimeToolSelection {
   repeated string substituted_tool_names = 2;
   repeated string additive_tool_names = 3;
   string tool_choice_hint_name = 4;
-  // Refactor (iter355/issue1438-first): Old pattern: server-trusted tool choice hints persisted prefilled args as JSON string. New principle: typed Struct carries new writes; JSON is only legacy read fallback.
   string tool_choice_hint_arguments_json = 5;
   google.protobuf.Struct tool_choice_hint_arguments = 6;
 }
@@ -244,7 +241,6 @@ message LlmToolCallObserved {
   int32 round = 3;
   LlmSessionRuntimeToolCall tool_call = 4;
   bool forwarded = 5;
-  // Refactor (iter355/issue1438-first): Old pattern: local tool result facts persisted as local_result_json. New principle: local_result is typed Value primary; local_result_json remains read fallback.
   string local_result_json = 6;
   google.protobuf.Timestamp observed_at = 7;
   google.protobuf.Value local_result = 8;
@@ -273,229 +269,11 @@ message LlmRunCancelled {
   google.protobuf.Timestamp cancelled_at = 3;
 }
 
-enum ChatRunSubRunTargetKind {
-  CHAT_RUN_SUB_RUN_TARGET_KIND_UNSPECIFIED = 0;
-  CHAT_RUN_SUB_RUN_TARGET_KIND_GAGENT = 1;
-  CHAT_RUN_SUB_RUN_TARGET_KIND_TEAM = 2;
-  CHAT_RUN_SUB_RUN_TARGET_KIND_WORKFLOW = 3;
-}
-
 enum ChatRunSubRunWaitMode {
   CHAT_RUN_SUB_RUN_WAIT_MODE_UNSPECIFIED = 0;
   CHAT_RUN_SUB_RUN_WAIT_MODE_ACK = 1;
   CHAT_RUN_SUB_RUN_WAIT_MODE_STREAM = 2;
   CHAT_RUN_SUB_RUN_WAIT_MODE_COMPLETE = 3;
-}
-
-message ChatRunMessageRecord {
-  string role = 1;
-  string content = 2;
-  repeated ChatRunContentPart content_parts = 3;
-  string tool_call_id = 4;
-  repeated ChatRunToolCallRecord assistant_tool_calls = 5;
-}
-
-message ChatRunContentPart {
-  string kind = 1;
-  string text = 2;
-  string data_base64 = 3;
-  string media_type = 4;
-  string uri = 5;
-  string name = 6;
-}
-
-message ChatRunToolCallRecord {
-  string tool_call_id = 1;
-  string tool_name = 2;
-  google.protobuf.Struct arguments = 3;
-  // Refactor (iter355/issue1438-first): Old pattern: ChatRun tool results persisted only as internal_result_json strings. New principle: internal_result is typed Value primary; internal_result_json remains fallback.
-  string internal_result_json = 4;
-  int32 llm_round = 5;
-  string run_id = 6;
-  google.protobuf.Timestamp observed_at = 7;
-  google.protobuf.Value internal_result = 8;
-}
-
-message ChatRunSubRunSubscription {
-  string run_id = 1;
-  google.protobuf.Timestamp started_at = 2;
-  ChatRunSubRunTargetKind target_kind = 3;
-  string target_id = 4;
-  ChatRunSubRunWaitMode wait_mode = 5;
-  string stream_topic = 6;
-  string caller_tool_call_id = 7;
-  string tool_name = 8;
-  string actor_id = 9;
-  string service_id = 10;
-  string endpoint_id = 11;
-  int32 llm_round = 12;
-}
-
-message ChatRunState {
-  string response_id = 1;
-  string model_name = 2;
-  repeated ChatRunMessageRecord messages = 3;
-  string assistant_content_draft = 4;
-  repeated ChatRunToolCallRecord tool_call_history = 5;
-  repeated ChatRunSubRunSubscription active_sub_run_subscriptions = 6;
-  int32 current_llm_round = 7;
-  google.protobuf.Timestamp initialized_at = 8;
-  google.protobuf.Timestamp last_activity_at = 9;
-  google.protobuf.Duration idle_ttl = 10;
-  bool terminated = 11;
-}
-
-message StartChatRunRequested {
-  string response_id = 1;
-  string model_name = 2;
-  repeated ChatRunMessageRecord messages = 3;
-  google.protobuf.Duration idle_ttl = 4;
-  google.protobuf.Timestamp started_at = 5;
-}
-
-message ChatRunStartedEvent {
-  string response_id = 1;
-  string model_name = 2;
-  repeated ChatRunMessageRecord messages = 3;
-  google.protobuf.Duration idle_ttl = 4;
-  google.protobuf.Timestamp started_at = 5;
-}
-
-message RecordChatRunAssistantDraftRequested {
-  string content = 1;
-  int32 llm_round = 2;
-  google.protobuf.Timestamp observed_at = 3;
-}
-
-message ChatRunAssistantDraftRecordedEvent {
-  string content = 1;
-  int32 llm_round = 2;
-  google.protobuf.Timestamp observed_at = 3;
-}
-
-message SubmitChatRunToolCallRequested {
-  string tool_call_id = 1;
-  string tool_name = 2;
-  google.protobuf.Struct arguments = 3;
-  // Refactor (iter355/issue1438-first): Old pattern: ChatRun submit command carried internal result as JSON string. New principle: internal_result is typed Value primary; internal_result_json remains fallback.
-  string internal_result_json = 4;
-  string run_id = 5;
-  ChatRunSubRunTargetKind target_kind = 6;
-  string target_id = 7;
-  ChatRunSubRunWaitMode wait_mode = 8;
-  string stream_topic = 9;
-  string actor_id = 10;
-  string service_id = 11;
-  string endpoint_id = 12;
-  int32 llm_round = 13;
-  google.protobuf.Timestamp observed_at = 14;
-  google.protobuf.Value internal_result = 15;
-}
-
-message ChatRunToolCallSubmittedEvent {
-  string tool_call_id = 1;
-  string tool_name = 2;
-  google.protobuf.Struct arguments = 3;
-  // Refactor (iter355/issue1438-first): Old pattern: ChatRun submitted event persisted internal result as JSON string. New principle: internal_result is typed Value primary; internal_result_json remains fallback.
-  string internal_result_json = 4;
-  string run_id = 5;
-  ChatRunSubRunTargetKind target_kind = 6;
-  string target_id = 7;
-  ChatRunSubRunWaitMode wait_mode = 8;
-  string stream_topic = 9;
-  string actor_id = 10;
-  string service_id = 11;
-  string endpoint_id = 12;
-  int32 llm_round = 13;
-  google.protobuf.Timestamp observed_at = 14;
-  google.protobuf.Value internal_result = 15;
-}
-
-message PrepareChatRunSubRunObservationRequested {
-  string run_id = 1;
-  string tool_call_id = 2;
-  string tool_name = 3;
-  google.protobuf.Struct arguments = 4;
-  ChatRunSubRunTargetKind target_kind = 5;
-  string target_id = 6;
-  ChatRunSubRunWaitMode wait_mode = 7;
-  string stream_topic = 8;
-  string actor_id = 9;
-  string service_id = 10;
-  string endpoint_id = 11;
-  int32 llm_round = 12;
-  google.protobuf.Timestamp observed_at = 13;
-}
-
-message ChatRunSubRunObservationStartedEvent {
-  string run_id = 1;
-  string tool_call_id = 2;
-  string tool_name = 3;
-  google.protobuf.Struct arguments = 4;
-  ChatRunSubRunTargetKind target_kind = 5;
-  string target_id = 6;
-  ChatRunSubRunWaitMode wait_mode = 7;
-  string stream_topic = 8;
-  string actor_id = 9;
-  string service_id = 10;
-  string endpoint_id = 11;
-  int32 llm_round = 12;
-  google.protobuf.Timestamp observed_at = 13;
-}
-
-message ChatRunSubRunTerminalObserved {
-  string run_id = 1;
-  string status = 2;
-  // Refactor (iter355/issue1438-first): Old pattern: ChatRun terminal observation carried folded payload as internal_result_json. New principle: internal_result is typed Value primary; internal_result_json remains fallback.
-  string internal_result_json = 3;
-  string actor_id = 4;
-  string service_id = 5;
-  string endpoint_id = 6;
-  google.protobuf.Timestamp observed_at = 7;
-  bool completion_observed = 8;
-  google.protobuf.Value internal_result = 9;
-}
-
-message ChatRunSubRunTerminalFoldedEvent {
-  string run_id = 1;
-  string caller_tool_call_id = 2;
-  string tool_name = 3;
-  // Refactor (iter355/issue1438-first): Old pattern: folded ChatRun result event stored only internal_result_json. New principle: internal_result is typed Value primary; internal_result_json remains fallback.
-  string internal_result_json = 4;
-  int32 llm_round = 5;
-  google.protobuf.Timestamp observed_at = 6;
-  string status = 7;
-  string actor_id = 8;
-  string service_id = 9;
-  string endpoint_id = 10;
-  bool completion_observed = 11;
-  google.protobuf.Value internal_result = 12;
-}
-
-message ChatRunToolResultReady {
-  string response_id = 1;
-  string run_id = 2;
-  string caller_tool_call_id = 3;
-  string tool_name = 4;
-  // Refactor (iter355/issue1438-first): Old pattern: ChatRun readiness payload exposed only internal_result_json. New principle: internal_result is typed Value primary; internal_result_json remains fallback.
-  string internal_result_json = 5;
-  int32 llm_round = 6;
-  string status = 7;
-  string actor_id = 8;
-  string service_id = 9;
-  string endpoint_id = 10;
-  bool completion_observed = 11;
-  google.protobuf.Value internal_result = 12;
-}
-
-message TerminateChatRunRequested {
-  string reason = 1;
-  google.protobuf.Timestamp observed_at = 2;
-}
-
-message ChatRunTerminatedEvent {
-  string reason = 1;
-  google.protobuf.Timestamp observed_at = 2;
 }
 
 message ResponsesAgentToolStateRecord {
@@ -522,9 +300,6 @@ message ResponsesWebTrace {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  // Refactor (iter161-cluster-001 #1251-first):
-  //   Old pattern: normal writes stored stable Web results in google.protobuf.Value.
-  //   New principle: normal writes use typed ResponsesWebToolResult; result remains legacy read fallback only.
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
   ResponsesWebToolResult typed_result = 10;
@@ -535,9 +310,6 @@ message ResponsesWebCacheEntry {
   string tool_name = 2;
   string url = 3;
   string query = 4;
-  // Refactor (iter161-cluster-001 #1251-first):
-  //   Old pattern: cache result facts were written as google.protobuf.Value.
-  //   New principle: typed_result is the write path; result is legacy read fallback only.
   google.protobuf.Value result = 5;
   google.protobuf.Timestamp cached_at = 6;
   google.protobuf.Timestamp last_hit_at = 7;
@@ -600,9 +372,6 @@ message ResponsesWebToolResult {
 
 message ResponsesWebSubstituteToolExecutionResult {
   oneof result {
-    // Refactor (iter161-cluster-001 #1251-first):
-    //   Old pattern: cached/error/search used Value in the normal path.
-    //   New principle: typed fields carry stable Responses Web result semantics; Value arms are legacy fallback only.
     google.protobuf.Value cached = 1;
     google.protobuf.Value error = 2;
     ResponsesWebFetchToolOutput fetch = 3;
@@ -614,11 +383,6 @@ message ResponsesWebSubstituteToolExecutionResult {
 }
 
 message ResponsesAgentToolState {
-  // Refactor (issue1183/first-slice):
-  //   Old pattern: ResponsesTaskTrace dead trace surface — task_substitute / task_trace
-  //                readmodel surface 无 consumer,占用 proto field number。
-  //   New principle: deleted / reserved per Phase 9 r1 consensus (hybrid minimal/
-  //                  structural/delete), proto field number reserved 防重新占用。
   reserved 5;
   reserved "task_traces";
   ResponsesAgentToolStateRecord record = 1;
@@ -664,9 +428,6 @@ message RecordResponsesWebTraceRequested {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  // Refactor (iter161-cluster-001 #1251-first):
-  //   Old pattern: command carried normal Web result as Value.
-  //   New principle: typed_result is the write path; result is legacy fallback only.
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
   ResponsesWebToolResult typed_result = 10;

@@ -59,9 +59,45 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
         outcome.ErrorMessage.Should().Contain(nameof(FailingToolSource));
     }
 
+    [Fact]
+    public async Task ProbeAsync_ShouldReportDown_WhenObserveRunToolIsNotReadOnly()
+    {
+        using var provider = BuildProvider(
+            includeInvokeTeamSource: true,
+            observeRunReadOnly: false);
+        var executor = provider.GetRequiredService<AevatarCoreLoopStatusProbeExecutor>();
+
+        var outcome = await executor.ProbeAsync(
+            CoreLoopDescriptor(requireWorkspaceSources: false),
+            CancellationToken.None);
+
+        outcome.Status.Should().Be(HealthOutcomeStatus.Down);
+        outcome.Detail.Should().Be("completion_observe_tool_not_read_only");
+        outcome.ErrorMessage.Should().Contain("aevatar_observe_run");
+    }
+
+    [Fact]
+    public async Task ProbeAsync_ShouldReportDown_WhenQueryReadModelToolIsNotReadOnly()
+    {
+        using var provider = BuildProvider(
+            includeInvokeTeamSource: true,
+            queryReadModelReadOnly: false);
+        var executor = provider.GetRequiredService<AevatarCoreLoopStatusProbeExecutor>();
+
+        var outcome = await executor.ProbeAsync(
+            CoreLoopDescriptor(requireWorkspaceSources: false),
+            CancellationToken.None);
+
+        outcome.Status.Should().Be(HealthOutcomeStatus.Down);
+        outcome.Detail.Should().Be("completion_query_tool_not_read_only");
+        outcome.ErrorMessage.Should().Contain("aevatar_query_readmodel");
+    }
+
     private static ServiceProvider BuildProvider(
         bool includeInvokeTeamSource,
-        bool breakInvokeTeamDiscovery = false)
+        bool breakInvokeTeamDiscovery = false,
+        bool observeRunReadOnly = true,
+        bool queryReadModelReadOnly = true)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -97,7 +133,11 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
             if (includeInvokeTeamSource)
                 sources.Add(sp => sp.GetRequiredService<InvokeTeamToolSource>());
             sources.Add(sp => sp.GetRequiredService<StartWorkflowToolSource>());
+            if (!observeRunReadOnly)
+                sources.Add(_ => new FixedToolSource(new FixedInvocationTool("aevatar_observe_run", false)));
             sources.Add(sp => sp.GetRequiredService<ObserveRunToolSource>());
+            if (!queryReadModelReadOnly)
+                sources.Add(_ => new FixedToolSource(new FixedInvocationTool("aevatar_query_readmodel", false)));
             sources.Add(sp => sp.GetRequiredService<QueryReadModelToolSource>());
             options.AddToolSet(ToolSetNames.WorkspaceDefault, sources);
         });
@@ -109,6 +149,41 @@ public sealed class AevatarCoreLoopStatusProbeExecutorTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             throw new InvalidOperationException("discovery unavailable");
+    }
+
+    private sealed class FixedToolSource : IAgentToolSource
+    {
+        private readonly IAgentTool _tool;
+
+        public FixedToolSource(IAgentTool tool)
+        {
+            _tool = tool;
+        }
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<IAgentTool>>([_tool]);
+    }
+
+    private sealed class FixedInvocationTool : IAevatarInvocationTool
+    {
+        private readonly bool _isReadOnly;
+
+        public FixedInvocationTool(string name, bool isReadOnly)
+        {
+            Name = name;
+            _isReadOnly = isReadOnly;
+        }
+
+        public string Name { get; }
+
+        public string Description => "Test invocation tool.";
+
+        public string ParametersSchema => "{}";
+
+        public bool IsReadOnly => _isReadOnly;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private static HealthProbeTargetDescriptor CoreLoopDescriptor(bool requireWorkspaceSources = true) =>

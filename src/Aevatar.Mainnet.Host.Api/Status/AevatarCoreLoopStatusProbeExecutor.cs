@@ -4,7 +4,6 @@ using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
-using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Google.Protobuf.WellKnownTypes;
@@ -127,7 +126,7 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
         if (routeCheck is not null)
             return routeCheck;
 
-        var completionCheck = VerifyCompletionCoordinator();
+        var completionCheck = VerifyCompletionObservationTools(discovered);
         if (completionCheck is not null)
             return completionCheck;
 
@@ -297,36 +296,26 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
             ObserveRunToolSource or
             QueryReadModelToolSource;
 
-    private static HealthProbeOutcome? VerifyCompletionCoordinator()
+    private static HealthProbeOutcome? VerifyCompletionObservationTools(
+        IReadOnlyDictionary<string, IAgentTool> discovered)
     {
-        foreach (var toolName in ChatRunToolCompletionCoordinator.CompleteInvocationToolNames)
+        foreach (var toolName in RequiredToolNames)
         {
-            var completeToolCall = new ToolCall
-            {
-                Id = $"status-{toolName}",
-                Name = toolName,
-                ArgumentsJson = """{"wait":"complete"}""",
-            };
-            if (!ChatRunToolCompletionCoordinator.IsWaitCompleteInvocationTool(completeToolCall))
-            {
+            if (!discovered.ContainsKey(toolName))
                 return Failure(
-                    "completion_tool_not_recognized",
-                    $"Tool '{toolName}' is not recognized for wait=complete coordination.");
-            }
+                    "completion_tool_missing",
+                    $"Tool '{toolName}' is not registered for accepted dispatch or readmodel observation.");
         }
 
-        var observeToolCall = new ToolCall
-        {
-            Id = "status-observe",
-            Name = "aevatar_observe_run",
-            ArgumentsJson = """{"wait":"complete"}""",
-        };
-        if (ChatRunToolCompletionCoordinator.IsWaitCompleteInvocationTool(observeToolCall))
-        {
+        if (discovered["aevatar_observe_run"] is not IAevatarInvocationTool observeRun || !observeRun.IsReadOnly)
             return Failure(
-                "completion_tool_scope_too_broad",
-                "Read-only observe tool was incorrectly recognized as a wait=complete invocation tool.");
-        }
+                "completion_observe_tool_not_read_only",
+                "aevatar_observe_run must remain a read-only readmodel observation tool.");
+
+        if (discovered["aevatar_query_readmodel"] is not IAevatarInvocationTool queryReadmodel || !queryReadmodel.IsReadOnly)
+            return Failure(
+                "completion_query_tool_not_read_only",
+                "aevatar_query_readmodel must remain a read-only readmodel query tool.");
 
         return null;
     }
