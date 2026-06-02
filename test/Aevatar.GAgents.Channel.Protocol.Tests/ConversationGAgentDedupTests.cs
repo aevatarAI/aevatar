@@ -839,6 +839,7 @@ public sealed class ConversationGAgentDedupTests
                 new NeedsLlmReplyEvent
                 {
                     CorrelationId = activity.Id,
+                    RunId = activity.Id,
                     TargetActorId = "conversation:actor",
                     RegistrationId = "reg-1",
                     Activity = activity.Clone(),
@@ -908,6 +909,7 @@ public sealed class ConversationGAgentDedupTests
                 new NeedsLlmReplyEvent
                 {
                     CorrelationId = activity.Id,
+                    RunId = activity.Id,
                     TargetActorId = "conversation:actor",
                     RegistrationId = "reg-1",
                     Activity = activity.Clone(),
