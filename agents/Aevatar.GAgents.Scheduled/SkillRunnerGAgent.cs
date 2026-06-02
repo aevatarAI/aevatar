@@ -325,7 +325,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = await BuildExecutionMetadataAsync(ct);
         var llmControl = await BuildExecutionLlmControlAsync(ct);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromMetadata(metadata));
+        var toolContext = llmControl.ToToolContext(BuildExternalOnlyToolContext(metadata));
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
@@ -624,6 +624,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 "Refusing to record this run as a successful execution.");
         }
     }
+
+    private static AgentToolExecutionContext BuildExternalOnlyToolContext(
+        IReadOnlyDictionary<string, string>? metadata) =>
+        AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
 
     private Task SendOutputAsync(string output, CancellationToken ct) =>
         SendOutputAsync(output, providerSlugOverride: null, ct);
