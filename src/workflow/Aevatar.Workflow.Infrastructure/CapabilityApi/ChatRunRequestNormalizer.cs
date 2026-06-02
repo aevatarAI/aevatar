@@ -72,7 +72,6 @@ internal static class ChatRunRequestNormalizer
         if (source == null)
             return null;
 
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: workflow chat API accepted NyxID-named adapter fields. New: workflow request only carries provider-neutral LLM intent controls.
         return new WorkflowLlmControl(
             NormalizeOptional(source.ModelOverride),
             source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,

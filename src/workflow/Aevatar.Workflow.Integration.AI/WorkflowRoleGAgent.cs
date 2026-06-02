@@ -38,7 +38,6 @@ public class WorkflowRoleGAgent(
     [EventHandler]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
     {
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: RoleGAgent in AI.Core adapted workflow-owned role initialization. New: workflow integration owns the adapter while RoleGAgent keeps only AI role state.
         ArgumentNullException.ThrowIfNull(evt);
         var initialize = new InitializeRoleAgentEvent
         {
@@ -62,7 +61,6 @@ public class WorkflowRoleGAgent(
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleWorkflowLlmExecutionIntent(WorkflowLlmExecutionIntent intent)
     {
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: workflow integration/application could drive provider-facing chat directly, then RoleGAgent in AI.Core handled workflow intent. New: workflow sends intent to this workflow-owned role actor adapter inbox and the adapter invokes the role actor LLM stream.
         ArgumentNullException.ThrowIfNull(intent);
         await PublishAsync(new WorkflowLlmInvocationStartedEvent
         {

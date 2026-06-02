@@ -30,7 +30,7 @@ public sealed class WorkflowModuleCompletionSourceRegressionTests
     }
 
     [Fact]
-    public async Task WorkflowLlmModules_ShouldOnlyUseRoleReplyRecordedEventAsCompletionDriver()
+    public async Task WorkflowLlmModules_ShouldOnlyUseLlmInvocationCompletedEventAsCompletionDriver()
     {
         var repositoryRoot = FindRepositoryRoot();
         var modulePaths = new[]
@@ -44,7 +44,8 @@ public sealed class WorkflowModuleCompletionSourceRegressionTests
         {
             var executableSource = StripComments(await File.ReadAllTextAsync(modulePath));
 
-            executableSource.Should().Contain("WorkflowRoleReplyRecordedEvent.Descriptor", Path.GetFileName(modulePath));
+            executableSource.Should().Contain("WorkflowLlmInvocationCompletedEvent.Descriptor", Path.GetFileName(modulePath));
+            executableSource.Should().NotContain("WorkflowRoleReplyRecordedEvent.Descriptor", Path.GetFileName(modulePath));
             executableSource.Should().NotContain("RoleChatSessionCompletedEvent.Descriptor", Path.GetFileName(modulePath));
             executableSource.Should().NotContain("TextMessageEndEvent.Descriptor", Path.GetFileName(modulePath));
             executableSource.Should().NotContain("ChatResponseEvent.Descriptor", Path.GetFileName(modulePath));

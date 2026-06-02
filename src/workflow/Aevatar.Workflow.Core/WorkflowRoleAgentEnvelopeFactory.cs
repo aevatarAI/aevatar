@@ -8,7 +8,6 @@ internal static class WorkflowRoleAgentEnvelopeFactory
 {
     public static EventEnvelope CreateInitializeEnvelope(RoleDefinition role, string actorId)
     {
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: workflow core packed AI InitializeRoleAgentEvent directly. New: workflow owns role initialization payload and role actors adapt it internally.
         var initialize = new WorkflowRoleInitializeEvent
         {
             // Refactor (iter15/cluster-028):

@@ -26,7 +26,6 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
         AppendMetadata(chatRequest.Headers, context.Headers);
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: application command factory packed AI ChatRequestEvent. New: workflow run command uses workflow-owned chat request and LLM control contracts.
         AppendMetadata(chatRequest.Metadata, command.Metadata);
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToProto(command.LlmControl);

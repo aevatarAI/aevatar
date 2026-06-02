@@ -378,7 +378,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: workflow module dispatched ChatRequestEvent/provider-facing fields. New: workflow publishes a typed intent to the role actor inbox and waits for workflow-owned completion events.
         var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,

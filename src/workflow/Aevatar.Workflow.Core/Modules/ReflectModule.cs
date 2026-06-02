@@ -205,7 +205,6 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         runtimeState.PendingBySessionId[sessionId] = state;
         await SaveStateAsync(runtimeState, ctx, ct);
 
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: reflect dispatched provider-facing ChatRequestEvent. New: reflect sends workflow-owned LLM intent to the role actor inbox.
         var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,
@@ -242,7 +241,6 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         runtimeState.PendingBySessionId[sessionId] = state;
         await SaveStateAsync(runtimeState, ctx, ct);
 
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: reflect dispatched provider-facing ChatRequestEvent. New: reflect sends workflow-owned LLM intent to the role actor inbox.
         var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,

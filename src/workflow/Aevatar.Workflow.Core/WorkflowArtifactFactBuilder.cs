@@ -85,7 +85,6 @@ internal static class WorkflowArtifactFactBuilder
         // Refactor (iter15/cluster-028):
         //   Old pattern: parsed childActorId prefix to derive RoleId via string split.
         //   New principle: role id comes from typed event payload / readmodel; actor id is opaque address only.
-        // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: workflow artifact extraction unpacked AI RoleChatSessionCompletedEvent. New: role actor publishes workflow-owned LLM completion events.
         evt = new WorkflowRoleReplyRecordedEvent
         {
             RunId = runId,

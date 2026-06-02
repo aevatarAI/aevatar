@@ -1,6 +1,5 @@
 namespace Aevatar.Workflow.Core.Primitives;
 
-// Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: Workflow.Core used AI ChatSessionKeys. New: workflow owns session id composition for workflow LLM intents.
 internal static class WorkflowChatSessionKeys
 {
     public static string CreateWorkflowStepSessionId(string scopeId, string stepId)

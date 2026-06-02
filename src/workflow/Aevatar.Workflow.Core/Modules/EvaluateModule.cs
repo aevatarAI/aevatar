@@ -107,7 +107,6 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             };
             await SaveStateAsync(state, ctx, ct);
 
-            // Refactor (iter129/cluster-triage-workflow-llm-nyx-coupling): Old: evaluate dispatched provider-facing ChatRequestEvent. New: evaluate sends workflow-owned LLM intent to the role actor inbox.
             var intent = new WorkflowLlmExecutionIntent
             {
                 Prompt = prompt,
