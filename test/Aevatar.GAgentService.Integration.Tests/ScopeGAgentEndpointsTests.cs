@@ -4,9 +4,12 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -14,8 +17,10 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Hosting.ExecutionActivity;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -52,6 +57,7 @@ public sealed class ScopeGAgentEndpointsTests
         routes.Should().Contain(route => route.Contains("gagent-types"));
         routes.Should().Contain(route => route.Contains("gagent/draft-run"));
         routes.Should().Contain(route => route.Contains("gagent-actors"));
+        routes.Should().Contain("/api/scopes/{scopeId}/execution-events");
     }
 
     [Fact]
@@ -262,6 +268,171 @@ public sealed class ScopeGAgentEndpointsTests
 
         var remainder = await reader.ReadToEndAsync();
         remainder.Should().Contain("\"runFinished\"");
+    }
+
+    [Fact]
+    public async Task ExecutionEventsEndpoint_ShouldStreamStartedAndCompletedFrames_ForRequestedScope()
+    {
+        var streamProvider = new InMemoryStreamProvider();
+        var context = CreateExecutionEventsContext("scope-a");
+        var responseStream = new ObservableResponseStream();
+        context.Response.Body = responseStream;
+        using var cts = new CancellationTokenSource();
+        var endpointTask = InvokeHandleExecutionEventsAsync(context, "scope-a", streamProvider, cts.Token);
+
+        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-a")).ProduceAsync(
+            new ExecutionActivityEvent
+            {
+                ScopeId = "scope-a",
+                ActorId = "actor-1",
+                AgentType = "RoleGAgent",
+                HandlerName = "HandleAsync",
+                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                EventId = "evt-1",
+                Stage = ExecutionActivityLifecycleStage.Started,
+                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        var startedFrame = await responseStream.WaitUntilContainsAsync("handler.started", TimeSpan.FromSeconds(5));
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.OK);
+        context.Response.ContentType.Should().Be("text/event-stream; charset=utf-8");
+        startedFrame.Should().Contain("\"scopeId\":\"scope-a\"");
+        startedFrame.Should().Contain("\"actorId\":\"actor-1\"");
+        startedFrame.Should().Contain("\"handlerName\":\"HandleAsync\"");
+        startedFrame.Should().Contain("\"eventId\":\"evt-1\"");
+
+        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-a")).ProduceAsync(
+            new ExecutionActivityEvent
+            {
+                ScopeId = "scope-a",
+                ActorId = "actor-1",
+                AgentType = "RoleGAgent",
+                HandlerName = "HandleAsync",
+                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                EventId = "evt-1",
+                Stage = ExecutionActivityLifecycleStage.Completed,
+                Duration = Duration.FromTimeSpan(TimeSpan.FromMilliseconds(12)),
+                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        var completedFrame = await responseStream.WaitUntilContainsAsync("handler.completed", TimeSpan.FromSeconds(5));
+        completedFrame.Should().Contain("\"durationMs\":12");
+
+        await cts.CancelAsync();
+        await endpointTask;
+    }
+
+    [Fact]
+    public async Task ExecutionEventsEndpoint_ShouldNotLeakEventsAcrossScopes()
+    {
+        var streamProvider = new InMemoryStreamProvider();
+        var context = CreateExecutionEventsContext("scope-a");
+        var responseStream = new ObservableResponseStream();
+        context.Response.Body = responseStream;
+        using var cts = new CancellationTokenSource();
+        var endpointTask = InvokeHandleExecutionEventsAsync(context, "scope-a", streamProvider, cts.Token);
+
+        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-b")).ProduceAsync(
+            new ExecutionActivityEvent
+            {
+                ScopeId = "scope-b",
+                ActorId = "actor-b",
+                AgentType = "RoleGAgent",
+                HandlerName = "OtherHandler",
+                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                EventId = "evt-b",
+                Stage = ExecutionActivityLifecycleStage.Started,
+                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-a")).ProduceAsync(
+            new ExecutionActivityEvent
+            {
+                ScopeId = "scope-a",
+                ActorId = "actor-a",
+                AgentType = "RoleGAgent",
+                HandlerName = "ScopeAHandler",
+                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                EventId = "evt-a",
+                Stage = ExecutionActivityLifecycleStage.Started,
+                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        var frame = await responseStream.WaitUntilContainsAsync("handler.started", TimeSpan.FromSeconds(5));
+        frame.Should().Contain("\"scopeId\":\"scope-a\"");
+        frame.Should().Contain("\"actorId\":\"actor-a\"");
+        frame.Should().NotContain("scope-b");
+        frame.Should().NotContain("actor-b");
+
+        await cts.CancelAsync();
+        await endpointTask;
+    }
+
+    [Fact]
+    public async Task ExecutionEventsEndpoint_ShouldStreamFailedFrames()
+    {
+        var streamProvider = new InMemoryStreamProvider();
+        var context = CreateExecutionEventsContext("scope-a");
+        var responseStream = new ObservableResponseStream();
+        context.Response.Body = responseStream;
+        using var cts = new CancellationTokenSource();
+        var endpointTask = InvokeHandleExecutionEventsAsync(context, "scope-a", streamProvider, cts.Token);
+
+        await streamProvider.GetStream(ExecutionActivityStreamTopics.ForScope("scope-a")).ProduceAsync(
+            new ExecutionActivityEvent
+            {
+                ScopeId = "scope-a",
+                ActorId = "actor-1",
+                AgentType = "RoleGAgent",
+                HandlerName = "FailingHandler",
+                EventType = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                EventId = "evt-fail",
+                Stage = ExecutionActivityLifecycleStage.Failed,
+                Duration = Duration.FromTimeSpan(TimeSpan.FromMilliseconds(7)),
+                Error = "boom",
+                Ts = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        var failedFrame = await responseStream.WaitUntilContainsAsync("handler.failed", TimeSpan.FromSeconds(5));
+        failedFrame.Should().Contain("\"error\":\"boom\"");
+        failedFrame.Should().Contain("\"durationMs\":7");
+
+        await cts.CancelAsync();
+        await endpointTask;
+    }
+
+    [Fact]
+    public async Task ExecutionActivityPublisherHook_ShouldNotBlockHandler_WhenStreamPublishBackpressures()
+    {
+        var blockingStreamProvider = new BlockingStreamProvider();
+        var hook = new ExecutionActivityPublisherHook(
+            blockingStreamProvider,
+            new ExecutionActivityScopeResolver(),
+            LoggerFactory.Create(_ => { }).CreateLogger<ExecutionActivityPublisherHook>());
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-1",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new Aevatar.AI.Abstractions.ChatRequestEvent { ScopeId = "scope-a" }),
+        };
+        var ctx = new GAgentExecutionHookContext
+        {
+            AgentId = "actor-1",
+            AgentType = "RoleGAgent",
+            EventId = "evt-1",
+            EventType = envelope.Payload.TypeUrl,
+            HandlerName = "HandleAsync",
+        };
+        ctx.Items[GAgentExecutionHookItemKeys.InboundEnvelope] = envelope;
+
+        var publishTask = hook.OnEventHandlerStartAsync(ctx, CancellationToken.None);
+
+        await publishTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await blockingStreamProvider.FirstAttempt.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        publishTask.IsCompletedSuccessfully.Should().BeTrue();
+        blockingStreamProvider.Attempts.Should().Be(1);
+        blockingStreamProvider.ReleasePublish.TrySetResult(null);
     }
 
     [Fact]
@@ -1125,6 +1296,26 @@ public sealed class ScopeGAgentEndpointsTests
             })!;
     }
 
+    private static Task InvokeHandleExecutionEventsAsync(
+        HttpContext context,
+        string scopeId,
+        IStreamProvider streamProvider,
+        CancellationToken ct)
+    {
+        var method = typeof(ScopeGAgentEndpoints).GetMethod(
+            "HandleExecutionEventsAsync",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        return (Task)method!.Invoke(
+            null,
+            new object[]
+            {
+                context,
+                scopeId,
+                streamProvider,
+                ct,
+            })!;
+    }
+
     private static HttpContext CreateDraftRunContext(string? authorization = null, string claimedScopeId = "scope-a")
     {
         var context = CreateScopedHttpContext(claimedScopeId);
@@ -1134,6 +1325,13 @@ public sealed class ScopeGAgentEndpointsTests
             context.Request.Headers.Authorization = authorization;
         }
 
+        return context;
+    }
+
+    private static HttpContext CreateExecutionEventsContext(string claimedScopeId)
+    {
+        var context = CreateScopedHttpContext(claimedScopeId);
+        context.Response.Body = new MemoryStream();
         return context;
     }
 
@@ -1289,17 +1487,107 @@ public sealed class ScopeGAgentEndpointsTests
         }
     }
 
+    private sealed class ObservableResponseStream : MemoryStream
+    {
+        private readonly Lock _lock = new();
+        private readonly List<ContentWaiter> _waiters = [];
+
+        public Task<string> WaitUntilContainsAsync(string expected, TimeSpan timeout)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(expected);
+
+            lock (_lock)
+            {
+                var snapshot = ReadSnapshotUnsafe();
+                if (snapshot.Contains(expected, StringComparison.Ordinal))
+                    return Task.FromResult(snapshot);
+
+                var waiter = new ContentWaiter(
+                    expected,
+                    new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously));
+                _waiters.Add(waiter);
+
+                var cancellation = new CancellationTokenSource(timeout);
+                cancellation.Token.Register(() =>
+                {
+                    if (waiter.Completion.TrySetCanceled(cancellation.Token))
+                    {
+                        lock (_lock)
+                        {
+                            _waiters.Remove(waiter);
+                        }
+                    }
+                });
+                return waiter.Completion.Task;
+            }
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            base.Write(buffer, offset, count);
+            NotifyWaiters();
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var result = base.WriteAsync(buffer, cancellationToken);
+            NotifyWaiters();
+            return result;
+        }
+
+        private void NotifyWaiters()
+        {
+            List<ContentWaiter>? completed = null;
+            string snapshot;
+            lock (_lock)
+            {
+                snapshot = ReadSnapshotUnsafe();
+                foreach (var waiter in _waiters)
+                {
+                    if (!snapshot.Contains(waiter.Expected, StringComparison.Ordinal))
+                        continue;
+
+                    completed ??= [];
+                    completed.Add(waiter);
+                }
+
+                if (completed != null)
+                {
+                    foreach (var waiter in completed)
+                        _waiters.Remove(waiter);
+                }
+            }
+
+            if (completed == null)
+                return;
+
+            foreach (var waiter in completed)
+                waiter.Completion.TrySetResult(snapshot);
+        }
+
+        private string ReadSnapshotUnsafe()
+        {
+            return Encoding.UTF8.GetString(GetBuffer(), 0, checked((int)Length));
+        }
+
+        private sealed record ContentWaiter(
+            string Expected,
+            TaskCompletionSource<string> Completion);
+    }
+
     private sealed class ScopeGAgentEndpointHostedTestHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
 
-        private ScopeGAgentEndpointHostedTestHost(WebApplication app, HttpClient client)
+        private ScopeGAgentEndpointHostedTestHost(WebApplication app, HttpClient client, InMemoryStreamProvider streamProvider)
         {
             _app = app;
             Client = client;
+            StreamProvider = streamProvider;
         }
 
         public HttpClient Client { get; }
+        public InMemoryStreamProvider StreamProvider { get; }
 
         public static async Task<ScopeGAgentEndpointHostedTestHost> StartAsync(
             FakeGAgentDraftRunInteractionPort interactionPort)
@@ -1312,6 +1600,8 @@ public sealed class ScopeGAgentEndpointsTests
             builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
             builder.Services.AddAuthorization();
             builder.Services.AddSingleton<IGAgentDraftRunInteractionPort>(interactionPort);
+            var streamProvider = new InMemoryStreamProvider();
+            builder.Services.AddSingleton<IStreamProvider>(streamProvider);
 
             var app = builder.Build();
             app.Use(async (http, next) =>
@@ -1336,13 +1626,53 @@ public sealed class ScopeGAgentEndpointsTests
                 BaseAddress = new Uri(addressFeature.Addresses.Single()),
             };
 
-            return new ScopeGAgentEndpointHostedTestHost(app, client);
+            return new ScopeGAgentEndpointHostedTestHost(app, client, streamProvider);
         }
 
         public async ValueTask DisposeAsync()
         {
             Client.Dispose();
             await _app.DisposeAsync();
+        }
+    }
+
+    private sealed class BlockingStreamProvider : IStreamProvider
+    {
+        public int Attempts { get; private set; }
+        public TaskCompletionSource<object?> FirstAttempt { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<object?> ReleasePublish { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IStream GetStream(string actorId) => new BlockingStream(this, actorId);
+
+        private sealed class BlockingStream(BlockingStreamProvider owner, string streamId) : IStream
+        {
+            public string StreamId => streamId;
+
+            public Task ProduceAsync<T>(T message, CancellationToken ct = default)
+                where T : Google.Protobuf.IMessage
+            {
+                owner.Attempts++;
+                owner.FirstAttempt.TrySetResult(null);
+                return owner.ReleasePublish.Task;
+            }
+
+            public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+                where T : Google.Protobuf.IMessage, new() =>
+                Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+
+            public Task UpsertRelayAsync(Aevatar.Foundation.Abstractions.Streaming.StreamForwardingBinding binding, CancellationToken ct = default) =>
+                Task.CompletedTask;
+
+            public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
+                Task.CompletedTask;
+
+            public Task<IReadOnlyList<Aevatar.Foundation.Abstractions.Streaming.StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
+                Task.FromResult<IReadOnlyList<Aevatar.Foundation.Abstractions.Streaming.StreamForwardingBinding>>([]);
+        }
+
+        private sealed class NoopAsyncDisposable : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 
