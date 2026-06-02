@@ -374,6 +374,29 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WhenApprovalHandlerMissingAndToolRequiresApproval_ShouldDenyWithoutExecutingTool()
+    {
+        var tool = new ApprovalRequiredTool();
+        var generator = new NyxIdConversationReplyGenerator(
+            new ToolResultEchoingProviderFactory(),
+            toolSources: [new SingleToolSource(tool)]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-no-handler-approval",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-no-handler" },
+                Content = new MessageContent { Text = "run tool" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Contain("No tool approval handler is registered.");
+        tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithLocalSkillCatalog_AddsLocalSkillsWithoutRemoteFetcherWarning()
     {
         var logger = new ListLogger<NyxIdConversationReplyGenerator>();
@@ -1259,6 +1282,43 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
+    private sealed class ToolResultEchoingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "tool-result-echoing";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var toolResult = request.Messages.LastOrDefault(static message => message.Role == "tool")?.Content;
+            if (toolResult is not null)
+            {
+                yield return new LLMStreamChunk { DeltaContent = toolResult };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval",
+                    Name = ApprovalRequiredTool.ToolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
     private sealed class ToolCallingPreambleProviderFactory : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "tool-calling-preamble";
@@ -1476,6 +1536,8 @@ public sealed class ConversationReplyGeneratorTests
     {
         public const string ToolName = "approval_required_tool";
 
+        public int ExecuteCount { get; private set; }
+
         public string Name => ToolName;
 
         public string Description => "Requires approval.";
@@ -1484,8 +1546,13 @@ public sealed class ConversationReplyGeneratorTests
 
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("""{"executed":true}""");
+        public bool IsDestructive => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("""{"executed":true}""");
+        }
     }
 
     private sealed class CountingApprovalHandler : IToolApprovalHandler
