@@ -17,6 +17,7 @@ using Aevatar.Hosting;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -48,6 +49,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IServiceServingQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
+        services.Should().Contain(x => x.ServiceType == typeof(ISkillWorkflowMountPort));
         services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
         services.Should().NotContain(x => x.ServiceType == typeof(ITeamEntryMemberResolver));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));

@@ -21,6 +21,7 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
     private readonly SkillDiscovery _discovery;
     private readonly LocalSkillCatalog _localCatalog;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
+    private readonly ISkillWorkflowMountPort _workflowMountPort;
     private readonly ILogger _logger;
 
     public SkillsAgentToolSource(
@@ -28,12 +29,14 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
         SkillDiscovery discovery,
         LocalSkillCatalog localCatalog,
         IRemoteSkillFetcher? remoteFetcher = null,
+        ISkillWorkflowMountPort? workflowMountPort = null,
         ILogger<SkillsAgentToolSource>? logger = null)
     {
         _options = options;
         _discovery = discovery;
         _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
+        _workflowMountPort = workflowMountPort ?? new NoOpSkillWorkflowMountPort();
         _logger = logger ?? NullLogger<SkillsAgentToolSource>.Instance;
     }
 
@@ -57,7 +60,7 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
         }
 
         // 2. 返回统一的 UseSkillTool（单个工具）
-        IReadOnlyList<IAgentTool> tools = [new UseSkillTool(_localCatalog, _remoteFetcher)];
+        IReadOnlyList<IAgentTool> tools = [new UseSkillTool(_localCatalog, _remoteFetcher, _workflowMountPort)];
         return Task.FromResult(tools);
     }
 }
