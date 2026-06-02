@@ -610,6 +610,32 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+        if (evt.SuspensionType == "tool_approval")
+        {
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    Custom = new WorkflowCustomEventPayload
+                    {
+                        Name = "aevatar.tool_approval.pending",
+                        Payload = Any.Pack(new WorkflowToolApprovalSuspensionCustomPayload
+                        {
+                            RunId = evt.RunId,
+                            StepId = evt.StepId,
+                            ExecutionId = evt.ToolApproval?.ExecutionId ?? string.Empty,
+                            ToolName = evt.ToolApproval?.ToolName ?? string.Empty,
+                            ToolCallId = evt.ToolApproval?.ToolCallId ?? string.Empty,
+                            ApprovalRequestId = evt.ToolApproval?.ApprovalRequestId ?? string.Empty,
+                            ArgumentsJson = evt.ToolApproval?.ArgumentsJson ?? string.Empty,
+                        }),
+                    },
+                },
+            ];
+            return true;
+        }
+
         // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
         //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
         //   New principle: typed suspension fields are the single source; Metadata is open extension data only.
@@ -617,22 +643,6 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
         var variableName = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.VariableName);
         var secure = evt.Secure;
         var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.RedactedOutput);
-
-        var customPayload = new WorkflowHumanInputRequestCustomPayload
-        {
-            StepId = evt.StepId,
-            RunId = evt.RunId,
-            SuspensionType = evt.SuspensionType.ToWireName(),
-            Prompt = evt.Prompt,
-            TimeoutSeconds = evt.TimeoutSeconds,
-            VariableName = variableName,
-            Content = evt.Content,
-            DeliveryTargetId = evt.DeliveryTargetId,
-            Secure = secure,
-            RedactedOutput = redactedOutput,
-            Metadata = { metadata },
-        };
-        customPayload.Options.Add(evt.ExpectedOptions);
 
         events =
         [
@@ -642,7 +652,20 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                 Custom = new WorkflowCustomEventPayload
                 {
                     Name = "aevatar.human_input.request",
-                    Payload = Any.Pack(customPayload),
+                    Payload = Any.Pack(new WorkflowHumanInputRequestCustomPayload
+                    {
+                        StepId = evt.StepId,
+                        RunId = evt.RunId,
+                        SuspensionType = evt.SuspensionType,
+                        Prompt = evt.Prompt,
+                        TimeoutSeconds = evt.TimeoutSeconds,
+                        VariableName = variableName,
+                        Content = evt.Content,
+                        DeliveryTargetId = evt.DeliveryTargetId,
+                        Secure = secure,
+                        RedactedOutput = redactedOutput,
+                        Metadata = { metadata },
+                    }),
                 },
             },
         ];

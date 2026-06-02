@@ -8,6 +8,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
@@ -309,8 +310,10 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
+                ["connector.http.authorization"] = "Bearer metadata-secret",
             },
-            ScopeId: "u-1001");
+            ScopeId: "u-1001",
+            ConnectorHttpAuthorization: " Bearer typed-secret ");
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
@@ -323,9 +326,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
         request.ScopeId.Should().Be("u-1001");
+        request.ConnectorHttpAuthorization.Should().Be("Bearer typed-secret");
         request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Metadata.Should().NotContainKey("connector.http.authorization");
         request.Headers.Should().NotContainKey("workflow.command_id");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");

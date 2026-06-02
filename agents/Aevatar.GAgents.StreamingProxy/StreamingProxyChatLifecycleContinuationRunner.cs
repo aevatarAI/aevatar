@@ -6,9 +6,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
-// Refactor (iter104/cluster-1 r2):
-//   Old pattern: StreamingProxyGAgent continuation handler awaited Nyx participant join/reply streaming inside the actor turn.
-//   New principle: this host-side runner consumes typed continuation requests outside actor turns and returns observed outcomes through typed room commands.
 internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedService, IAsyncDisposable
 {
     private readonly IStreamProvider _streamProvider;
@@ -17,6 +14,7 @@ internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedSer
     private readonly IStreamingProxyRoomCommandService _roomCommandService;
     private readonly ILogger<StreamingProxyChatLifecycleContinuationRunner> _logger;
     private IAsyncDisposable? _subscription;
+    private IAsyncDisposable? _replySubscription;
 
     public StreamingProxyChatLifecycleContinuationRunner(
         IStreamProvider streamProvider,
@@ -39,29 +37,48 @@ internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedSer
             StreamingProxyGAgent.ChatLifecycleContinuationRunnerStreamId,
             HandleAsync,
             cancellationToken);
+        _replySubscription = await _subscriptionProvider.SubscribeAsync<StreamingProxyChatParticipantReplyRequested>(
+            StreamingProxyGAgent.ChatLifecycleContinuationRunnerStreamId,
+            HandleReplyRequestAsync,
+            cancellationToken);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _ = cancellationToken;
-        if (_subscription is null)
-            return;
+        if (_subscription is not null)
+        {
+            await _subscription.DisposeAsync();
+            _subscription = null;
+        }
 
-        await _subscription.DisposeAsync();
-        _subscription = null;
+        if (_replySubscription is not null)
+        {
+            await _replySubscription.DisposeAsync();
+            _replySubscription = null;
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_subscription is null)
-            return;
+        if (_subscription is not null)
+        {
+            await _subscription.DisposeAsync();
+            _subscription = null;
+        }
 
-        await _subscription.DisposeAsync();
-        _subscription = null;
+        if (_replySubscription is not null)
+        {
+            await _replySubscription.DisposeAsync();
+            _replySubscription = null;
+        }
     }
 
     private Task HandleAsync(StreamingProxyChatLifecycleContinuationRequested request) =>
         RunAsync(request, CancellationToken.None);
+
+    private Task HandleReplyRequestAsync(StreamingProxyChatParticipantReplyRequested request) =>
+        RunParticipantReplyAsync(request, CancellationToken.None);
 
     internal async Task RunAsync(
         StreamingProxyChatLifecycleContinuationRequested request,
@@ -79,7 +96,7 @@ internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedSer
             return;
         }
 
-        var participants = await _coordinator.EnsureParticipantsJoinedAsync(
+        var participants = await _coordinator.ResolveParticipantsAsync(
             request.ScopeId,
             roomId,
             request.AccessToken,
@@ -87,23 +104,69 @@ internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedSer
             request.PreferredRoute,
             request.DefaultModel);
 
-        var successfulReplies = participants.Count == 0
-            ? 0
-            : await _coordinator.GenerateRepliesAsync(
-                participants,
-                roomId,
-                request.Prompt,
-                request.SessionId,
-                request.AccessToken,
+        foreach (var participant in participants)
+        {
+            await _roomCommandService.JoinAsync(
+                new StreamingProxyRoomJoinCommand(
+                    roomId,
+                    participant.ParticipantId,
+                    participant.DisplayName),
                 ct);
+        }
 
-        var terminalState = StreamingProxyGAgent.DetermineParticipantTerminalState(successfulReplies);
-        await _roomCommandService.PublishTerminalStateAsync(
-            new StreamingProxyRoomTerminalStateCommand(
+        await _roomCommandService.SubmitParticipantsResolvedAsync(
+            new StreamingProxyRoomParticipantsResolvedCommand(
                 roomId,
                 request.SessionId,
-                terminalState.Status,
-                terminalState.ErrorMessage),
+                participants
+                    .Select(participant => new StreamingProxyChatLifecycleParticipant
+                    {
+                        ParticipantId = participant.ParticipantId,
+                        DisplayName = participant.DisplayName,
+                        RoutePreference = participant.RoutePreference,
+                        Model = participant.Model ?? string.Empty,
+                        Status = StreamingProxyChatLifecycleParticipantStatus.Active,
+                    })
+                    .ToList()),
+            ct);
+    }
+
+    internal async Task RunParticipantReplyAsync(
+        StreamingProxyChatParticipantReplyRequested request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.RoomId) ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            string.IsNullOrWhiteSpace(request.ParticipantId))
+        {
+            return;
+        }
+
+        var outcome = await _coordinator.GenerateReplyAsync(request, ct);
+        if (outcome.IsSuccess)
+        {
+            await _roomCommandService.SubmitParticipantReplyObservedAsync(
+                new StreamingProxyRoomParticipantReplyObservedCommand(
+                    request.RoomId,
+                    request.SessionId,
+                    request.ParticipantId,
+                    request.Round,
+                    request.ParticipantIndex,
+                    outcome.Content ?? string.Empty),
+                ct);
+            return;
+        }
+
+        await _roomCommandService.SubmitParticipantReplyFailedAsync(
+            new StreamingProxyRoomParticipantReplyFailedCommand(
+                request.RoomId,
+                request.SessionId,
+                request.ParticipantId,
+                request.Round,
+                request.ParticipantIndex,
+                outcome.FailureKind,
+                outcome.ErrorMessage),
             ct);
     }
 }

@@ -1431,6 +1431,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             EditUnsupported = result.EditUnsupported,
             RawErrorCode = result.ErrorCode ?? string.Empty,
             RawErrorSummary = result.ErrorSummary ?? string.Empty,
+            FailureKind = result.FailureKind,
+            RetryAfterMs = result.RetryAfter.HasValue ? (long)result.RetryAfter.Value.TotalMilliseconds : 0,
+            HttpStatus = result.HttpStatus,
+            RawErrorKey = result.RawErrorKey ?? string.Empty,
+            RawErrorCodeValue = result.RawErrorCode,
         };
 
     private static NyxRelayTextOperationRawResult ToNyxRelayTextRawFault(Exception ex) =>
@@ -1453,7 +1458,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             evt.State == NyxRelayTextOperationResultState.Faulted
                 ? raw.ExceptionMessage
                 : raw.RawErrorSummary,
-            raw.EditUnsupported);
+            raw.EditUnsupported,
+            raw.FailureKind,
+            raw.RetryAfterMs > 0 ? TimeSpan.FromMilliseconds(raw.RetryAfterMs) : null,
+            raw.HttpStatus,
+            raw.RawErrorKey,
+            raw.RawErrorCodeValue);
     }
 
     private static string BuildNyxRelayTextFaultErrorCode(NyxRelayTextOperationRawResult raw)

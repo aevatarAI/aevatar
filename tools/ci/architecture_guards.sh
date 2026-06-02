@@ -85,6 +85,7 @@ check_directory_build_version_guard
 check_channel_inbound_no_runtime_credential() {
   local proto_file="agents/Aevatar.GAgents.Channel.Runtime/protos/channel_bot_registration.proto"
   local runner_file="agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs"
+  local canon_dir="docs/canon"
 
   if ! awk '
     /message ChannelInboundEvent[[:space:]]*\{/ { in_msg = 1 }
@@ -112,6 +113,10 @@ check_channel_inbound_no_runtime_credential() {
     exit 1
   fi
 
+  if rg -n "registration_token" "${canon_dir}"; then
+    echo "Canonical channel inbound durable facts docs must not list registration_token."
+    exit 1
+  fi
 }
 
 check_channel_inbound_no_runtime_credential
@@ -1234,15 +1239,13 @@ if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevata
 fi
 
 tool_context_metadata_hits="$(
-  rg -n "AgentToolRequestContext\\.(LegacyMetadata|CurrentMetadata|TryGet\\()|ToLegacyMetadata\\(" src agents \
-    -g '*.cs' \
-    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolRequestContext.cs' \
-    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolExecutionContext.cs' || true
+  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()|\\.ToLegacyMetadata\\(|HttpAuthorizationMetadataKey" src agents \
+    -g '*.cs' || true
 )"
 
 if [ -n "${tool_context_metadata_hits}" ]; then
   echo "${tool_context_metadata_hits}"
-  echo "Agent tool control facts must use typed AgentToolExecutionContext accessors. LegacyMetadata/CurrentMetadata/TryGet/ToLegacyMetadata are legacy adapter shims only."
+  echo "Public legacy metadata control shims are forbidden. Use typed context fields and local scrub-only blocked keys."
   exit 1
 fi
 

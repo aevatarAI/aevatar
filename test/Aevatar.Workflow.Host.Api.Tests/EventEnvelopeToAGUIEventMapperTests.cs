@@ -314,7 +314,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         {
             RunId = "run-1",
             StepId = "get_context",
-            SuspensionType = WorkflowSuspensionType.HumanInput,
+            SuspensionType = "human_input",
             Prompt = "请提供补充信息",
             Content = "已有上下文",
             TimeoutSeconds = 1800,
@@ -366,7 +366,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         {
             RunId = "run-legacy",
             StepId = "secure-legacy",
-            SuspensionType = WorkflowSuspensionType.SecureInput,
+            SuspensionType = "secure_input",
             Prompt = "provide secret",
             Metadata =
             {
@@ -388,6 +388,41 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         request.Metadata.Should().NotContainKey("secure");
         request.Metadata.Should().NotContainKey("input_mode");
         request.Metadata.Should().NotContainKey("redacted_output");
+    }
+
+    [Fact]
+    public void WorkflowSuspendedToolApproval_ShouldMapTypedPayloadWithoutMetadataRecoveryKeys()
+    {
+        var suspended = CreateMapper().Map(WrapCommitted(new WorkflowSuspendedEvent
+        {
+            RunId = "run-tool",
+            StepId = "step-tool",
+            SuspensionType = "tool_approval",
+            Metadata =
+            {
+                ["approval_request_id"] = "legacy-approval",
+                ["tool_call_id"] = "legacy-call",
+            },
+            ToolApproval = new WorkflowToolApprovalSuspension
+            {
+                ExecutionId = "exec-tool",
+                ToolName = "dangerous_tool",
+                ToolCallId = "call-tool",
+                ApprovalRequestId = "approval-tool",
+                ArgumentsJson = """{"danger":true}""",
+            },
+        }));
+
+        suspended.Should().ContainSingle();
+        suspended[0].Custom.Name.Should().Be("aevatar.tool_approval.pending");
+        var payload = suspended[0].Custom.Payload.Unpack<WorkflowToolApprovalSuspensionCustomPayload>();
+        payload.RunId.Should().Be("run-tool");
+        payload.StepId.Should().Be("step-tool");
+        payload.ExecutionId.Should().Be("exec-tool");
+        payload.ToolName.Should().Be("dangerous_tool");
+        payload.ToolCallId.Should().Be("call-tool");
+        payload.ApprovalRequestId.Should().Be("approval-tool");
+        payload.ArgumentsJson.Should().Be("""{"danger":true}""");
     }
 
     [Fact]

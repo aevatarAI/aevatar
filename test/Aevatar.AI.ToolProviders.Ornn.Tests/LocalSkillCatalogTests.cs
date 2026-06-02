@@ -338,8 +338,8 @@ public sealed class LocalSkillCatalogTests
 
     private static IDisposable BeginMetadataScope(IReadOnlyDictionary<string, string> metadata)
     {
-        var previous = AgentToolRequestContext.CurrentMetadata;
-        AgentToolRequestContext.CurrentMetadata = metadata;
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
         return new RestoreContextScope(previous);
     }
 
@@ -373,9 +373,9 @@ public sealed class LocalSkillCatalogTests
     }
 
     // refactor helper, no behavior change
-    private sealed class RestoreContextScope(IReadOnlyDictionary<string, string>? previous) : IDisposable
+    private sealed class RestoreContextScope(AgentToolExecutionContext? previous) : IDisposable
     {
-        public void Dispose() => AgentToolRequestContext.CurrentMetadata = previous;
+        public void Dispose() => AgentToolRequestContext.Current = previous;
     }
 
     private static string ExtractText(string json)

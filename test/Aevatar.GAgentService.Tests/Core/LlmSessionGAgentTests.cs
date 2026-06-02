@@ -1196,6 +1196,123 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldPreferCommandToolContextOverLegacyScalars()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var request = BuildRunRequest("resp_1");
+        request.ScopeId = "legacy-scope";
+        request.OwnerSubject = "legacy-owner";
+        request.BearerToken = "legacy-token";
+        request.RoutePreference = "legacy-route";
+        request.ToolContext = NewCommandToolContext(
+            requestId: "typed-request",
+            scopeId: "typed-scope",
+            ownerSubject: "typed-owner",
+            responseId: "typed-response",
+            token: "typed-token",
+            routePreference: "typed-route").ToPayload();
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var llmRequest = provider.Requests.Should().ContainSingle().Subject;
+        llmRequest.ToolContext.Should().NotBeNull();
+        llmRequest.ToolContext!.Request.RequestId.Should().Be("typed-request");
+        llmRequest.CallerContext.Should().NotBeNull();
+        llmRequest.CallerContext!.ScopeId.Should().Be("typed-scope");
+        llmRequest.CallerContext.OwnerSubject.Should().Be("typed-owner");
+        llmRequest.CallerContext.ResponseId.Should().Be("typed-response");
+        llmRequest.CallerContext.Credentials.NyxIdBearer.Should().Be("typed-token");
+        llmRequest.LlmControl.Should().NotBeNull();
+        llmRequest.LlmControl!.NyxIdAccessToken.Should().Be("typed-token");
+        llmRequest.LlmControl.NyxIdRoutePreference.Should().Be("typed-route");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseLegacyScalars_WhenCommandToolContextIsAbsent()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var request = BuildRunRequest("resp_1");
+        request.RoutePreference = "legacy-route";
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var llmRequest = provider.Requests.Should().ContainSingle().Subject;
+        llmRequest.ToolContext.Should().NotBeNull();
+        llmRequest.ToolContext!.Request.RequestId.Should().Be("resp_1");
+        llmRequest.ToolContext.Caller.ScopeId.Should().Be("user-1");
+        llmRequest.ToolContext.Caller.OwnerSubject.Should().Be("user-1");
+        llmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token-1");
+        llmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("legacy-route");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldNotWriteOwnedControlKeysToProviderMetadata_WhenToolContextIsTyped()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var request = BuildRunRequest("resp_1");
+        request.ToolContext = NewCommandToolContext(
+            requestId: "typed-request",
+            scopeId: "typed-scope",
+            ownerSubject: "typed-owner",
+            responseId: "typed-response",
+            token: "typed-token",
+            routePreference: "typed-route").ToPayload();
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var llmRequest = provider.Requests.Should().ContainSingle().Subject;
+        llmRequest.Metadata.Should().NotBeNull();
+        llmRequest.Metadata!.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        llmRequest.Metadata.Should().NotContainKey("scope_id");
+        llmRequest.RequestId.Should().Be("resp_1");
+        llmRequest.CallerContext!.ScopeId.Should().Be("typed-scope");
+        llmRequest.ToolContext!.Caller.ScopeId.Should().Be("typed-scope");
+        llmRequest.LlmControl!.NyxIdRoutePreference.Should().Be("typed-route");
+    }
+
+    [Fact]
     public async Task HandleLlmRunRequestedAsync_WhenProviderThrows_ShouldRecordFailedCompletion()
     {
         var provider = new ThrowingLlmProviderFactory(
@@ -1322,6 +1439,21 @@ public sealed class LlmSessionGAgentTests
                     Content = "What is the weather?",
                 },
             },
+        };
+
+    private static AgentToolExecutionContext NewCommandToolContext(
+        string requestId,
+        string scopeId,
+        string ownerSubject,
+        string responseId,
+        string token,
+        string routePreference) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Credentials = new AgentToolCredentials(token, null, null),
+            Caller = new AgentToolCallerContext(scopeId, ownerSubject, responseId),
+            Routing = new LLMRequestRoutingContext(null, routePreference, null, null),
         };
 
     private static LlmSessionRuntimeToolSelection BuildForwardedSelection() =>

@@ -30,47 +30,6 @@ public sealed record AgentToolExecutionContext(
     public AgentToolExecutionContext WithCallId(string? callId) =>
         this with { Request = Request with { CallId = Normalize(callId) } };
 
-    /// <summary>
-    /// Builds the legacy string metadata bag required by old or third-party tool adapters.
-    /// Application, Domain, and Core production code must consume the typed fields on
-    /// <see cref="AgentToolExecutionContext"/> instead of reading these control semantics back from metadata.
-    /// </summary>
-    public IReadOnlyDictionary<string, string> ToLegacyMetadata()
-    {
-        var metadata = new Dictionary<string, string>(ExternalMetadata, StringComparer.Ordinal);
-        Set(metadata, LLMRequestMetadataKeys.RequestId, Request.RequestId);
-        Set(metadata, LLMRequestMetadataKeys.CallId, Request.CallId);
-        Set(metadata, LLMRequestMetadataKeys.ScopeId, Caller.ScopeId);
-        Set(metadata, "scope_id", Caller.ScopeId);
-        Set(metadata, LLMRequestMetadataKeys.OwnerSubject, Caller.OwnerSubject);
-        Set(metadata, LLMRequestMetadataKeys.ResponseId, Caller.ResponseId);
-        Set(metadata, LLMRequestMetadataKeys.NyxIdAccessToken, Credentials.NyxIdAccessToken);
-        Set(metadata, LLMRequestMetadataKeys.NyxIdOrgToken, Credentials.NyxIdOrgToken);
-        Set(metadata, LLMRequestMetadataKeys.SenderNyxIdAccessToken, Credentials.SenderNyxIdAccessToken);
-        Set(metadata, LLMRequestMetadataKeys.SenderBindingId, SenderBinding.BindingId);
-        Set(metadata, LLMRequestMetadataKeys.ModelOverride, Routing.ModelOverride);
-        Set(metadata, LLMRequestMetadataKeys.NyxIdRoutePreference, Routing.NyxIdRoutePreference);
-        Set(metadata, LLMRequestMetadataKeys.MaxToolRoundsOverride, Routing.MaxToolRoundsOverride?.ToString());
-        Set(metadata, LLMRequestMetadataKeys.UserMemoryPrompt, Routing.UserMemoryPrompt);
-        Set(metadata, LLMRequestMetadataKeys.ConnectedServicesContext, ConnectedServices.ContextJson);
-        Set(metadata, "platform", Channel.Platform);
-        Set(metadata, "channel.platform", Channel.Platform);
-        Set(metadata, "sender_id", Channel.SenderId);
-        Set(metadata, "channel.sender_id", Channel.SenderId);
-        Set(metadata, "registration_scope_id", Channel.RegistrationScopeId);
-        Set(metadata, "message_id", Channel.MessageId);
-        Set(metadata, "channel.message_id", Channel.MessageId);
-        Set(metadata, "platform_message_id", Channel.PlatformMessageId);
-        Set(metadata, "channel.platform_message_id", Channel.PlatformMessageId);
-        return metadata;
-    }
-
-    private static void Set(IDictionary<string, string> metadata, string key, string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-            metadata[key] = value.Trim();
-    }
-
     internal static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

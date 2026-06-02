@@ -32,6 +32,9 @@ public sealed class WorkflowHumanInteractionProjector
             return;
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
+        if (evt.SuspensionType == "tool_approval")
+            return;
+
         if (string.IsNullOrWhiteSpace(evt.DeliveryTargetId))
             return;
 
@@ -40,19 +43,15 @@ public sealed class WorkflowHumanInteractionProjector
         //   New principle: typed suspension fields are the single source; Metadata is open extension data only.
         var annotations = BuildAnnotations(evt);
 
-        var options = evt.ExpectedOptions.Count > 0
-            ? (IReadOnlyList<string>)evt.ExpectedOptions.ToArray()
-            : evt.SuspensionType.DefaultExpectedOptions();
-
         var request = new HumanInteractionRequest
         {
             ActorId = context.RootActorId,
             RunId = evt.RunId,
             StepId = evt.StepId,
-            SuspensionType = evt.SuspensionType.ToWireName(),
+            SuspensionType = evt.SuspensionType,
             Prompt = evt.Prompt,
             Content = string.IsNullOrWhiteSpace(evt.Content) ? null : evt.Content,
-            Options = options,
+            Options = ResolveOptions(evt.SuspensionType),
             TimeoutSeconds = evt.TimeoutSeconds,
             Annotations = annotations,
         };
@@ -62,6 +61,15 @@ public sealed class WorkflowHumanInteractionProjector
             evt.DeliveryTargetId,
             ct);
     }
+
+    private static IReadOnlyList<string> ResolveOptions(string suspensionType) =>
+        suspensionType switch
+        {
+            "human_approval" => ["approve", "reject"],
+            "human_input" => ["submit"],
+            "secure_input" => ["submit"],
+            _ => Array.Empty<string>(),
+        };
 
     private static Dictionary<string, string> BuildAnnotations(WorkflowSuspendedEvent evt)
     {

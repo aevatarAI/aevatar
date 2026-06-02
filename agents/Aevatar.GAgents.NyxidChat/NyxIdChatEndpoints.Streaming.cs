@@ -95,7 +95,7 @@ public static partial class NyxIdChatEndpoints
                     llmControl),
                 async (evt, _) =>
                 {
-                    await NyxIdChatStreamingRunner.WriteAguiEventAsync(evt, messageId, writer);
+                    await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer);
                 },
                 null,
                 ct);
@@ -188,7 +188,7 @@ public static partial class NyxIdChatEndpoints
                     messageId),
                 async (evt, _) =>
                 {
-                    await NyxIdChatStreamingRunner.WriteAguiEventAsync(evt, messageId, writer);
+                    await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer);
                 },
                 null,
                 ct);

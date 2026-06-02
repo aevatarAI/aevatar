@@ -92,20 +92,16 @@ public sealed class SkillWorkflowMountAdapterTests
         {
             Requests.Add(request);
             return Task.FromResult(new ScopeWorkflowUpsertResult(
-                new ScopeWorkflowSummary(
-                    request.ScopeId,
-                    request.WorkflowId,
-                    request.DisplayName ?? request.WorkflowId,
-                    $"service:{request.WorkflowId}",
-                    request.WorkflowName ?? string.Empty,
-                    $"actor:{request.WorkflowId}",
-                    "rev-1",
-                    "dep-1",
-                    "active",
-                    DateTimeOffset.UtcNow),
-                "rev-1",
-                $"prefix:{request.WorkflowId}",
-                $"actor:{request.WorkflowId}"));
+                ScopeId: request.ScopeId,
+                WorkflowId: request.WorkflowId,
+                ServiceKey: $"service:{request.WorkflowId}",
+                RevisionId: "rev-1",
+                DefinitionActorIdPrefix: $"prefix:{request.WorkflowId}",
+                ExpectedActorId: $"actor:{request.WorkflowId}",
+                ExpectedDeploymentId: "dep-1",
+                AcceptedAtUtc: DateTimeOffset.UtcNow,
+                CommandHandles: [],
+                ReadModelUrl: $"/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
         }
     }
 

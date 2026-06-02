@@ -666,7 +666,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.StepId.Should().Be("approval-1");
-        suspended.SuspensionType.Should().Be(WorkflowSuspensionType.HumanApproval);
+        suspended.SuspensionType.Should().Be("human_approval");
         suspended.Content.Should().Be("original");
         suspended.DeliveryTargetId.Should().Be("agent-approval-1");
         ctx.Published.Clear();
@@ -1318,7 +1318,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
-        suspended.SuspensionType.Should().Be(WorkflowSuspensionType.SecureInput);
+        suspended.SuspensionType.Should().Be("secure_input");
         suspended.VariableName.Should().Be("api_key");
         suspended.Secure.Should().BeTrue();
         suspended.RedactedOutput.Should().Be("[api key captured]");
@@ -2197,12 +2197,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var connector = new RecordingConnector("runtime-auth");
         var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
         var ctx = CreateContext();
-        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
-            new Dictionary<string, string>
-            {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer token-123 ",
-            });
+            " Bearer token-123 ");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -2222,7 +2219,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.HttpAuthorization.Should().Be("Bearer token-123");
-        connector.LastRequest.Metadata.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
+        connector.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]

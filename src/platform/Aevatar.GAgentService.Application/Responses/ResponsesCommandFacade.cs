@@ -835,6 +835,7 @@ public sealed class ResponsesCommandFacade(
             ScopeId = request.CallerContext?.ScopeId ?? string.Empty,
             OwnerSubject = request.CallerContext?.OwnerSubject ?? string.Empty,
             BearerToken = request.CallerContext?.Credentials?.NyxIdBearer ?? string.Empty,
+            ToolContext = (request.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload(),
             RequestedAt = Timestamp.FromDateTimeOffset(requestedAt),
         };
         if (request.Temperature is not null)

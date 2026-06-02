@@ -10,10 +10,10 @@ public sealed class OrnnSearchSkillsToolTests
     [Fact]
     public async Task ExecuteAsync_ReturnsAuthenticationErrorWhenTokenMissing()
     {
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
             var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
 
             var result = await tool.ExecuteAsync("""{ "query": "translate" }""");
@@ -23,7 +23,7 @@ public sealed class OrnnSearchSkillsToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
     }
 
@@ -45,13 +45,13 @@ public sealed class OrnnSearchSkillsToolTests
               }
             }
             """);
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            };
+            });
             var tool = CreateTool(handler);
 
             var result = await tool.ExecuteAsync("""{ "query": "translate", "scope": "private" }""");
@@ -70,20 +70,20 @@ public sealed class OrnnSearchSkillsToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
     }
 
     [Fact]
     public async Task ExecuteAsync_ReturnsSearchFailureWhenClientFails()
     {
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            };
+            });
             var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson(
                 """{ "error": "bad" }""",
                 System.Net.HttpStatusCode.BadGateway));
@@ -95,7 +95,7 @@ public sealed class OrnnSearchSkillsToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
     }
 
@@ -103,13 +103,13 @@ public sealed class OrnnSearchSkillsToolTests
     public async Task ExecuteAsync_UsesDefaultsForMalformedArguments()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }""");
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
-            };
+            });
             var tool = CreateTool(handler);
 
             var result = await tool.ExecuteAsync("not-json");
@@ -119,7 +119,7 @@ public sealed class OrnnSearchSkillsToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
     }
 

@@ -330,7 +330,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 new WorkflowSuspendedEvent
                 {
                     StepId = "step-1",
-                    SuspensionType = WorkflowSuspensionType.HumanInput,
+                    SuspensionType = "human_input",
                     Prompt = "Need approval",
                     VariableName = "approval",
                     Secure = true,
@@ -578,7 +578,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 new WorkflowSuspendedEvent
                 {
                     StepId = "secure-input",
-                    SuspensionType = WorkflowSuspensionType.SecureInput,
+                    SuspensionType = "secure_input",
                     Prompt = "enter secret",
                     Metadata =
                     {
@@ -726,7 +726,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 new WorkflowSuspendedEvent
                 {
                     StepId = "step-2",
-                    SuspensionType = WorkflowSuspensionType.HumanApproval,
+                    SuspensionType = "approval",
                     Prompt = "approve",
                     TimeoutSeconds = 60,
                     VariableName = "approved",

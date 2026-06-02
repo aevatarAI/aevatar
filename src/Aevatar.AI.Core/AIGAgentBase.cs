@@ -214,7 +214,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync([ContentPart.TextPart(userMessage)], EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
+        var maxRounds = ResolveMaxToolRounds(metadata);
+        return _chat!.ChatStreamAsync([ContentPart.TextPart(userMessage)], maxRounds, requestId, metadata, ct);
     }
 
     /// <summary>流式 Chat（多模态内容），显式传入稳定 request id 和 metadata。</summary>
@@ -225,7 +226,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userContent, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
+        var maxRounds = ResolveMaxToolRounds(metadata);
+        return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, metadata, ct);
     }
 
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
@@ -251,8 +253,24 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        var maxRounds = toolContext?.Routing.MaxToolRoundsOverride ?? EffectiveConfig.MaxToolRounds;
+        var maxRounds = toolContext?.Routing.MaxToolRoundsOverride ?? ResolveMaxToolRounds(metadata);
         return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, toolContext, metadata, ct);
+    }
+
+    /// <summary>
+    /// Resolve maxToolRounds: metadata override > EffectiveConfig > int.MaxValue (no limit).
+    /// </summary>
+    private int ResolveMaxToolRounds(IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (metadata != null
+            && metadata.TryGetValue(LLMRequestMetadataKeys.MaxToolRoundsOverride, out var overrideValue)
+            && int.TryParse(overrideValue, out var overrideRounds)
+            && overrideRounds > 0)
+        {
+            return overrideRounds;
+        }
+
+        return EffectiveConfig.MaxToolRounds;
     }
 
     /// <summary>注册单个工具。</summary>
@@ -284,9 +302,10 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         }
 
         // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
-        var effectiveToolMiddlewares = new List<IToolCallMiddleware>();
-        if (_approvalHandler != null)
-            effectiveToolMiddlewares.Add(new Middleware.ToolApprovalMiddleware(_approvalHandler, _hooks));
+        var effectiveToolMiddlewares = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 1)
+        {
+            new Middleware.ToolApprovalMiddleware(_approvalHandler ?? Middleware.MissingApprovalHandler.Instance, _hooks),
+        };
         effectiveToolMiddlewares.AddRange(_toolMiddlewares);
 
         // 构建 Chat Runtime

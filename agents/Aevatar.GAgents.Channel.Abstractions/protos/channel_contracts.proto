@@ -41,6 +41,21 @@ enum PrincipalKind {
   PRINCIPAL_KIND_ON_BEHALF_OF_USER = 2;
 }
 
+// Refactor (iter1535/cluster-issue-1535): Old pattern: relay update failures were string
+// summaries plus edit_unsupported booleans. New principle: retry and terminal control flow
+// use a shared typed channel contract.
+// Classifies adapter failures that affect retry and terminal control flow.
+enum FailureKind {
+  FAILURE_KIND_UNSPECIFIED = 0;
+  FAILURE_KIND_TRANSIENT_ADAPTER_ERROR = 1;
+  FAILURE_KIND_PERMANENT_ADAPTER_ERROR = 2;
+  FAILURE_KIND_CREDENTIAL_RESOLUTION_FAILED = 3;
+  FAILURE_KIND_PLATFORM_UNAVAILABLE = 4;
+}
+
+// Refactor (iter1535/cluster-issue-1535): Old pattern: outbound results dropped upstream
+// diagnostics after formatting an error summary. New principle: adapter boundaries preserve
+// sanitized typed diagnostics for actor continuation and projection consumers.
 // Records the outcome of one outbound send or update operation.
 message EmitResult {
   // Whether the adapter operation succeeded.
@@ -58,6 +73,14 @@ message EmitResult {
   // The upstream platform-owned message identifier (for example, Lark `om_xxx`) when the adapter
   // exposes it, required by the streaming reply path so later edits target the same message.
   string platform_message_id = 7;
+  // The typed failure classification for failed operations.
+  FailureKind failure_kind = 8;
+  // The upstream adapter error key parsed at the external boundary.
+  string raw_error_key = 9;
+  // The upstream adapter numeric error code parsed at the external boundary.
+  int32 raw_error_code = 10;
+  // The HTTP status observed at the external boundary.
+  int32 http_status = 11;
 }
 
 // Carries the normalized conversation and capability inputs used during composition.

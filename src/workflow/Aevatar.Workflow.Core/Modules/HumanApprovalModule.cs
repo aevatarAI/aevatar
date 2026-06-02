@@ -75,11 +75,10 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             {
                 RunId = runId,
                 StepId = request.StepId,
-                SuspensionType = WorkflowSuspensionType.HumanApproval,
+                SuspensionType = "human_approval",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
             };
-            suspended.ExpectedOptions.Add(WorkflowSuspensionType.HumanApproval.DefaultExpectedOptions());
             WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
             WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
 

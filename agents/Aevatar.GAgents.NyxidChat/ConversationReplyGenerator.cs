@@ -472,12 +472,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private IReadOnlyList<IToolCallMiddleware> BuildToolMiddlewaresForTurn()
     {
-        if (_approvalHandler is null)
-            return _toolMiddlewares;
-
         var effective = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 1)
         {
-            new ToolApprovalMiddleware(_approvalHandler),
+            new ToolApprovalMiddleware(_approvalHandler ?? MissingApprovalHandler.Instance),
         };
         effective.AddRange(_toolMiddlewares);
         return effective;

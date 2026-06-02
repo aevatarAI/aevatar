@@ -97,14 +97,13 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             {
                 RunId = runId,
                 StepId = request.StepId,
-                SuspensionType = WorkflowSuspensionType.SecureInput,
+                SuspensionType = Name,
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
                 VariableName = requestVariableName,
                 Secure = true,
                 RedactedOutput = requestMaskedOutput,
             };
-            suspended.ExpectedOptions.Add(WorkflowSuspensionType.SecureInput.DefaultExpectedOptions());
             WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
 
             await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);

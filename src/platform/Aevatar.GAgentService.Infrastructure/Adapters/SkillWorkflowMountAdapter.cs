@@ -49,7 +49,7 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
 
             mounted.Add(new MountedSkillWorkflow(
                 WorkflowId: workflow.WorkflowId,
-                ServiceId: upsert.Workflow.WorkflowId,
+                ServiceId: upsert.WorkflowId,
                 EndpointId: "chat",
                 RevisionId: upsert.RevisionId));
         }

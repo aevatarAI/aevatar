@@ -32,42 +32,20 @@ internal static class WorkflowRunExecutionContextStateAccess
         return stateHost.ClearExecutionContextAsync(ct);
     }
 
-    public static Task ApplyRequestMetadataAsync(
-        IWorkflowExecutionStateHost stateHost,
-        IReadOnlyDictionary<string, string>? metadata,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(stateHost);
-        var delta = BuildRequestMetadataDelta(metadata);
-        return stateHost.UpdateExecutionContextAsync(delta, ct);
-    }
-
-    public static WorkflowRunExecutionContextDelta BuildRequestMetadataDelta(
-        IReadOnlyDictionary<string, string>? metadata)
+    public static WorkflowRunExecutionContextDelta BuildConnectorAuthorizationDelta(string? authorization)
     {
         var delta = new WorkflowRunExecutionContextDelta
         {
             ClearConnector = true,
         };
-        if (metadata == null || metadata.Count == 0)
+        var normalized = Normalize(authorization);
+        if (string.IsNullOrWhiteSpace(normalized))
             return delta;
 
-        foreach (var pair in metadata)
+        delta.Connector = new WorkflowRunConnectorExecutionContextDelta
         {
-            var key = Normalize(pair.Key);
-            var value = Normalize(pair.Value);
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
-                continue;
-
-            if (string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal))
-            {
-                delta.Connector = new WorkflowRunConnectorExecutionContextDelta
-                {
-                    HttpAuthorization = value,
-                };
-                continue;
-            }
-        }
+            HttpAuthorization = normalized,
+        };
 
         return delta;
     }

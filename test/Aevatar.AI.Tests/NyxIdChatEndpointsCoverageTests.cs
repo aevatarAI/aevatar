@@ -97,23 +97,27 @@ public class NyxIdChatEndpointsCoverageTests
     public void AgentSseEndpointSources_ShouldNotSubscribeRawEventEnvelope()
     {
         var root = GetRepositoryRoot();
-        var streamingRunner = File.ReadAllText(Path.Combine(
+        var aguiSseWriter = File.ReadAllText(Path.Combine(
             root,
-            "agents/Aevatar.GAgents.NyxidChat/NyxIdChatStreamingRunner.cs"));
+            "agents/Aevatar.GAgents.NyxidChat/NyxIdChatAguiSseEventWriter.cs"));
         var streamingEndpoints = File.ReadAllText(Path.Combine(
             root,
             "agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs"));
 
-        streamingRunner.Should().NotContain("SubscribeAsync<EventEnvelope>");
+        aguiSseWriter.Should().Contain("Refactor (issue1533): Old pattern:");
+        aguiSseWriter.Should().NotContain("StreamingRunner");
+        aguiSseWriter.Should().NotContain("SubscribeAsync<EventEnvelope>");
         streamingEndpoints.Should().NotContain("SubscribeAsync<EventEnvelope>");
-        streamingRunner.Should().NotContain("actor.HandleEventAsync");
-        streamingRunner.Should().NotContain(".HandleEventAsync(");
+        aguiSseWriter.Should().NotContain("actor.HandleEventAsync");
+        aguiSseWriter.Should().NotContain(".HandleEventAsync(");
         streamingEndpoints.Should().NotContain("actor.HandleEventAsync");
         streamingEndpoints.Should().NotContain(".HandleEventAsync(");
         streamingEndpoints.Should().NotContain("INyxIdChatSessionProjectionPort");
         streamingEndpoints.Should().NotContain("[FromServices] IActorRuntime");
-        streamingRunner.Should().NotContain("TaskCompletionSource");
-        streamingRunner.Should().NotContain("WaitAsync(TimeSpan.FromSeconds(120))");
+        aguiSseWriter.Should().NotContain("TaskCompletionSource");
+        aguiSseWriter.Should().NotContain("WaitAsync(TimeSpan.FromSeconds(120))");
+        streamingEndpoints.Should().NotContain("TaskCompletionSource");
+        streamingEndpoints.Should().NotContain("WaitAsync(TimeSpan.FromSeconds(120))");
     }
 
     [Fact]
@@ -1968,7 +1972,7 @@ public class NyxIdChatEndpointsCoverageTests
               "raw_platform_data":{
                 "event":{
                   "sender":{"sender_id":{"union_id":"on_union_1"}},
-                  "message":{"chat_id":"oc_lark_chat_1","message_id":"om_daily_1"}
+                  "message":{"chat_id":"oc_lark_chat_1","message_id":"om_invoice_1"}
                 }
               }
             }
@@ -2024,7 +2028,7 @@ public class NyxIdChatEndpointsCoverageTests
         activity.OutboundDelivery.CorrelationId.Should().Be("corr-summary-1");
         activity.TransportExtras.NyxPlatform.Should().Be("lark");
         activity.TransportExtras.NyxConversationId.Should().Be("oc_private_1");
-        activity.TransportExtras.NyxPlatformMessageId.Should().Be("om_daily_1");
+        activity.TransportExtras.NyxPlatformMessageId.Should().Be("om_invoice_1");
         activity.TransportExtras.NyxLarkUnionId.Should().Be("on_union_1");
         activity.TransportExtras.NyxLarkChatId.Should().Be("oc_lark_chat_1");
         activity.TransportExtras.NyxUserAccessToken.Should().Be(relay.UserToken);

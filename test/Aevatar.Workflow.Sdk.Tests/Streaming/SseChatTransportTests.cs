@@ -84,6 +84,38 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
     }
 
     [Fact]
+    public async Task StreamAsync_ShouldNotSerializeAgentId()
+    {
+        string? capturedBody = null;
+        var handler = new TestHttpMessageHandler(async (request, ct) =>
+        {
+            capturedBody = await request.Content!.ReadAsStringAsync(ct);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(string.Empty, Encoding.UTF8, "text/event-stream"),
+            };
+        });
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5100") };
+        var transport = new SseChatTransport();
+
+        await foreach (var _ in transport.StreamAsync(
+                           client,
+                           new ChatRunRequest
+                           {
+                               Prompt = "hello",
+                               ScopeId = "scope-a",
+                               Workflow = "approval",
+                           },
+                           CreateJsonOptions(),
+                           CancellationToken.None))
+        {
+        }
+
+        using var document = JsonDocument.Parse(capturedBody!);
+        document.RootElement.TryGetProperty("agentId", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task StreamAsync_WhenResponseStreamAcquisitionCanceled_ShouldPropagateCancellation()
     {
         using var cts = new CancellationTokenSource();
