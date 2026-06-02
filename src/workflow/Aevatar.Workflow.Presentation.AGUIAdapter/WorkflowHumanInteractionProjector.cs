@@ -32,6 +32,9 @@ public sealed class WorkflowHumanInteractionProjector
             return;
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
+        if (evt.SuspensionType == "tool_approval")
+            return;
+
         if (string.IsNullOrWhiteSpace(evt.DeliveryTargetId))
             return;
 

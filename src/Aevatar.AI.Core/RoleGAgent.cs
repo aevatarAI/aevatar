@@ -129,11 +129,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             // Refactor (issue1414/cluster-004):
             //   Old pattern: pending approval state could rehydrate stable tool/caller context from metadata.
-            //   New principle: typed ToolContext/LlmControl are the only tool control authority; metadata carries annotations only.
+            //   New principle: typed ToolContext/LlmControl are the only tool control authority.
             try
             {
                 // Refactor (issue1253-first):
-                //   Old pattern: Approval resume rebuilt control context from pending.Metadata.
+                //   Old pattern: Approval resume rebuilt control context from a durable annotation bag.
                 //   New principle: Use typed pending.ToolContext only; metadata is never a control source.
                 var pendingToolContext = ResolvePendingToolContext(pending);
                 using (AgentToolContextScope.Push(pendingToolContext))
@@ -170,9 +170,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                         ScopeId = pending.SessionId,
                         ToolContext = pendingToolContext.ToPayload(),
                     };
-                    foreach (var kv in ScrubPendingApprovalMetadata(pending.Metadata))
-                        continuationRequest.Metadata[kv.Key] = kv.Value;
-
                     await SendToAsync(Id, continuationRequest);
 
                     Logger.LogInformation(
@@ -240,11 +237,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.ToolCallId,
                     pending.ArgumentsJson,
                     ToolApprovalMode.Auto,
-                    pending.IsDestructive,
-                    // Refactor (issue1253-first):
-                    //   Old pattern: Remote approval received scrubbed durable metadata that could include legacy control keys.
-                    //   New principle: Remote approval only receives open annotations.
-                    new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
+                    pending.IsDestructive),
                 CancellationToken.None);
 
             var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, submission.RemoteApprovalId, 1);
@@ -306,11 +299,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             snapshot = await RemoteToolApprovalPort.GetStatusAsync(
                 new RemoteToolApprovalStatusQuery(
                     pending.RequestId,
-                    pending.RemoteApprovalId,
-                    // Refactor (issue1253-first):
-                    //   Old pattern: Status checks forwarded pending.Metadata as a control surface.
-                    //   New principle: Status checks forward annotations only.
-                    new Dictionary<string, string>(ScrubPendingApprovalMetadata(pending.Metadata), StringComparer.Ordinal)),
+                    pending.RemoteApprovalId),
                 CancellationToken.None);
         }
         catch (Exception ex)
@@ -434,9 +423,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     IsDestructive = true,
                     ToolContext = ResolveToolContext(request, requestId, toolCallId).ToPayload(),
                 };
-                foreach (var kv in ScrubPendingApprovalMetadata(request.Metadata))
-                    pending.Metadata[kv.Key] = kv.Value;
-
                 return pending;
             }
             catch (JsonException)
@@ -576,13 +562,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     {
         // Refactor (iter290/cluster-002-invocation-trusted-context-metadata-bag):
         //   Old pattern: pending approval Metadata remained the primary resume context.
-        //   New principle: pending ToolContext is authoritative; metadata is only a scrubbed old-state annotation fallback.
+        //   New principle: pending ToolContext is authoritative; missing legacy context resolves to empty.
         var context = pending.ToolContext != null
             ? AgentToolExecutionContextMapper.FromPayload(pending.ToolContext)
-            : AgentToolExecutionContext.Empty with
-            {
-                ExternalMetadata = ScrubPendingApprovalMetadata(pending.Metadata),
-            };
+            : AgentToolExecutionContext.Empty;
 
         return context with
         {

@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
@@ -22,7 +24,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_MissingToolParameter_ShouldPublishFailedStepCompleted()
     {
-        var module = new ToolCallModule([], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule([], [], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -44,7 +46,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_ToolNotFound_ShouldPublishToolFailureEvents()
     {
-        var module = new ToolCallModule([], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule([], [], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -79,7 +81,7 @@ public sealed class WorkflowCoreModulesCoverageTests
                 new FakeAgentTool("echo", args => args),
             ]);
         IAgentToolSource[] toolSources = [new ThrowingToolSource(), source];
-        var module = new ToolCallModule(toolSources, NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule(toolSources, [], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -104,7 +106,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("cached_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule([source], [], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
 
         await module.HandleAsync(
@@ -140,7 +142,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("parallel_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule([source], [], NullLogger<ToolCallModule>.Instance);
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var readyCount = 0;
@@ -189,7 +191,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("delayed_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule([source], [], NullLogger<ToolCallModule>.Instance);
         var cancelledContext = CreateContext();
         using var cts = new CancellationTokenSource();
 
@@ -234,7 +236,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("explode", _ => throw new InvalidOperationException("boom")),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule([source], [], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
 
         await module.HandleAsync(
@@ -250,6 +252,121 @@ public sealed class WorkflowCoreModulesCoverageTests
         var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Last();
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("execution failed: boom");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenApprovalYields_ShouldPersistPendingStateAndSuspendWithoutExecutingTool()
+    {
+        var executeCalls = 0;
+        var source = new CountingToolSource(
+            [
+                new FakeAgentTool("approval_required", args =>
+                {
+                    executeCalls++;
+                    return args;
+                })
+                {
+                    ApprovalModeOverride = ToolApprovalMode.AlwaysRequire,
+                    IsDestructiveOverride = true,
+                },
+            ]);
+        var middleware = new ToolApprovalMiddleware(new ScriptedApprovalHandler(ToolApprovalResult.Yielded("ignored")));
+        var module = new ToolCallModule([source], [middleware], NullLogger<ToolCallModule>.Instance);
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                RunId = "run-tool-approval",
+                StepId = "step-tool-approval",
+                StepType = "tool_call",
+                Input = """{"danger":true}""",
+                ExecutionId = "exec-tool-approval",
+                Parameters = { ["tool"] = "approval_required" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        executeCalls.Should().Be(0);
+        ctx.Published.Select(x => x.evt).OfType<ToolCallEvent>().Should().ContainSingle();
+        ctx.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Should().ContainSingle().Subject;
+        suspended.RunId.Should().Be("run-tool-approval");
+        suspended.StepId.Should().Be("step-tool-approval");
+        suspended.SuspensionType.Should().Be("tool_approval");
+        suspended.ToolApproval.Should().NotBeNull();
+        suspended.ToolApproval.ExecutionId.Should().Be("exec-tool-approval");
+        suspended.ToolApproval.ToolName.Should().Be("approval_required");
+        suspended.ToolApproval.ToolCallId.Should().Be("step-tool-approval");
+        suspended.ToolApproval.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        suspended.ToolApproval.ArgumentsJson.Should().Be("""{"danger":true}""");
+        suspended.Metadata.Should().BeEmpty();
+
+        var state = ctx.LoadState<ToolCallModuleState>("tool_call");
+        state.PendingApprovals.Should().ContainSingle();
+        var pending = state.PendingApprovals.Values.Single();
+        pending.RunId.Should().Be("run-tool-approval");
+        pending.StepId.Should().Be("step-tool-approval");
+        pending.ExecutionId.Should().Be("exec-tool-approval");
+        pending.ToolName.Should().Be("approval_required");
+        pending.ToolCallId.Should().Be("step-tool-approval");
+        pending.ApprovalRequestId.Should().Be(suspended.ToolApproval.ApprovalRequestId);
+        pending.ArgumentsJson.Should().Be("""{"danger":true}""");
+        pending.Input.Should().Be("""{"danger":true}""");
+    }
+
+    [Theory]
+    [InlineData("denied")]
+    [InlineData("timeout")]
+    [InlineData("exception")]
+    public async Task ToolCallModule_WhenApprovalFailsOrToolThrows_ShouldPublishFailureAndNotPersistPendingApproval(string scenario)
+    {
+        var source = new CountingToolSource(
+            [
+                new FakeAgentTool("guarded_tool", _ =>
+                {
+                    if (scenario == "exception")
+                        throw new InvalidOperationException("boom");
+
+                    return """{"ok":true}""";
+                })
+                {
+                    ApprovalModeOverride = ToolApprovalMode.AlwaysRequire,
+                    IsDestructiveOverride = true,
+                },
+            ]);
+        var approvalResult = scenario switch
+        {
+            "denied" => ToolApprovalResult.Denied("blocked"),
+            "timeout" => ToolApprovalResult.TimedOut(),
+            _ => ToolApprovalResult.Approved(),
+        };
+        var middleware = new ToolApprovalMiddleware(new ScriptedApprovalHandler(approvalResult));
+        var module = new ToolCallModule([source], [middleware], NullLogger<ToolCallModule>.Instance);
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                RunId = $"run-{scenario}",
+                StepId = $"step-{scenario}",
+                StepType = "tool_call",
+                Input = "{}",
+                ExecutionId = $"exec-{scenario}",
+                Parameters = { ["tool"] = "guarded_tool" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Should().BeEmpty();
+        var toolResult = ctx.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().ContainSingle().Subject;
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().ContainSingle().Subject;
+        toolResult.Success.Should().BeFalse();
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("tool 'guarded_tool' execution failed");
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
     }
 
     [Fact]
@@ -1597,10 +1714,28 @@ public sealed class WorkflowCoreModulesCoverageTests
         public string Name { get; } = name;
         public string Description => "fake tool";
         public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ApprovalModeOverride;
+        public bool IsReadOnly => IsReadOnlyOverride;
+        public bool IsDestructive => IsDestructiveOverride;
+        public ToolApprovalMode ApprovalModeOverride { get; init; } = ToolApprovalMode.NeverRequire;
+        public bool IsReadOnlyOverride { get; init; }
+        public bool IsDestructiveOverride { get; init; }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             return Task.FromResult(execute(argumentsJson));
+        }
+    }
+
+    private sealed class ScriptedApprovalHandler(params ToolApprovalResult[] results) : IToolApprovalHandler
+    {
+        private readonly Queue<ToolApprovalResult> _results = new(results);
+
+        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
+        {
+            return Task.FromResult(_results.TryDequeue(out var result)
+                ? result
+                : ToolApprovalResult.Denied("no scripted approval result"));
         }
     }
 

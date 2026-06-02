@@ -43,12 +43,6 @@ internal sealed class ChannelBotRegistrationStartupService : IHostedService
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Channel bot registration projection activation failed; registrations may not be visible until activation is re-triggered");
-        }
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

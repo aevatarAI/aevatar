@@ -2652,7 +2652,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             >
               <EditOutlined />
               {' '}
-              Open Scripts Studio
+              Open Script Build
             </button>
           </div>
 

@@ -214,6 +214,15 @@ message WorkflowSuspendedEvent
   string delivery_target_id = 9;
   bool secure = 10;
   string redacted_output = 11;
+  WorkflowToolApprovalSuspension tool_approval = 12;
+}
+message WorkflowToolApprovalSuspension
+{
+  string execution_id = 1;
+  string tool_name = 2;
+  string tool_call_id = 3;
+  string approval_request_id = 4;
+  string arguments_json = 5;
 }
 message WorkflowResumedEvent
 {

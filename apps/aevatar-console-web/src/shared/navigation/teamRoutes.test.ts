@@ -6,6 +6,10 @@ import {
   readTeamDetailRouteState,
 } from "./teamRoutes";
 
+// Refactor (iter2/cluster-issue1593): Old pattern: route tests named retired
+// connectors/events/topology Team tabs as explicit compatibility cases. New principle:
+// unknown Team tabs are covered by one neutral fallback case so tests do not preserve
+// removed Team topology vocabulary as a product contract.
 describe("teamRoutes", () => {
   it("builds a canonical team detail href and trims empty values", () => {
     expect(
@@ -72,12 +76,9 @@ describe("teamRoutes", () => {
     expect(
       buildTeamCreateHref({
         teamName: "订单助手团队",
-        entryName: "订单入口",
-        teamDraftWorkflowId: "workflow-7",
-        teamDraftWorkflowName: "order-entry-draft",
       }),
     ).toBe(
-      "/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft",
+      "/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F",
     );
   });
 
@@ -125,27 +126,6 @@ describe("teamRoutes", () => {
       teamId: "t-alpha",
     });
   });
-
-  it.each(["connectors", "events", "topology"])(
-    "falls back legacy %s deep links to the overview tab",
-    (tab) => {
-      expect(
-        readTeamDetailRouteState(
-          `?workflowId=wf-1&tab=${tab}`,
-          "/teams/scope-alpha",
-        ),
-      ).toEqual({
-        memberId: "",
-        runId: "",
-        scopeId: "scope-alpha",
-        serviceId: "",
-        tab: "overview",
-        teamId: "",
-        testTeam: false,
-        workflowId: "wf-1",
-      });
-    },
-  );
 
   it("defaults canonical team routes to the overview tab", () => {
     expect(

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -61,15 +62,18 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         var client = app.GetTestClient();
 
         var response = await client.PostAsync("/api/demo/voice/bootstrap", content: null);
-        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+        var responseText = await response.Content.ReadAsStringAsync();
+        var body = JsonSerializer.Deserialize<Dictionary<string, object>>(responseText);
 
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted, responseText);
         body.Should().ContainKey("status").WhoseValue.ToString().Should().Be("accepted");
         body.Should().ContainKey("actor_id");
         body.Should().ContainKey("route_policy_actor_id");
         body.Should().ContainKey("agent_command_id");
         body.Should().ContainKey("route_policy_command_id");
         body.Should().ContainKey("readiness");
+        body.Should().NotContainKey("nyxid_proxy");
+        responseText.Should().NotContain("https://nyx.chrono-ai.fun/api/v1/proxy/s/llm-openai");
         var demoActorId = body!["actor_id"].ToString()!;
         demoActorId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
         body["route_policy_actor_id"].ToString().Should().Be($"chat-route-policy:{Scope}");

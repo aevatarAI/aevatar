@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -387,6 +388,7 @@ public sealed class ScopeWorkflowEndpointsTests
             },
         };
         var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer token-123";
 
         await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
             http,
@@ -409,7 +411,10 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
-        interactionService.LastRequest.Metadata.Should().BeNullOrEmpty();
+        interactionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
+        interactionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         interactionService.LastRequest.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Headers.Should().NotContainKey("scope_id");
     }
@@ -627,7 +632,7 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
-    public async Task HandleUpsertWorkflowAsync_ShouldReturnOk_WhenCommandSucceeds()
+    public async Task HandleUpsertWorkflowAsync_ShouldReturnAccepted_WithLocation_WhenCommandSucceeds()
     {
         var http = CreateHttpContext();
         var snapshot = new ServiceCatalogSnapshot(
@@ -660,8 +665,15 @@ public sealed class ScopeWorkflowEndpointsTests
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/scopes/user-1/workflows/approval");
+        body.Should().Contain("\"acceptanceStage\":\"accepted\"");
+        body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
+        body.Should().Contain("\"readModelUrl\":\"/api/scopes/user-1/workflows/approval\"");
+        body.Should().Contain("\"commandHandles\"");
+        body.Should().NotContain("\"workflow\"");
     }
 
     private static IScopeWorkflowCommandPort BuildCommandPort(
@@ -670,13 +682,11 @@ public sealed class ScopeWorkflowEndpointsTests
         FakeWorkflowActorBindingReader? bindingReader = null)
     {
         var resolvedQueryPort = queryPort ?? new FakeServiceLifecycleQueryPort();
-        var queryService = BuildQueryApplicationService(resolvedQueryPort, bindingReader);
         return new ScopeWorkflowCommandApplicationService(
             commandPort ?? new FakeServiceCommandPort(),
             resolvedQueryPort,
             new NoOpServiceGovernanceCommandPort(),
             new NoOpServiceGovernanceQueryPort(),
-            queryService,
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
                 ServiceAppId = "default",

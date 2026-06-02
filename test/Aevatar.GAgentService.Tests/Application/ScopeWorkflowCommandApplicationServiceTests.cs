@@ -25,8 +25,7 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
         var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
         var governanceQueryPort = new FakeServiceGovernanceQueryPort();
-        var queryPort = new FakeWorkflowQueryPort(getByWorkflowIdResult: null);
-        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, queryPort);
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort);
 
         var result = await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
             ScopeId, WorkflowId, WorkflowYaml));
@@ -38,8 +37,18 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         commandPort.Calls[3].Method.Should().Be("PublishRevisionAsync");
         commandPort.Calls[4].Method.Should().Be("SetDefaultServingRevisionAsync");
         commandPort.Calls[5].Method.Should().Be("ActivateServiceRevisionAsync");
-        result.Workflow.ScopeId.Should().Be(ScopeId);
-        result.Workflow.WorkflowId.Should().Be(WorkflowId);
+        result.ScopeId.Should().Be(ScopeId);
+        result.WorkflowId.Should().Be(WorkflowId);
+        result.AcceptanceStage.Should().Be("accepted");
+        result.PropagationStage.Should().Be("readmodel_propagating");
+        result.ReadModelUrl.Should().Be($"/api/scopes/{ScopeId}/workflows/{WorkflowId}");
+        result.CommandHandles.Select(x => x.Stage).Should().Equal(
+            "create_service",
+            "create_revision",
+            "prepare_revision",
+            "publish_revision",
+            "set_default_serving_revision",
+            "activate_service_revision");
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
         createCommand.Spec.Identity.TenantId.Should().Be(ScopeId);
@@ -77,8 +86,7 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
                 ],
                 DateTimeOffset.UtcNow),
         };
-        var queryPort = new FakeWorkflowQueryPort(getByWorkflowIdResult: null);
-        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, queryPort);
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort);
 
         await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
             ScopeId, WorkflowId, WorkflowYaml, DisplayName: "New Name"));
@@ -96,13 +104,11 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
-        var queryPort = new FakeWorkflowQueryPort(getByWorkflowIdResult: null);
         var service = CreateService(
             commandPort,
             lifecyclePort,
             new RecordingServiceGovernanceCommandPort(),
             new FakeServiceGovernanceQueryPort(),
-            queryPort,
             new ScopeWorkflowCapabilityOptions
             {
                 ServiceAppId = "custom-app",
@@ -118,20 +124,21 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldReturnFallbackSummary_WhenQueryReturnsNull()
+    public async Task UpsertAsync_ShouldReturnAcceptedOnlyHandles_WithoutWorkflowReadModelSummary()
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
-        var queryPort = new FakeWorkflowQueryPort(getByWorkflowIdResult: null);
-        var service = CreateService(commandPort, lifecyclePort, queryPort);
+        var service = CreateService(commandPort, lifecyclePort);
 
         var result = await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
             ScopeId, WorkflowId, WorkflowYaml));
 
-        result.Workflow.ScopeId.Should().Be(ScopeId);
-        result.Workflow.WorkflowId.Should().Be(WorkflowId);
-        result.Workflow.DisplayName.Should().Be(WorkflowId);
-        result.Workflow.DeploymentStatus.Should().Be("active");
+        result.ScopeId.Should().Be(ScopeId);
+        result.WorkflowId.Should().Be(WorkflowId);
+        result.DisplayName.Should().Be(WorkflowId);
+        result.ReadModelUrl.Should().Be($"/api/scopes/{ScopeId}/workflows/{WorkflowId}");
+        result.CommandHandles.Should().HaveCount(6);
+        result.CommandHandles.Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x.CommandId));
     }
 
     [Fact]
@@ -139,8 +146,7 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
-        var queryPort = new FakeWorkflowQueryPort(getByWorkflowIdResult: null);
-        var service = CreateService(commandPort, lifecyclePort, queryPort);
+        var service = CreateService(commandPort, lifecyclePort);
 
         var act = () => service.UpsertAsync(new ScopeWorkflowUpsertRequest(
             ScopeId, WorkflowId, ""));
@@ -150,27 +156,23 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
 
     private static ScopeWorkflowCommandApplicationService CreateService(
         RecordingServiceCommandPort commandPort,
-        FakeServiceLifecycleQueryPort lifecyclePort,
-        FakeWorkflowQueryPort queryPort) =>
+        FakeServiceLifecycleQueryPort lifecyclePort) =>
         CreateService(
             commandPort,
             lifecyclePort,
             new RecordingServiceGovernanceCommandPort(),
-            new FakeServiceGovernanceQueryPort(),
-            queryPort);
+            new FakeServiceGovernanceQueryPort());
 
     private static ScopeWorkflowCommandApplicationService CreateService(
         RecordingServiceCommandPort commandPort,
         FakeServiceLifecycleQueryPort lifecyclePort,
         RecordingServiceGovernanceCommandPort governanceCommandPort,
-        FakeServiceGovernanceQueryPort governanceQueryPort,
-        FakeWorkflowQueryPort queryPort) =>
+        FakeServiceGovernanceQueryPort governanceQueryPort) =>
         CreateService(
             commandPort,
             lifecyclePort,
             governanceCommandPort,
             governanceQueryPort,
-            queryPort,
             new ScopeWorkflowCapabilityOptions());
 
     private static ScopeWorkflowCommandApplicationService CreateService(
@@ -178,14 +180,12 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         FakeServiceLifecycleQueryPort lifecyclePort,
         RecordingServiceGovernanceCommandPort governanceCommandPort,
         FakeServiceGovernanceQueryPort governanceQueryPort,
-        FakeWorkflowQueryPort queryPort,
         ScopeWorkflowCapabilityOptions options) =>
         new(
             commandPort,
             lifecyclePort,
             governanceCommandPort,
             governanceQueryPort,
-            queryPort,
             Options.Create(options));
 
     private static ServiceCatalogSnapshot CreateServiceSnapshot(
@@ -317,25 +317,6 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
-    }
-
-    private sealed class FakeWorkflowQueryPort : IScopeWorkflowQueryPort
-    {
-        private readonly ScopeWorkflowSummary? _getByWorkflowIdResult;
-
-        public FakeWorkflowQueryPort(ScopeWorkflowSummary? getByWorkflowIdResult)
-        {
-            _getByWorkflowIdResult = getByWorkflowIdResult;
-        }
-
-        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>([]);
-
-        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(string scopeId, string workflowId, CancellationToken ct = default) =>
-            Task.FromResult(_getByWorkflowIdResult);
-
-        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(string scopeId, string actorId, CancellationToken ct = default) =>
-            Task.FromResult<ScopeWorkflowSummary?>(null);
     }
 
     private sealed class RecordingServiceGovernanceCommandPort : IServiceGovernanceCommandPort

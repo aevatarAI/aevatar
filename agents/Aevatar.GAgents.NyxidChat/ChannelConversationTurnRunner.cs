@@ -965,7 +965,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return ConversationStreamChunkResult.Failed(
                 string.IsNullOrWhiteSpace(emit.ErrorCode) ? "stream_chunk_rejected" : emit.ErrorCode,
                 emit.ErrorMessage ?? "Relay stream chunk rejected.",
-                editUnsupported);
+                editUnsupported,
+                emit.FailureKind,
+                emit.RetryAfterTimeSpan,
+                emit.HttpStatus,
+                emit.RawErrorKey,
+                emit.RawErrorCode);
         }
 
         var resolvedPlatformMessageId = string.IsNullOrWhiteSpace(emit.PlatformMessageId)
@@ -996,12 +1001,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
-                       await BuildAgentBuilderMetadataAsync(
+            var metadata = await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
                     ResolveUserAccessToken(activity, runtimeContext),
-                    ct))))
+                    ct);
+            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(metadata)))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
@@ -1430,6 +1435,32 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return metadata;
     }
 
+    private static AgentToolExecutionContext BuildAgentBuilderToolContext(
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        static string? Get(IReadOnlyDictionary<string, string> source, string key) =>
+            source.TryGetValue(key, out var value) ? NormalizeOptional(value) : null;
+
+        return AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                Get(metadata, LLMRequestMetadataKeys.NyxIdAccessToken),
+                Get(metadata, LLMRequestMetadataKeys.NyxIdOrgToken),
+                null),
+            Caller = new AgentToolCallerContext(
+                Get(metadata, "scope_id"),
+                null,
+                null),
+            Channel = new AgentToolChannelContext(
+                Get(metadata, ChannelMetadataKeys.Platform),
+                Get(metadata, ChannelMetadataKeys.SenderId),
+                Get(metadata, "scope_id"),
+                Get(metadata, ChannelMetadataKeys.MessageId),
+                Get(metadata, ChannelMetadataKeys.PlatformMessageId)),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
+    }
+
     private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
@@ -1669,6 +1700,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return false;
         }
 
+        // Refactor (iter1/cluster-issue1553): Old pattern: hardcoded /daily skill name. New principle: generic skill discovery, no skill-name in routing logic.
         return TryBuildSlashSkillDiscoveryPrompt(text, commandName, argumentText, out prompt);
     }
 

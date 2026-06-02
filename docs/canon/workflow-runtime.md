@@ -202,7 +202,7 @@ steps:
 ## 四、运行链路（从请求到结果）
 
 ```
-POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
+POST /api/chat { prompt, workflow?, workflowYaml?, source? }
   │
   ├── ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>.ExecuteAsync
   │     ├── WorkflowRunCommandTargetResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
@@ -242,9 +242,9 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 |------|------------|------|
 | 新建 Actor，按名称加载已注册 workflow | `{ "prompt": "...", "workflow": "direct" }` | `workflow` 按名称从 registry 查 YAML。 |
 | 新建 Actor，`workflow/workflowYaml` 都不传 | `{ "prompt": "..." }` | 默认走 `direct`；如开启 `UseAutoAsDefaultWhenWorkflowUnspecified`，则默认走 `auto`。 |
-| 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "agentId": "actor-123" }` | 只传 `prompt + agentId` 即可，`workflow/workflowYaml` 可留空。 |
+| 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "source": { "kind": "definition_actor", "definitionActor": { "actorId": "actor-123" } } }` | actor-targeted execution 只通过 typed source 子消息表达。 |
 | 新建 Actor，直接提交 inline YAML | `{ "prompt": "...", "workflowYaml": "name: demo\\nroles: ...\\nsteps: ..." }` | 不依赖预存文件，服务端先解析 `workflowYaml`。 |
-| 给指定 Actor 传 inline YAML | `{ "prompt": "...", "agentId": "actor-123", "workflowYaml": "..." }` | 仅允许“未绑定 actor 首次绑定”或“同名 workflow 更新”；不允许切换到其它 workflow 名。 |
+| 给指定 Actor 传 inline YAML | `{ "prompt": "...", "source": { "kind": "inline_yaml_bundle", "inlineBundle": { "actorId": "actor-123", "yamlDocuments": [{ "yaml": "..." }] } } }` | 仅允许“未绑定 actor 首次绑定”或“同名 workflow 更新”；不允许切换到其它 workflow 名。 |
 | 同时传 `workflow` + `workflowYaml` | `{ "prompt": "...", "workflow": "demo", "workflowYaml": "name: demo\\n..." }` | 两者名称必须一致；不一致返回 `WORKFLOW_NAME_MISMATCH`（400）。 |
 
 错误码要点：
@@ -252,7 +252,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 - `INVALID_WORKFLOW_YAML`（400）：`workflowYaml` 解析/校验失败。
 - `WORKFLOW_NAME_MISMATCH`（400）：`workflow` 与 `workflowYaml.name` 不一致。
 - `WORKFLOW_BINDING_MISMATCH`（409）：目标 actor 已绑定其它 workflow。
-- `AGENT_WORKFLOW_NOT_CONFIGURED`（409）：传了 `agentId`，但 actor 未绑定且未提供 `workflowYaml`。
+- `AGENT_WORKFLOW_NOT_CONFIGURED`（409）：typed source 指定的 actor 未绑定且未提供 inline YAML。
 
 异常回退语义：
 
@@ -264,7 +264,12 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 ```json
 {
   "prompt": "继续上一次分析，给我三条行动建议",
-  "agentId": "actor-123"
+  "source": {
+    "kind": "definition_actor",
+    "definitionActor": {
+      "actorId": "actor-123"
+    }
+  }
 }
 ```
 

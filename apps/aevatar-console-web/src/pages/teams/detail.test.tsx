@@ -3,7 +3,6 @@ import { message } from "antd";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { studioApi } from "@/shared/studio/api";
@@ -13,19 +12,15 @@ import {
 } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
 
+// Refactor (iter2/cluster-issue1593): Old pattern: Team detail tests kept stale
+// actor-graph mocks and legacy event-tab deep links after the Team surface narrowed
+// to overview/members. New principle: keep coverage on observable unknown-tab
+// fallback behavior without preserving removed topology/event dependencies.
 async function openTeamTestDialog() {
   fireEvent.click(await screen.findByRole("button", { name: "测试团队" }));
   await screen.findByLabelText("测试问题");
   return screen.getByTestId("team-test-modal-body");
 }
-
-jest.mock("@/shared/graphs/GraphCanvas", () => ({
-  __esModule: true,
-  default: () => {
-    const React = require("react");
-    return React.createElement("div", null, "Graph canvas");
-  },
-}));
 
 jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
@@ -444,60 +439,6 @@ jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   },
 }));
 
-jest.mock("@/shared/api/runtimeActorsApi", () => ({
-  runtimeActorsApi: {
-    getActorGraphEnriched: jest.fn(async () => ({
-      snapshot: {
-        actorId: "actor-intake",
-        workflowName: "support-triage",
-        lastCommandId: "cmd-1",
-        completionStatusValue: 1,
-        stateVersion: 2,
-        lastEventId: "evt-2",
-        lastUpdatedAt: "2026-04-09T09:05:00Z",
-        lastSuccess: false,
-        lastOutput: "",
-        lastError: "Waiting on approval",
-        totalSteps: 4,
-        requestedSteps: 2,
-        completedSteps: 2,
-        roleReplyCount: 1,
-      },
-      subgraph: {
-        rootNodeId: "actor-intake",
-        nodes: [
-          {
-            nodeId: "actor-intake",
-            nodeType: "actor",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {
-              role: "triage lead",
-            },
-          },
-          {
-            nodeId: "actor-risk",
-            nodeType: "actor",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {
-              role: "risk review",
-            },
-          },
-        ],
-        edges: [
-          {
-            edgeId: "edge-1",
-            fromNodeId: "actor-intake",
-            toNodeId: "actor-risk",
-            edgeType: "handoff",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {},
-          },
-        ],
-      },
-    })),
-  },
-}));
-
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
     listServices: jest.fn(async () => [
@@ -771,7 +712,6 @@ describe("TeamDetailPage", () => {
     (scopesApi.listWorkflows as jest.Mock).mockClear();
     (scopesApi.listScripts as jest.Mock).mockClear();
     (runtimeGAgentApi.listActors as jest.Mock).mockClear();
-    (runtimeActorsApi.getActorGraphEnriched as jest.Mock).mockClear();
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockReset();
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockImplementation(
       async () => mockCreateServiceRevisionCatalog(),
@@ -858,7 +798,6 @@ describe("TeamDetailPage", () => {
       expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
       expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();
       expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
-      expect(runtimeActorsApi.getActorGraphEnriched).not.toHaveBeenCalled();
     });
   });
 
@@ -1100,17 +1039,16 @@ describe("TeamDetailPage", () => {
     expect(window.location.search).not.toContain("step=bind");
   });
 
-  it("falls legacy event deep links back to the overview tab", async () => {
+  it("normalizes unknown tab deep links back to the overview tab", async () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?serviceId=default&tab=events",
+      "/teams/scope-1/t-alpha?serviceId=default&tab=legacy-tab",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前态势")).toBeTruthy();
-    expect(screen.queryByText("当前任务事件流")).toBeNull();
 
     await waitFor(() => {
       const params = new URLSearchParams(window.location.search);

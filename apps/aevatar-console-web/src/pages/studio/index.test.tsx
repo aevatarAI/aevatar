@@ -2366,19 +2366,6 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
         { key: "workflow-yamls" },
         `workflow-yamls:${props.buildWorkflowYamls ? "present" : "none"}`
       ),
-      props.postBindEntryActions
-        ? React.createElement(
-            "button",
-            {
-              key: "set-entry-test",
-              type: "button",
-              onClick: () => props.postBindEntryActions?.onSetEntryAndTest(),
-            },
-            props.postBindEntryActions.isEntryMember
-              ? "测试 Team"
-              : "设为入口并测试 Team"
-          )
-        : null,
       React.createElement(
         "div",
         { key: "member" },
@@ -4457,6 +4444,8 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
     expect(screen.getByLabelText("Script ID")).toHaveValue("script-alpha");
+    expect(screen.queryByText("Scripts Studio")).toBeNull();
+    expect(screen.queryByText("Leave Scripts Studio?")).toBeNull();
 
     fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
     const createDialog = await screen.findByRole("dialog", { name: "Create member" });
@@ -5374,127 +5363,24 @@ describe("StudioPage", () => {
     });
   });
 
-  it("sets the bound Team member as entry and returns to Team Detail for testing", async () => {
-    (studioApi.setTeamEntryMember as jest.Mock).mockResolvedValueOnce(undefined);
-    (studioApi.getTeam as jest.Mock)
-      .mockResolvedValueOnce({
-        teamId: "t-alpha",
-        scopeId: "scope-1",
-        displayName: "Alpha Team",
-        description: "",
-        entryMemberId: null,
-        lifecycleStage: "active",
-        memberCount: 1,
-        createdAt: "2026-05-01T08:00:00Z",
-        updatedAt: "2026-05-01T08:05:00Z",
-      })
-      .mockResolvedValueOnce({
-        teamId: "t-alpha",
-        scopeId: "scope-1",
-        displayName: "Alpha Team",
-        description: "",
-        entryMemberId: "workspace-demo",
-        lifecycleStage: "active",
-        memberCount: 1,
-        createdAt: "2026-05-01T08:00:00Z",
-        updatedAt: "2026-05-01T08:05:00Z",
-      });
+  it("does not expose post-bind Team entry or Team test actions from Studio bind", async () => {
     renderStudioPage(
       "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
     );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "设为入口并测试 Team",
-      }),
+    expect(
+      screen.queryByRole("button", { name: "设为入口并测试 Team" })
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "测试 Team" })).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByText("service:default")).toBeTruthy()
     );
-
-    await waitFor(() => {
-      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
-        "scope-1",
-        "t-alpha",
-        "workspace-demo",
-      );
-      expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
-    });
-    expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
-    expect(new URLSearchParams(window.location.search).get("memberId")).toBe(
-      "workspace-demo",
-    );
-    expect(new URLSearchParams(window.location.search).get("testTeam")).toBe("1");
-    expect(message.info).toHaveBeenCalledWith(
-      "Team entry 变更已提交，正在等待同步确认。",
-    );
-    expect(message.warning).not.toHaveBeenCalled();
-  });
-
-  it("returns to Team Detail for testing without resetting an existing Team entry", async () => {
-    (studioApi.getTeam as jest.Mock).mockResolvedValue({
-      teamId: "t-alpha",
-      scopeId: "scope-1",
-      displayName: "Alpha Team",
-      description: "",
-      entryMemberId: "workspace-demo",
-      lifecycleStage: "active",
-      memberCount: 1,
-      createdAt: "2026-05-01T08:00:00Z",
-      updatedAt: "2026-05-01T08:05:00Z",
-    });
-    renderStudioPage(
-      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
-    );
-
-    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "测试 Team",
-      }),
-    );
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
-    });
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
-    expect(new URLSearchParams(window.location.search).get("memberId")).toBe(
-      "workspace-demo",
-    );
-    expect(new URLSearchParams(window.location.search).get("testTeam")).toBe("1");
-  });
-
-  it("returns to Team Detail without auto-opening Test Team while entry visibility is pending", async () => {
-    (studioApi.setTeamEntryMember as jest.Mock).mockResolvedValueOnce(undefined);
-    (studioApi.getTeam as jest.Mock).mockResolvedValue({
-      teamId: "t-alpha",
-      scopeId: "scope-1",
-      displayName: "Alpha Team",
-      description: "",
-      entryMemberId: null,
-      lifecycleStage: "active",
-      memberCount: 1,
-      createdAt: "2026-05-01T08:00:00Z",
-      updatedAt: "2026-05-01T08:05:00Z",
-    });
-    renderStudioPage(
-      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=bind&tab=bindings"
-    );
-
-    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "设为入口并测试 Team",
-      }),
-    );
-
-    await waitFor(() => {
-      expect(studioApi.getTeam).toHaveBeenCalledTimes(6);
-      expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
-    });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("memberId")).toBe("workspace-demo");
-    expect(params.get("testTeam")).toBeNull();
-    expect(message.warning).toHaveBeenCalledWith(
-      "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后在 Team Detail 中重试 Test Team。",
+    expect(window.location.pathname).toBe("/studio");
+    expect(new URLSearchParams(window.location.search).get("testTeam")).toBeNull();
+    expect(message.warning).not.toHaveBeenCalledWith(
+      expect.stringContaining("读模型还没有确认新入口成员"),
     );
   });
 
@@ -7509,6 +7395,81 @@ describe("StudioPage", () => {
     expect(await screen.findByLabelText("Script ID")).toBeTruthy();
     expect(screen.getByTestId("studio-script-build-panel")).toBeTruthy();
     expect(screen.getByText("Script source")).toBeTruthy();
+  });
+
+  it("treats legacy script member routes as script focus only", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValue([
+      {
+        available: true,
+        scopeId: "scope-1",
+        script: {
+          scopeId: "scope-1",
+          scriptId: "script-alpha",
+          catalogActorId: "catalog-1",
+          definitionActorId: "definition-1",
+          activeRevision: "rev-1",
+          activeSourceHash: "hash-1",
+          updatedAt: "2026-03-18T00:00:00Z",
+        },
+        source: {
+          sourceText: "using System;",
+          definitionActorId: "definition-1",
+          revision: "rev-1",
+          sourceHash: "hash-1",
+        },
+      },
+    ]);
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=script%3Ascript-alpha&tab=scripts"
+    );
+
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    expect(screen.getByLabelText("Script ID")).toHaveValue("script-alpha");
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBeNull();
+      expect(searchParams.get("focus")).toBe("script:script-alpha");
+      expect(searchParams.get("tab")).toBe("scripts");
+    });
+  });
+
+  it("does not open Bind from Script Build without a member subject", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+
+    renderStudioPage("/studio?scopeId=scope-1&focus=script%3Ascript-alpha&tab=scripts");
+
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+
+    expect(screen.queryByTestId("studio-bind-surface")).toBeNull();
+    expect(studioApi.bindMemberScript).not.toHaveBeenCalled();
+    expect(studioApi.bindScopeScript).not.toHaveBeenCalled();
+    expect(message.warning).toHaveBeenCalledWith(
+      "Select or create a member before opening Bind for this Script.",
+    );
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("member")).toBeNull();
+    expect(searchParams.get("focus")).toBe("script:script-alpha");
+    expect(searchParams.get("tab")).toBe("scripts");
   });
 
   it("does not duplicate the selected Script member and its script artifact in the rail", async () => {

@@ -35,6 +35,13 @@ public sealed class MessagesCommandFacadeTests
         command.ResponseId.Should().Be(result.Accepted.Session.ResponseId);
         command.RunId.Should().Be($"{result.Accepted.Session.ResponseId}:llm-run");
         command.Model.Should().Be("claude-sonnet");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        toolContext.Request.RequestId.Should().Be(command.ResponseId);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
 
     [Fact]
@@ -209,6 +216,7 @@ public sealed class MessagesCommandFacadeTests
                 RequestId = "msg_stream",
                 Model = "claude-sonnet",
                 Messages = [ChatMessage.User("hello")],
+                ToolContext = BuildToolContext("msg_stream"),
             },
             BuildToolContext("msg_stream"),
             new ResponsesToolClassification([], [], [], []),

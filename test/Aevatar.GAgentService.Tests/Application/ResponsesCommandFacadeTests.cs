@@ -49,6 +49,13 @@ public sealed class ResponsesCommandFacadeTests
         command.RoutePreference.Should().Be("route-value");
         command.ScopeId.Should().Be("scope-1");
         command.BearerToken.Should().Be("token");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        toolContext.Request.RequestId.Should().Be(command.ResponseId);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
 
     [Fact]
@@ -508,6 +515,7 @@ public sealed class ResponsesCommandFacadeTests
                 RequestId = "resp_stream",
                 Model = "model",
                 Messages = [ChatMessage.User("hello")],
+                ToolContext = BuildToolContext("resp_stream"),
             },
             BuildToolContext("resp_stream"),
             new ResponsesToolClassification([], [], [], []),

@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions.Connectors;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -53,9 +52,11 @@ internal sealed class WorkflowExecutionRuntimeContext
 //                  durable control/security keys.
 internal sealed class WorkflowRequestPassthroughMetadata
 {
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+
     private static readonly HashSet<string> BlockedKeys =
     [
-        ConnectorRequest.HttpAuthorizationMetadataKey,
+        LegacyConnectorHttpAuthorizationBlockedKey,
         LLMRequestMetadataKeys.NyxIdAccessToken,
         LLMRequestMetadataKeys.ModelOverride,
         LLMRequestMetadataKeys.NyxIdRoutePreference,

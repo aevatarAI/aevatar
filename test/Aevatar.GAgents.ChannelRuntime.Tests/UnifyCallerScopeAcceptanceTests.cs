@@ -270,7 +270,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var inner = Substitute.For<INyxIdCurrentUserResolver>();
         var resolver = new NyxIdNativeCallerScopeResolver(inner);
 
-        AgentToolRequestContext.CurrentMetadata = null;
+        AgentToolRequestContext.Current = null;
         try
         {
             (await resolver.TryResolveAsync()).Should().BeNull(
@@ -278,7 +278,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -291,17 +291,17 @@ public sealed class UnifyCallerScopeAcceptanceTests
 
         var resolver = new NyxIdNativeCallerScopeResolver(inner);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "expired-token",
-        };
+        });
         try
         {
             await Assert.ThrowsAsync<CallerScopeUnavailableException>(() => resolver.TryResolveAsync());
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -311,19 +311,19 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var inner = Substitute.For<INyxIdCurrentUserResolver>();
         var resolver = new ChannelMetadataCallerScopeResolver(inner);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [ChannelMetadataKeys.Platform] = "lark",
             // no sender_id
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
+        });
         try
         {
             await Assert.ThrowsAsync<CallerScopeUnavailableException>(() => resolver.TryResolveAsync());
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -333,11 +333,11 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var inner = Substitute.For<INyxIdCurrentUserResolver>();
         var resolver = new ChannelMetadataCallerScopeResolver(inner);
 
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
             // no channel.platform
-        };
+        });
         try
         {
             (await resolver.TryResolveAsync()).Should().BeNull(
@@ -345,7 +345,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
