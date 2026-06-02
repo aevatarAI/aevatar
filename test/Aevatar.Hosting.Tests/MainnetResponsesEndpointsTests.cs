@@ -107,7 +107,8 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Temperature.Should().Be(0.2);
         provider.LastRequest.Messages.Should().ContainSingle();
         provider.LastRequest.Messages[0].Content.Should().Be("ping");
-        provider.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
+        provider.LastRequest.RequestId.Should().Be(responseId);
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
         provider.LastRequest.CallerContext.Should().Be(new LLMRequestCallerContext(
             "user-1",

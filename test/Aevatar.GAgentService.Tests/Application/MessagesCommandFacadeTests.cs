@@ -35,6 +35,8 @@ public sealed class MessagesCommandFacadeTests
         command.ResponseId.Should().Be(result.Accepted.Session.ResponseId);
         command.RunId.Should().Be($"{result.Accepted.Session.ResponseId}:llm-run");
         command.Model.Should().Be("claude-sonnet");
+        command.ScopeId.Should().Be("scope-1");
+        command.BearerToken.Should().Be("token");
         var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
         toolContext.Request.RequestId.Should().Be(command.ResponseId);
         toolContext.Caller.ScopeId.Should().Be("scope-1");
@@ -71,6 +73,9 @@ public sealed class MessagesCommandFacadeTests
         result.Completed.Should().BeNull();
         result.StreamPlan!.LlmRequest.Model.Should().Be("claude");
         result.StreamPlan.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
         result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.MessageId);
         result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
@@ -78,6 +83,7 @@ public sealed class MessagesCommandFacadeTests
         sessions.Registered.Should().ContainSingle();
     }
 
+    [Fact]
     public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();

@@ -195,9 +195,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var disableTools = forceDisableTools || replyPlan.DisableTools;
         var tools = await BuildTurnToolsAsync(disableTools, ct);
-        var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
-            replyPlan.PrimaryToolContext ?? BuildExternalOnlyToolContext(replyPlan.Primary));
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
+        var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
+            replyPlan.PrimaryToolContext ?? AgentToolExecutionContext.Empty with
+            {
+                ExternalMetadata = externalMetadata,
+            });
         var runtime = BuildRuntime(
             activity,
             replyPlan.PrimaryControl,
@@ -290,7 +293,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         CancellationToken ct)
     {
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(effectiveMetadata);
-        var toolContext = llmControl.ToToolContext(baseToolContext ?? BuildExternalOnlyToolContext(effectiveMetadata));
+        var toolContext = llmControl.ToToolContext(baseToolContext ?? AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = externalMetadata,
+        });
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
@@ -454,13 +460,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ? null
             : $"正在处理 `/{commandLabel}`, 加载技能并扫描数据中...";
     }
-
-    private static AgentToolExecutionContext BuildExternalOnlyToolContext(
-        IReadOnlyDictionary<string, string>? metadata) =>
-        AgentToolExecutionContext.Empty with
-        {
-            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
-        };
 
     // ADR-0021 §6 / canon §8 cross-round usage aggregation — each provider round
     // reports its own Usage; the actor-edge closeout carries the sum.
