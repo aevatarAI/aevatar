@@ -357,6 +357,69 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.FireRecords[idempotencyKey].Error.Should().Be("dispatch unavailable");
     }
 
+    [Fact]
+    public void ScheduledDispatchState_ShouldNormalizeNullableTimestampsAndLeaseCodec()
+    {
+        var localTime = new DateTimeOffset(2026, 5, 29, 17, 0, 0, TimeSpan.FromHours(8));
+        var state = new ScheduledDispatchState();
+
+        state.CreatedAt.Should().Be(default);
+        state.UpdatedAt.Should().Be(default);
+        state.NextFireAt.Should().BeNull();
+        state.LastFireAt.Should().BeNull();
+
+        state.CreatedAt = localTime;
+        state.UpdatedAt = localTime.AddMinutes(1);
+        state.NextFireAt = localTime.AddMinutes(2);
+        state.LastFireAt = localTime.AddMinutes(-2);
+
+        state.CreatedAt.Offset.Should().Be(TimeSpan.Zero);
+        state.UpdatedAt.Offset.Should().Be(TimeSpan.Zero);
+        state.NextFireAt.Should().Be(localTime.AddMinutes(2).ToUniversalTime());
+        state.LastFireAt.Should().Be(localTime.AddMinutes(-2).ToUniversalTime());
+
+        state.NextFireAt = null;
+        state.LastFireAt = null;
+        state.NextFireAt.Should().BeNull();
+        state.LastFireAt.Should().BeNull();
+
+        ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToState(null).Should().BeNull();
+        ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(null).Should().BeNull();
+        ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(new ScheduledDispatchRuntimeCallbackLeaseState
+        {
+            ActorId = " ",
+            CallbackId = "callback-1",
+        }).Should().BeNull();
+        ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(new ScheduledDispatchRuntimeCallbackLeaseState
+        {
+            ActorId = "actor-1",
+            CallbackId = " ",
+        }).Should().BeNull();
+
+        var dedicated = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToState(
+            new RuntimeCallbackLease("actor-1", "callback-1", 7, RuntimeCallbackBackend.Dedicated));
+        dedicated.Should().NotBeNull();
+        dedicated!.Backend.Should().Be(ScheduledDispatchRuntimeCallbackBackendState.Dedicated);
+
+        var runtime = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(dedicated);
+        runtime.Should().NotBeNull();
+        runtime!.ActorId.Should().Be("actor-1");
+        runtime.CallbackId.Should().Be("callback-1");
+        runtime.Generation.Should().Be(7);
+        runtime.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
+
+        var inMemory = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(
+            new ScheduledDispatchRuntimeCallbackLeaseState
+            {
+                ActorId = "actor-2",
+                CallbackId = "callback-2",
+                Generation = 3,
+                Backend = ScheduledDispatchRuntimeCallbackBackendState.InMemory,
+            });
+        inMemory.Should().NotBeNull();
+        inMemory!.Backend.Should().Be(RuntimeCallbackBackend.InMemory);
+    }
+
     private static ScheduledDispatchGAgent CreateAgent(
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,

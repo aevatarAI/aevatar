@@ -175,6 +175,88 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task EnableDisableAndRunNow_ShouldRejectMissingActorAfterConfiguredReadModel()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
+        var service = CreateService(actorPort, queryPort);
+
+        var enable = () => service.EnableAsync(" schedule-1 ", " resume ");
+        var runNow = () => service.RunNowAsync("schedule-1");
+
+        await enable.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
+        await runNow.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
+        actorPort.ResolveScheduleIds.Should().Equal("schedule-1", "schedule-1");
+        actorPort.Enabled.Should().BeEmpty();
+        actorPort.RunNowRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnableDisable_ShouldNormalizeReasonsAndDispatchToResolvedActor()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
+        var service = CreateService(actorPort, queryPort);
+
+        var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
+        var disabled = await service.DisableAsync("schedule-1", " ");
+
+        enabled.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", true));
+        disabled.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", true));
+        actorPort.Enabled.Should().ContainSingle()
+            .Which.Should().Be(("actor:schedule-1", "resume"));
+        actorPort.Disabled.Should().ContainSingle()
+            .Which.Should().Be(("actor:schedule-1", string.Empty));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldUseRouteScheduleIdAndScrubOptionalAdapterHeaders()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var service = CreateService(actorPort);
+
+        var receipt = await service.UpdateAsync(
+            " route-schedule ",
+            new WorkflowScheduleConfiguration(
+                ScheduleId: "body-schedule",
+                DisplayName: " ",
+                WorkflowName: " direct ",
+                Prompt: " hello ",
+                CronExpression: "*/20 * * * *",
+                Timezone: " ",
+                Enabled: false,
+                Headers: new Dictionary<string, string>
+                {
+                    [" x "] = " y ",
+                    ["empty"] = " ",
+                    [WorkflowScheduleAdapterHeaderKeys.ScopeId] = "spoofed",
+                    [WorkflowScheduleAdapterHeaderKeys.SourceActorId] = "spoofed",
+                },
+                ScopeId: " ",
+                ActorId: " "));
+
+        receipt.Should().Be(new WorkflowScheduleMutationReceipt("route-schedule", "actor:route-schedule", true));
+        actorPort.Configured.Should().ContainSingle();
+        var configuration = actorPort.Configured.Single().Configuration;
+        configuration.ScheduleId.Should().Be("route-schedule");
+        configuration.DisplayName.Should().BeEmpty();
+        configuration.Timezone.Should().Be("UTC");
+        configuration.ScopeId.Should().BeNull();
+        configuration.ActorId.Should().BeNull();
+        configuration.Headers.Should().Contain("x", "y");
+        configuration.Headers.Should().NotContainKey("empty");
+        configuration.Headers[WorkflowScheduleAdapterHeaderKeys.WorkflowName].Should().Be("direct");
+        configuration.Headers[WorkflowScheduleAdapterHeaderKeys.Prompt].Should().Be("hello");
+        configuration.Headers.Should().NotContainKey(WorkflowScheduleAdapterHeaderKeys.ScopeId);
+        configuration.Headers.Should().NotContainKey(WorkflowScheduleAdapterHeaderKeys.SourceActorId);
+    }
+
+    [Fact]
     public async Task PrepareAsync_ShouldCreateStoredEnvelopeWithWorkflowRequestMetadata()
     {
         var resolver = new FakeWorkflowRunActorResolver();
@@ -361,6 +443,43 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public void ScheduledDispatchCalculator_ShouldAdvanceCursorExclusivelyAndThrowForInvalidInputs()
+    {
+        var boundary = new DateTimeOffset(2026, 5, 29, 8, 30, 0, TimeSpan.Zero);
+
+        var occurrences = ScheduledDispatchCalculator.GetNextOccurrences(
+            "*/30 * * * *",
+            "UTC",
+            boundary,
+            -3);
+
+        occurrences.Should().ContainSingle()
+            .Which.Should().Be(new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero));
+        occurrences.Should().NotContain(boundary);
+
+        var invalidTimezone = () => ScheduledDispatchCalculator.GetNextOccurrences(
+            "* * * * *",
+            "Invalid/Zone",
+            boundary,
+            1);
+        invalidTimezone.Should().Throw<ArgumentException>()
+            .WithParameterName("timeZoneId");
+
+        var invalidCron = () => ScheduledDispatchCalculator.GetNextOccurrences(
+            "not cron",
+            "UTC",
+            boundary,
+            1);
+        invalidCron.Should().Throw<ArgumentException>()
+            .WithParameterName("cronExpression");
+
+        ScheduledDispatchValidationResult.Failed(" ")
+            .Error.Should().Be("Schedule is invalid.");
+        WorkflowScheduleValidationResult.Failed(" ")
+            .Error.Should().Be("Schedule is invalid.");
+    }
+
+    [Fact]
     public async Task PreviewAsync_ShouldNormalizeBlankTimezoneAndClampLowCount()
     {
         var service = CreateService();
@@ -430,6 +549,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
+        public string? ResolveActorId { get; set; }
 
         public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default)
         {
@@ -440,7 +560,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default)
         {
             ResolveScheduleIds.Add(scheduleId);
-            return Task.FromResult<string?>($"actor:{scheduleId}");
+            return Task.FromResult<string?>(ResolveActorId ?? $"actor:{scheduleId}");
         }
 
         public Task DispatchConfigureAsync(
