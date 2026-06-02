@@ -2,11 +2,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
@@ -14,7 +11,6 @@ using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
 
@@ -24,16 +20,14 @@ namespace Aevatar.Workflow.Core;
     "Maintainability",
     "CA1506:Avoid excessive class coupling",
     Justification = "WorkflowRunGAgent is the run-scoped orchestration boundary and intentionally coordinates workflow execution dependencies.")]
-// Refactor (iter159/cluster-613-first):
-//   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
-//   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
-// Refactor (iter149/issue1132): Old pattern: workflow role initialization preferred handled-dispatch when available.  New principle: role initialization uses accepted-only IActorDispatchPort and observes completion through workflow events.
+// Refactor (iter115/cluster-3):
+//   Old pattern: WorkflowRunGAgent kept durable control/security facts in
+//                process-local runtime context.
+//   New principle: durable control/security facts live in typed WorkflowRunState;
+//                  runtime context carries only same-turn passthrough metadata.
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
-// Refactor (iter164/cluster-002-first):
-//   Old pattern: LLM workflow modules listened to presentation frames for completion.
-//   New principle: committed role reply facts are persisted and then self-published as workflow-owned completion signals.
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost
@@ -42,15 +36,12 @@ public sealed class WorkflowRunGAgent
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
-
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
     private readonly WorkflowExecutionRuntimeContext _runtimeContext = new();
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IStreamForwardingRegistry? _streamForwardingRegistry;
-    private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IEventModuleFactory<IWorkflowExecutionContext> _stepExecutorFactory;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
@@ -60,16 +51,12 @@ public sealed class WorkflowRunGAgent
     public WorkflowRunGAgent(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
-        IRoleAgentTypeResolver roleAgentTypeResolver,
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
-        IWorkflowDefinitionResolver? workflowDefinitionResolver = null,
-        IStreamForwardingRegistry? streamForwardingRegistry = null)
+        IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _streamForwardingRegistry = streamForwardingRegistry;
-        _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _stepExecutorFactory = stepExecutorFactory ?? throw new ArgumentNullException(nameof(stepExecutorFactory));
         _ = workflowDefinitionResolver;
 
@@ -241,14 +228,17 @@ public sealed class WorkflowRunGAgent
     }
 
     [EventHandler]
-    public async Task HandleChatRequest(ChatRequestEvent request)
+    public async Task HandleChatRequest(WorkflowChatRequestEvent request)
     {
         if (_compiledWorkflow == null)
         {
-            await PublishAsync(new ChatResponseEvent
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
             {
+                RunId = RunId,
                 Content = "Workflow run is not definition-bound or compiled.",
                 SessionId = request.SessionId,
+                Success = false,
+                Error = "Workflow run is not definition-bound or compiled.",
             }, TopologyAudience.Parent);
             return;
         }
@@ -269,19 +259,17 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        // Refactor (iter169/cluster-issue1551): Old pattern: connector auth was promoted from request.Metadata. New principle: connector auth is carried by ChatRequestEvent.ConnectorHttpAuthorization.
+        // Refactor (iter169/cluster-issue1551): Old pattern: connector auth was promoted from request.Metadata. New principle: connector auth is carried by WorkflowChatRequestEvent.ConnectorHttpAuthorization.
         var connectorAuthorizationDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(request.ConnectorHttpAuthorization);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
-        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
-        var toolContextDelta = WorkflowRunExecutionContextStateAccess.BuildToolContextDelta(toolContext);
+        var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
 
         await EnsureAgentTreeAsync();
 
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var executionContextDelta = MergeExecutionContextDeltas(connectorAuthorizationDelta, toolContextDelta);
+        var executionContextDelta = MergeExecutionContextDeltas(connectorAuthorizationDelta, llmControlDelta);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
@@ -307,7 +295,13 @@ public sealed class WorkflowRunGAgent
         if (string.IsNullOrWhiteSpace(yaml))
         {
             Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: empty workflow YAML, ignoring.");
-            await PublishAsync(new ChatResponseEvent { Content = "Dynamic workflow YAML is empty." }, TopologyAudience.Parent);
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = RunId,
+                Success = false,
+                Error = "Dynamic workflow YAML is empty.",
+                Content = "Dynamic workflow YAML is empty.",
+            }, TopologyAudience.Parent);
             return;
         }
 
@@ -318,7 +312,13 @@ public sealed class WorkflowRunGAgent
                 ? "Dynamic workflow YAML compilation failed."
                 : $"Dynamic workflow YAML compilation failed: {replaceResult.CompilationError}";
             Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: YAML compilation failed. Error={Error}", replaceResult.CompilationError);
-            await PublishAsync(new ChatResponseEvent { Content = reason }, TopologyAudience.Parent);
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = RunId,
+                Success = false,
+                Error = reason,
+                Content = reason,
+            }, TopologyAudience.Parent);
             return;
         }
 
@@ -487,9 +487,12 @@ public sealed class WorkflowRunGAgent
                 (evt.Output ?? string.Empty).Length);
         }
 
-        await PublishAsync(new TextMessageEndEvent
+        await PublishAsync(new WorkflowLlmInvocationCompletedEvent
         {
+            RunId = evt.RunId,
+            Success = evt.Success,
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
+            Error = evt.Success ? string.Empty : evt.Error,
         }, TopologyAudience.Parent);
     }
 
@@ -542,33 +545,9 @@ public sealed class WorkflowRunGAgent
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (!WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
-            return;
-
-        await PersistDomainEventAsync(artifactFact, CancellationToken.None);
-
-        if (artifactFact is not WorkflowRoleReplyRecordedEvent roleReply)
-            return;
-
-        await DispatchCommittedRoleReplyArtifactAsync(roleReply, envelope);
+        if (WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
+            await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
-
-    // Refactor (issue1271/first-slice):
-    //   Old pattern: LLM-like modules completed steps from live TextMessageEndEvent / ChatResponseEvent frames.
-    //   New principle: child role committed facts are first persisted as WorkflowRoleReplyRecordedEvent.
-    //   The same fact is then fed through the existing workflow module bridge for SessionId reconciliation.
-    // Refactor (iter170/cluster-1247-first):
-    //   Old pattern: the actor re-entered itself with inline handling/publish fallback.
-    //   New principle: committed role reply facts are admitted through the runtime-neutral dispatch port before the module pipeline consumes them.
-    private Task DispatchCommittedRoleReplyArtifactAsync(WorkflowRoleReplyRecordedEvent roleReply, EventEnvelope sourceEnvelope) =>
-        _dispatchPort.DispatchAsync(Id, new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(roleReply),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
-            Propagation = sourceEnvelope.Propagation?.Clone(),
-        }, CancellationToken.None);
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
     {
@@ -581,7 +560,6 @@ public sealed class WorkflowRunGAgent
         {
             try
             {
-                await UnlinkRoleCommittedFactsFromWorkflowAsync(childActorId, ct);
                 await _runtime.UnlinkAsync(childActorId, ct);
                 await _runtime.DestroyAsync(childActorId, ct);
             }
@@ -626,7 +604,6 @@ public sealed class WorkflowRunGAgent
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await CreateRoleActorAsync(role, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
-            await LinkRoleCommittedFactsToWorkflowAsync(actor.Id, CancellationToken.None);
 
             await DispatchRoleInitializationAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id));
             _childAgentIds.Add(actor.Id);
@@ -646,47 +623,6 @@ public sealed class WorkflowRunGAgent
     private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope) =>
         _dispatchPort.DispatchAsync(actorId, envelope);
 
-    private async Task LinkRoleCommittedFactsToWorkflowAsync(string roleActorId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(Id))
-            return;
-
-        var forwardingRegistry = ResolveStreamForwardingRegistry();
-        if (forwardingRegistry == null)
-            return;
-
-        // Refactor (iter170/cluster-1247-first):
-        //   Old pattern: workflow modules used live role frames as completion fallback and the run actor manipulated stream transport directly.
-        //   New principle: role committed facts are registered through the stream forwarding topology abstraction and re-enter via actor dispatch.
-        var binding = new StreamForwardingBinding
-        {
-            SourceStreamId = roleActorId,
-            TargetStreamId = Id,
-            ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [],
-            EventTypeFilter =
-            {
-                $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}",
-            },
-        };
-
-        await forwardingRegistry.UpsertAsync(binding, ct);
-    }
-
-    private Task UnlinkRoleCommittedFactsFromWorkflowAsync(string roleActorId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(Id))
-            return Task.CompletedTask;
-
-        var forwardingRegistry = ResolveStreamForwardingRegistry();
-        return forwardingRegistry == null
-            ? Task.CompletedTask
-            : forwardingRegistry.RemoveAsync(roleActorId, Id, ct);
-    }
-
-    private IStreamForwardingRegistry? ResolveStreamForwardingRegistry() =>
-        _streamForwardingRegistry ?? Services.GetService<IStreamForwardingRegistry>();
-
     // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
     //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
     //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
@@ -695,14 +631,8 @@ public sealed class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(role.AgentKind))
             return await _runtime.CreateByKindAsync(role.AgentKind.Trim(), childActorId);
 
-        var roleAgentType = _roleAgentTypeResolver.ResolveRoleAgentType();
-        if (!typeof(IRoleAgent).IsAssignableFrom(roleAgentType))
-        {
-            throw new InvalidOperationException(
-                $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
-        }
-
-        return await _runtime.CreateAsync(roleAgentType, childActorId);
+        throw new InvalidOperationException(
+            $"Role '{role.Id}' must declare agent_kind because Workflow.Core no longer depends on AI role implementations.");
     }
 
     private string BuildChildActorId(string roleId)
@@ -926,10 +856,11 @@ public sealed class WorkflowRunGAgent
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
-                NyxidAccessToken = delta.Llm.NyxidAccessToken?.Trim() ?? string.Empty,
                 ModelOverride = delta.Llm.ModelOverride?.Trim() ?? string.Empty,
-                NyxidRoutePreference = delta.Llm.NyxidRoutePreference?.Trim() ?? string.Empty,
+                UserMemoryPrompt = delta.Llm.UserMemoryPrompt?.Trim() ?? string.Empty,
             };
+            if (delta.Llm.HasMaxToolRoundsOverride)
+                state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
         if (delta.Connector != null)
@@ -1088,9 +1019,12 @@ public sealed class WorkflowRunGAgent
             runId,
             string.IsNullOrWhiteSpace(reason) ? "(none)" : reason);
 
-        await PublishAsync(new TextMessageEndEvent
+        await PublishAsync(new WorkflowLlmInvocationCompletedEvent
         {
+            RunId = runId,
+            Success = false,
             Content = BuildStoppedMessage(reason),
+            Error = BuildStoppedMessage(reason),
         }, TopologyAudience.Parent);
     }
 

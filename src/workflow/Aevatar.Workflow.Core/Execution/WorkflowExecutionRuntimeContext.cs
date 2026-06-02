@@ -1,5 +1,3 @@
-using Aevatar.AI.Abstractions.LLMProviders;
-
 namespace Aevatar.Workflow.Core.Execution;
 
 // Refactor (iter16/cluster-031):
@@ -57,9 +55,12 @@ internal sealed class WorkflowRequestPassthroughMetadata
     private static readonly HashSet<string> BlockedKeys =
     [
         LegacyConnectorHttpAuthorizationBlockedKey,
-        LLMRequestMetadataKeys.NyxIdAccessToken,
-        LLMRequestMetadataKeys.ModelOverride,
-        LLMRequestMetadataKeys.NyxIdRoutePreference,
+        "llm.model_override",
+        "model_override",
+        "llm.max_tool_rounds",
+        "max_tool_rounds",
+        "llm.user_memory_prompt",
+        "user_memory_prompt",
     ];
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

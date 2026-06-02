@@ -354,10 +354,11 @@ public sealed class WorkflowExecutionContextAdapterTests
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
-                NyxidAccessToken = delta.Llm.NyxidAccessToken,
                 ModelOverride = delta.Llm.ModelOverride,
-                NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+                UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
             };
+            if (delta.Llm.HasMaxToolRoundsOverride)
+                state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
         if (delta.Connector != null)

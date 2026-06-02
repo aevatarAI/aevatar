@@ -129,8 +129,8 @@ public static class ScopeServiceEndpoints
                 SessionId: request.SessionId,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
-                LlmControl: await BuildScopedLlmControlAsync(http, ct),
                 ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                LlmControl: ToWorkflowLlmControl(await BuildScopedLlmControlAsync(http, ct)),
                 Headers: scopedHeaders);
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
@@ -2937,6 +2937,25 @@ const response = await fetch("{{invokePath}}", {
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
             UserMemoryPrompt = control.UserMemoryPrompt,
         };
+    }
+
+    private static WorkflowLlmControl? ToWorkflowLlmControl(LLMControlContext? control)
+    {
+        if (control == null)
+            return null;
+
+        var model = NormalizeOptional(control.ModelOverride);
+        var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
+        var maxToolRounds = control.MaxToolRoundsOverride is > 0
+            ? control.MaxToolRoundsOverride
+            : null;
+        if (model == null && userMemoryPrompt == null && maxToolRounds == null)
+            return null;
+
+        return new WorkflowLlmControl(
+            model,
+            maxToolRounds,
+            userMemoryPrompt);
     }
 
     private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(

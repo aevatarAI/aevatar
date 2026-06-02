@@ -610,9 +610,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
-        ShouldCarryTypedToolControlValues(
-            harness.WorkflowDispatch.Command.ToolContext,
-            harness.WorkflowDispatch.Command.LlmControl);
+        ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
 
         var result = Read(output);
@@ -773,9 +771,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
-        ShouldCarryTypedToolControlValues(
-            harness.WorkflowDispatch.Command.ToolContext,
-            harness.WorkflowDispatch.Command.LlmControl);
+        ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
     }
 
@@ -819,8 +815,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         var command = harness.WorkflowDispatch.Command!;
         command.ScopeId.Should().Be("scope-1");
-        command.ToolContext.Should().NotBeNull("trusted caller/tool context must use the typed sub-message");
-        command.LlmControl.Should().NotBeNull("trusted LLM control must use the typed control object");
+        command.LlmControl.Should().NotBeNull("trusted LLM routing must use the typed workflow control object");
         command.Metadata.Should().Contain("client-note", "open-extension");
         ShouldNotCarryTrustedCallerValues(command.Metadata);
         ShouldCarryTypedTrustedCallerValues(command);
@@ -999,27 +994,7 @@ public sealed class AevatarInvocationToolSourceTests
     private static void ShouldCarryTypedTrustedCallerValues(WorkflowChatRunRequest command)
     {
         command.ScopeId.Should().Be("scope-1");
-        command.ToolContext.Should().NotBeNull();
-        command.ToolContext!.Request.RequestId.Should().Be("request-1");
-        command.ToolContext.Request.CallId.Should().NotBeNullOrWhiteSpace();
-        command.ToolContext.Caller.ScopeId.Should().Be("scope-1");
-        command.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        command.ToolContext.Caller.ResponseId.Should().Be("response-1");
-        command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        command.ToolContext.Credentials.NyxIdOrgToken.Should().Be("org-token");
-        command.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
-        command.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
-        command.ToolContext.Routing.ModelOverride.Should().Be("model-1");
-        command.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-1");
-        command.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
-        command.ToolContext.ConnectedServices.ContextJson.Should().Be("""{"service":"ctx"}""");
-        command.LlmControl.Should().NotBeNull();
-        command.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
-        command.LlmControl.NyxIdOrgToken.Should().Be("org-token");
-        command.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
-        command.LlmControl.ModelOverride.Should().Be("model-1");
-        command.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
-        command.LlmControl.MaxToolRoundsOverride.Should().Be(4);
+        ShouldCarryWorkflowLlmControlValues(command.LlmControl);
     }
 
     private static void ShouldNotCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)
@@ -1060,6 +1035,14 @@ public sealed class AevatarInvocationToolSourceTests
         llmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
         llmControl.ModelOverride.Should().Be("model-1");
         llmControl.NyxIdRoutePreference.Should().Be("route-1");
+    }
+
+    private static void ShouldCarryWorkflowLlmControlValues(WorkflowLlmControl? llmControl)
+    {
+        llmControl.Should().NotBeNull();
+        llmControl!.ModelOverride.Should().Be("model-1");
+        llmControl.MaxToolRoundsOverride.Should().Be(4);
+        llmControl.UserMemoryPrompt.Should().Be("memory");
     }
 
     private static AgentToolContextScope PushContext(string callId, string? scopeId = "scope-1") =>

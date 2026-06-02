@@ -73,9 +73,8 @@ public sealed record ChatLlmControlInput
 {
     public string? NyxIdAccessToken { get; init; }
     public string? NyxIdOrgToken { get; init; }
-    public string? SenderNyxIdAccessToken { get; init; }
-    public string? ModelOverride { get; init; }
     public string? NyxIdRoutePreference { get; init; }
+    public string? ModelOverride { get; init; }
     public int? MaxToolRoundsOverride { get; init; }
     public string? UserMemoryPrompt { get; init; }
 }

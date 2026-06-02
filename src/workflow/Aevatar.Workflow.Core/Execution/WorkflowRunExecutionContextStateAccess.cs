@@ -50,33 +50,36 @@ internal static class WorkflowRunExecutionContextStateAccess
         return delta;
     }
 
-    public static Task ApplyToolContextAsync(
+    public static Task ApplyLlmControlAsync(
         IWorkflowExecutionStateHost stateHost,
-        AgentToolExecutionContext? toolContext,
+        WorkflowLlmControlContext? llmControl,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        var delta = BuildToolContextDelta(toolContext);
+        var delta = BuildLlmControlDelta(llmControl);
         return stateHost.UpdateExecutionContextAsync(delta, ct);
     }
 
-    public static WorkflowRunExecutionContextDelta BuildToolContextDelta(AgentToolExecutionContext? toolContext)
+    public static WorkflowRunExecutionContextDelta BuildLlmControlDelta(WorkflowLlmControlContext? llmControl)
     {
         var delta = new WorkflowRunExecutionContextDelta
         {
             ClearLlm = true,
         };
-        if (toolContext == null)
+        if (llmControl == null)
             return delta;
 
         var llm = new WorkflowRunLlmExecutionContextDelta
         {
-            ModelOverride = Normalize(toolContext.Routing.ModelOverride),
-            NyxidRoutePreference = Normalize(toolContext.Routing.NyxIdRoutePreference),
+            ModelOverride = Normalize(llmControl.ModelOverride),
+            UserMemoryPrompt = Normalize(llmControl.UserMemoryPrompt),
         };
+        if (llmControl.HasMaxToolRoundsOverride)
+            llm.MaxToolRoundsOverride = llmControl.MaxToolRoundsOverride;
 
         if (string.IsNullOrWhiteSpace(llm.ModelOverride) &&
-            string.IsNullOrWhiteSpace(llm.NyxidRoutePreference))
+            string.IsNullOrWhiteSpace(llm.UserMemoryPrompt) &&
+            !llm.HasMaxToolRoundsOverride)
         {
             return delta;
         }
@@ -106,14 +109,13 @@ internal static class WorkflowRunExecutionContextStateAccess
     {
         llm = Get(ctx).Llm ?? new WorkflowLlmExecutionContextState();
         return !string.IsNullOrWhiteSpace(llm.ModelOverride) ||
-               !string.IsNullOrWhiteSpace(llm.NyxidRoutePreference);
+               !string.IsNullOrWhiteSpace(llm.UserMemoryPrompt) ||
+               llm.HasMaxToolRoundsOverride;
     }
 
     public static WorkflowRunExecutionContextState RedactedClone(WorkflowRunExecutionContextState? source)
     {
         var clone = source?.Clone() ?? new WorkflowRunExecutionContextState();
-        if (!string.IsNullOrWhiteSpace(clone.Llm?.NyxidAccessToken))
-            clone.Llm.NyxidAccessToken = string.Empty;
         if (!string.IsNullOrWhiteSpace(clone.Connector?.HttpAuthorization))
             clone.Connector.HttpAuthorization = string.Empty;
         return clone;
