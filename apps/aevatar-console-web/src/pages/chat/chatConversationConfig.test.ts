@@ -86,6 +86,23 @@ describe("buildConversationRouteOptions", () => {
       }).map((option) => option.label)
     ).toEqual(["Gateway"]);
   });
+
+  it("does not add saved global or conversation routes when backend omits them", () => {
+    const options = buildConversationRouteOptions({
+      ...llmSettings,
+      routeOptions: [llmSettings.routeOptions[0]],
+    });
+
+    expect(options).toEqual([
+      {
+        label: "Company LLM Gateway",
+        value: USER_LLM_ROUTE_GATEWAY,
+      },
+    ]);
+    expect(options.map((option) => option.value)).not.toContain(
+      "/api/v1/proxy/s/retired-team"
+    );
+  });
 });
 
 describe("buildConversationModelGroups", () => {
@@ -103,6 +120,19 @@ describe("buildConversationModelGroups", () => {
       buildConversationModelGroups({
         effectiveRoute: "/api/v1/proxy/s/missing",
         settings: llmSettings,
+      })
+    ).toEqual([]);
+  });
+
+  it("does not emit a current group from selected or default models outside backend groups", () => {
+    expect(
+      buildConversationModelGroups({
+        effectiveRoute: USER_LLM_ROUTE_GATEWAY,
+        settings: {
+          ...llmSettings,
+          defaultModel: "retired-default-model",
+          modelGroupsByRoute: [],
+        },
       })
     ).toEqual([]);
   });

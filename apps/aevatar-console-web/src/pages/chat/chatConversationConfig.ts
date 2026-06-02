@@ -100,9 +100,7 @@ export function describeConversationRoute(
 }
 
 export function buildConversationRouteOptions(
-  settings: StudioUserLlmSettings | undefined,
-  globalPreferredRoute?: string,
-  conversationRoute?: string
+  settings: StudioUserLlmSettings | undefined
 ): ConversationRouteOption[] {
   const options: ConversationRouteOption[] = [];
   const seen = new Set<string>();
@@ -119,30 +117,15 @@ export function buildConversationRouteOptions(
     });
   }
 
-  for (const route of [globalPreferredRoute, conversationRoute]) {
-    if (route !== undefined) {
-      const normalizedRoute = normalizeUserLlmRoute(route);
-      if (!seen.has(normalizedRoute)) {
-        seen.add(normalizedRoute);
-        options.push({
-          label: normalizedRoute || USER_LLM_ROUTE_GATEWAY_LABEL,
-          value: normalizedRoute,
-        });
-      }
-    }
-  }
-
   return options;
 }
 
 export function buildConversationModelGroups(input: {
-  conversationModel?: string;
   effectiveRoute: string;
-  globalDefaultModel?: string;
   settings: StudioUserLlmSettings | undefined;
 }): ConversationLlmModelGroup[] {
   const normalizedRoute = normalizeUserLlmRoute(input.effectiveRoute);
-  const groups = (input.settings?.modelGroupsByRoute ?? [])
+  return (input.settings?.modelGroupsByRoute ?? [])
     .filter((group: StudioUserLlmModelGroup) =>
       normalizeUserLlmRoute(group.routeValue) === normalizedRoute
     )
@@ -152,22 +135,6 @@ export function buildConversationModelGroups(input: {
       models: Array.from(new Set(group.models.filter(Boolean))),
     }))
     .filter((group) => group.models.length > 0);
-  const selectedModel =
-    trimConversationValue(input.conversationModel) ||
-    trimConversationValue(input.globalDefaultModel);
-
-  if (
-    selectedModel &&
-    !groups.some((group) => group.models.includes(selectedModel))
-  ) {
-    groups.unshift({
-      id: "__current__",
-      label: "Current",
-      models: [selectedModel],
-    });
-  }
-
-  return groups;
 }
 
 export function findConversationRouteOption(
