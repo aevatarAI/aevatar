@@ -12,7 +12,13 @@ import {
 } from "@/shared/runs/endpointKinds";
 import { cardStackStyle, embeddedPanelStyle, moduleCardProps, scrollPanelStyle } from "@/shared/ui/proComponents";
 import type { RunTransport } from "../runEventPresentation";
-import type { RecentRunTableRow, RunFormValues, RunPreset, SelectedRouteRecord } from "../runWorkbenchConfig";
+import type {
+  RecentRunTableRow,
+  RunFormValues,
+  RunPreset,
+  RunReadinessSummary,
+  SelectedRouteRecord,
+} from "../runWorkbenchConfig";
 import {
   formatRunRouteLabel,
   workbenchCardBodyStyle,
@@ -46,6 +52,7 @@ type RunsLaunchRailProps = {
   visiblePresets: RunPreset[];
   workflowCatalogLoading: boolean;
   routeOptions: WorkflowOption[];
+  runReadiness?: RunReadinessSummary;
   onAbortRun: () => void;
   onCatalogSearchChange: (value: string) => void;
   onClearRecentRuns: () => void;
@@ -147,6 +154,120 @@ const railMetaWrapStyle: React.CSSProperties = {
 const railDescriptionStyle: React.CSSProperties = {
   marginBottom: 0,
 };
+
+const readinessPanelStyle: React.CSSProperties = {
+  ...embeddedPanelStyle,
+  background: "linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, rgba(255, 255, 255, 0.92) 100%)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  padding: 14,
+};
+
+const readinessHeaderStyle: React.CSSProperties = {
+  alignItems: "flex-start",
+  display: "flex",
+  gap: 12,
+  justifyContent: "space-between",
+};
+
+const readinessGridStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+  gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))",
+};
+
+const readinessItemStyle: React.CSSProperties = {
+  border: "1px solid var(--ant-color-border-secondary)",
+  borderRadius: 10,
+  display: "flex",
+  flexDirection: "column",
+  gap: 5,
+  minWidth: 0,
+  padding: "9px 10px",
+};
+
+const readinessLabelStyle: React.CSSProperties = {
+  color: "var(--ant-color-text-secondary)",
+  fontSize: 11,
+  lineHeight: 1,
+};
+
+const readinessValueStyle: React.CSSProperties = {
+  color: "var(--ant-color-text)",
+  fontSize: 13,
+  fontWeight: 700,
+  lineHeight: 1.25,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const readinessHelperStyle: React.CSSProperties = {
+  color: "var(--ant-color-text-secondary)",
+  fontSize: 12,
+  lineHeight: 1.35,
+  margin: 0,
+};
+
+function renderReadinessSummary(
+  runReadiness?: RunReadinessSummary,
+): React.ReactNode {
+  if (!runReadiness) {
+    return null;
+  }
+
+  return (
+    <div style={readinessPanelStyle}>
+      <div style={readinessHeaderStyle}>
+        <div>
+          <Typography.Text strong>
+            {runReadiness.ready ? "Ready to send" : "Send readiness"}
+          </Typography.Text>
+          <Typography.Paragraph style={readinessHelperStyle}>
+            {runReadiness.ready
+              ? "Prompt runs will use this workspace context."
+              : runReadiness.blockingReason}
+          </Typography.Paragraph>
+        </div>
+        <Tag color={runReadiness.ready ? "success" : "warning"}>
+          {runReadiness.ready ? "Ready" : "Blocked"}
+        </Tag>
+      </div>
+
+      <div style={readinessGridStyle}>
+        {runReadiness.items.map((item) => (
+          <div key={item.key} style={readinessItemStyle}>
+            <Typography.Text style={readinessLabelStyle}>
+              {item.label}
+            </Typography.Text>
+            <Typography.Text title={item.value} style={readinessValueStyle}>
+              {item.value}
+            </Typography.Text>
+            <Tag
+              color={
+                item.status === "ready"
+                  ? "success"
+                  : item.status === "required"
+                    ? "warning"
+                    : "default"
+              }
+            >
+              {item.status === "ready"
+                ? "Ready"
+                : item.status === "required"
+                  ? "Required"
+                  : "Context"}
+            </Tag>
+            <Typography.Paragraph style={readinessHelperStyle}>
+              {item.helper}
+            </Typography.Paragraph>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function renderRouteMiniCard(
   activeEndpointId: string,
@@ -440,6 +561,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   visiblePresets,
   workflowCatalogLoading,
   routeOptions,
+  runReadiness,
   onAbortRun,
   onCatalogSearchChange,
   onClearRecentRuns,
@@ -516,6 +638,8 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
               label: isChatVariant ? "Context" : "Compose",
               children: (
                 <div style={compactStackStyle}>
+                  {isChatVariant ? renderReadinessSummary(runReadiness) : null}
+
                   {renderRouteMiniCard(
                     activeEndpointId,
                     activeEndpointKind,
@@ -716,7 +840,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         items={[
                           {
                             key: "advanced",
-                            label: "Advanced options",
+                            label: "Advanced payload and transport",
                             children: (
                               <div style={compactStackStyle}>
                                 <ProFormText

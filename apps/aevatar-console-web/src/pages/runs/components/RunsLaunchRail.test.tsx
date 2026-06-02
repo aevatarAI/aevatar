@@ -110,6 +110,33 @@ describe("RunsLaunchRail", () => {
         visiblePresets={[]}
         workflowCatalogLoading={false}
         routeOptions={[{ label: "direct", value: "direct" }]}
+        runReadiness={{
+          ready: false,
+          blockingReason: "Workspace is required before the prompt can be sent.",
+          items: [
+            {
+              key: "workspace",
+              label: "Workspace",
+              value: "Required",
+              status: "required",
+              helper: "Add a workspace ID to unlock Send.",
+            },
+            {
+              key: "route",
+              label: "Route",
+              value: "direct",
+              status: "context",
+              helper: "The prompt will target this chat route.",
+            },
+            {
+              key: "endpoint",
+              label: "Endpoint",
+              value: "chat",
+              status: "context",
+              helper: "Advanced endpoint and payload controls stay available below.",
+            },
+          ],
+        }}
         onAbortRun={jest.fn()}
         onCatalogSearchChange={jest.fn()}
         onClearRecentRuns={jest.fn()}
@@ -125,13 +152,95 @@ describe("RunsLaunchRail", () => {
 
     expect(screen.getByLabelText("Chat route (optional)")).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace ID")).toBeInTheDocument();
+    expect(screen.getByText("Send readiness")).toBeInTheDocument();
+    expect(screen.getByText("Blocked")).toBeInTheDocument();
+    expect(screen.getByText("Workspace is required before the prompt can be sent.")).toBeInTheDocument();
+    expect(screen.getByText("Add a workspace ID to unlock Send.")).toBeInTheDocument();
+    expect(screen.getAllByText("Required").length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("Endpoint")).toBeNull();
     expect(screen.queryByText("Requests go through /api/scopes/{scopeId}/invoke/chat:stream")).toBeNull();
 
-    fireEvent.click(screen.getByText("Advanced options"));
+    fireEvent.click(screen.getByText("Advanced payload and transport"));
 
     expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
     expect(screen.getByLabelText("Binding override (optional)")).toBeInTheDocument();
+  });
+
+  it("shows ready chat context without expanding advanced payload controls", () => {
+    const composerFormRef = {
+      current: undefined,
+    } as React.RefObject<ProFormInstance<RunFormValues> | undefined>;
+
+    render(
+      <RunsLaunchRail
+        catalogSearch=""
+        activeEndpointId="chat"
+        activeEndpointKind="chat"
+        composerFormRef={composerFormRef}
+        initialFormValues={{
+          prompt: "",
+          endpointId: "chat",
+          endpointKind: "chat",
+          scopeId: "scope-1",
+          serviceOverrideId: "",
+          transport: "sse",
+          routeName: "direct",
+        }}
+        recentRunRows={[]}
+        selectedTransport="sse"
+        selectedRouteDetailsPrimitives={[]}
+        streaming={false}
+        submitPathLabel="/api/scopes/{scopeId}/invoke/chat:stream"
+        transportOptions={[{ label: "Service SSE stream", value: "sse" }]}
+        variant="chat"
+        visiblePresets={[]}
+        workflowCatalogLoading={false}
+        routeOptions={[{ label: "direct", value: "direct" }]}
+        runReadiness={{
+          ready: true,
+          items: [
+            {
+              key: "workspace",
+              label: "Workspace",
+              value: "scope-1",
+              status: "ready",
+              helper: "Run requests are scoped to this workspace.",
+            },
+            {
+              key: "route",
+              label: "Route",
+              value: "direct",
+              status: "context",
+              helper: "The prompt will target this chat route.",
+            },
+            {
+              key: "endpoint",
+              label: "Endpoint",
+              value: "chat",
+              status: "context",
+              helper: "Advanced endpoint and payload controls stay available below.",
+            },
+          ],
+        }}
+        onAbortRun={jest.fn()}
+        onCatalogSearchChange={jest.fn()}
+        onClearRecentRuns={jest.fn()}
+        onEndpointChange={jest.fn()}
+        onEndpointKindChange={jest.fn()}
+        onSelectRouteName={jest.fn()}
+        onScopeIdChange={jest.fn()}
+        onSubmitRun={async () => {}}
+        onTransportChange={jest.fn()}
+        onUsePreset={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("Ready to send")).toBeInTheDocument();
+    expect(screen.getByText("Prompt runs will use this workspace context.")).toBeInTheDocument();
+    expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
+    expect(screen.getByText("scope-1")).toBeInTheDocument();
+    expect(screen.getByText("Run requests are scoped to this workspace.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Endpoint")).toBeNull();
   });
 
   it("keeps command endpoint payload controls behind advanced options", () => {
