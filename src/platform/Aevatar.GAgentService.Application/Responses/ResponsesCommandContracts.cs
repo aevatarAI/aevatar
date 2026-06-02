@@ -261,7 +261,14 @@ public sealed record ResponsesCreateCommandResult(
 public sealed record ResponsesCreateCompletedCommandResult(
     NormalizedResponsesRequest Normalized,
     long CreatedAt,
+    ResponsesCompletionStage CompletionStage,
     LlmSessionCompletionSnapshot Completion);
+
+public enum ResponsesCompletionStage
+{
+    Committed = 0,
+    ReadModelObserved = 1,
+}
 
 // Refactor (iter103/cluster-1 r2):
 //   Old pattern: Application facades treated IActorDispatchPort ACK as committed/readmodel-observed completion.

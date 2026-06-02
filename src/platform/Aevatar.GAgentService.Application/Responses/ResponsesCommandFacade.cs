@@ -81,7 +81,7 @@ public sealed class ResponsesCommandFacade(
                 sessionResult.Error.Message);
         if (continuation.AlreadyResolvedCompletion is not null)
         {
-            var completionResult = await RecordCompletionAndReadAsync(
+            var completionResult = await RecordCompletionAsync(
                 sessionResult.Session!,
                 continuation.AlreadyResolvedCompletion,
                 ct);
@@ -93,6 +93,7 @@ public sealed class ResponsesCommandFacade(
                 : ResponsesCreateCommandResult.FromCompleted(new ResponsesCreateCompletedCommandResult(
                     normalized,
                     createdAt.ToUnixTimeSeconds(),
+                    completionResult.Stage,
                     completionResult.Completion!));
         }
 
@@ -767,7 +768,7 @@ public sealed class ResponsesCommandFacade(
         return true;
     }
 
-    private async Task<CompletionRecordResult> RecordCompletionAndReadAsync(
+    private async Task<CompletionRecordResult> RecordCompletionAsync(
         LlmSessionRegistrationResult session,
         LlmSessionCompletion completion,
         CancellationToken ct)
@@ -793,19 +794,9 @@ public sealed class ResponsesCommandFacade(
                 $"Failed to record response completion. Correlation: {correlation}"));
         }
 
-        var observedCompletion = await LlmSessionCompletionObserver.WaitForCompletionAsync(
-            responseSessionQueryPort,
-            session.ResponseId,
-            ct);
-        if (observedCompletion is null)
-        {
-            return CompletionRecordResult.FromError(new ResponsesCommandError(
-                503,
-                "response_completion_not_observed",
-                "Response completion was committed but is not yet visible in the read model."));
-        }
-
-        return CompletionRecordResult.FromCompletion(observedCompletion);
+        return CompletionRecordResult.FromCompletion(
+            ResponsesCompletionStage.Committed,
+            ToCompletionSnapshot(completion));
     }
 
     // Refactor (iter103/cluster-1 r2):
@@ -944,6 +935,25 @@ public sealed class ResponsesCommandFacade(
 
         return completion;
     }
+
+    private static LlmSessionCompletionSnapshot ToCompletionSnapshot(LlmSessionCompletion completion) =>
+        new(
+            completion.OutputText,
+            completion.ToolCalls
+                .Select(static tool => new LlmSessionCompletedToolCallSnapshot(
+                    tool.CallId,
+                    tool.ToolName,
+                    ResponsesJsonValues.ToBoundaryJson(tool.Result)))
+                .ToArray(),
+            completion.CompletedAt?.ToDateTimeOffset(),
+            string.IsNullOrWhiteSpace(completion.FailureCode) ? null : completion.FailureCode,
+            string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage,
+            completion.Usage is null
+                ? null
+                : new TokenUsage(
+                    completion.Usage.PromptTokens,
+                    completion.Usage.CompletionTokens,
+                    completion.Usage.TotalTokens));
 
     private async Task TryResolveIncomingToolResultsAsync(
         LlmSessionSnapshot? previousSnapshot,
@@ -1119,10 +1129,15 @@ public sealed class ResponsesCommandFacade(
 
     private sealed record CompletionRecordResult(
         ResponsesCommandError? Error,
+        ResponsesCompletionStage Stage,
         LlmSessionCompletionSnapshot? Completion)
     {
-        public static CompletionRecordResult FromError(ResponsesCommandError error) => new(error, null);
+        public static CompletionRecordResult FromError(ResponsesCommandError error) =>
+            new(error, ResponsesCompletionStage.Committed, null);
 
-        public static CompletionRecordResult FromCompletion(LlmSessionCompletionSnapshot completion) => new(null, completion);
+        public static CompletionRecordResult FromCompletion(
+            ResponsesCompletionStage stage,
+            LlmSessionCompletionSnapshot completion) =>
+            new(null, stage, completion);
     }
 }

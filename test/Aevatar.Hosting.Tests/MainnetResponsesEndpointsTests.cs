@@ -2613,6 +2613,7 @@ public sealed class MainnetResponsesEndpointsTests
                     new ResponsesCreateCompletedCommandResult(
                         plan.Normalized,
                         plan.CreatedAt.ToUnixTimeSeconds(),
+                        ResponsesCompletionStage.ReadModelObserved,
                         snapshot));
             }
         }
