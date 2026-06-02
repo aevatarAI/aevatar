@@ -7,18 +7,38 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeResolver
 {
     private readonly INyxIdCurrentUserResolver _currentUserResolver;
+    private readonly NyxIdIdentityAssertionValidator _identityAssertionValidator;
 
-    public NyxIdResponsesCallerScopeResolver(INyxIdCurrentUserResolver currentUserResolver)
+    public NyxIdResponsesCallerScopeResolver(
+        INyxIdCurrentUserResolver currentUserResolver,
+        NyxIdIdentityAssertionValidator identityAssertionValidator)
     {
         _currentUserResolver = currentUserResolver ?? throw new ArgumentNullException(nameof(currentUserResolver));
+        _identityAssertionValidator = identityAssertionValidator ??
+                                      throw new ArgumentNullException(nameof(identityAssertionValidator));
     }
 
-    // Refactor (iter159/cluster-640-first): Old: ResolveAsync(string bearer)  New: ResolveAsync(ResponsesCallerScopeResolutionContext)
     public async Task<ResponsesCallerScope> ResolveAsync(
         ResponsesCallerScopeResolutionContext context,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
+
+        if (!string.IsNullOrWhiteSpace(context.NyxIdIdentityToken))
+        {
+            var validation = await _identityAssertionValidator.ValidateAsync(context.NyxIdIdentityToken, ct);
+            if (!validation.Succeeded || string.IsNullOrWhiteSpace(validation.Subject))
+            {
+                throw new ResponsesCallerScopeUnavailableException(
+                    $"NyxID identity assertion is invalid: {validation.ErrorCode ?? "identity_assertion_invalid"}.");
+            }
+
+            var normalizedSubject = validation.Subject.Trim();
+            return new ResponsesCallerScope(
+                ScopeId: normalizedSubject,
+                OwnerSubject: normalizedSubject,
+                OriginKind: LlmSessionOriginKind.ApiKey);
+        }
 
         var nyxIdAccessToken = context.InboundBearerToken;
         if (string.IsNullOrWhiteSpace(nyxIdAccessToken))
