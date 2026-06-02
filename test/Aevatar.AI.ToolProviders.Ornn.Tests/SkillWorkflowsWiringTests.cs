@@ -208,6 +208,68 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
+    public async Task UseSkillTool_MountWorkflowsTrueWithBlankWorkflowId_ReturnsErrorAndDoesNotUpsert()
+    {
+        using var _ = BeginContextScope(scopeId: "scope-1");
+        var catalog = new LocalSkillCatalog();
+        catalog.Register(new SkillDefinition
+        {
+            Name = "translator",
+            Description = "Translates text",
+            Instructions = "Follow these steps.",
+            Source = SkillSource.Local,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = " ",
+                    WorkflowYamls = ["name: translate_flow\nsteps: []\n"],
+                },
+            ],
+        });
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+
+        var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
+
+        output.Should().Contain("## Mounted Workflows");
+        output.Should().Contain("\"success\": false");
+        output.Should().Contain("skill workflow descriptor has no workflow_id");
+        commandPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountWorkflowsTrueWithBlankWorkflowYamls_ReturnsErrorAndDoesNotUpsert()
+    {
+        using var _ = BeginContextScope(scopeId: "scope-1");
+        var catalog = new LocalSkillCatalog();
+        catalog.Register(new SkillDefinition
+        {
+            Name = "translator",
+            Description = "Translates text",
+            Instructions = "Follow these steps.",
+            Source = SkillSource.Local,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "translate_flow",
+                    WorkflowYamls = ["", "   ", "\t"],
+                },
+            ],
+        });
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var tool = new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort);
+
+        var output = await tool.ExecuteAsync("""{"skill":"translator","mount_workflows":true}""");
+
+        output.Should().Contain("## Mounted Workflows");
+        output.Should().Contain("\"success\": false");
+        output.Should().Contain(@"skill workflow \u0027translate_flow\u0027 has no workflow YAML");
+        commandPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task UseSkillTool_MountWorkflowsTrue_UpsertsAllSkillWorkflowsThroughScopeWorkflowCommandPort()
     {
         using var _ = BeginContextScope(scopeId: "scope-1");
