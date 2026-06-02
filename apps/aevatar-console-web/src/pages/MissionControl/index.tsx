@@ -45,8 +45,10 @@ import {
 import {
   formatInterventionLabel,
   formatConnectionLabel,
+  formatHandoffSeverityLabel,
   formatMissionLabel,
   resolveConnectionTagColor,
+  resolveHandoffTagColor,
   resolveMissionStatusTone,
   resolveObservationTone,
   type MissionThemeToken,
@@ -618,7 +620,13 @@ function MissionStage({
                   <Space wrap size={[8, 8]}>
                     {event.stepId ? <Tag>{event.stepId}</Tag> : null}
                     {event.actorId ? <Tag color="cyan">{event.actorId}</Tag> : null}
+                    <Tag color={resolveHandoffTagColor(event.handoff.severity)}>
+                      {formatHandoffSeverityLabel(event.handoff.severity)}
+                    </Tag>
                   </Space>
+                  <Typography.Text style={{ color: token.colorTextTertiary }}>
+                    {event.handoff.title}: {event.handoff.nextStep}
+                  </Typography.Text>
                 </Card>
               ))}
             </div>

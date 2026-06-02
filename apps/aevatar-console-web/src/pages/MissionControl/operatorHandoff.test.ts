@@ -9,6 +9,13 @@ function createSnapshot(
     events: [
       {
         detail: 'approval requested',
+        handoff: {
+          detail: 'Waiting for approval at step approval.',
+          evidence: 'approval requested',
+          nextStep: 'Open the intervention panel and decide with the latest event dock evidence.',
+          severity: 'action',
+          title: 'Action handoff',
+        },
         id: 'event-1',
         severity: 'warning',
         stepId: 'approval',

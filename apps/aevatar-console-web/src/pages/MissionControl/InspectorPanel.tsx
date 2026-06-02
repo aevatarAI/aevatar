@@ -25,12 +25,14 @@ import type {
 import type { MissionOperatorHandoff } from './operatorHandoff';
 import {
   formatConnectionLabel,
+  formatHandoffSeverityLabel,
   formatInspectorPresentationLabel,
   formatInterventionLabel,
   formatMissionLabel,
   renderMissionKindIcon,
   resolveConnectionTagColor,
   resolveFeedbackTagColor,
+  resolveHandoffTagColor,
   resolveMissionStatusTone,
   resolveObservationTone,
 } from './presentation';
@@ -323,6 +325,9 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   <Tag color={resolveObservationTone(token, focusNode.observationStatus)}>
                     Observation: {formatMissionLabel(focusNode.observationStatus)}
                   </Tag>
+                  <Tag color={resolveHandoffTagColor(focusNode.handoff.severity)}>
+                    Handoff: {formatHandoffSeverityLabel(focusNode.handoff.severity)}
+                  </Tag>
                 </Space>
                 <div
                   style={{
@@ -361,6 +366,31 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 <Typography.Text style={{ color: token.colorTextSecondary }}>
                   {focusNode.summary}
                 </Typography.Text>
+                <div
+                  aria-label="Mission Control node handoff"
+                  style={{
+                    background: token.colorFillQuaternary,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    borderRadius: 4,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                    padding: 12,
+                  }}
+                >
+                  <Typography.Text strong style={{ color: token.colorTextHeading }}>
+                    {focusNode.handoff.title}
+                  </Typography.Text>
+                  <Typography.Text style={{ color: token.colorTextSecondary }}>
+                    {focusNode.handoff.detail}
+                  </Typography.Text>
+                  <Typography.Text style={{ color: token.colorTextTertiary }}>
+                    Evidence: {focusNode.handoff.evidence}
+                  </Typography.Text>
+                  <Typography.Text style={{ color: token.colorTextTertiary }}>
+                    Next: {focusNode.handoff.nextStep}
+                  </Typography.Text>
+                </div>
               </Space>
             </Card>
 

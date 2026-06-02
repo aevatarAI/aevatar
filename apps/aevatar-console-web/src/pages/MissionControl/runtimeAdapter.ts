@@ -23,6 +23,10 @@ import type {
   MissionTopologyNode,
   MissionTopologyNodeKind,
 } from './models';
+import {
+  buildMissionEventHandoffCue,
+  buildMissionNodeHandoffCue,
+} from './runtimeHandoff';
 
 type MissionSessionLike = {
   context?: {
@@ -927,6 +931,19 @@ export function buildMissionSnapshotFromRuntime(
         terminal && node.nodeType !== 'WorkflowStep',
       );
 
+      const status = nodeStatusFromRuntime(
+        node,
+        runStatus,
+        activityMap,
+        input.nowMs,
+        intervention,
+      );
+      const label =
+        node.properties.targetRole ||
+        node.properties.stepId ||
+        node.properties.workflowName ||
+        node.nodeId;
+
       return {
         id: node.nodeId,
         kind,
@@ -940,12 +957,17 @@ export function buildMissionSnapshotFromRuntime(
             : undefined,
         freshnessLabel: formatFreshness(ageSeconds),
         freshnessSeconds: ageSeconds ?? Number.POSITIVE_INFINITY,
+        handoff: buildMissionNodeHandoffCue({
+          connectionStatus: input.connectionStatus,
+          freshnessLabel: formatFreshness(ageSeconds),
+          isInterventionNode: intervention?.nodeId === node.nodeId,
+          kind,
+          label,
+          observationStatus,
+          status,
+        }),
         lane: laneForKind(kind),
-        label:
-          node.properties.targetRole ||
-          node.properties.stepId ||
-          node.properties.workflowName ||
-          node.nodeId,
+        label,
         lastLatencyMs:
           Number(
             relatedTimeline[relatedTimeline.length - 1]?.data.durationMs ||
@@ -958,7 +980,7 @@ export function buildMissionSnapshotFromRuntime(
         role:
           node.properties.stepType || node.properties.targetRole || node.nodeType,
         snapshot: buildNodeSnapshot(node, artifacts.graph, session),
-        status: nodeStatusFromRuntime(node, runStatus, activityMap, input.nowMs, intervention),
+        status,
         summary: buildNodeSummary(node, relatedTimeline, artifacts.graph.snapshot),
         toolCalls: buildToolCalls(node, relatedTimeline),
       } satisfies MissionTopologyNode;
@@ -995,16 +1017,29 @@ export function buildMissionSnapshotFromRuntime(
   });
 
   const timelineTail = artifacts.timeline.slice(-24);
-  const events: MissionExecutionEvent[] = timelineTail.map((item, index) => ({
-    id: `timeline-${index}-${item.timestamp}`,
-    actorId: item.agentId || undefined,
-    detail: item.message,
-    severity: mapTimelineSeverity(item.eventType),
-    stepId: item.stepId || undefined,
-    timestamp: item.timestamp,
-    title: item.stage || item.eventType || 'Runtime event',
-    type: mapTimelineEventType(item.eventType),
-  }));
+  const events: MissionExecutionEvent[] = timelineTail.map((item, index) => {
+    const type = mapTimelineEventType(item.eventType);
+    const actorId = item.agentId || undefined;
+    const stepId = item.stepId || undefined;
+    return {
+      id: `timeline-${index}-${item.timestamp}`,
+      actorId,
+      detail: item.message,
+      handoff: buildMissionEventHandoffCue({
+        actorId,
+        detail: item.message,
+        intervention,
+        runStatus,
+        stepId,
+        type,
+      }),
+      severity: mapTimelineSeverity(item.eventType),
+      stepId,
+      timestamp: item.timestamp,
+      title: item.stage || item.eventType || 'Runtime event',
+      type,
+    };
+  });
 
   return {
     summary: {
