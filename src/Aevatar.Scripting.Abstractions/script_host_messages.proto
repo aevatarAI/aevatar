@@ -124,6 +124,7 @@ message ScriptBehaviorState {
   string read_model_descriptor_full_name = 17;
   ScriptRuntimeSemanticsSpec runtime_semantics = 18;
   string scope_id = 19;
+  ScriptRunOutcomeRecordedEvent last_run_outcome = 20;
 }
 
 message ScriptCatalogEntryState {
@@ -271,6 +272,29 @@ message RunScriptRequestedEvent {
   string command_id = 6;
   string correlation_id = 7;
   string scope_id = 8;
+}
+
+enum ScriptRunOutcomeStatus {
+  SCRIPT_RUN_OUTCOME_STATUS_UNSPECIFIED = 0;
+  SCRIPT_RUN_OUTCOME_STATUS_SUCCEEDED = 1;
+  SCRIPT_RUN_OUTCOME_STATUS_FAILED = 2;
+}
+
+message ScriptRunOutcomeRecordedEvent {
+  string script_run_id = 1;
+  ScriptRunOutcomeStatus status = 2;
+  string error = 3;
+  google.protobuf.Any result = 4;
+  string actor_id = 5;
+  string definition_actor_id = 6;
+  string script_id = 7;
+  string script_revision = 8;
+  string command_id = 9;
+  string correlation_id = 10;
+  string scope_id = 11;
+  int32 committed_fact_count = 12;
+  int64 state_version = 13;
+  int64 occurred_at_unix_time_ms = 14;
 }
 
 message BindScriptBehaviorRequestedEvent {

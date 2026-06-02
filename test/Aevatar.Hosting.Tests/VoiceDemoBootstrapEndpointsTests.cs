@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -9,7 +10,6 @@ using Aevatar.GAgents.Scheduled;
 using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -48,8 +48,8 @@ public sealed class VoiceDemoBootstrapEndpointsTests
                     RuleId = "voice-demo",
                     Priority = 900,
                     Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
-                    Action = GAgentToolHint("old-agent", "voice_presence_openai"),
-                    Description = "replace stale voice demo rule",
+                    Action = TypedVoiceAttachTarget("old-agent", "voice_presence_openai"),
+                    Description = "remove stale voice demo rule",
                 },
             ]);
         var routePolicyQueryPort = new StaticRoutePolicyQueryPort(existing);
@@ -62,15 +62,18 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         var client = app.GetTestClient();
 
         var response = await client.PostAsync("/api/demo/voice/bootstrap", content: null);
-        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+        var responseText = await response.Content.ReadAsStringAsync();
+        var body = JsonSerializer.Deserialize<Dictionary<string, object>>(responseText);
 
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted, responseText);
         body.Should().ContainKey("status").WhoseValue.ToString().Should().Be("accepted");
         body.Should().ContainKey("actor_id");
         body.Should().ContainKey("route_policy_actor_id");
         body.Should().ContainKey("agent_command_id");
         body.Should().ContainKey("route_policy_command_id");
         body.Should().ContainKey("readiness");
+        body.Should().NotContainKey("nyxid_proxy");
+        responseText.Should().NotContain("https://nyx.chrono-ai.fun/api/v1/proxy/s/llm-openai");
         var demoActorId = body!["actor_id"].ToString()!;
         demoActorId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
         body["route_policy_actor_id"].ToString().Should().Be($"chat-route-policy:{Scope}");
@@ -91,37 +94,40 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         command.Rules.Should().ContainSingle(rule => rule.RuleId == "keep-chat")
             .Which.Action.ForwardToModel.ModelName.Should().Be("kept-model");
         var voiceRule = command.Rules.Should().ContainSingle(rule => rule.RuleId == "voice-demo").Subject;
-        voiceRule.Priority.Should().Be(1000);
-        voiceRule.Match.SourceKind.Should().Be(ChatSourceKind.Voice);
-        voiceRule.Action.ForwardToModel.ToolSetRef.Name.Should().Be("voice.realtime");
-        voiceRule.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("aevatar_invoke_gagent");
-        voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"].StringValue
-            .Should()
-            .Be(demoActorId);
-        voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["voice_module_name"].StringValue
-            .Should()
-            .Be("voice_presence_openai");
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.ActorId.Should().Be(demoActorId);
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.VoiceAttachTarget.VoiceModuleName.Should().Be("voice_presence_openai");
+        voiceRule.Action.ForwardToModel.ToolChoiceHint.PrefilledArguments.Should().BeNull();
     }
 
-    private static ChatRouteAction GAgentToolHint(string actorId, string voiceModuleName) => new()
+    [Fact]
+    public async Task Bootstrap_DoesNotCreateRoutePolicy_WhenNoExistingPolicyExists()
     {
-        ForwardToModel = new ForwardToModel
-        {
-            ToolSetRef = new ChatRouteToolSetRef { Name = "voice.realtime" },
-            ToolChoiceHint = new ChatRouteToolChoiceHint
-            {
-                ToolName = "aevatar_invoke_gagent",
-                PrefilledArguments = new Struct
-                {
-                    Fields =
-                    {
-                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
-                        ["voice_module_name"] = Google.Protobuf.WellKnownTypes.Value.ForString(voiceModuleName),
-                    },
-                },
-            },
-        },
-    };
+        var voiceDemoCommandPort = new RecordingVoiceDemoAgentCommandPort();
+        var catalogCommandPort = new RecordingCatalogCommandPort();
+        var routePolicyQueryPort = new StaticRoutePolicyQueryPort(null);
+        var routePolicyCommandPort = new RecordingChatRoutePolicyCommandPort();
+        await using var app = await CreateAppAsync(
+            voiceDemoCommandPort,
+            catalogCommandPort,
+            routePolicyCommandPort,
+            routePolicyQueryPort);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync("/api/demo/voice/bootstrap", content: null);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, object?>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+        voiceDemoCommandPort.Commands.Should().ContainSingle()
+            .Which.Should().Be((Scope, "voice_presence_openai"));
+        catalogCommandPort.Commands.Should().ContainSingle()
+            .Which.AgentId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
+        routePolicyCommandPort.Upserts.Should().BeEmpty();
+        body.Should().ContainKey("route_policy_actor_id").WhoseValue.Should().BeNull();
+        body.Should().ContainKey("route_policy_command_id").WhoseValue.Should().BeNull();
+    }
+
+    private static ChatRouteAction TypedVoiceAttachTarget(string actorId, string voiceModuleName) =>
+        ChatRouteActionTargets.ForwardToVoiceAttachTarget(actorId, voiceModuleName);
 
     private static async Task<WebApplication> CreateAppAsync(
         RecordingVoiceDemoAgentCommandPort voiceDemoCommandPort,

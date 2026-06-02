@@ -2,9 +2,11 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Sdk.Contracts;
 using Aevatar.Workflow.Sdk.Errors;
 using Aevatar.Workflow.Sdk.Internal;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Sdk.Streaming;
 
@@ -161,20 +163,28 @@ public sealed class SseChatTransport : IWorkflowChatTransport
         if (string.Equals(payload.Trim(), "[DONE]", StringComparison.Ordinal))
             return null;
 
-        WorkflowOutputFrame? frame;
+        WorkflowRunEventEnvelope frame;
         try
         {
-            frame = JsonSerializer.Deserialize<WorkflowOutputFrame>(payload, jsonOptions);
+            // Refactor (iter104/cluster-2): Old pattern: SDK exposed WorkflowOutputFrame as JSON semantic contract (internal serialization not protobuf). New principle: SDK uses WorkflowRunEventEnvelope proto; JSON only at external wire boundary adapter.
+            frame = WorkflowRunEventJsonBoundaryCodec.Parse(payload);
         }
         catch (JsonException ex)
         {
             throw AevatarWorkflowException.StreamPayload(
-                "Failed to parse SSE frame payload as WorkflowOutputFrame.",
+                "Failed to parse SSE frame payload as WorkflowRunEventEnvelope.",
+                payload,
+                ex);
+        }
+        catch (InvalidProtocolBufferException ex)
+        {
+            throw AevatarWorkflowException.StreamPayload(
+                "Failed to parse SSE frame payload as WorkflowRunEventEnvelope.",
                 payload,
                 ex);
         }
 
-        if (frame == null || string.IsNullOrWhiteSpace(frame.Type))
+        if (frame.EventCase == WorkflowRunEventEnvelope.EventOneofCase.None)
         {
             throw AevatarWorkflowException.StreamPayload(
                 "SSE frame payload does not contain a valid event type.",

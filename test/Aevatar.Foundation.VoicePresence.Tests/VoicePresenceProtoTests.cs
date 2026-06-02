@@ -74,6 +74,8 @@ public class VoicePresenceProtoTests
             .ShouldContain(nameof(VoiceControlFrame));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoiceToolDefinition));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoicePresenceEventDedupeFenceEntry));
     }
 
     [Fact]
@@ -124,6 +126,7 @@ public class VoicePresenceProtoTests
             OwnerId = "host-1",
             TransportLeaseId = "transport-1",
             LeaseExpiresAt = expiresAt,
+            LeaseEpoch = 7,
             Pcm16 = ByteString.CopyFrom([1, 2, 3]),
             SampleRateHz = 24000,
         };
@@ -137,9 +140,39 @@ public class VoicePresenceProtoTests
 
         parsed.ShouldBe(signal);
         parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
+        parsed.TransportAudioFrameReceived.LeaseEpoch.ShouldBe(7);
         parsed.TransportAudioFrameReceived.Pcm16.ToByteArray().ShouldBe([1, 2, 3]);
         VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
             .ShouldContain(nameof(VoiceTransportAudioFrameReceived));
+    }
+
+    [Fact]
+    public void VoiceModuleSignal_should_roundtrip_transport_lifetime_completed()
+    {
+        var expiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5));
+        var completed = new VoiceTransportLifetimeCompleted
+        {
+            SessionId = "lease-1",
+            OwnerId = "host-1",
+            TransportLeaseId = "transport-1",
+            LeaseExpiresAt = expiresAt,
+            Reason = "host_transport_completed",
+            LeaseEpoch = 8,
+        };
+        var signal = new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            TransportLifetimeCompleted = completed,
+        };
+
+        var parsed = VoiceModuleSignal.Parser.ParseFrom(signal.ToByteArray());
+
+        parsed.ShouldBe(signal);
+        parsed.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportLifetimeCompleted);
+        parsed.TransportLifetimeCompleted.LeaseEpoch.ShouldBe(8);
+        parsed.TransportLifetimeCompleted.ShouldBe(completed);
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(static x => x.Name)
+            .ShouldContain(nameof(VoiceTransportLifetimeCompleted));
     }
 
     [Fact]
@@ -151,6 +184,7 @@ public class VoicePresenceProtoTests
             OwnerId = "host-1",
             TransportLeaseId = "transport-1",
             LeaseExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(5)),
+            LeaseEpoch = 9,
             Pcm16 = ByteString.CopyFrom([4, 5, 6]),
             SampleRateHz = 24000,
         };
@@ -161,6 +195,7 @@ public class VoicePresenceProtoTests
         envelope.Route.ShouldBe(EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self));
         signal.ModuleName.ShouldBe("voice_presence");
         signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.TransportAudioFrameReceived);
+        signal.TransportAudioFrameReceived.LeaseEpoch.ShouldBe(9);
         signal.TransportAudioFrameReceived.ShouldBe(audio);
         signal.TransportAudioFrameReceived.ShouldNotBeSameAs(audio);
     }

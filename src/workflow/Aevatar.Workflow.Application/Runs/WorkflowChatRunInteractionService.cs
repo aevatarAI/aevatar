@@ -103,14 +103,13 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             return AttemptStartResult.Failure(WorkflowChatRunStartError.ProjectionUnavailable);
         }
 
-        var source = request.Source ?? BuildSource(request);
         var seededRequest = request with
         {
             TargetSeed = new WorkflowRunTargetSeed(
                 actorResolution.Target.ActorId,
                 actorResolution.WorkflowNameForRun,
                 actorResolution.Target.CreatedActorIds,
-                source),
+                request.Source),
         };
 
         return AttemptStartResult.Success(new WorkflowChatRunInteractionAttempt(
@@ -165,20 +164,6 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         {
             await _runProvisioningPort.DestroyAsync(actorId, ct).ConfigureAwait(false);
         }
-    }
-
-    private static WorkflowChatSource BuildSource(WorkflowChatRunRequest request)
-    {
-        if (request.WorkflowYamls is { Count: > 0 })
-            return WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls, request.WorkflowName, request.ActorId);
-
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
-            return WorkflowChatSource.DefinitionActor(request.ActorId, request.WorkflowName);
-
-        if (!string.IsNullOrWhiteSpace(request.WorkflowName))
-            return WorkflowChatSource.CatalogWorkflow(request.WorkflowName);
-
-        return WorkflowChatSource.Direct();
     }
 
     private static string CreateInteractionId() => Guid.NewGuid().ToString("N");

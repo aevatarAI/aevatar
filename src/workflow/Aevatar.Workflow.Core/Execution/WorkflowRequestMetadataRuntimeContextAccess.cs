@@ -1,43 +1,39 @@
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-// Refactor (iter16/cluster-031):
-//   Old pattern: request metadata was copied into the generic execution item
-//                bag as `workflow.request.metadata`, mixing control values with passthrough metadata.
-//   New principle: request metadata is normalized into typed runtime sections
-//                  for LLM overrides, connector authorization, and filtered passthrough metadata.
 internal static class WorkflowRequestMetadataRuntimeContextAccess
 {
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: request metadata writes stored a normalized dictionary
-    //                under `workflow.request.metadata` in the item bag.
-    //   New principle: request metadata writes promote known control keys into
-    //                  typed runtime sections and keep only passthrough values.
-    public static void SetRequestMetadata(
+    public static Task SetRequestMetadataAsync(
         IWorkflowExecutionStateHost stateHost,
-        IReadOnlyDictionary<string, string>? metadata)
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
+        ct.ThrowIfCancellationRequested();
         stateHost.RuntimeContext.ApplyRequestMetadata(metadata);
+        return Task.CompletedTask;
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: request metadata cleanup removed the generic
-    //                `workflow.request.metadata` item.
-    //   New principle: request metadata cleanup clears the typed LLM,
-    //                  connector, and passthrough runtime sections.
-    public static void RemoveRequestMetadata(IWorkflowExecutionStateHost stateHost)
+    public static Task SetToolContextAsync(
+        IWorkflowExecutionStateHost stateHost,
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.RuntimeContext.ApplyRequestMetadata(null);
+        return WorkflowRunExecutionContextStateAccess.ApplyToolContextAsync(stateHost, toolContext, ct);
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: LLM calls copied request metadata out of the generic item
-    //                bag, where control keys and passthrough keys were mixed.
-    //   New principle: LLM calls copy only the filtered passthrough runtime
-    //                  metadata section.
+    public static async Task RemoveRequestMetadataAsync(
+        IWorkflowExecutionStateHost stateHost,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stateHost);
+        await WorkflowRunExecutionContextStateAccess.ClearAsync(stateHost, ct);
+        stateHost.RuntimeContext.Clear();
+    }
+
     public static int CopyRequestMetadata(
         IWorkflowExecutionContext ctx,
         IDictionary<string, string> target)

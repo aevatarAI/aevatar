@@ -13,6 +13,7 @@ namespace Aevatar.Scripting.Projection.Orchestration;
 //   New principle: Command service dispatches accepted-only write commands; readmodel activation is owned by scripting committed-state projection activation plan provider.
 public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IProjectionActivationPlanProvider
 {
+    // Refactor (iter149/cluster-1133): Old pattern: scripting execution projection activation only recognized domain fact commits.  New principle: actor-owned script run outcome commits use the same projection-session observation path.
     public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -21,7 +22,7 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IP
             yield break;
 
         if (context.ActorType == typeof(ScriptBehaviorGAgent) &&
-            context.Published.StateEvent.EventData.Is(ScriptDomainFactCommitted.Descriptor))
+            IsScriptExecutionMutation(context.Published.StateEvent.EventData))
         {
             yield return DurableExecutionPlan(context.ActorId);
             yield break;
@@ -61,6 +62,18 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IP
                 Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
         };
+
+    private static bool IsScriptExecutionMutation(Google.Protobuf.WellKnownTypes.Any eventData)
+    {
+        // Refactor (iter149/cluster-1133): Old pattern: execution mutation meant only ScriptDomainFactCommitted.  New principle: ScriptRunOutcomeRecordedEvent is a first-class committed execution fact for observers.
+        if (eventData.Is(ScriptDomainFactCommitted.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptRunOutcomeRecordedEvent.Descriptor))
+            return true;
+
+        return false;
+    }
 
     private static ProjectionActivationPlan DurableEvolutionPlan(string actorId) =>
         new()

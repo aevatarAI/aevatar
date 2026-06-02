@@ -23,7 +23,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
@@ -41,7 +41,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
 
         result.Succeeded.Should().BeTrue();
         result.Target.Should().NotBeNull();
@@ -62,8 +62,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var request = new WorkflowChatRunRequest(
             "hello",
-            "direct",
-            null,
+            WorkflowChatSource.CatalogWorkflow("direct"),
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -92,8 +91,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var request = new WorkflowChatRunRequest(
             "hello",
-            "direct",
-            null,
+            WorkflowChatSource.CatalogWorkflow("direct"),
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -118,8 +116,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var request = new WorkflowChatRunRequest(
             "hello",
-            "auto",
-            null,
+            WorkflowChatSource.CatalogWorkflow("auto"),
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -143,8 +140,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var request = new WorkflowChatRunRequest(
             "hello",
-            "direct",
-            "actor-2",
+            WorkflowChatSource.DefinitionActor("actor-2", "direct"),
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
@@ -168,7 +164,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt(actor.Id, string.Empty, ["definition-1", "actor-accepted"]), "direct", WorkflowChatRunStartError.None)),
             actorPort);
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "direct", null), CancellationToken.None);
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")), CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         result.Target.Should().NotBeNull();
@@ -187,7 +183,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             actorResolver,
             new FakeWorkflowRunActorPort());
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")));
 
         result.Succeeded.Should().BeTrue();
         actorResolver.ResolveCallCount.Should().Be(1);
@@ -202,7 +198,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             actorResolver,
             new FakeWorkflowRunActorPort());
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "missing", null));
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("missing")));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
@@ -316,7 +312,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             actorPort,
             new WorkflowRunDurableCompletionResolver(queryPort));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "direct", null), CancellationToken.None);
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")), CancellationToken.None);
         result.Target.Should().NotBeNull();
         result.Target!.BindLiveObservation(
             new FakeProjectionLease("actor-1", "cmd-1"),
@@ -352,7 +348,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new Dictionary<string, string>());
 
         var result = await lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -388,7 +384,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new Dictionary<string, string>());
 
         var result = await lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -422,7 +418,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new Dictionary<string, string>());
 
         var act = () => lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -576,10 +572,10 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
     private sealed class CompletingCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
     {
-        public bool EnableActorQueryEndpoints => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
         public List<string> ActorIds { get; } = [];
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ActorIds.Add(actorId);
@@ -587,10 +583,10 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Completed });
         }
 
-        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(int take = 200, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

@@ -55,6 +55,20 @@ public sealed class ResponsesToolChoiceHintPlan
 
     public bool IsEmpty => string.IsNullOrWhiteSpace(ToolName);
 
+    public string PrefilledArgumentsJson() =>
+        new JsonObject(PrefilledArguments
+                .Select(pair => KeyValuePair.Create(pair.Key, pair.Value?.DeepClone()))
+                .ToArray())
+            .ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: durable LlmSession tool choice hint writes used only prefilled JSON strings.
+    //   New principle: command builders write typed Struct and keep JSON only as legacy fallback.
+    public Struct PrefilledArgumentsStruct() =>
+        string.IsNullOrWhiteSpace(PrefilledArgumentsJson())
+            ? new Struct()
+            : ResponsesProtoPayloads.ParseStruct(PrefilledArgumentsJson());
+
     public ToolCall Apply(ToolCall call)
     {
         ArgumentNullException.ThrowIfNull(call);

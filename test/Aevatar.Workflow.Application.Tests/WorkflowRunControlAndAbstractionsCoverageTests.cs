@@ -108,22 +108,43 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
                 string.Empty));
     }
 
-    [Theory]
-    [InlineData(null, null)]
-    [InlineData("", null)]
-    [InlineData(" ", null)]
-    [InlineData("cmd-1", "cmd-1")]
-    public void WorkflowRunControlCommandBase_ShouldExposeCorrelationIdOnlyWhenCommandIdExists(
-        string? commandId,
-        string? expectedCorrelationId)
+    [Fact]
+    public void WorkflowRunControlCommandBase_ShouldKeepCorrelationIdExplicit()
     {
-        var resume = new WorkflowResumeCommand("actor-1", "run-1", "step-1", commandId, true, "approved");
-        var signal = new WorkflowSignalCommand("actor-1", "run-1", "approve", commandId, "payload");
-        var stop = new WorkflowStopCommand("actor-1", "run-1", commandId, "stop");
+        var resume = new WorkflowResumeCommand("actor-1", "run-1", "step-1", "cmd-1", true, "approved");
+        var signal = new WorkflowSignalCommand("actor-1", "run-1", "approve", "cmd-2", "payload");
+        var stop = new WorkflowStopCommand("actor-1", "run-1", "cmd-3", "stop");
 
-        resume.CorrelationId.Should().Be(expectedCorrelationId);
-        signal.CorrelationId.Should().Be(expectedCorrelationId);
-        stop.CorrelationId.Should().Be(expectedCorrelationId);
+        resume.CorrelationId.Should().BeNull();
+        signal.CorrelationId.Should().BeNull();
+        stop.CorrelationId.Should().BeNull();
+
+        var explicitResume = new WorkflowResumeCommand(
+            "actor-1",
+            "run-1",
+            "step-1",
+            "cmd-4",
+            true,
+            "approved",
+            CorrelationId: "corr-4");
+        var explicitSignal = new WorkflowSignalCommand(
+            "actor-1",
+            "run-1",
+            "approve",
+            "cmd-5",
+            "payload",
+            CorrelationId: "corr-5");
+        var explicitStop = new WorkflowStopCommand(
+            "actor-1",
+            "run-1",
+            "cmd-6",
+            "stop",
+            CorrelationId: "corr-6");
+
+        // Refactor (issue1326): Control command correlation is caller-provided context, not derived from command id.
+        explicitResume.CorrelationId.Should().Be("corr-4");
+        explicitSignal.CorrelationId.Should().Be("corr-5");
+        explicitStop.CorrelationId.Should().Be("corr-6");
         resume.Headers.Should().BeNull();
         signal.Headers.Should().BeNull();
         stop.Headers.Should().BeNull();
@@ -240,6 +261,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             context);
 
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
+        envelope.Id.Should().Be("cmd-1");
         resumed.UserInput.Should().BeEmpty();
         resumed.EditedContent.Should().BeEmpty();
         resumed.Feedback.Should().BeEmpty();
@@ -267,6 +289,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new WorkflowSignalCommand("actor-1", "run-1", "approve", "cmd-1", null),
             context);
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Payload.Unpack<SignalReceivedEvent>().Payload.Should().BeEmpty();
 
         var actOnCommand = () => factory.CreateEnvelope(null!, context);
@@ -292,6 +315,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new WorkflowStopCommand("actor-1", "run-1", "cmd-1", null),
             context);
 
+        envelope.Id.Should().Be("cmd-1");
         envelope.Payload.Unpack<WorkflowStoppedEvent>().Reason.Should().BeEmpty();
 
         var actOnCommand = () => factory.CreateEnvelope(null!, context);
@@ -561,7 +585,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
-        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null), CancellationToken.None);
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("auto")), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.AgentNotFound);
@@ -585,7 +609,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
 
         var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
         var act = async () => await lifecycle.BindAsync(
-            new WorkflowChatRunRequest("hello", "workflow-1", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("workflow-1")),
             new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
             {
                 Target = target,

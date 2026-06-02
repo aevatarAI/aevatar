@@ -3,9 +3,11 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Callbacks;
@@ -16,6 +18,7 @@ using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
@@ -128,6 +131,7 @@ public class WorkflowGAgentCoverageTests
         runtime.CreateCalls.Should().Be(1);
         runtime.Linked.Should().ContainSingle();
         runtime.Linked[0].child.Should().EndWith(":role_a");
+        runtime.DispatchRequests.Should().Contain(runtime.Linked[0].child);
 
         var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
         roleAgent.RoleName.Should().Be("RoleA");
@@ -330,7 +334,7 @@ public class WorkflowGAgentCoverageTests
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
         var oldChildActorId = runtime.CreatedActors.Single().Id;
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
-        SeedRuntimeContext(agent);
+        await SeedRuntimeContextAsync(agent);
         await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
             WorkflowName = "wf_valid",
@@ -338,7 +342,7 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
-        SeedRuntimeContext(agent);
+        await SeedRuntimeContextAsync(agent);
         runtime.ThrowOnGetAsyncActorId = agent.Id;
 
         await agent.BindWorkflowRunDefinitionAsync(
@@ -419,7 +423,7 @@ public class WorkflowGAgentCoverageTests
             BuildValidWorkflowYaml("role_a", "RoleA"),
             "wf_replay",
             runId: "run-replay");
-        SeedRuntimeContext(agent1);
+        await SeedRuntimeContextAsync(agent1);
         await agent1.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
             WorkflowName = "wf_replay",
@@ -445,6 +449,156 @@ public class WorkflowGAgentCoverageTests
 
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>()
             .Should().ContainSingle(x => x.Content == "done");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_ReplayContract_ShouldRestoreExecutionContextAfterChatStart()
+    {
+        var eventStore = new InMemoryEventStore();
+        var runtime = new RecordingActorRuntime();
+        var agent1 = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+        SetAgentId(agent1, "workflow-run-context-replay");
+
+        await agent1.ActivateAsync();
+        await agent1.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_context_replay",
+            runId: "run-context-replay");
+
+        await agent1.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "s1",
+            ConnectorHttpAuthorization = " Bearer secret ",
+            Metadata =
+            {
+                ["connector.http.authorization"] = " Bearer secret ",
+                ["trace-id"] = " trace-abc ",
+            },
+            LlmControl = new LLMControlContext(
+                NyxIdAccessToken: " token-123 ",
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: null,
+                ModelOverride: " model-main ",
+                NyxIdRoutePreference: " route-fast ",
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: null).ToPayload(),
+        });
+
+        agent1.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent1.State.ExecutionContext.Llm!.NyxidAccessToken.Should().BeEmpty();
+        agent1.State.ExecutionContext.Llm.ModelOverride.Should().Be("model-main");
+        agent1.State.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route-fast");
+        await agent1.DeactivateAsync();
+
+        var persisted = await eventStore.GetEventsAsync(agent1.Id);
+        persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(WorkflowRunExecutionStartedEvent), StringComparison.Ordinal));
+
+        var agent2 = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+        SetAgentId(agent2, "workflow-run-context-replay");
+        await agent2.ActivateAsync();
+
+        agent2.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent2.State.ExecutionContext.Llm!.NyxidAccessToken.Should().BeEmpty();
+        agent2.State.ExecutionContext.Llm.ModelOverride.Should().Be("model-main");
+        agent2.State.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route-fast");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_CommittedObservation_ShouldRedactExecutionContextAndCapturedSecrets()
+    {
+        var eventStore = new InMemoryEventStore();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateRunAgent(eventStore: eventStore);
+        SetAgentId(agent, "workflow-run-redaction");
+        agent.EventPublisher = publisher;
+        agent.CommittedStateEventPublisher = publisher;
+
+        await agent.ActivateAsync();
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_redaction",
+            runId: "run-redaction");
+
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(agent, "Bearer secret");
+        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
+            agent,
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = "token" },
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = "model",
+                    NyxIdRoutePreference = "route",
+                },
+            });
+
+        await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
+        await agent.UpsertExecutionStateAsync(
+            SecureInputStateAccess.ModuleStateKey,
+            Any.Pack(new SecureInputModuleState
+            {
+                Captured =
+                {
+                    ["run-redaction::api_key"] = new CapturedSecureInputState
+                    {
+                        RunId = "run-redaction",
+                        VariableName = "api_key",
+                        Value = "sk-secret",
+                    },
+                },
+            }));
+
+        agent.State.ExecutionContext.Llm!.NyxidAccessToken.Should().BeEmpty();
+        agent.State.ExecutionContext.Llm.ModelOverride.Should().Be("model");
+        agent.State.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route");
+        agent.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent.State.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
+            .Unpack<SecureInputModuleState>()
+            .Captured["run-redaction::api_key"]
+            .Value.Should().Be("sk-secret");
+
+        var observedState = publisher.Published
+            .Select(x => x.evt)
+            .OfType<CommittedStateEventPublished>()
+            .Last()
+            .StateRoot
+            .Unpack<WorkflowRunState>();
+
+        observedState.ExecutionContext.Llm!.NyxidAccessToken.Should().BeEmpty();
+        observedState.ExecutionContext.Llm.ModelOverride.Should().Be("model");
+        observedState.ExecutionContext.Llm.NyxidRoutePreference.Should().Be("route");
+        observedState.ExecutionContext.Connector!.HttpAuthorization.Should().BeEmpty();
+        observedState.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
+            .Unpack<SecureInputModuleState>()
+            .Captured["run-redaction::api_key"]
+            .Value.Should().BeEmpty();
+
+        var observedEvent = publisher.Published
+            .Select(x => x.evt)
+            .OfType<CommittedStateEventPublished>()
+            .Last()
+            .StateEvent
+            .EventData
+            .Unpack<WorkflowExecutionStateUpsertedEvent>();
+        observedEvent.State.Unpack<SecureInputModuleState>()
+            .Captured["run-redaction::api_key"]
+            .Value.Should().BeEmpty();
+
+        var observedContextEvent = publisher.Published
+            .Select(x => x.evt)
+            .OfType<CommittedStateEventPublished>()
+            .Select(x => x.StateEvent.EventData)
+            .Where(x => x.Is(WorkflowRunExecutionContextUpdatedEvent.Descriptor))
+            .Select(x => x.Unpack<WorkflowRunExecutionContextUpdatedEvent>())
+            .ToList();
+        observedContextEvent.Should().HaveCount(2);
+        observedContextEvent[0].ExecutionContextDelta.Connector!.HttpAuthorization.Should().BeEmpty();
+        observedContextEvent[1].ExecutionContextDelta.Llm!.NyxidAccessToken.Should().BeEmpty();
+        observedContextEvent[1].ExecutionContextDelta.Llm.ModelOverride.Should().Be("model");
+        observedContextEvent[1].ExecutionContextDelta.Llm.NyxidRoutePreference.Should().Be("route");
     }
 
     [Fact]
@@ -940,9 +1094,12 @@ public class WorkflowGAgentCoverageTests
     public async Task WorkflowRunGAgent_WhenRunCompletes_ShouldCleanupRoleActors()
     {
         var runtime = new RecordingActorRuntime();
+        var forwardingRegistry = new RecordingStreamForwardingRegistry();
         var agent = CreateRunAgent(
             runtime: runtime,
-            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)),
+            streamForwardingRegistry: forwardingRegistry);
+        SetAgentId(agent, "workflow-run-complete-cleanup");
 
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
@@ -952,6 +1109,9 @@ public class WorkflowGAgentCoverageTests
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
 
         var roleActorId = runtime.CreatedActors.Single().Id;
+        forwardingRegistry.Upserted.Should().ContainSingle(x =>
+            x.SourceStreamId == roleActorId &&
+            x.TargetStreamId == agent.Id);
 
         await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
@@ -965,6 +1125,7 @@ public class WorkflowGAgentCoverageTests
         runtime.Unlinked.Should().Contain(roleActorId);
         runtime.Destroyed.Should().Contain(roleActorId);
         runtime.CreatedActors.Should().BeEmpty();
+        forwardingRegistry.Removed.Should().ContainSingle().Which.Should().Be((roleActorId, agent.Id));
     }
 
     [Fact]
@@ -1013,7 +1174,7 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_ShouldPersistObservedWorkflowCommandId_FromChatMetadata()
+    public async Task WorkflowRunGAgent_ShouldPersistObservedWorkflowCommandId_FromInboundEnvelopeId()
     {
         var eventStore = new InMemoryEventStore();
         var agent = CreateRunAgent(eventStore: eventStore);
@@ -1029,13 +1190,24 @@ public class WorkflowGAgentCoverageTests
 
         (await agent.GetDescriptionAsync()).Should().Contain("bound");
 
-        await agent.HandleChatRequest(new ChatRequestEvent
+        var request = new ChatRequestEvent
         {
             Prompt = "hello",
             SessionId = "session-1",
             Headers =
             {
-                ["workflow.command_id"] = "cmd-123",
+                ["workflow.command_id"] = "legacy-header-must-not-win",
+            },
+        };
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = "cmd-123",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(request),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("api", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-123",
             },
         });
 
@@ -1151,7 +1323,7 @@ public class WorkflowGAgentCoverageTests
             runId: "run-stop");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
-        SeedRuntimeContext(agent);
+        await SeedRuntimeContextAsync(agent);
 
         var roleActorId = runtime.CreatedActors.Single().Id;
 
@@ -1193,7 +1365,7 @@ public class WorkflowGAgentCoverageTests
             runId: "run-stop-async");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
-        SeedRuntimeContext(agent);
+        await SeedRuntimeContextAsync(agent);
 
         var roleActorId = runtime.CreatedActors.Single().Id;
 
@@ -1296,8 +1468,10 @@ public class WorkflowGAgentCoverageTests
     public async Task WorkflowRunGAgent_HandleWorkflowArtifactObservationEnvelope_ShouldTranslateChildRoleReplyFacts()
     {
         var eventStore = new InMemoryEventStore();
-        var agent = CreateRunAgent(eventStore: eventStore);
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(runtime: runtime, eventStore: eventStore);
         SetAgentId(agent, "workflow-run-role-reply");
+        runtime.RegisterAgent(agent.Id, agent);
 
         await agent.HandleWorkflowArtifactObservationEnvelope(new EventEnvelope
         {
@@ -1363,6 +1537,164 @@ public class WorkflowGAgentCoverageTests
         fact.Prompt.Should().Be("prompt");
         fact.ContentEmitted.Should().BeTrue();
         fact.ToolCalls.Should().ContainSingle(x => x.ToolName == "search" && x.CallId == "call-1");
+        runtime.DispatchRequests.Should().Contain(agent.Id);
+    }
+
+    [Theory]
+    [InlineData("llm_call")]
+    [InlineData("evaluate")]
+    [InlineData("reflect")]
+    public async Task WorkflowRunGAgent_HandleWorkflowArtifactObservationEnvelope_ShouldCompletePendingModuleStepFromChildRoleReply(
+        string stepType)
+    {
+        var eventStore = new InMemoryEventStore();
+        var runtime = new RecordingActorRuntime();
+        var forwardingRegistry = new RecordingStreamForwardingRegistry();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            eventStore: eventStore,
+            eventModuleFactory: new WorkflowCoreTestModuleFactory(),
+            packs: [new WorkflowCoreModulePack()],
+            streamForwardingRegistry: forwardingRegistry);
+        SetAgentId(agent, $"workflow-run-{stepType}-reply");
+        runtime.RegisterAgent(agent.Id, agent);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            $$"""
+              name: wf_{{stepType}}
+              roles:
+                - id: assistant
+                  name: Assistant
+                  system_prompt: "helpful role"
+              steps:
+                - id: step_1
+                  type: {{stepType}}
+                  target_role: assistant
+              """,
+            $"wf_{stepType}",
+            runId: $"run-{stepType}");
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "draft", SessionId = $"chat-{stepType}" });
+
+        var roleActorId = $"{agent.Id}:assistant";
+        forwardingRegistry.Upserted.Should().ContainSingle().Which.Should().Match<StreamForwardingBinding>(binding =>
+            binding.SourceStreamId == roleActorId &&
+            binding.TargetStreamId == agent.Id &&
+            binding.ForwardingMode == StreamForwardingMode.HandleThenForward &&
+            binding.DirectionFilter.Count == 0 &&
+            binding.EventTypeFilter.Contains($"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}"));
+
+        var pendingSessionId = $"session-{stepType}";
+        await SeedPendingModuleStateAsync(agent, stepType, pendingSessionId, roleActorId);
+        await agent.HandleWorkflowArtifactObservationEnvelope(RoleReplyCommittedEnvelope(
+            roleActorId,
+            pendingSessionId,
+            "assistant",
+            CompletionContentFor(stepType)));
+
+        var persisted = await eventStore.GetEventsAsync(agent.Id);
+        persisted.Should().Contain(x => x.EventData.Is(WorkflowRoleReplyRecordedEvent.Descriptor));
+        var completed = publisher.Published
+            .Where(x => x.direction == TopologyAudience.Self)
+            .Select(x => x.evt)
+            .OfType<StepCompletedEvent>()
+            .Single(x => x.StepId == "step_1");
+        completed.Success.Should().BeTrue();
+        completed.RunId.Should().Be($"run-{stepType}");
+        if (stepType == "llm_call")
+            completed.WorkerId.Should().Be(roleActorId);
+        agent.GetExecutionState(stepType).Should().BeNull();
+        runtime.DispatchRequests.Count(x => x == agent.Id).Should().Be(1);
+
+        await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            WorkflowName = $"wf_{stepType}",
+            RunId = $"run-{stepType}",
+            Success = true,
+            Output = "done",
+        });
+
+        forwardingRegistry.Removed.Should().Contain((roleActorId, agent.Id));
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_RoleReplyFact_ShouldContinueLlmStepCompletion()
+    {
+        var eventStore = new InMemoryEventStore();
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var services = BuildServices(eventStore, workflowResolver: null);
+        var modulePacks = new IWorkflowModulePack[] { new WorkflowCoreModulePack() };
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            eventStore: eventStore,
+            packs: modulePacks,
+            eventModuleFactory: new WorkflowModuleFactory(services, modulePacks));
+        SetAgentId(agent, "workflow-run-role-reply-continuation");
+        runtime.RegisterAgent(agent.Id, agent);
+        agent.EventPublisher = publisher;
+        agent.CommittedStateEventPublisher = publisher;
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition",
+            """
+            name: wf_role_reply
+            roles:
+              - id: assistant
+                name: Assistant
+                system_prompt: "help"
+            steps:
+              - id: llm_1
+                type: llm_call
+            """,
+            "wf_role_reply",
+            runId: "run-role-reply");
+
+        await agent.HandleEventAsync(Envelope(
+            new ChatRequestEvent
+            {
+                Prompt = "question",
+                SessionId = "root-session",
+            },
+            "test",
+            TopologyAudience.Self));
+
+        var start = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
+        await agent.HandleEventAsync(Envelope(start, agent.Id, TopologyAudience.Self));
+
+        var stepRequest = publisher.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        await agent.HandleEventAsync(Envelope(stepRequest, agent.Id, TopologyAudience.Self));
+
+        var chatRequest = publisher.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+
+        await agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-run-role-reply-continuation:assistant"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-role-reply-continuation",
+                    EventData = Any.Pack(new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = chatRequest.SessionId,
+                        RoleId = "assistant",
+                        Content = "answer",
+                        ContentEmitted = true,
+                    }),
+                },
+            }),
+        });
+
+        var completed = publisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("llm_1");
+        completed.RunId.Should().Be("run-role-reply");
+        completed.Output.Should().Be("answer");
+        runtime.DispatchRequests.Should().Contain(agent.Id);
     }
 
     [Fact]
@@ -1483,7 +1815,8 @@ public class WorkflowGAgentCoverageTests
         IEventModuleFactory<IWorkflowExecutionContext>? eventModuleFactory = null,
         IEnumerable<IWorkflowModulePack>? packs = null,
         IEventStore? eventStore = null,
-        IWorkflowDefinitionResolver? workflowResolver = null)
+        IWorkflowDefinitionResolver? workflowResolver = null,
+        IStreamForwardingRegistry? streamForwardingRegistry = null)
     {
         runtime ??= new RecordingActorRuntime();
         roleResolver ??= new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
@@ -1491,8 +1824,15 @@ public class WorkflowGAgentCoverageTests
         packs ??= [];
         eventStore ??= new InMemoryEventStore();
 
-        var services = BuildServices(eventStore, workflowResolver);
-        var agent = new WorkflowRunGAgent(runtime, runtime, roleResolver, eventModuleFactory, packs, workflowResolver)
+        var services = BuildServices(eventStore, workflowResolver, streamForwardingRegistry);
+        var agent = new WorkflowRunGAgent(
+            runtime,
+            runtime,
+            roleResolver,
+            eventModuleFactory,
+            packs,
+            workflowResolver,
+            streamForwardingRegistry)
         {
             Services = services,
         };
@@ -1503,17 +1843,28 @@ public class WorkflowGAgentCoverageTests
 
     private static ServiceProvider BuildServices(
         IEventStore eventStore,
-        IWorkflowDefinitionResolver? workflowResolver)
+        IWorkflowDefinitionResolver? workflowResolver,
+        IStreamForwardingRegistry? streamForwardingRegistry = null)
     {
+        streamForwardingRegistry ??= new InMemoryStreamForwardingRegistry();
+        var streamProviderRegistry = streamForwardingRegistry as InMemoryStreamForwardingRegistry
+            ?? new InMemoryStreamForwardingRegistry();
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton<IEventStore>(eventStore)
-            .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
+            .AddSingleton(streamForwardingRegistry)
+            .AddSingleton<IStreamForwardingRegistry>(streamForwardingRegistry)
+            .AddSingleton(streamProviderRegistry)
+            .AddSingleton<IStreamProvider>(sp => new InMemoryStreamProvider(
+                new InMemoryStreamOptions(),
+                Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+                sp.GetRequiredService<InMemoryStreamForwardingRegistry>()))
             .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
             .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                 sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .AddAevatarWorkflow();
 
         if (workflowResolver != null)
             services.AddSingleton(workflowResolver);
@@ -1535,6 +1886,103 @@ public class WorkflowGAgentCoverageTests
             },
         };
     }
+
+    private static EventEnvelope RoleReplyCommittedEnvelope(
+        string roleActorId,
+        string sessionId,
+        string roleId,
+        string content)
+    {
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(roleActorId),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = $"evt-{sessionId}",
+                    EventData = Any.Pack(new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = sessionId,
+                        RoleId = roleId,
+                        Content = content,
+                        ContentEmitted = true,
+                    }),
+                },
+                StateRoot = Any.Pack(new RoleGAgentState()),
+            }),
+        };
+    }
+
+    private static Task SeedPendingModuleStateAsync(
+        WorkflowRunGAgent agent,
+        string stepType,
+        string sessionId,
+        string roleActorId)
+    {
+        return stepType switch
+        {
+            "llm_call" => agent.UpsertExecutionStateAsync("llm_call", Any.Pack(new LLMCallModuleState
+            {
+                PendingBySessionId =
+                {
+                    [sessionId] = new PendingLlmCallState
+                    {
+                        StepId = "step_1",
+                        RunId = "run-llm_call",
+                        TargetRole = "assistant",
+                        RequestDispatched = true,
+                    },
+                },
+            })),
+            "evaluate" => agent.UpsertExecutionStateAsync("evaluate", Any.Pack(new EvaluateModuleState
+            {
+                PendingBySessionId =
+                {
+                    [sessionId] = new EvalContextState
+                    {
+                        StepId = "step_1",
+                        RunId = "run-evaluate",
+                        OriginalInput = "draft",
+                        Threshold = 4,
+                    },
+                },
+                AttemptsByStepId =
+                {
+                    ["run-evaluate:step_1"] = 1,
+                },
+            })),
+            "reflect" => agent.UpsertExecutionStateAsync("reflect", Any.Pack(new ReflectModuleState
+            {
+                PendingBySessionId =
+                {
+                    [sessionId] = new ReflectState
+                    {
+                        StepId = "step_1",
+                        RunId = "run-reflect",
+                        TargetRole = "assistant",
+                        TargetActorId = roleActorId,
+                        CurrentDraft = "draft",
+                        Criteria = "quality",
+                        MaxRounds = 2,
+                        Round = 0,
+                        Phase = ReflectPhaseState.Critique,
+                    },
+                },
+            })),
+            _ => throw new InvalidOperationException($"Unexpected step type '{stepType}'."),
+        };
+    }
+
+    private static string CompletionContentFor(string stepType) =>
+        stepType switch
+        {
+            "evaluate" => "5",
+            "reflect" => "PASS",
+            _ => "done",
+        };
 
     private static async Task ResolveLatestDefinitionRequestAsync(
         WorkflowRunGAgent runAgent,
@@ -1569,35 +2017,35 @@ public class WorkflowGAgentCoverageTests
         setIdMethod!.Invoke(agent, [agentId]);
     }
 
-    private static void SeedRuntimeContext(WorkflowRunGAgent agent)
+    private static async Task SeedRuntimeContextAsync(WorkflowRunGAgent agent)
     {
-        var runtimeContext = ((IWorkflowExecutionStateHost)agent).RuntimeContext;
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            (IWorkflowExecutionStateHost)agent,
-            AgentToolExecutionContext.Empty with
+        var host = (IWorkflowExecutionStateHost)agent;
+        await host.UpdateExecutionContextAsync(
+            new WorkflowRunExecutionContextDelta
             {
-                Credentials = AgentToolCredentials.Empty with
+                ClearLlm = true,
+                ClearConnector = true,
+                Llm = new WorkflowRunLlmExecutionContextDelta
                 {
-                    NyxIdAccessToken = "token",
-                },
-                Routing = LLMRequestRoutingContext.Empty with
-                {
+                    NyxidAccessToken = "token",
                     ModelOverride = "model",
-                    NyxIdRoutePreference = "route",
+                    NyxidRoutePreference = "route",
+                },
+                Connector = new WorkflowRunConnectorExecutionContextDelta
+                {
+                    HttpAuthorization = "Bearer secret",
                 },
             });
-        runtimeContext.Connector.Authorization = "Bearer secret";
-        runtimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
-        runtimeContext.CapturedSecureInputs.Set(agent.RunId, "api_key", "secret");
+        host.RuntimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
     }
 
     private static void AssertRuntimeContextCleared(WorkflowRunGAgent agent)
     {
-        var runtimeContext = ((IWorkflowExecutionStateHost)agent).RuntimeContext;
-        runtimeContext.ToolContext.Should().BeNull();
-        runtimeContext.Connector.Authorization.Should().BeNull();
-        runtimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
-        runtimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
+        var host = (IWorkflowExecutionStateHost)agent;
+        host.RuntimeContext.ToolContext.Should().BeNull();
+        host.ExecutionContextSnapshot.Llm.Should().BeNull();
+        host.ExecutionContextSnapshot.Connector.Should().BeNull();
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
     private static string BuildValidWorkflowYaml(
@@ -1645,7 +2093,7 @@ public class WorkflowGAgentCoverageTests
                """;
     }
 
-    private sealed class RecordingEventPublisher : IEventPublisher
+    private sealed class RecordingEventPublisher : IEventPublisher, ICommittedStateEventPublisher
     {
         public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
         public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
@@ -1692,6 +2140,20 @@ public class WorkflowGAgentCoverageTests
             Published.Add((evt, TopologyAudience.Self));
             return Task.CompletedTask;
         }
+
+        Task ICommittedStateEventPublisher.PublishAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience,
+            CancellationToken ct,
+            EventEnvelope? sourceEnvelope,
+            EventEnvelopePublishOptions? options)
+        {
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
+            Published.Add((evt, TopologyAudience.Self));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
@@ -1701,6 +2163,7 @@ public class WorkflowGAgentCoverageTests
         public List<FakeActor> CreatedActors { get; } = [];
         public List<FakeWorkflowRunChildAgent> CreatedChildWorkflowAgents { get; } = [];
         public List<(string parent, string child)> Linked { get; } = [];
+        public List<string> DispatchRequests { get; } = [];
         public List<string> Destroyed { get; } = [];
         public List<string> Unlinked { get; } = [];
         public string? ThrowOnGetAsyncActorId { get; set; }
@@ -1769,6 +2232,7 @@ public class WorkflowGAgentCoverageTests
         public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            DispatchRequests.Add(actorId);
             var actor = CreatedActors.FirstOrDefault(x => x.Id == actorId)
                         ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
@@ -1796,6 +2260,50 @@ public class WorkflowGAgentCoverageTests
             CreatedChildWorkflowAgents.Add(child);
             return child;
         }
+    }
+
+    private sealed class RecordingStreamForwardingRegistry : IStreamForwardingRegistry
+    {
+        public List<StreamForwardingBinding> Upserted { get; } = [];
+        public List<(string sourceStreamId, string targetStreamId)> Removed { get; } = [];
+
+        public Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserted.Add(CloneBinding(binding));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveAsync(string sourceStreamId, string targetStreamId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Removed.Add((sourceStreamId, targetStreamId));
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListBySourceAsync(
+            string sourceStreamId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>(
+                Upserted
+                    .Where(x => string.Equals(x.SourceStreamId, sourceStreamId, StringComparison.Ordinal))
+                    .Select(CloneBinding)
+                    .ToList());
+        }
+
+        private static StreamForwardingBinding CloneBinding(StreamForwardingBinding binding) =>
+            new()
+            {
+                SourceStreamId = binding.SourceStreamId,
+                TargetStreamId = binding.TargetStreamId,
+                ForwardingMode = binding.ForwardingMode,
+                DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
+                EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
+                Version = binding.Version,
+                LeaseId = binding.LeaseId,
+            };
     }
 
     private sealed class FakeActor(string id, IAgent agent) : IActor
@@ -1882,6 +2390,23 @@ public class WorkflowGAgentCoverageTests
             CreatedNames.Add(name);
             module = new RecordingEventModule(name);
             return true;
+        }
+    }
+
+    private sealed class WorkflowCoreTestModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>
+    {
+        private readonly WorkflowStepTargetAgentResolver _targetAgentResolver = new();
+
+        public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? module)
+        {
+            module = name switch
+            {
+                "llm_call" => new LLMCallModule(_targetAgentResolver),
+                "evaluate" => new EvaluateModule(_targetAgentResolver),
+                "reflect" => new ReflectModule(_targetAgentResolver),
+                _ => null,
+            };
+            return module != null;
         }
     }
 

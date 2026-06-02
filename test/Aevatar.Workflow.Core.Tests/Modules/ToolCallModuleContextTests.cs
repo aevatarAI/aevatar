@@ -399,7 +399,6 @@ public sealed class ToolCallModuleContextTests
     [Theory]
     [InlineData(AgentToolExecutionStatus.ApprovalDenied)]
     [InlineData(AgentToolExecutionStatus.ApprovalTimedOut)]
-    [InlineData(AgentToolExecutionStatus.ApprovalPending)]
     [InlineData(AgentToolExecutionStatus.MiddlewareTerminated)]
     [InlineData(AgentToolExecutionStatus.Failed)]
     public async Task ToolCallModule_WhenPortReturnsNonSuccessStatus_ShouldPublishFailedEvents(
@@ -419,6 +418,35 @@ public sealed class ToolCallModuleContextTests
         var completed = LastCompleted(ctx);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain($"{status} blocked");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenPortReturnsApprovalPending_ShouldPersistPendingApprovalAndSuspend()
+    {
+        var tool = new CountingAgentTool("approval_tool", _ => """{"raw":true}""");
+        var port = new FakeExecutionPort(new AgentToolExecutionResult(
+            AgentToolExecutionStatus.ApprovalPending,
+            """{"approval_required":true,"request_id":"approval-123"}""",
+            "approval pending"));
+        var module = CreateModule(tool, port);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            stepId: "approval_step",
+            input: """{"danger":true}""",
+            executionId: "approval-exec");
+
+        tool.ExecuteCalls.Should().Be(0);
+        ctx.Published.Select(x => x.Event).OfType<ToolResultEvent>().Should().BeEmpty();
+        ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
+        var suspended = ctx.Published.Select(x => x.Event).OfType<WorkflowSuspendedEvent>().Should().ContainSingle().Subject;
+        suspended.ToolApproval.Should().NotBeNull();
+        suspended.ToolApproval.ApprovalRequestId.Should().Be("approval-123");
+        suspended.ToolApproval.ToolCallId.Should().Be("workflow:run-1:approval_step:approval-exec");
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().ContainSingle();
     }
 
     private static ToolCallModule CreateModule(
@@ -580,6 +608,10 @@ public sealed class ToolCallModuleContextTests
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
         public List<AgentToolExecutionContext?> PublishedToolContexts { get; } = [];
@@ -631,6 +663,44 @@ public sealed class ToolCallModuleContextTests
 
         public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default) =>
             ClearStateAsync(scopeKey, ct);
+
+        public Task UpdateExecutionContextAsync(
+            WorkflowRunExecutionContextDelta delta,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (delta.ClearLlm)
+                ExecutionContextState.Llm = null;
+            if (delta.ClearConnector)
+                ExecutionContextState.Connector = null;
+            if (delta.Llm != null)
+            {
+                ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
+                {
+                    NyxidAccessToken = delta.Llm.NyxidAccessToken,
+                    ModelOverride = delta.Llm.ModelOverride,
+                    NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+                };
+            }
+
+            if (delta.Connector != null)
+            {
+                ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+                {
+                    HttpAuthorization = delta.Connector.HttpAuthorization,
+                };
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
+            return Task.CompletedTask;
+        }
 
         public Task PublishAsync<TEvent>(
             TEvent evt,

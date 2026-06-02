@@ -38,7 +38,7 @@ isolated git worktrees, with /loop dynamic wakeups as the pacing primitive).
 | 4 | 008 | StreamingProxy dispatch-tail (closes cluster-004) | +104 |
 | 4 | 009 | UserAgentCatalogCommandPort accepted-only | −206 |
 | 5 | 010 | ScopeGAgent host AGUI mapper residual | +21 |
-| 5 | 011 | docs/canon/daily-command-pipeline drift | −49 |
+| 5 | 011 | retired command-pipeline canon drift | −49 |
 | 5 | 012 | CatalogCommandOutcome dead-enum removal | +63 |
 | 6 | 013 | A2A InMemory default registration leak | +83 |
 | 6 | 014 | ChannelRegistrationTool delete polling removal | −12 |

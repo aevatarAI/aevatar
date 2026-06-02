@@ -78,9 +78,7 @@ internal sealed class WorkflowRunCommandTargetResolver
         WorkflowChatRunRequest command,
         WorkflowRunTargetSeed seed)
     {
-        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(command.WorkflowName);
-        if (string.IsNullOrWhiteSpace(requestedWorkflowName))
-            requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(command.Source?.WorkflowName);
+        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(command.Source?.WorkflowName);
 
         var seededWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(seed.WorkflowNameForRun);
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName) &&
@@ -96,9 +94,7 @@ internal sealed class WorkflowRunCommandTargetResolver
         WorkflowChatRunRequest command,
         WorkflowRunTargetSeed seed)
     {
-        var requestedActorId = NormalizeActorId(command.ActorId);
-        if (string.IsNullOrWhiteSpace(requestedActorId))
-            requestedActorId = NormalizeActorId(command.Source?.ActorId);
+        var requestedActorId = NormalizeActorId(command.Source?.ActorId);
 
         var seededActorId = NormalizeActorId(seed.Source?.ActorId);
         if (!string.IsNullOrWhiteSpace(requestedActorId) &&

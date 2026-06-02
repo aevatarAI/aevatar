@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.VoicePresence.Events;
 
@@ -11,38 +13,68 @@ public sealed class VoicePresenceEventPolicy
 
     public TimeSpan DedupeWindow { get; init; } = TimeSpan.FromSeconds(2);
 
-    private readonly LinkedList<RecentEventEntry> _recent = [];
-    private readonly HashSet<string> _recentKeys = [];
-
-    public VoicePresenceEventPolicyDecision Evaluate(EventEnvelope envelope, DateTimeOffset now)
+    // Refactor (iter104/cluster-3): Old pattern: VoicePresenceEventPolicy kept module-local in-memory recent-event dedupe set. New principle: dedupe fence in VoicePresenceRuntimeState (actor-owned); policy is pure evaluator over passed-in actor state.
+    public VoicePresenceEventPolicyVerdict Evaluate(
+        EventEnvelope envelope,
+        DateTimeOffset now,
+        IEnumerable<VoicePresenceEventDedupeFenceEntry> recentEvents)
     {
         ArgumentNullException.ThrowIfNull(envelope);
-        Prune(now);
+        ArgumentNullException.ThrowIfNull(recentEvents);
 
         var observedAt = envelope.Timestamp?.ToDateTimeOffset() ?? now;
         if (now - observedAt > StaleAfter)
-            return VoicePresenceEventPolicyDecision.DropStale;
+            return VoicePresenceEventPolicyVerdict.Drop(VoicePresenceEventPolicyDecision.DropStale);
 
         var key = BuildKey(envelope);
-        if (!_recentKeys.Add(key))
-            return VoicePresenceEventPolicyDecision.DropDuplicate;
-
-        _recent.AddLast(new RecentEventEntry(key, now));
-        return VoicePresenceEventPolicyDecision.Admit;
-    }
-
-    private void Prune(DateTimeOffset now)
-    {
         var cutoff = now - DedupeWindow;
-        while (_recent.First is { } first && first.Value.RecordedAt < cutoff)
+        foreach (var entry in recentEvents)
         {
-            _recentKeys.Remove(first.Value.Key);
-            _recent.RemoveFirst();
+            var recordedAt = entry.RecordedAt?.ToDateTimeOffset();
+            if (recordedAt is null || recordedAt < cutoff)
+                continue;
+
+            if (string.Equals(entry.Key, key, StringComparison.Ordinal))
+                return VoicePresenceEventPolicyVerdict.Drop(VoicePresenceEventPolicyDecision.DropDuplicate);
         }
+
+        return VoicePresenceEventPolicyVerdict.Admit(key, Timestamp.FromDateTimeOffset(now));
     }
 
-    private static string BuildKey(EventEnvelope envelope)
+    public IReadOnlyList<VoicePresenceEventDedupeFenceEntry> BuildFence(
+        IEnumerable<VoicePresenceEventDedupeFenceEntry> recentEvents,
+        VoicePresenceEventPolicyVerdict verdict,
+        DateTimeOffset now)
     {
+        ArgumentNullException.ThrowIfNull(recentEvents);
+
+        var cutoff = now - DedupeWindow;
+        var pruned = new List<VoicePresenceEventDedupeFenceEntry>();
+        foreach (var entry in recentEvents)
+        {
+            var recordedAt = entry.RecordedAt?.ToDateTimeOffset();
+            if (recordedAt is null || recordedAt < cutoff)
+                continue;
+
+            pruned.Add(entry.Clone());
+        }
+
+        if (verdict.Decision == VoicePresenceEventPolicyDecision.Admit)
+        {
+            pruned.Add(new VoicePresenceEventDedupeFenceEntry
+            {
+                Key = verdict.Key,
+                RecordedAt = verdict.RecordedAt?.Clone(),
+            });
+        }
+
+        return pruned;
+    }
+
+    public static string BuildKey(EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
         if (envelope.Payload == null)
             return "payload:null";
 
@@ -52,8 +84,18 @@ public sealed class VoicePresenceEventPolicy
 
         return $"{envelope.Payload.TypeUrl}|{payloadBytes}";
     }
+}
 
-    private readonly record struct RecentEventEntry(string Key, DateTimeOffset RecordedAt);
+public sealed record VoicePresenceEventPolicyVerdict(
+    VoicePresenceEventPolicyDecision Decision,
+    string Key,
+    Timestamp? RecordedAt)
+{
+    public static VoicePresenceEventPolicyVerdict Admit(string key, Timestamp recordedAt) =>
+        new(VoicePresenceEventPolicyDecision.Admit, key, recordedAt);
+
+    public static VoicePresenceEventPolicyVerdict Drop(VoicePresenceEventPolicyDecision decision) =>
+        new(decision, string.Empty, null);
 }
 
 public enum VoicePresenceEventPolicyDecision

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -43,6 +44,44 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("always-fail-no-retry");
+
+            await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
+            await RetryAwareDirectDispatchAgent.WaitForAttemptAsync(envelope.Id, TimeSpan.FromSeconds(20));
+            await logProbe.WaitForRuntimeHandlingFailureAsync(TimeSpan.FromSeconds(20));
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldNotRetryNonOccFailure_WhenRuntimeRetryUsesDefaultClassifier()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        var logProbe = new RuntimeRetryLogProbe();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = null,
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(siloPort, gatewayPort, logProbe);
+
+        try
+        {
+            await InitializeAgentAsync(host, actorId);
+
+            var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
+            var envelope = CreateEnvelope("always-fail-non-occ-default");
 
             await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
             await RetryAwareDirectDispatchAgent.WaitForAttemptAsync(envelope.Id, TimeSpan.FromSeconds(20));
@@ -129,6 +168,47 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
             await logProbe.WaitForRuntimeRetryScheduledAsync(TimeSpan.FromSeconds(20));
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRetryOccFailure_WhenRuntimeRetryUsesDefaultClassifier()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        var logProbe = new RuntimeRetryLogProbe();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = null,
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(siloPort, gatewayPort, logProbe);
+
+        try
+        {
+            await InitializeAgentAsync(host, actorId);
+
+            var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
+            var envelope = CreateEnvelope("occ-fail-once-then-succeed");
+
+            await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
+            await logProbe.WaitForRuntimeRetryScheduledAsync(TimeSpan.FromSeconds(20));
+            var successfulEnvelope =
+                await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(envelope.Id, TimeSpan.FromSeconds(20));
+
+            RuntimeEnvelopeDeduplication.GetAttempt(successfulEnvelope).Should().Be(1);
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
         }
         finally
         {
@@ -355,6 +435,9 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             if (payload == "always-fail-no-retry")
                 throw new InvalidOperationException("always-fail-no-retry");
 
+            if (payload == "always-fail-non-occ-default")
+                throw new InvalidOperationException("always-fail-non-occ-default");
+
             if (payload == "always-fail-retry-exhausted")
                 throw new InvalidOperationException("always-fail-retry-exhausted");
 
@@ -362,6 +445,15 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 RuntimeEnvelopeDeduplication.GetAttempt(envelope) == 0)
             {
                 throw new InvalidOperationException("fail-once-before-retry");
+            }
+
+            if (payload == "occ-fail-once-then-succeed" &&
+                RuntimeEnvelopeDeduplication.GetAttempt(envelope) == 0)
+            {
+                throw new EventStoreOptimisticConcurrencyException(
+                    envelope.Id,
+                    expectedVersion: 1,
+                    actualVersion: 2);
             }
 
             lock (SyncLock)

@@ -1,6 +1,5 @@
 using System.Net.WebSockets;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -13,7 +12,6 @@ internal static class ChatWebSocketRunCoordinator
         IWorkflowChatRunInteractionPort chatRunService,
         ApiRequestScope scope,
         CancellationToken ct = default,
-        WorkflowCapabilitiesDocument? capabilities = null,
         IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
@@ -21,7 +19,7 @@ internal static class ChatWebSocketRunCoordinator
         CapabilityMessageTraceContext ResolveContext() =>
             CapabilityTraceContext.CreateMessageContext(correlationId, command.RequestId);
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input, capabilities, defaultMetadata);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input, defaultMetadata);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);

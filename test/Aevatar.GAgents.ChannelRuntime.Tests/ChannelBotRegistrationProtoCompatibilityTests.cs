@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Google.Protobuf;
 using Xunit;
 using Aevatar.GAgents.Channel.Runtime;
 
@@ -53,5 +54,46 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(11);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(12);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
+    }
+
+    [Fact]
+    public void ChannelInboundEvent_ShouldReserveRuntimeCredentialCarrier()
+    {
+        // Refactor (v1/issue1466-first):
+        //   Old: registration_token was a typed durable field on ChannelInboundEvent.
+        //   New: field 9 and registration_token are unavailable on the descriptor.
+        //   Principle: inbound protobuf facts must not carry runtime credentials.
+        ChannelInboundEvent.Descriptor.FindFieldByName("registration_token").Should().BeNull();
+        ChannelInboundEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Should().NotContain(field => field.FieldNumber == 9);
+    }
+
+    [Fact]
+    public void ChannelInboundEvent_ShouldSerializeCredentialFreeDurableFacts()
+    {
+        // Refactor (v1/issue1466-first):
+        //   Old: durable inbound payloads could persist bearer-like registration_token bytes.
+        //   New: a complete inbound event serializes only stable channel/routing facts.
+        //   Principle: runtime tokens stay outside the durable channel inbound fact model.
+        var inboundEvent = new ChannelInboundEvent
+        {
+            Text = "hello",
+            SenderId = "ou_user_1",
+            SenderName = "User One",
+            ConversationId = "oc_group_chat_1",
+            MessageId = "msg-1",
+            ChatType = "group",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "provider-1",
+        };
+        inboundEvent.Extra["event_id"] = "evt-1";
+
+        var serialized = inboundEvent.ToByteArray();
+
+        serialized.Should().NotContain((byte)0x4a);
+        ChannelInboundEvent.Parser.ParseFrom(serialized).Should().BeEquivalentTo(inboundEvent);
+        ChannelInboundEvent.Descriptor.FindFieldByName("registration_token").Should().BeNull();
     }
 }

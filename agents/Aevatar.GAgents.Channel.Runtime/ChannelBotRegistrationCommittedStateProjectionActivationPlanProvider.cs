@@ -39,7 +39,6 @@ public sealed class ChannelBotRegistrationCommittedStateProjectionActivationPlan
     private static bool IsChannelBotRegistrationEvent(Any payload) =>
         payload.Is(ChannelBotRegisteredEvent.Descriptor) ||
         payload.Is(ChannelBotUnregisteredEvent.Descriptor) ||
-        payload.Is(ChannelBotProjectionRebuildRequestedEvent.Descriptor) ||
         payload.Is(ChannelBotTombstonesCompactedEvent.Descriptor) ||
         payload.Is(ChannelBotRegistrationRejectedEvent.Descriptor) ||
         payload.Is(ChannelBotScopeIdRepairedEvent.Descriptor);

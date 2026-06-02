@@ -583,6 +583,7 @@ public sealed class WorkflowProjectionMaterializationTests
         {
             Id = $"outer-{version}",
             Timestamp = Timestamp.FromDateTimeOffset(timestamp),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("actor-1"),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
                 StateEvent = new StateEvent

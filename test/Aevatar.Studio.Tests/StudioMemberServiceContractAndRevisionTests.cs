@@ -440,8 +440,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not start binding runs.");
 
-        public Task ReassignTeamAsync(
-            string scopeId, string memberId, string? fromTeamId, string? toTeamId,
+        public Task PatchTeamAssignmentAsync(
+            string scopeId, string memberId, string? targetTeamId,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not reassign teams.");
     }

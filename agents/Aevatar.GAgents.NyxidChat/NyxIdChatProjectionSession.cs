@@ -50,10 +50,13 @@ public sealed class NyxIdChatSessionProjectionContext : IProjectionSessionContex
 /// Runtime lease for NyxID chat Projection Pipeline sessions. It carries the
 /// EventEnvelope projector scope and typed AGUIEvent session identity.
 /// </summary>
+// Refactor (issue-377): Old pattern: runtime lease implemented IProjectionPortSessionLease.
+// Refactor (issue-377): Old pattern: ScopeId was a RootActorId alias on the lease.
+// Refactor (issue-377): New principle: NyxID chat session context owns RootActorId + SessionId.
+// Refactor (issue-377): New principle: lifecycle attach reads the typed context directly.
 public sealed class NyxIdChatSessionRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<AGUIEvent>,
       INyxIdChatSessionProjectionLease,
-      IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<NyxIdChatSessionProjectionContext>
 {
     public NyxIdChatSessionRuntimeLease(NyxIdChatSessionProjectionContext context)
@@ -66,7 +69,6 @@ public sealed class NyxIdChatSessionRuntimeLease
     public string ActorId => RootEntityId;
     public string SessionId { get; }
     public NyxIdChatSessionProjectionContext Context { get; }
-    public string ScopeId => RootEntityId;
 }
 
 /// <summary>
@@ -83,11 +85,10 @@ public sealed class NyxIdChatSessionProjectionPort
     private readonly IProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease> _attachExistingLeaseLookup;
 
     public NyxIdChatSessionProjectionPort(
-        IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease> activationService,
         IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease> releaseService,
         IProjectionSessionEventHub<AGUIEvent> sessionEventHub,
         IProjectionScopeAttachExistingLeaseLookup<NyxIdChatSessionRuntimeLease> attachExistingLeaseLookup)
-        : base(static () => true, activationService, releaseService, sessionEventHub)
+        : base(static () => true, releaseService, sessionEventHub)
     {
         _attachExistingLeaseLookup = attachExistingLeaseLookup ?? throw new ArgumentNullException(nameof(attachExistingLeaseLookup));
     }
@@ -104,6 +105,7 @@ public sealed class NyxIdChatSessionProjectionPort
         IEventSink<AGUIEvent> sink,
         CancellationToken ct = default)
     {
+        // Refactor (iter101/cluster-104): Old chat session port inherited direct ensure activation; new request-facing surface attaches only to an existing projection session.
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
 

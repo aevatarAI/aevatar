@@ -26,20 +26,19 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         _workflowCapabilitiesPort = workflowCapabilitiesPort ?? throw new ArgumentNullException(nameof(workflowCapabilitiesPort));
     }
 
-    public bool ActorQueryEnabled => _currentStateQueryPort.EnableActorQueryEndpoints;
+    public bool WorkflowActorCurrentStateQueryEnabled => _currentStateQueryPort.WorkflowActorCurrentStateQueryEnabled;
 
-    // Refactor (iter29/cluster-029-workflow-history-artifact):
-    //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)
-    //   New principle: Workflow history / report / graph are workflow-run artifacts (or aggregate-owned views), NOT actor current-state readmodels: keep existing WorkflowRunInsightReportDocument adapter/name workflow-local as the single report artifact source; delete duplicate WorkflowRunTimelineDocument / WorkflowRunGraphArtifactDocument shells (timeline derived from report artifact, graph materialization derived from report artifact); stop current-state query paths from reading report/history artifacts to enrich actor snapshots; rename public application/query/tool/HTTP surfaces so report/timeline/graph are explicit workflow-run artifact / export, not current-state readmodel surfaces; WorkflowExecutionCurrentStateDocument remains the only workflow actor-scoped current-state readmodel; NO CLAUDE.md change, NO new core abstraction, NO generic CQRS Projection artifact storage seam, NO new actor type
-    //   New pattern: workflow history/report/graph are artifacts or aggregate-owned views, not current-state readmodels.
+    // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
+    //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
+    //   New principle: Workflow artifacts have an explicit artifact/export query surface separate from actor current-state query and tool names — graph-only workflow_artifact_query tool on existing execution facade; delete actor-shaped graph wrapper and aliases; rename artifact gate away from actor query.
 
     public async Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        if (!ActorQueryEnabled)
+        if (!WorkflowActorCurrentStateQueryEnabled)
             return [];
 
-        var snapshots = await _currentStateQueryPort.ListActorSnapshotsAsync(ct: ct);
+        var snapshots = await _currentStateQueryPort.ListWorkflowActorCurrentStatesAsync(ct: ct);
         return snapshots
             .Select(snapshot => new WorkflowAgentSummary(
                 snapshot.ActorId,
@@ -66,17 +65,20 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
     public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
         _workflowCapabilitiesPort.GetCapabilitiesAsync(ct);
 
-    public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+    // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
+    //   Old pattern: application service exposed GetActorSnapshotAsync(actorId) as an actor inspection query.
+    //   New principle: application service exposes GetWorkflowActorCurrentStateAsync(actorId) over the current-state readmodel.
+    public async Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
     {
-        if (!ActorQueryEnabled)
+        if (!WorkflowActorCurrentStateQueryEnabled)
             return null;
 
-        return await _currentStateQueryPort.GetActorSnapshotAsync(actorId, ct);
+        return await _currentStateQueryPort.GetWorkflowActorCurrentStateAsync(actorId, ct);
     }
 
     public async Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string workflowRunId, CancellationToken ct = default)
     {
-        if (!_artifactQueryPort.EnableActorQueryEndpoints)
+        if (!_artifactQueryPort.WorkflowArtifactQueryEnabled)
             return null;
 
         return await _artifactQueryPort.GetWorkflowRunReportArtifactAsync(workflowRunId, ct);
@@ -87,7 +89,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         int take = 200,
         CancellationToken ct = default)
     {
-        if (!_artifactQueryPort.EnableActorQueryEndpoints)
+        if (!_artifactQueryPort.WorkflowArtifactQueryEnabled)
             return [];
 
         return await _artifactQueryPort.ListWorkflowRunTimelineExportAsync(workflowRunId, take, ct);
@@ -99,7 +101,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         WorkflowRunGraphExportQueryOptions? options = null,
         CancellationToken ct = default)
     {
-        if (!_artifactQueryPort.EnableActorQueryEndpoints || string.IsNullOrWhiteSpace(workflowRunId))
+        if (!_artifactQueryPort.WorkflowArtifactQueryEnabled || string.IsNullOrWhiteSpace(workflowRunId))
             return [];
 
         return await _artifactQueryPort.GetWorkflowRunGraphExportEdgesAsync(workflowRunId, take, options, ct);
@@ -112,7 +114,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         WorkflowRunGraphExportQueryOptions? options = null,
         CancellationToken ct = default)
     {
-        if (!_artifactQueryPort.EnableActorQueryEndpoints || string.IsNullOrWhiteSpace(workflowRunId))
+        if (!_artifactQueryPort.WorkflowArtifactQueryEnabled || string.IsNullOrWhiteSpace(workflowRunId))
             return new WorkflowRunGraphExportSubgraph
             {
                 RootNodeId = workflowRunId ?? string.Empty,

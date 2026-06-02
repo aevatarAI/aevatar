@@ -11,6 +11,10 @@ using Aevatar.Foundation.Abstractions.Streaming;
 
 namespace Aevatar.Foundation.Runtime.Streaming;
 
+// DEV/TEST ONLY transport - production must use a durable Orleans/Kafka stream provider.
+// Refactor (iter109/cluster-109-inmemory-stream-inline-dispatch):
+//   Old pattern: Local stream runtime keeps actor-id stream registries and can fan out subscribers via fire-and-forget background work.
+//   New principle: InMemoryStream is dev/test-only transport (usage proves no production registration); keep stream/forwarding registry but remove concurrent subscriber fire-and-forget dispatch; no new admission abstraction.
 /// <summary>In-memory event stream for actor-to-actor delivery and broadcast.</summary>
 public sealed class InMemoryStream : IStream
 {
@@ -186,19 +190,6 @@ public sealed class InMemoryStream : IStream
             await foreach (var envelope in _dispatchChannel.Reader.ReadAllAsync(_cts.Token))
             {
                 var subs = _subscribers;
-                if (_options.DispatchSubscribersConcurrently)
-                {
-                    foreach (var sub in subs)
-                    {
-                        _ = Task.Run(() => InvokeSubscriberAsync(sub, envelope), CancellationToken.None);
-                    }
-
-                    if (!await InvokePostDispatchAsync(envelope))
-                        return;
-
-                    continue;
-                }
-
                 foreach (var sub in subs)
                 {
                     try
@@ -226,26 +217,6 @@ public sealed class InMemoryStream : IStream
         }
         catch (OperationCanceledException) { }
         catch (ChannelClosedException) { }
-    }
-
-    private async Task InvokeSubscriberAsync(Func<EventEnvelope, Task> sub, EventEnvelope envelope)
-    {
-        try
-        {
-            await sub(envelope);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "In-memory stream subscriber failed. stream={StreamId}",
-                StreamId);
-
-            if (_options.ThrowOnSubscriberError)
-            {
-                StopWithError(ex);
-            }
-        }
     }
 
     private async Task<bool> InvokePostDispatchAsync(EventEnvelope envelope)

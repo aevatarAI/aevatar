@@ -4,10 +4,12 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Execution;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -15,11 +17,14 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
 public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
+    private const string ModuleStateKey = "tool_call";
+
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly ILogger<ToolCallModule> _logger;
     private readonly IAgentToolExecutionPort? _executionPort;
     private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
 
+    [ActivatorUtilitiesConstructor]
     public ToolCallModule(
         IEnumerable<IAgentToolSource> toolSources,
         ILogger<ToolCallModule> logger,
@@ -28,6 +33,17 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _executionPort = executionPort;
+    }
+
+    public ToolCallModule(
+        IEnumerable<IAgentToolSource> toolSources,
+        IEnumerable<IToolCallMiddleware> middlewares,
+        ILogger<ToolCallModule> logger)
+        : this(
+            toolSources,
+            logger,
+            new LocalMiddlewareExecutionPort(middlewares))
+    {
     }
 
     public string Name => "tool_call";
@@ -102,6 +118,17 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                     ExecutionContext: toolContext),
                 ct);
 
+            if (result.Status == AgentToolExecutionStatus.ApprovalPending)
+            {
+                await PublishPendingApprovalAsync(
+                    ctx,
+                    request,
+                    BuildPendingApprovalContext(toolName, callId, argumentsJson, result),
+                    argumentsJson,
+                    ct);
+                return;
+            }
+
             if (result.Status != AgentToolExecutionStatus.Succeeded)
             {
                 await PublishToolFailureAsync(
@@ -168,6 +195,38 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             AgentToolExecutionStatus.Failed => "tool execution failed",
             _ => $"tool execution did not succeed: {result.Status}",
         };
+    }
+
+    private static ToolApprovalPendingContext BuildPendingApprovalContext(
+        string toolName,
+        string toolCallId,
+        string argumentsJson,
+        AgentToolExecutionResult result) =>
+        new(
+            TryReadApprovalRequestId(result.ResultJson) ?? Guid.NewGuid().ToString("N"),
+            toolName,
+            toolCallId,
+            argumentsJson,
+            ToolApprovalMode.AlwaysRequire,
+            IsReadOnly: false,
+            IsDestructive: true);
+
+    private static string? TryReadApprovalRequestId(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return null;
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(resultJson);
+            return document.RootElement.TryGetProperty("request_id", out var requestIdElement)
+                ? Normalize(requestIdElement.GetString())
+                : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     private static string ComposeWorkflowToolCallId(StepRequestEvent request)
@@ -284,5 +343,125 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             Success = false,
             Error = errorMessage,
         }, TopologyAudience.Self, ct);
+    }
+
+    private static async Task PublishPendingApprovalAsync(
+        IWorkflowExecutionContext ctx,
+        StepRequestEvent request,
+        ToolApprovalPendingContext pending,
+        string input,
+        CancellationToken ct)
+    {
+        var runId = request.RunId ?? string.Empty;
+        var stepId = request.StepId ?? string.Empty;
+        var state = WorkflowExecutionStateAccess.Load<ToolCallModuleState>(ctx, ModuleStateKey);
+        state.PendingApprovals[BuildPendingApprovalKey(runId, stepId, pending)] = new PendingToolCallApprovalState
+        {
+            RunId = runId,
+            StepId = stepId,
+            ExecutionId = request.ExecutionId ?? string.Empty,
+            ToolName = pending.ToolName,
+            ToolCallId = pending.ToolCallId,
+            ApprovalRequestId = pending.ApprovalRequestId,
+            ArgumentsJson = pending.ArgumentsJson,
+            Input = input,
+        };
+        await WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+
+        await ctx.PublishAsync(new WorkflowSuspendedEvent
+        {
+            RunId = runId,
+            StepId = stepId,
+            SuspensionType = "tool_approval",
+            ToolApproval = new WorkflowToolApprovalSuspension
+            {
+                ExecutionId = request.ExecutionId ?? string.Empty,
+                ToolName = pending.ToolName,
+                ToolCallId = pending.ToolCallId,
+                ApprovalRequestId = pending.ApprovalRequestId,
+                ArgumentsJson = pending.ArgumentsJson,
+            },
+        }, TopologyAudience.ParentAndChildren, ct);
+    }
+
+    private static string BuildPendingApprovalKey(
+        string runId,
+        string stepId,
+        ToolApprovalPendingContext pending) =>
+        $"{runId}:{stepId}:{pending.ToolCallId}:{pending.ApprovalRequestId}";
+
+    private sealed class LocalMiddlewareExecutionPort : IAgentToolExecutionPort
+    {
+        private readonly IReadOnlyList<IToolCallMiddleware> _middlewares;
+
+        public LocalMiddlewareExecutionPort(IEnumerable<IToolCallMiddleware> middlewares)
+        {
+            _middlewares = (middlewares ?? throw new ArgumentNullException(nameof(middlewares))).ToList();
+        }
+
+        public async Task<AgentToolExecutionResult> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            var context = new ToolCallContext
+            {
+                Tool = request.Tool,
+                ToolName = request.ToolName,
+                ToolCallId = request.ToolCallId,
+                ArgumentsJson = request.ArgumentsJson,
+                CancellationToken = ct,
+            };
+
+            using (AgentToolContextScope.Push(request.ExecutionContext))
+            {
+                await ExecuteWithMiddlewareAsync(context);
+            }
+
+            if (context.Terminate)
+            {
+                return new AgentToolExecutionResult(
+                    MapTerminationStatus(context.TerminationKind),
+                    context.Result,
+                    context.TerminationReason);
+            }
+
+            return context.Result == null
+                ? AgentToolExecutionResult.Failed($"Tool '{context.ToolName}' returned no result.")
+                : AgentToolExecutionResult.Succeeded(context.Result);
+        }
+
+        private Task ExecuteWithMiddlewareAsync(ToolCallContext context)
+        {
+            var index = -1;
+
+            Task InvokeNextAsync()
+            {
+                index++;
+                if (index < _middlewares.Count)
+                    return _middlewares[index].InvokeAsync(context, InvokeNextAsync);
+
+                return ExecuteToolAsync(context);
+            }
+
+            return InvokeNextAsync();
+        }
+
+        private static async Task ExecuteToolAsync(ToolCallContext context)
+        {
+            if (context.Terminate)
+                return;
+
+            context.Result = await context.Tool.ExecuteAsync(context.ArgumentsJson, context.CancellationToken);
+        }
+
+        private static AgentToolExecutionStatus MapTerminationStatus(ToolCallTerminationKind kind) =>
+            kind switch
+            {
+                ToolCallTerminationKind.ApprovalDenied => AgentToolExecutionStatus.ApprovalDenied,
+                ToolCallTerminationKind.ApprovalTimedOut => AgentToolExecutionStatus.ApprovalTimedOut,
+                ToolCallTerminationKind.ApprovalPending => AgentToolExecutionStatus.ApprovalPending,
+                _ => AgentToolExecutionStatus.MiddlewareTerminated,
+            };
     }
 }

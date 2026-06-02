@@ -122,7 +122,7 @@ tab inside Team Detail.
 
 Team Overview v1 only displays backend-backed facts.
 
-Do not add frontend-computed Team operational metrics such as daily message
+Do not add frontend-computed Team operational metrics such as periodic message
 count, success rate, online rate, average response time, Team-level error rate,
 or Team-level throughput until the backend provides a Team-scoped operational
 summary, Team Activity read model, or equivalent authoritative metric contract.
@@ -139,7 +139,7 @@ Allowed v1 facts:
 
 Deferred metrics:
 
-- daily messages
+- periodic messages
 - success rate
 - online rate
 - average response time

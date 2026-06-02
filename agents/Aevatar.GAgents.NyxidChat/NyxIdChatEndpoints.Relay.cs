@@ -21,6 +21,9 @@ public static partial class NyxIdChatEndpoints
     // Refactor (iter17/cluster-038):
     //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
     //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
+    // Refactor (iter113/cluster-113-telegram-connector-inmemory-updates):
+    //   Old pattern: Telegram connector keeps inbound updates as in-memory state (process-local queue/dictionary).
+    //   New principle: Delete telegram_user /getUpdates in-memory queue and route inbound Telegram through existing NyxID relay/proxy; no new actor type; no in-memory state on connector side.
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
         [FromServices] INyxIdRelayIngressPort relayIngressPort,

@@ -1,6 +1,9 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -21,7 +24,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_MissingToolParameter_ShouldPublishFailedStepCompleted()
     {
-        var module = new ToolCallModule([], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule([], [], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -43,7 +46,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_ToolNotFound_ShouldPublishToolFailureEvents()
     {
-        var module = new ToolCallModule([], NullLogger<ToolCallModule>.Instance);
+        var module = new ToolCallModule([], [], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -276,6 +279,122 @@ public sealed class WorkflowCoreModulesCoverageTests
         var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("execution port is not configured");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenApprovalYields_ShouldPersistPendingStateAndSuspendWithoutExecutingTool()
+    {
+        var executeCalls = 0;
+        var source = new CountingToolSource(
+            [
+                new FakeAgentTool("approval_required", args =>
+                {
+                    executeCalls++;
+                    return args;
+                })
+                {
+                    ApprovalModeOverride = ToolApprovalMode.AlwaysRequire,
+                    IsDestructiveOverride = true,
+                },
+            ]);
+        var middleware = new ToolApprovalMiddleware(new ScriptedApprovalHandler(ToolApprovalResult.Yielded("ignored")));
+        var module = new ToolCallModule([source], [middleware], NullLogger<ToolCallModule>.Instance);
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                RunId = "run-tool-approval",
+                StepId = "step-tool-approval",
+                StepType = "tool_call",
+                Input = """{"danger":true}""",
+                ExecutionId = "exec-tool-approval",
+                Parameters = { ["tool"] = "approval_required" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        executeCalls.Should().Be(0);
+        ctx.Published.Select(x => x.evt).OfType<ToolCallEvent>().Should().ContainSingle();
+        ctx.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Should().ContainSingle().Subject;
+        var expectedToolCallId = "workflow:run-tool-approval:step-tool-approval:exec-tool-approval";
+        suspended.RunId.Should().Be("run-tool-approval");
+        suspended.StepId.Should().Be("step-tool-approval");
+        suspended.SuspensionType.Should().Be("tool_approval");
+        suspended.ToolApproval.Should().NotBeNull();
+        suspended.ToolApproval.ExecutionId.Should().Be("exec-tool-approval");
+        suspended.ToolApproval.ToolName.Should().Be("approval_required");
+        suspended.ToolApproval.ToolCallId.Should().Be(expectedToolCallId);
+        suspended.ToolApproval.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        suspended.ToolApproval.ArgumentsJson.Should().Be("""{"danger":true}""");
+        suspended.Metadata.Should().BeEmpty();
+
+        var state = ctx.LoadState<ToolCallModuleState>("tool_call");
+        state.PendingApprovals.Should().ContainSingle();
+        var pending = state.PendingApprovals.Values.Single();
+        pending.RunId.Should().Be("run-tool-approval");
+        pending.StepId.Should().Be("step-tool-approval");
+        pending.ExecutionId.Should().Be("exec-tool-approval");
+        pending.ToolName.Should().Be("approval_required");
+        pending.ToolCallId.Should().Be(expectedToolCallId);
+        pending.ApprovalRequestId.Should().Be(suspended.ToolApproval.ApprovalRequestId);
+        pending.ArgumentsJson.Should().Be("""{"danger":true}""");
+        pending.Input.Should().Be("""{"danger":true}""");
+    }
+
+    [Theory]
+    [InlineData("denied")]
+    [InlineData("timeout")]
+    [InlineData("exception")]
+    public async Task ToolCallModule_WhenApprovalFailsOrToolThrows_ShouldPublishFailureAndNotPersistPendingApproval(string scenario)
+    {
+        var source = new CountingToolSource(
+            [
+                new FakeAgentTool("guarded_tool", _ =>
+                {
+                    if (scenario == "exception")
+                        throw new InvalidOperationException("boom");
+
+                    return """{"ok":true}""";
+                })
+                {
+                    ApprovalModeOverride = ToolApprovalMode.AlwaysRequire,
+                    IsDestructiveOverride = true,
+                },
+            ]);
+        var approvalResult = scenario switch
+        {
+            "denied" => ToolApprovalResult.Denied("blocked"),
+            "timeout" => ToolApprovalResult.TimedOut(),
+            _ => ToolApprovalResult.Approved(),
+        };
+        var middleware = new ToolApprovalMiddleware(new ScriptedApprovalHandler(approvalResult));
+        var module = new ToolCallModule([source], [middleware], NullLogger<ToolCallModule>.Instance);
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                RunId = $"run-{scenario}",
+                StepId = $"step-{scenario}",
+                StepType = "tool_call",
+                Input = "{}",
+                ExecutionId = $"exec-{scenario}",
+                Parameters = { ["tool"] = "guarded_tool" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Should().BeEmpty();
+        var toolResult = ctx.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().ContainSingle().Subject;
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().ContainSingle().Subject;
+        toolResult.Success.Should().BeFalse();
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("tool 'guarded_tool' execution failed");
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
     }
 
     [Fact]
@@ -924,8 +1043,9 @@ public sealed class WorkflowCoreModulesCoverageTests
         var module = new LLMCallModule();
 
         module.CanHandle(Envelope(new StepRequestEvent { StepType = "llm_call", StepId = "s1" })).Should().BeTrue();
-        module.CanHandle(Envelope(new TextMessageEndEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
-        module.CanHandle(Envelope(new ChatResponseEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
+        module.CanHandle(Envelope(RoleReply("s1", "done"))).Should().BeTrue();
+        module.CanHandle(Envelope(new TextMessageEndEvent { SessionId = "s1", Content = "done" })).Should().BeFalse();
+        module.CanHandle(Envelope(new ChatResponseEvent { SessionId = "s1", Content = "done" })).Should().BeFalse();
         module.CanHandle(Envelope(new WorkflowCompletedEvent { WorkflowName = "wf", Success = true })).Should().BeFalse();
         module.CanHandle(new EventEnvelope()).Should().BeFalse();
     }
@@ -1095,7 +1215,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_TextMessageEndAndChatResponse_ShouldCompleteMatchingPendingStep()
+    public async Task LLMCallModule_LiveFramesShouldNotCompleteAndRoleReplyShouldCompleteMatchingPendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1119,6 +1239,18 @@ public sealed class WorkflowCoreModulesCoverageTests
                 SessionId = textSessionId,
                 Content = "a1",
             }, publisherId: "role-worker-1"),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowRoleReplyRecordedEvent
+            {
+                SessionId = textSessionId,
+                Content = "a1",
+                RoleActorId = "role-worker-1",
+            }),
             ctx,
             CancellationToken.None);
 
@@ -1151,10 +1283,68 @@ public sealed class WorkflowCoreModulesCoverageTests
             ctx,
             CancellationToken.None);
 
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowRoleReplyRecordedEvent
+            {
+                SessionId = chatSessionId,
+                Content = "a2",
+            }),
+            ctx,
+            CancellationToken.None);
+
         var chatCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         chatCompleted.StepId.Should().Be("llm-chat");
-        chatCompleted.WorkerId.Should().Be(ctx.AgentId);
+        chatCompleted.WorkerId.Should().Be("test-publisher");
         chatCompleted.Output.Should().Be("a2");
+    }
+
+    [Fact]
+    public async Task LLMCallModule_PresentationFrames_ShouldNotCompletePendingStep()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-presentation",
+                StepType = "llm_call",
+                RunId = "run-presentation",
+                Input = "q",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-presentation", "llm-presentation", attempt: 1);
+        await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = sessionId,
+                Content = "presentation text",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = sessionId,
+                Content = "presentation response",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(RoleReply(sessionId, "committed role reply")),
+            ctx,
+            CancellationToken.None);
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("llm-presentation");
+        completed.Output.Should().Be("committed role reply");
     }
 
     [Fact]
@@ -1177,11 +1367,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed", attempt: 1);
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
-            {
-                SessionId = sessionId,
-                Content = "[[AEVATAR_LLM_ERROR]] provider returned 429",
-            }, publisherId: "role-worker-failed"),
+            Envelope(RoleReply(sessionId, "[[AEVATAR_LLM_ERROR]] provider returned 429", roleActorId: "role-worker-failed")),
             ctx,
             CancellationToken.None);
 
@@ -1223,15 +1409,28 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_WhenSessionNotPendingOrEmpty_ShouldIgnoreCompletionEvents()
+    public async Task LLMCallModule_LiveFrames_ShouldNotCompletePendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
 
         await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-live-frame",
+                StepType = "llm_call",
+                RunId = "run-live-frame",
+                Input = "q-live",
+            }),
+            ctx,
+            CancellationToken.None);
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-live-frame", "llm-live-frame", attempt: 1);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
-                SessionId = "",
+                SessionId = sessionId,
                 Content = "x",
             }),
             ctx,
@@ -1240,13 +1439,15 @@ public sealed class WorkflowCoreModulesCoverageTests
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
             {
-                SessionId = "missing",
+                SessionId = sessionId,
                 Content = "y",
             }),
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+        ctx.LoadState<LLMCallModuleState>("llm_call")
+            .PendingBySessionId.Should().ContainKey(sessionId);
     }
 
     [Fact]
@@ -1528,11 +1729,31 @@ public sealed class WorkflowCoreModulesCoverageTests
             NullLogger<ToolCallModule>.Instance,
             new DirectFakeExecutionPort());
 
+    private static WorkflowRoleReplyRecordedEvent RoleReply(
+        string sessionId,
+        string content,
+        string roleActorId = "role-worker") =>
+        new()
+        {
+            RunId = "run",
+            RoleActorId = roleActorId,
+            RoleId = "assistant",
+            SessionId = sessionId,
+            Content = content,
+            ContentEmitted = true,
+        };
+
     private sealed class FakeAgentTool(string name, Func<string, string> execute) : IAgentTool
     {
         public string Name { get; } = name;
         public string Description => "fake tool";
         public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ApprovalModeOverride;
+        public bool IsReadOnly => IsReadOnlyOverride;
+        public bool IsDestructive => IsDestructiveOverride;
+        public ToolApprovalMode ApprovalModeOverride { get; init; } = ToolApprovalMode.NeverRequire;
+        public bool IsReadOnlyOverride { get; init; }
+        public bool IsDestructiveOverride { get; init; }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -1562,6 +1783,18 @@ public sealed class WorkflowCoreModulesCoverageTests
         {
             var result = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
             return AgentToolExecutionResult.Succeeded(result);
+        }
+    }
+
+    private sealed class ScriptedApprovalHandler(params ToolApprovalResult[] results) : IToolApprovalHandler
+    {
+        private readonly Queue<ToolApprovalResult> _results = new(results);
+
+        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
+        {
+            return Task.FromResult(_results.TryDequeue(out var result)
+                ? result
+                : ToolApprovalResult.Denied("no scripted approval result"));
         }
     }
 

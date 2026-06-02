@@ -39,15 +39,19 @@ public sealed class StreamingToolExecutor
         IReadOnlyDictionary<string, string>? requestMetadata = null,
         AgentToolExecutionContext? toolContext = null)
     {
-        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
-        //   Old pattern: streaming tool execution received raw request Metadata.
-        //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+        // Refactor (issue1574): Old pattern: streaming tool execution promoted request Metadata into tool control.
+        // New principle: streaming tool control is typed; request Metadata remains external annotations only.
         _tools = tools;
         _hooks = hooks;
         _toolMiddlewares = toolMiddlewares ?? [];
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
-            ?? AgentToolExecutionContextMapper.FromMetadata(requestMetadata);
+            ?? (requestMetadata == null
+                ? null
+                : AgentToolExecutionContext.Empty with
+                {
+                    ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(requestMetadata),
+                });
     }
 
     public ExecutionState CreateExecutionState() => new();

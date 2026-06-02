@@ -37,6 +37,30 @@ public sealed class ChannelRuntimeProtoTests
     }
 
     [Fact]
+    public void NyxRelayTextOperationRawResult_ShouldRoundtripTypedFailureDiagnostics()
+    {
+        var raw = new NyxRelayTextOperationRawResult
+        {
+            RawErrorCode = "relay_reply_update_rejected",
+            RawErrorSummary = "rate limited",
+            FailureKind = FailureKind.TransientAdapterError,
+            RetryAfterMs = 4000,
+            HttpStatus = 429,
+            RawErrorKey = "rate_limited",
+            RawErrorCodeValue = 1005,
+        };
+
+        var parsed = NyxRelayTextOperationRawResult.Parser.ParseFrom(raw.ToByteArray());
+
+        parsed.ShouldBe(raw);
+        parsed.FailureKind.ShouldBe(FailureKind.TransientAdapterError);
+        parsed.RetryAfterMs.ShouldBe(4000);
+        parsed.HttpStatus.ShouldBe(429);
+        parsed.RawErrorKey.ShouldBe("rate_limited");
+        parsed.RawErrorCodeValue.ShouldBe(1005);
+    }
+
+    [Fact]
     public void LeaseToken_ShouldKeepOwnerBytesAtFieldOneAndExpiryAtFieldTwo()
     {
         var ownerField = LeaseToken.Descriptor.FindFieldByNumber(1);

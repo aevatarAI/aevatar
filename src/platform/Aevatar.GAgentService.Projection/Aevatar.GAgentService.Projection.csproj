@@ -25,6 +25,6 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="service_projection_read_models.proto" GrpcServices="None" />
+    <Protobuf Include="service_projection_read_models.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos;..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions" />
   </ItemGroup>
 </Project>

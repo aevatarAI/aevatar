@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
 using FluentAssertions;
 using Google.Protobuf;
@@ -38,12 +39,14 @@ public sealed class WorkflowExecutionContextAdapterTests
                 NyxIdAccessToken = "token-x",
             },
         });
+        host.RuntimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
 
         var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
 
         adapter.RuntimeContext.Should().BeSameAs(host.RuntimeContext);
         adapter.RuntimeContext.ToolContext.Should().BeSameAs(host.RuntimeContext.ToolContext);
         adapter.RuntimeContext.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-x");
+        adapter.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
     }
 
     [Fact]
@@ -288,6 +291,23 @@ public sealed class WorkflowExecutionContextAdapterTests
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+        public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+        {
+            ApplyDelta(ExecutionContextState, delta);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
+            return Task.CompletedTask;
+        }
+
         public Dictionary<string, Any> States { get; } = new(StringComparer.Ordinal);
 
         public Any? GetExecutionState(string scopeKey) =>
@@ -330,6 +350,33 @@ public sealed class WorkflowExecutionContextAdapterTests
     private sealed class NullServiceProvider : IServiceProvider
     {
         public object? GetService(global::System.Type serviceType) => null;
+    }
+
+    private static void ApplyDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta delta)
+    {
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                NyxidAccessToken = delta.Llm.NyxidAccessToken,
+                ModelOverride = delta.Llm.ModelOverride,
+                NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+            };
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization,
+            };
+        }
     }
 
     private sealed class SingleServiceProvider(global::System.Type serviceType, object service) : IServiceProvider

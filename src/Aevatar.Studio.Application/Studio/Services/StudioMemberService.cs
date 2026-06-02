@@ -276,13 +276,6 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // Resolve current state first — UpdateAsync only touches members that
-        // already exist (mirrors GetBindingAsync semantics for missing members).
-        // Knowing the current team_id also lets us shape the reassignment
-        // event correctly: from = current team, to = patch's intent.
-        var currentDetail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
-            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
-
         if (request.TeamId.HasValue)
         {
             var requested = request.TeamId.Value;
@@ -296,45 +289,19 @@ public sealed class StudioMemberService : IStudioMemberService
                     "(use null in JSON body to mean 'unassign').");
             }
 
-            // Read the member's current team_id off the read model. The
-            // detail response doesn't surface team_id today (it is added by
-            // the team-aware response shape introduced for the team API);
-            // route through the projection document directly via the
-            // existing summary contract — for the v1 wiring we keep the
-            // application service stateless and let the actor reject any
-            // mismatched from_team_id (which would surface as a typed 409
-            // / 400 from the dispatch path).
-            var currentTeamId = ResolveCurrentTeamId(currentDetail);
-
-            // No-op when the patch already matches the current state.
-            // Compare on the *normalized* representation so a trailing-space
-            // teamId in either side doesn't trip a spurious dispatch.
-            var requestedNormalized = requested?.Trim();
-            if (string.Equals(currentTeamId, requestedNormalized, StringComparison.Ordinal))
-            {
-                return currentDetail;
-            }
-
-            await _memberCommandPort.ReassignTeamAsync(
+            // Refactor (iter96/cluster-545):
+            //   Old: service/application layer interpreted current membership and reassignment fanout.
+            //   New: service forwards PATCH intent only; StudioMemberGAgent owns the decision and materializer fans out committed facts.
+            await _memberCommandPort.PatchTeamAssignmentAsync(
                 scopeId,
                 memberId,
-                fromTeamId: currentTeamId,
-                toTeamId: requestedNormalized,
+                targetTeamId: requested?.Trim(),
                 ct);
         }
 
         // Re-read the member detail so callers see the post-update state.
         return await GetAsync(scopeId, memberId, ct);
     }
-
-    /// <summary>
-    /// Resolves the member's current team assignment from the summary
-    /// (ADR-0017). The query port populates <c>TeamId</c> from the read
-    /// model document; null means the member is currently unassigned and
-    /// the reassignment event should carry an absent <c>from_team_id</c>.
-    /// </summary>
-    private static string? ResolveCurrentTeamId(StudioMemberDetailResponse detail) =>
-        detail.Summary.TeamId;
 
     /// <summary>
     /// Resolves the published service the member is currently bound to in

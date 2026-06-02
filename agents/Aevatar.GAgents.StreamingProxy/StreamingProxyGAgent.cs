@@ -21,6 +21,8 @@ namespace Aevatar.GAgents.StreamingProxy;
 // External Nyx streaming I/O stays outside actor turns.
 public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>, IProjectedActor
 {
+    internal const string ChatLifecycleContinuationRunnerStreamId = "streaming-proxy:chat-lifecycle-continuation-runner";
+
     public static string ProjectionKind => StreamingProxyProjectionKinds.CurrentState;
 
     [EventHandler(EndpointName = "initializeRoom")]
@@ -38,10 +40,16 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
     {
+        // Refactor (iter104/cluster-1):
+        //   Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer.
+        //   New principle: StreamingProxyGAgent owns typed lifecycle facts; host-side runner performs external Nyx I/O outside actor turns.
+        var sessionId = request.SessionId?.Trim() ?? string.Empty;
+        var scopeId = request.ScopeId?.Trim() ?? string.Empty;
+        var prompt = request.Prompt?.Trim() ?? string.Empty;
         var lifecycleEvent = new StreamingProxyChatLifecycleAcceptedEvent
         {
-            SessionId = request.SessionId,
-            ScopeId = request.ScopeId,
+            SessionId = sessionId,
+            ScopeId = scopeId,
         };
         var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
         if (!string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken))
@@ -53,8 +61,8 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
 
         var topicEvent = new GroupChatTopicEvent
         {
-            Prompt = request.Prompt,
-            SessionId = request.SessionId,
+            Prompt = prompt,
+            SessionId = sessionId,
         };
 
         await PersistDomainEventAsync(lifecycleEvent);
@@ -63,9 +71,42 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         // Publish topic so all SSE subscribers (user + OpenClaws) receive it
         await PublishAsync(topicEvent, TopologyAudience.Parent);
 
+        if (!string.IsNullOrWhiteSpace(lifecycleEvent.AccessToken))
+        {
+            await SendToAsync(
+                ChatLifecycleContinuationRunnerStreamId,
+                new StreamingProxyChatLifecycleContinuationRequested
+                {
+                    RoomId = Id,
+                    SessionId = sessionId,
+                    ScopeId = scopeId,
+                    Prompt = prompt,
+                    AccessToken = lifecycleEvent.AccessToken,
+                    PreferredRoute = lifecycleEvent.PreferredRoute,
+                    DefaultModel = lifecycleEvent.DefaultModel,
+                });
+        }
+
         Logger.LogInformation(
             "[StreamingProxy] Topic started: {Preview}",
-            request.Prompt.Length > 100 ? request.Prompt[..100] + "..." : request.Prompt);
+            prompt.Length > 100 ? prompt[..100] + "..." : prompt);
+    }
+
+    [EventHandler(EndpointName = "continueChatLifecycle")]
+    public async Task HandleChatLifecycleContinuationRequested(StreamingProxyChatLifecycleContinuationRequested request)
+    {
+        // Refactor (iter104/cluster-1 r2):
+        //   Old pattern: this actor handler awaited StreamingProxyNyxParticipantCoordinator and ran Nyx/LLM streaming I/O in the actor turn.
+        //   New principle: External Nyx streaming I/O stays outside actor turns; this compatibility endpoint only republishes the typed request to the host runner.
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrWhiteSpace(request.AccessToken))
+            return;
+
+        if (string.IsNullOrWhiteSpace(request.RoomId))
+            request.RoomId = Id;
+
+        await SendToAsync(ChatLifecycleContinuationRunnerStreamId, request);
     }
 
     [EventHandler(EndpointName = "postMessage")]
@@ -337,4 +378,10 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         };
         return next;
     }
+
+    internal static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
+        int successfulReplies) =>
+        successfulReplies > 0
+            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
+            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 }

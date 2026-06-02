@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Presentation.AGUI;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,6 +29,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IScopeResourceAdmissionPort>(),
                 sp.GetRequiredService<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>(),
                 sp.GetRequiredService<IGAgentDraftRunObservationScopeActivationPort>(),
+                sp.GetService<IAgentKindRegistry>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<GAgentDraftRunInteractionService>>()));
         services.TryAddSingleton<ICommandTargetResolver<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>, GAgentDraftRunCommandTargetResolver>();
         services.TryAddSingleton<ICommandObservationLifecycle<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>, GAgentDraftRunObservationLifecycle>();

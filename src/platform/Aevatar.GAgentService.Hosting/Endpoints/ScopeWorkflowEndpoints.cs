@@ -1,7 +1,11 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Hosting;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -12,16 +16,19 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 public static class ScopeWorkflowEndpoints
 {
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+
     public static IEndpointRouteBuilder MapScopeWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = ScopeEndpointRouteGroups.MapScopeGroup(app).WithTags("ScopeWorkflows");
         group.MapPut("/{scopeId}/workflows/{workflowId}", HandleUpsertWorkflowAsync)
-            .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status200OK)
+            .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
@@ -48,9 +55,10 @@ public static class ScopeWorkflowEndpoints
         bool includeSource,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
         [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
-        [FromServices] IServiceRevisionArtifactStore? artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
-        => await HandleListWorkflowsAsyncCore(http, scopeId, includeSource, workflowQueryPort, workflowActorBindingReader, artifactStore, ct);
+        => await HandleListWorkflowsAsyncCore(http, scopeId, includeSource, workflowQueryPort, workflowActorBindingReader, revisionCatalogReader, options, ct);
 
     internal static async Task<IResult> HandleGetWorkflowDetailAsync(
         HttpContext http,
@@ -58,9 +66,10 @@ public static class ScopeWorkflowEndpoints
         string workflowId,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
         [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
-        [FromServices] IServiceRevisionArtifactStore? artifactStore,
+        [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
-        => await HandleGetWorkflowDetailAsyncCore(http, scopeId, workflowId, workflowQueryPort, workflowActorBindingReader, artifactStore, ct);
+        => await HandleGetWorkflowDetailAsyncCore(http, scopeId, workflowId, workflowQueryPort, workflowActorBindingReader, revisionCatalogReader, options, ct);
 
     internal static async Task HandleRunWorkflowByIdStreamAsync(
         HttpContext http,
@@ -102,7 +111,7 @@ public static class ScopeWorkflowEndpoints
                 request.DisplayName,
                 request.InlineWorkflowYamls,
                 request.RevisionId), ct);
-            return Results.Ok(result);
+            return Results.Accepted(result.ReadModelUrl, result);
         }
         catch (InvalidOperationException ex)
         {
@@ -120,7 +129,8 @@ public static class ScopeWorkflowEndpoints
         bool includeSource,
         IScopeWorkflowQueryPort workflowQueryPort,
         IWorkflowActorBindingReader workflowActorBindingReader,
-        IServiceRevisionArtifactStore? artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
         try
@@ -134,7 +144,7 @@ public static class ScopeWorkflowEndpoints
 
             var details = new List<ScopeWorkflowDetail>(workflows.Count);
             foreach (var workflow in workflows)
-                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, artifactStore, ct));
+                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
 
             return Results.Ok(details);
         }
@@ -154,7 +164,8 @@ public static class ScopeWorkflowEndpoints
         string workflowId,
         IScopeWorkflowQueryPort workflowQueryPort,
         IWorkflowActorBindingReader workflowActorBindingReader,
-        IServiceRevisionArtifactStore? artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
         try
@@ -172,7 +183,7 @@ public static class ScopeWorkflowEndpoints
                 });
             }
 
-            return Results.Json(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, artifactStore, ct));
+            return Results.Json(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
         }
         catch (InvalidOperationException ex)
         {
@@ -303,13 +314,20 @@ public static class ScopeWorkflowEndpoints
 
         if (resolvedEventFormat == ScopeWorkflowStreamEventFormat.Workflow)
         {
-            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, headers, http, ct);
+            var scopedHeaders = BuildScopedHeaders(headers);
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
                 {
                     Prompt = prompt,
-                    AgentId = workflow.ActorId,
+                    Source = new WorkflowChatSourceInput
+                    {
+                        Kind = "definition_actor",
+                        DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                        {
+                            ActorId = workflow.ActorId,
+                        },
+                    },
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
                     Headers = scopedHeaders,
@@ -320,7 +338,7 @@ public static class ScopeWorkflowEndpoints
             return;
         }
 
-        var aguiHeaders = await BuildScopedHeadersAsync(scopeId, headers, http, ct);
+        var aguiHeaders = BuildScopedHeaders(headers);
         await HandleAguiStreamAsync(
             http,
             scopeId,
@@ -424,13 +442,13 @@ public static class ScopeWorkflowEndpoints
             http,
             new WorkflowChatRunRequest(
                 prompt,
-                workflow.WorkflowName,
-                workflow.ActorId,
+                WorkflowChatSource.DefinitionActor(workflow.ActorId, workflow.WorkflowName),
                 sessionId,
-                WorkflowYamls: null,
-                Headers: headers,
+                Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
-                LlmControl: llmControl),
+                LlmControl: llmControl,
+                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                Headers: headers),
             chatRunService,
             ct);
     }
@@ -438,7 +456,8 @@ public static class ScopeWorkflowEndpoints
     private static async Task<ScopeWorkflowDetail> BuildWorkflowDetailAsync(
         ScopeWorkflowSummary workflow,
         IWorkflowActorBindingReader workflowActorBindingReader,
-        IServiceRevisionArtifactStore? artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        ScopeWorkflowCapabilityOptions options,
         CancellationToken ct)
     {
         PreparedServiceRevisionArtifact? artifact = null;
@@ -446,15 +465,29 @@ public static class ScopeWorkflowEndpoints
         if (!string.IsNullOrWhiteSpace(workflow.ActorId))
             binding = await workflowActorBindingReader.GetAsync(workflow.ActorId, ct);
 
-        if (artifactStore != null &&
-            !string.IsNullOrWhiteSpace(workflow.ServiceKey) &&
+        if (!string.IsNullOrWhiteSpace(workflow.ServiceKey) &&
             !string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
         {
-            artifact = await artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
+            var revisionCatalog = await revisionCatalogReader.GetAsync(BuildWorkflowServiceIdentity(workflow, options), ct);
+            artifact = revisionCatalog?.Revisions
+                .FirstOrDefault(x => string.Equals(x.RevisionId, workflow.ActiveRevisionId, StringComparison.Ordinal))
+                ?.PreparedArtifact
+                ?.Clone();
         }
 
         return BuildWorkflowDetailPayload(workflow, binding, artifact);
     }
+
+    private static ServiceIdentity BuildWorkflowServiceIdentity(
+        ScopeWorkflowSummary workflow,
+        ScopeWorkflowCapabilityOptions options) =>
+        new()
+        {
+            TenantId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.ScopeId, nameof(workflow.ScopeId)),
+            AppId = options.ServiceAppId,
+            Namespace = options.ServiceNamespace,
+            ServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.WorkflowId, nameof(workflow.WorkflowId)),
+        };
 
     private static ScopeWorkflowDetail BuildWorkflowDetailPayload(
         ScopeWorkflowSummary workflow,
@@ -515,26 +548,16 @@ public static class ScopeWorkflowEndpoints
         return false;
     }
 
-    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
-        string scopeId,
-        IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null,
-        CancellationToken cancellationToken = default)
+    private static Dictionary<string, string> BuildScopedHeaders(
+        IReadOnlyDictionary<string, string>? headers)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        if (http != null)
-        {
-            var auth = http.Request.Headers.Authorization.FirstOrDefault();
-            if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            {
-                var bearerToken = auth["Bearer ".Length..].Trim();
-                scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-            }
-        }
+        scopedHeaders.Remove(LegacyConnectorHttpAuthorizationBlockedKey);
+        // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses WorkflowChatRunRequest.ConnectorHttpAuthorization.
 
         return scopedHeaders;
     }

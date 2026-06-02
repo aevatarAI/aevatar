@@ -13,6 +13,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Application.Bindings;
@@ -55,10 +56,13 @@ public sealed class ScopeServiceEndpointsTests
         {
             implementationKind = "workflow",
             displayName = "Orders App",
-            workflowYamls = new[]
+            workflow = new
             {
-                "name: main\nsteps:\n  - run: echo hello",
-                "name: child\nsteps:\n  - run: echo child",
+                workflowYamls = new[]
+                {
+                    "name: main\nsteps:\n  - run: echo hello",
+                    "name: child\nsteps:\n  - run: echo child",
+                },
             },
         });
 
@@ -73,6 +77,26 @@ public sealed class ScopeServiceEndpointsTests
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
         host.ScopeBindingPort.LastRequest.Workflow.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest.Workflow!.WorkflowYamls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldIgnoreTopLevelWorkflowYamlsFallback()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/binding", new
+        {
+            implementationKind = "workflow",
+            displayName = "Orders App",
+            workflowYamls = new[]
+            {
+                "name: legacy\nsteps:\n  - run: echo legacy",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.ScopeBindingPort.LastRequest.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest!.Workflow.Should().BeNull();
     }
 
     [Fact]
@@ -1301,8 +1325,8 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.WorkflowYamls.Should().NotBeNull();
-        host.InteractionService.LastRequest.WorkflowYamls.Should().HaveCount(2);
+        host.InteractionService.LastRequest.Source.WorkflowYamls.Should().NotBeNull();
+        host.InteractionService.LastRequest.Source.WorkflowYamls.Should().HaveCount(2);
     }
 
     [Fact]
@@ -1336,22 +1360,33 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/workflow/draft-run")
         {
-            prompt = "run the draft",
-            workflowYamls = new[]
+            Content = JsonContent.Create(new
             {
-                "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
-            },
-            eventFormat = "agui",
-        });
+                prompt = "run the draft",
+                workflowYamls = new[]
+                {
+                    "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
+                },
+                eventFormat = "agui",
+                headers = new Dictionary<string, string>
+                {
+                    ["connector.http.authorization"] = "Bearer stale-metadata-token",
+                },
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-123");
+        var response = await host.Client.SendAsync(httpRequest);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body.Should().Contain("\"humanInputRequest\"");
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.WorkflowYamls.Should().HaveCount(1);
+        host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(1);
+        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
@@ -1415,7 +1450,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1460,18 +1495,30 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/invoke/chat:stream", new
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/invoke/chat:stream")
         {
-            prompt = "hello",
-            headers = new Dictionary<string, string> { ["source"] = "tests" },
-        });
+            Content = JsonContent.Create(new
+            {
+                prompt = "hello",
+                headers = new Dictionary<string, string>
+                {
+                    ["source"] = "tests",
+                    ["connector.http.authorization"] = "Bearer stale-metadata-token",
+                },
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-123");
+        var response = await host.Client.SendAsync(httpRequest);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("source").WhoseValue.Should().Be("tests");
         // Service-run registry receives the actual workflow run actor id as the run id, so
         // /runs/{runId} can resolve the same id the SSE RunStarted frame carries.
@@ -1523,7 +1570,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1599,7 +1646,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1753,7 +1800,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1824,7 +1871,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -1915,6 +1962,7 @@ public sealed class ScopeServiceEndpointsTests
             "chat",
             "hello",
             new Dictionary<string, string>(),
+            null,
             null,
             null);
 
@@ -2080,7 +2128,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-orders-1",
             new PreparedServiceRevisionArtifact
@@ -2125,18 +2173,30 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat:stream", new
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/services/orders/invoke/chat:stream")
         {
-            prompt = "hello orders",
-            headers = new Dictionary<string, string> { ["channel"] = "tests" },
-        });
+            Content = JsonContent.Create(new
+            {
+                prompt = "hello orders",
+                headers = new Dictionary<string, string>
+                {
+                    ["channel"] = "tests",
+                    ["connector.http.authorization"] = "Bearer stale-metadata-token",
+                },
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-orders");
+        var response = await host.Client.SendAsync(httpRequest);
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-orders");
+        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
     }
 
@@ -2163,7 +2223,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-member-a-1",
             new PreparedServiceRevisionArtifact
@@ -2218,7 +2278,7 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-member-a");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("member-tests");
     }
@@ -2251,7 +2311,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-team-member-a-1",
             new PreparedServiceRevisionArtifact
@@ -2307,7 +2367,7 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("aevatar.run.context");
         host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-member-a");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("team-tests");
     }
@@ -2380,7 +2440,7 @@ public sealed class ScopeServiceEndpointsTests
                     ]),
             ],
             DateTimeOffset.UtcNow);
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             service.ServiceKey,
             "rev-orders-1",
             new PreparedServiceRevisionArtifact
@@ -2435,7 +2495,7 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
-        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
+        host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
     }
@@ -2920,7 +2980,7 @@ public sealed class ScopeServiceEndpointsTests
     public async Task InvokeEndpoint_ShouldPackPayloadJson_AsTypedAny_UsingExplicitRevision()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "scope-a:default:default:orders",
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -2966,7 +3026,7 @@ public sealed class ScopeServiceEndpointsTests
     public async Task InvokeEndpoint_ShouldReturnBadRequest_WhenPayloadJsonTypeUrlMissingFromRevision()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "scope-a:default:default:orders",
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -2991,7 +3051,7 @@ public sealed class ScopeServiceEndpointsTests
     public async Task InvokeEndpoint_ShouldReturnBadRequest_WhenPayloadJsonIsMalformed()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        await host.ArtifactStore.SaveAsync(
+        await host.RevisionCatalog.UpsertRevisionAsync(
             "scope-a:default:default:orders",
             "rev-1",
             new PreparedServiceRevisionArtifact
@@ -3861,19 +3921,16 @@ public sealed class ScopeServiceEndpointsTests
         };
         successContext.Request.Headers.Authorization = "Bearer token-123";
 
-        var scopedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
-            "BuildScopedHeadersAsync",
-            "scope-a",
-            explicitHeaders,
-            successContext,
-            CancellationToken.None);
+        var scopedHeaders = InvokePrivateStatic<Dictionary<string, string>>(
+            "BuildScopedHeaders",
+            explicitHeaders);
 
         scopedHeaders.Should().NotContainKey("scope_id");
         scopedHeaders.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         scopedHeaders[LLMRequestMetadataKeys.ModelOverride].Should().Be("existing-model");
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
         scopedHeaders.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer token-123");
+        scopedHeaders.Should().NotContainKey("connector.http.authorization");
 
         var scopedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",
@@ -3894,12 +3951,9 @@ public sealed class ScopeServiceEndpointsTests
                 .AddSingleton<IUserConfigQueryPort>(new ThrowingUserConfigStore())
                 .BuildServiceProvider(),
         };
-        var failedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
-            "BuildScopedHeadersAsync",
-            "scope-a",
-            null,
-            failingContext,
-            CancellationToken.None);
+        var failedHeaders = InvokePrivateStatic<Dictionary<string, string>>(
+            "BuildScopedHeaders",
+            (object?)null);
         failedHeaders.Should().BeEmpty();
         var failedControl = await InvokePrivateStaticTask<LLMControlContext?>(
             "BuildScopedLlmControlAsync",
@@ -4119,13 +4173,16 @@ public sealed class ScopeServiceEndpointsTests
             " chat ",
             "prompt",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
+            "Bearer connector-token",
             " rev-1 ",
             " app-x ");
         invocation.Identity.AppId.Should().Be("app-x");
         invocation.Identity.ServiceId.Should().Be("orders");
         invocation.EndpointId.Should().Be("chat");
         invocation.RevisionId.Should().Be("rev-1");
-        invocation.Payload!.Unpack<ChatRequestEvent>().Metadata["trace-id"].Should().Be("abc");
+        var payload = invocation.Payload!.Unpack<ChatRequestEvent>();
+        payload.Metadata["trace-id"].Should().Be("abc");
+        payload.ConnectorHttpAuthorization.Should().Be("Bearer connector-token");
 
         InvokePrivateStatic<string>("ResolveDefaultScopeServiceId", options).Should().Be("default");
     }
@@ -4565,7 +4622,7 @@ public sealed class ScopeServiceEndpointsTests
             RecordingServiceServingQueryPort servingQueryPort,
             FakeServiceCatalogQueryReader serviceCatalogReader,
             FakeServiceTrafficViewQueryReader trafficViewReader,
-            FakeServiceRevisionArtifactStore artifactStore,
+            FakeServiceRevisionCatalogQueryReader revisionCatalog,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
             FakeStaticGAgentStreamInvocationPort staticGAgentStreamInvocationPort,
@@ -4588,7 +4645,7 @@ public sealed class ScopeServiceEndpointsTests
             ServingQueryPort = servingQueryPort;
             ServiceCatalogReader = serviceCatalogReader;
             TrafficViewReader = trafficViewReader;
-            ArtifactStore = artifactStore;
+            RevisionCatalog = revisionCatalog;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
             StaticGAgentStreamInvocationPort = staticGAgentStreamInvocationPort;
@@ -4629,7 +4686,7 @@ public sealed class ScopeServiceEndpointsTests
 
         public FakeServiceTrafficViewQueryReader TrafficViewReader { get; }
 
-        public FakeServiceRevisionArtifactStore ArtifactStore { get; }
+        public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
         public FakeTeamEntryMemberResolver TeamEntryMemberResolver { get; }
 
@@ -4669,7 +4726,7 @@ public sealed class ScopeServiceEndpointsTests
             var servingQueryPort = new RecordingServiceServingQueryPort();
             var serviceCatalogReader = new FakeServiceCatalogQueryReader();
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
-            var artifactStore = new FakeServiceRevisionArtifactStore();
+            var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
@@ -4707,7 +4764,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
-            builder.Services.AddSingleton<IServiceRevisionArtifactStore>(artifactStore);
+            builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
             builder.Services.AddSingleton<ITeamEntryMemberResolver>(teamEntryMemberResolver);
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
@@ -4825,7 +4882,7 @@ public sealed class ScopeServiceEndpointsTests
                 servingQueryPort,
                 serviceCatalogReader,
                 trafficViewReader,
-                artifactStore,
+                revisionCatalog,
                 teamEntryMemberResolver,
                 interactionService,
                 staticGAgentStreamInvocationPort,
@@ -5325,20 +5382,51 @@ public sealed class ScopeServiceEndpointsTests
             Task.FromResult(View);
     }
 
-    private sealed class FakeServiceRevisionArtifactStore : IServiceRevisionArtifactStore
+    private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
-        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _artifacts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, PreparedServiceRevisionArtifact> _revisionCatalog = new(StringComparer.Ordinal);
 
-        public Task SaveAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
+        public Task UpsertRevisionAsync(string serviceKey, string revisionId, PreparedServiceRevisionArtifact artifact, CancellationToken ct = default)
         {
-            _artifacts[$"{serviceKey}:{revisionId}"] = artifact;
+            var clone = artifact.Clone();
+            clone.RevisionId = revisionId;
+            _revisionCatalog[$"{serviceKey}:{revisionId}"] = clone;
             return Task.CompletedTask;
         }
 
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(string serviceKey, string revisionId, CancellationToken ct = default)
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
-            _artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact);
-            return Task.FromResult<PreparedServiceRevisionArtifact?>(artifact);
+            var serviceKey = ServiceKeys.Build(identity);
+            var revisions = _revisionCatalog
+                .Where(x => x.Key.StartsWith(serviceKey + ":", StringComparison.Ordinal))
+                .Select(x => x.Value)
+                .Select(artifact => new ServiceRevisionSnapshot(
+                    artifact.RevisionId,
+                    artifact.ImplementationKind.ToString(),
+                    ServiceRevisionStatus.Prepared.ToString(),
+                    artifact.ArtifactHash,
+                    string.Empty,
+                    artifact.Endpoints.Select(endpoint => new ServiceEndpointSnapshot(
+                        endpoint.EndpointId,
+                        endpoint.DisplayName,
+                        endpoint.Kind.ToString(),
+                        endpoint.RequestTypeUrl,
+                        endpoint.ResponseTypeUrl,
+                        endpoint.Description)).ToList(),
+                    null,
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null,
+                    null,
+                    artifact.Clone()))
+                .ToList();
+
+            return Task.FromResult<ServiceRevisionCatalogSnapshot?>(new ServiceRevisionCatalogSnapshot(
+                serviceKey,
+                revisions,
+                DateTimeOffset.UtcNow,
+                revisions.Count,
+                string.Empty));
         }
     }
 
@@ -5382,7 +5470,7 @@ public sealed class ScopeServiceEndpointsTests
 
     private sealed class FakeWorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
     {
-        public bool ActorQueryEnabled => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
 
         public Dictionary<string, WorkflowActorSnapshot> SnapshotsByActorId { get; } = new(StringComparer.Ordinal);
 
@@ -5406,7 +5494,7 @@ public sealed class ScopeServiceEndpointsTests
         public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default) =>
             Task.FromResult(new WorkflowCapabilitiesDocument());
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
             SnapshotCalls.Add(actorId);
             SnapshotsByActorId.TryGetValue(actorId, out var snapshot);

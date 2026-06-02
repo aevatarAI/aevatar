@@ -175,7 +175,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WhenContextCommandIdMissing_ShouldFallbackToEnvelopeCorrelationId()
+    public async Task ProjectAsync_WhenContextSessionIdMissing_ShouldNotPublish()
     {
         var streams = new InMemoryStreamProvider();
         var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
@@ -200,8 +200,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             },
         });
 
-        await sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
-        sink.SnapshotEvents().Should().ContainSingle();
+        sink.SnapshotEvents().Should().BeEmpty();
     }
 
     [Fact]

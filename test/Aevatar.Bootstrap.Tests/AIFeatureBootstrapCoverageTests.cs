@@ -190,6 +190,58 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
+    public void AddAevatarAIFeatures_WhenVoicePresenceOpenAIEndpointOnlyConfigured_ShouldNotRegisterOpenAI()
+    {
+        using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["OPENAI_API_KEY"] = null,
+        });
+
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+        services.AddLogging();
+        services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
+        services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
+            new EmptyVoicePresenceCapabilityReader());
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.VoicePresence.DefaultProvider = "minicpm";
+            options.VoicePresence.OpenAIProvider = new VoiceProviderConfig
+            {
+                ProviderName = "openai",
+                Endpoint = "https://nyx.example.com/api/v1/proxy/s/llm-openai",
+            };
+            options.VoicePresence.OpenAISession = new VoiceSessionConfig
+            {
+                Voice = "alloy",
+                SampleRateHz = 24000,
+            };
+            options.VoicePresence.MiniCPMProvider = new VoiceProviderConfig
+            {
+                ProviderName = "minicpm",
+                Endpoint = "https://minicpm.example.com",
+            };
+            options.VoicePresence.MiniCPMSession = new VoiceSessionConfig
+            {
+                SampleRateHz = 16000,
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
+            .OfType<VoicePresenceModuleFactory>()
+            .Single();
+
+        factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
+        defaultModule.Should().BeOfType<VoicePresenceModule>();
+
+        factory.TryCreate("voice_presence_openai", out var openAIModule).Should().BeFalse();
+        openAIModule.Should().BeNull();
+    }
+
+    [Fact]
     public void AddAevatarAIFeatures_WhenVoicePresenceMiniCpmConfiguredAsDefault_ShouldCreateDefaultAlias()
     {
         using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>

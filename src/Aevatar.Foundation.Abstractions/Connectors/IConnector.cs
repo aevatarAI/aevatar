@@ -27,11 +27,11 @@ public interface IConnector
 /// </summary>
 public sealed class ConnectorRequest
 {
-    /// <summary>Generic HTTP authorization metadata key consumed by HTTP connectors.</summary>
-    public const string HttpAuthorizationMetadataKey = "connector.http.authorization";
-
-    /// <summary>Execution metadata propagated from workflow/runtime context.</summary>
+    /// <summary>Execution metadata propagated from workflow/runtime context, excluding connector authorization.</summary>
     public IReadOnlyDictionary<string, string> Metadata { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>Typed HTTP Authorization header value for connector execution, e.g. "Bearer token".</summary>
+    public string HttpAuthorization { get; init; } = "";
 
     /// <summary>Workflow run id.</summary>
     public string RunId { get; init; } = "";

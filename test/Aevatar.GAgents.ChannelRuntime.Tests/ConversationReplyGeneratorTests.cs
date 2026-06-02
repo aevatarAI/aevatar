@@ -186,13 +186,13 @@ public sealed class ConversationReplyGeneratorTests
         var systemPrompt = providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
-        systemPrompt.Should().Contain("chrono-ai-daily");
+        systemPrompt.Should().NotContain("chrono-ai-daily");
         systemPrompt.Should().Contain("When you are following a loaded skill and you hit a missing capability");
         systemPrompt.Should().Contain("ornn_search_skills");
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkOperatorUserIdInSystemPrompt()
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkApprovalOperatorUserIdInSystemPrompt()
     {
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
@@ -213,7 +213,8 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [ChannelMetadataKeys.LarkOperatorUserId] = "ou_operator_1",
+                [ChannelMetadataKeys.LarkOperatorUserId] = "lark-user-1",
+                [ChannelMetadataKeys.LarkOperatorOpenId] = "ou_operator_1",
             },
             streamingSink: null,
             CancellationToken.None);
@@ -221,7 +222,8 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().Be("ok");
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
-        systemPrompt.Should().Contain("operator_user_id: \"ou_operator_1\"");
+        systemPrompt.Should().Contain("operator_user_id: \"lark-user-1\"");
+        systemPrompt.Should().Contain("operator_open_id: \"ou_operator_1\"");
     }
 
     [Fact]
@@ -372,6 +374,29 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WhenApprovalHandlerMissingAndToolRequiresApproval_ShouldDenyWithoutExecutingTool()
+    {
+        var tool = new ApprovalRequiredTool();
+        var generator = new NyxIdConversationReplyGenerator(
+            new ToolResultEchoingProviderFactory(),
+            toolSources: [new SingleToolSource(tool)]);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-no-handler-approval",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-no-handler" },
+                Content = new MessageContent { Text = "run tool" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Contain("No tool approval handler is registered.");
+        tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithLocalSkillCatalog_AddsLocalSkillsWithoutRemoteFetcherWarning()
     {
         var logger = new ListLogger<NyxIdConversationReplyGenerator>();
@@ -505,33 +530,33 @@ public sealed class ConversationReplyGeneratorTests
             {
                 Id = "msg-tool-preamble",
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-tool-preamble" },
-                Content = new MessageContent { Text = "/daily eanzhao" },
+                Content = new MessageContent { Text = "/approval eanzhao" },
             },
             new Dictionary<string, string>(),
             sink,
             CancellationToken.None);
 
-        reply.Text.Should().Be("最终日报");
-        sink.Emissions.Should().Equal("…", "最终日报");
+        reply.Text.Should().Be("最终结果");
+        sink.Emissions.Should().Equal("…", "最终结果");
         sink.Emissions.Should().NotContain(text => text.Contains("开始执行", StringComparison.Ordinal));
         sink.Emissions.Should().NotContain(text => text.Contains("先查目录", StringComparison.Ordinal));
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[1].Messages.Any(message =>
             message.Role == "assistant" &&
-            message.Content == "开始执行 chrono-ai-daily，先查目录结构。" &&
+            message.Content == "开始执行 approval-flow，先查目录结构。" &&
             message.ToolCalls is { Count: 1 }).Should().BeTrue();
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenDailySkipsOrnnDiscovery_ForcesSearchThenUseSkillBeforeFinal()
+    public async Task GenerateReplyAsync_WhenPrimarySkillSkipsOrnnDiscovery_ForcesSearchThenUseSkillBeforeFinal()
     {
-        var providerFactory = new DailyPrimarySkillRecoveryProviderFactory();
+        var providerFactory = new PrimarySkillRecoveryProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
             toolSources:
             [
-                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **chrono-ai-daily**")),
-                new SingleToolSource(new FixedResultTool("use_skill", "# chrono-ai-daily\n## Instructions\nBuild the daily report.")),
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **project-summary**")),
+                new SingleToolSource(new FixedResultTool("use_skill", "# project-summary\n## Instructions\nBuild the project summary.")),
             ],
             relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
             {
@@ -540,17 +565,17 @@ public sealed class ConversationReplyGeneratorTests
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "daily",
-            OriginalCommand: "/daily",
-            PrimarySkillName: "chrono-ai-daily",
+            CommandName: "summary",
+            OriginalCommand: "/summary",
+            PrimarySkillName: "project-summary",
             MaxOrnnSearchAttempts: 2);
 
         var reply = await generator.GenerateReplyAsync(
             new ChatActivity
             {
-                Id = "msg-daily-primary-skill",
-                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-daily-primary-skill" },
-                Content = new MessageContent { Text = "/daily" },
+                Id = "msg-summary-primary-skill",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-summary-primary-skill" },
+                Content = new MessageContent { Text = "/summary" },
             },
             new Dictionary<string, string>(),
             Control(),
@@ -558,7 +583,7 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Text.Should().Be("daily report from loaded skill");
+        reply.Text.Should().Be("summary report from loaded skill");
         providerFactory.Requests.Should().ContainSingle();
         providerFactory.ObservedToolCalls.Should().Contain("ornn_search_skills");
         providerFactory.ObservedToolCalls.Should().Contain("use_skill");
@@ -567,42 +592,42 @@ public sealed class ConversationReplyGeneratorTests
                 message.Role == "assistant" &&
                 message.ToolCalls?.Any(call =>
                     call.Name == "ornn_search_skills" &&
-                    call.ArgumentsJson.Contains("chrono-ai-daily", StringComparison.Ordinal)) == true)).Should().BeTrue();
+                    call.ArgumentsJson.Contains("project-summary", StringComparison.Ordinal)) == true)).Should().BeTrue();
         providerFactory.Requests.Any(request =>
             request.Messages.Any(message =>
                 message.Role == "assistant" &&
                 message.ToolCalls?.Any(call =>
                     call.Name == "use_skill" &&
-                    call.ArgumentsJson.Contains("chrono-ai-daily", StringComparison.Ordinal)) == true)).Should().BeTrue();
-        reply.Text.Should().NotContain("generic daily answer");
+                    call.ArgumentsJson.Contains("project-summary", StringComparison.Ordinal)) == true)).Should().BeTrue();
+        reply.Text.Should().NotContain("generic summary answer");
     }
 
     [Fact]
     public async Task GenerateReplyAsync_WithSkillRecoveryStreamingStatus_DoesNotPolluteFinalReplyText()
     {
-        var providerFactory = new DailyPrimarySkillRecoveryProviderFactory();
+        var providerFactory = new PrimarySkillRecoveryProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
             toolSources:
             [
-                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **chrono-ai-daily**")),
-                new SingleToolSource(new FixedResultTool("use_skill", "# chrono-ai-daily\n## Instructions\nBuild the daily report.")),
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **project-summary**")),
+                new SingleToolSource(new FixedResultTool("use_skill", "# project-summary\n## Instructions\nBuild the project summary.")),
             ]);
         var sink = new RecordingStreamingSink();
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "daily",
-            OriginalCommand: "/daily",
-            PrimarySkillName: "chrono-ai-daily",
+            CommandName: "summary",
+            OriginalCommand: "/summary",
+            PrimarySkillName: "project-summary",
             MaxOrnnSearchAttempts: 2);
 
         var reply = await generator.GenerateReplyAsync(
             new ChatActivity
             {
-                Id = "msg-daily-streaming-status",
-                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-daily-streaming-status" },
-                Content = new MessageContent { Text = "/daily" },
+                Id = "msg-summary-streaming-status",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-summary-streaming-status" },
+                Content = new MessageContent { Text = "/summary" },
             },
             new Dictionary<string, string>(),
             Control(),
@@ -610,39 +635,39 @@ public sealed class ConversationReplyGeneratorTests
             sink,
             CancellationToken.None);
 
-        reply.Text.Should().Be("daily report from loaded skill");
+        reply.Text.Should().Be("summary report from loaded skill");
         sink.Emissions.Should().HaveCount(2);
-        sink.Emissions[0].Should().Contain("正在处理 `/daily`");
+        sink.Emissions[0].Should().Contain("正在处理 `/summary`");
         sink.Emissions[0].Should().NotBe("…");
-        sink.Emissions[1].Should().Be("daily report from loaded skill");
+        sink.Emissions[1].Should().Be("summary report from loaded skill");
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenDailySkillHitsToolBlocker_ForcesOrnnRecoveryBeforeFinalFailure()
+    public async Task GenerateReplyAsync_WhenLoadedSkillHitsToolBlocker_ForcesOrnnRecoveryBeforeFinalFailure()
     {
-        var providerFactory = new DailyBlockerRecoveryProviderFactory();
+        var providerFactory = new BlockerRecoveryProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
             toolSources:
             [
-                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **chrono-ai-daily**")),
-                new SingleToolSource(new FixedResultTool("use_skill", "# chrono-ai-daily\n## Instructions\nFetch chrono storage data.")),
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n- **project-summary**")),
+                new SingleToolSource(new FixedResultTool("use_skill", "# project-summary\n## Instructions\nFetch project data.")),
                 new SingleToolSource(new FixedResultTool("chrono_storage_query", "Error: Invalid URI: The hostname could not be parsed.")),
             ]);
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "daily",
-            OriginalCommand: "/daily",
-            PrimarySkillName: "chrono-ai-daily",
+            CommandName: "summary",
+            OriginalCommand: "/summary",
+            PrimarySkillName: "project-summary",
             MaxOrnnSearchAttempts: 2);
 
         var reply = await generator.GenerateReplyAsync(
             new ChatActivity
             {
-                Id = "msg-daily-recovery",
-                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-daily-recovery" },
-                Content = new MessageContent { Text = "/daily" },
+                Id = "msg-summary-recovery",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-summary-recovery" },
+                Content = new MessageContent { Text = "/summary" },
             },
             new Dictionary<string, string>(),
             Control(),
@@ -650,14 +675,14 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Text.Should().Be("recovered daily report");
+        reply.Text.Should().Be("recovered summary report");
         providerFactory.Requests.Should().HaveCount(3);
         providerFactory.Requests.Any(request =>
             request.Messages.Any(message =>
                 message.Role == "assistant" &&
                 message.ToolCalls?.Any(call =>
                     call.Name == "ornn_search_skills" &&
-                    call.ArgumentsJson.Contains("chrono-ai-daily", StringComparison.Ordinal)) == true)).Should().BeTrue();
+                    call.ArgumentsJson.Contains("project-summary", StringComparison.Ordinal)) == true)).Should().BeTrue();
         providerFactory.Requests.Any(request =>
             request.Messages.Any(message =>
                 message.Role == "assistant" &&
@@ -683,7 +708,7 @@ public sealed class ConversationReplyGeneratorTests
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
             CommandName: "goal",
-            OriginalCommand: "/goal ship daily command fix",
+            OriginalCommand: "/goal ship command fix",
             PrimarySkillName: null,
             MaxOrnnSearchAttempts: 2);
 
@@ -692,7 +717,7 @@ public sealed class ConversationReplyGeneratorTests
             {
                 Id = "msg-goal-recovery",
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-goal-recovery" },
-                Content = new MessageContent { Text = "/goal ship daily command fix" },
+                Content = new MessageContent { Text = "/goal ship command fix" },
             },
             new Dictionary<string, string>(),
             Control(),
@@ -724,13 +749,13 @@ public sealed class ConversationReplyGeneratorTests
             providerFactory,
             toolSources:
             [
-                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n* chrono-ai-daily")),
+                new SingleToolSource(new FixedResultTool("ornn_search_skills", "Found 1 skills:\n* project-summary")),
             ]);
         var skillRecovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "daily",
-            OriginalCommand: "/daily",
+            CommandName: "summary",
+            OriginalCommand: "/summary",
             PrimarySkillName: null,
             MaxOrnnSearchAttempts: 2);
 
@@ -739,7 +764,7 @@ public sealed class ConversationReplyGeneratorTests
             {
                 Id = "msg-unparseable-search-match",
                 Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-unparseable-search-match" },
-                Content = new MessageContent { Text = "/daily" },
+                Content = new MessageContent { Text = "/summary" },
             },
             new Dictionary<string, string>(),
             Control(),
@@ -792,13 +817,13 @@ public sealed class ConversationReplyGeneratorTests
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotBeNull();
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        var metadata = request.ToolContext!.ToLegacyMetadata();
+        var toolContext = request.ToolContext!;
         // Sender's model wins (non-empty).
-        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
+        toolContext.Routing.ModelOverride.Should().Be("sender-model");
         // Sender left route blank → owner's upstream-pinned route stays.
-        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
         // Sender left max-rounds at 0 → owner's upstream-pinned value stays.
-        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("9");
+        toolContext.Routing.MaxToolRoundsOverride.Should().Be(9);
     }
 
     [Fact]
@@ -827,12 +852,49 @@ public sealed class ConversationReplyGeneratorTests
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotBeNull();
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        var metadata = request.ToolContext!.ToLegacyMetadata();
-        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-only-model");
-        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("owner-route");
-        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("4");
+        var toolContext = request.ToolContext!;
+        toolContext.Routing.ModelOverride.Should().Be("owner-only-model");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("owner-route");
+        toolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         // Generator must not have touched the prefs store when no binding-id is present.
         prefsStore.Lookups.Should().BeEmpty();
+    }
+
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    [Fact]
+    public async Task GenerateReplyAsync_DisablesTools_WhenChannelTurnHasNoSenderBinding()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var toolSource = new CountingToolSource(new ApprovalRequiredTool());
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [toolSource],
+            localSkillCatalog: new LocalSkillCatalog());
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-unbound-channel-tools",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-unbound-channel-tools",
+            },
+            Control("owner-only-model", "owner-route", 4),
+            toolContext: null,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().BeNull();
+        toolSource.DiscoverCount.Should().Be(0);
     }
 
     [Fact]
@@ -861,10 +923,10 @@ public sealed class ConversationReplyGeneratorTests
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotBeNull();
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        var metadata = request.ToolContext!.ToLegacyMetadata();
-        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-fallback-model");
-        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("owner-route");
-        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
+        var toolContext = request.ToolContext!;
+        toolContext.Routing.ModelOverride.Should().Be("owner-fallback-model");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("owner-route");
+        toolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
     }
 
     [Fact]
@@ -903,24 +965,24 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests.Should().HaveCount(2);
         var senderRequest = providerFactory.Requests[0];
         senderRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        var senderMetadata = senderRequest.ToolContext!.ToLegacyMetadata();
-        senderMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
-        senderMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/sender");
-        senderMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
-        senderMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("sender-token");
-        senderMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("sender-token");
-        senderMetadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken].Should().Be("sender-token");
+        var senderToolContext = senderRequest.ToolContext!;
+        senderToolContext.Routing.ModelOverride.Should().Be("sender-model");
+        senderToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
+        senderToolContext.Routing.MaxToolRoundsOverride.Should().Be(7);
+        senderToolContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
+        senderToolContext.Credentials.NyxIdOrgToken.Should().Be("sender-token");
+        senderToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
 
         var ownerRequest = providerFactory.Requests[1];
         ownerRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        var ownerMetadata = ownerRequest.ToolContext!.ToLegacyMetadata();
-        ownerMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-model");
-        ownerMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
-        ownerMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
-        ownerMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("owner-token");
-        ownerMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("owner-token");
-        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
-        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        var ownerToolContext = ownerRequest.ToolContext!;
+        ownerToolContext.Routing.ModelOverride.Should().Be("owner-model");
+        ownerToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        ownerToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
+        ownerToolContext.Credentials.NyxIdAccessToken.Should().Be("owner-token");
+        ownerToolContext.Credentials.NyxIdOrgToken.Should().Be("owner-token");
+        ownerToolContext.SenderBinding.BindingId.Should().BeNull();
+        ownerToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
     }
 
     [Fact]
@@ -954,14 +1016,14 @@ public sealed class ConversationReplyGeneratorTests
 
         var ownerRequest = providerFactory.Requests.Should().ContainSingle().Subject;
         ownerRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        var ownerMetadata = ownerRequest.ToolContext!.ToLegacyMetadata();
-        ownerMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-model");
-        ownerMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
-        ownerMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
-        ownerMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("owner-token");
-        ownerMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("owner-token");
-        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
-        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        var ownerToolContext = ownerRequest.ToolContext!;
+        ownerToolContext.Routing.ModelOverride.Should().Be("owner-model");
+        ownerToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
+        ownerToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
+        ownerToolContext.Credentials.NyxIdAccessToken.Should().Be("owner-token");
+        ownerToolContext.Credentials.NyxIdOrgToken.Should().Be("owner-token");
+        ownerToolContext.SenderBinding.BindingId.Should().BeNull();
+        ownerToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
     }
 
     // ─── Issue #513 phase 3 — explicit 3 binding × 3 owner-prefs override matrix ───
@@ -1047,25 +1109,17 @@ public sealed class ConversationReplyGeneratorTests
 
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        var effective = request.ToolContext!.ToLegacyMetadata();
+        var effective = request.ToolContext!;
 
-        AssertKey(effective, LLMRequestMetadataKeys.ModelOverride, expectedModel);
-        AssertKey(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, expectedRoute);
-        AssertKey(effective, LLMRequestMetadataKeys.MaxToolRoundsOverride, expectedRounds);
+        effective.Routing.ModelOverride.Should().Be(expectedModel);
+        effective.Routing.NyxIdRoutePreference.Should().Be(expectedRoute);
+        effective.Routing.MaxToolRoundsOverride?.ToString().Should().Be(expectedRounds);
 
         if (bindingState == MatrixUnbound)
             prefsStore.Lookups.Should().BeEmpty(
                 "no typed sender binding → generator must not consult the prefs store");
         else
             prefsStore.Lookups.Should().ContainSingle().Which.Should().Be("bnd_sender");
-    }
-
-    private static void AssertKey(IReadOnlyDictionary<string, string> metadata, string key, string? expected)
-    {
-        if (expected is null)
-            metadata.Should().NotContainKey(key);
-        else
-            metadata.Should().ContainKey(key).WhoseValue.Should().Be(expected);
     }
 
     private sealed class ScopedStubPreferencesStore : INyxIdUserLlmPreferencesStore
@@ -1228,6 +1282,43 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
+    private sealed class ToolResultEchoingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "tool-result-echoing";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var toolResult = request.Messages.LastOrDefault(static message => message.Role == "tool")?.Content;
+            if (toolResult is not null)
+            {
+                yield return new LLMStreamChunk { DeltaContent = toolResult };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval",
+                    Name = ApprovalRequiredTool.ToolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
     private sealed class ToolCallingPreambleProviderFactory : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "tool-calling-preamble";
@@ -1247,13 +1338,13 @@ public sealed class ConversationReplyGeneratorTests
             Requests.Add(request);
             if (request.Messages.Any(static message => message.Role == "tool"))
             {
-                yield return new LLMStreamChunk { DeltaContent = "最终日报" };
+                yield return new LLMStreamChunk { DeltaContent = "最终结果" };
                 yield return new LLMStreamChunk { IsLast = true };
                 await Task.CompletedTask;
                 yield break;
             }
 
-            yield return new LLMStreamChunk { DeltaContent = "开始执行 chrono-ai-daily，先查目录结构。" };
+            yield return new LLMStreamChunk { DeltaContent = "开始执行 approval-flow，先查目录结构。" };
             yield return new LLMStreamChunk
             {
                 DeltaToolCall = new ToolCall
@@ -1268,9 +1359,9 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
-    private sealed class DailyPrimarySkillRecoveryProviderFactory : ILLMProviderFactory, ILLMProvider
+    private sealed class PrimarySkillRecoveryProviderFactory : ILLMProviderFactory, ILLMProvider
     {
-        public string Name => "daily-primary-skill-recovery";
+        public string Name => "primary-skill-recovery";
 
         public List<LLMRequest> Requests { get; } = [];
         public List<string> ObservedToolCalls { get; } = [];
@@ -1292,17 +1383,17 @@ public sealed class ConversationReplyGeneratorTests
             yield return new LLMStreamChunk
             {
                 DeltaContent = HasToolCall(request, "use_skill")
-                    ? "daily report from loaded skill"
-                    : "generic daily answer",
+                    ? "summary report from loaded skill"
+                    : "generic summary answer",
             };
             yield return new LLMStreamChunk { IsLast = true };
             await Task.CompletedTask;
         }
     }
 
-    private sealed class DailyBlockerRecoveryProviderFactory : ILLMProviderFactory, ILLMProvider
+    private sealed class BlockerRecoveryProviderFactory : ILLMProviderFactory, ILLMProvider
     {
-        public string Name => "daily-blocker-recovery";
+        public string Name => "blocker-recovery";
 
         public List<LLMRequest> Requests { get; } = [];
         public List<string> ObservedToolCalls { get; } = [];
@@ -1323,7 +1414,7 @@ public sealed class ConversationReplyGeneratorTests
 
             if (!HasToolCall(request, "use_skill"))
             {
-                yield return ToolChunk("call-use-daily", "use_skill", """{"skill":"chrono-ai-daily","args":""}""");
+                yield return ToolChunk("call-use-summary", "use_skill", """{"skill":"project-summary","args":""}""");
                 yield return new LLMStreamChunk { IsLast = true };
                 await Task.CompletedTask;
                 yield break;
@@ -1346,7 +1437,7 @@ public sealed class ConversationReplyGeneratorTests
                 yield break;
             }
 
-            yield return new LLMStreamChunk { DeltaContent = "recovered daily report" };
+            yield return new LLMStreamChunk { DeltaContent = "recovered summary report" };
             yield return new LLMStreamChunk { IsLast = true };
             await Task.CompletedTask;
         }
@@ -1430,9 +1521,22 @@ public sealed class ConversationReplyGeneratorTests
             Task.FromResult(result);
     }
 
+    private sealed class CountingToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public int DiscoverCount { get; private set; }
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            DiscoverCount++;
+            return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
+    }
+
     private sealed class ApprovalRequiredTool : IAgentTool
     {
         public const string ToolName = "approval_required_tool";
+
+        public int ExecuteCount { get; private set; }
 
         public string Name => ToolName;
 
@@ -1442,8 +1546,13 @@ public sealed class ConversationReplyGeneratorTests
 
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("""{"executed":true}""");
+        public bool IsDestructive => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("""{"executed":true}""");
+        }
     }
 
     private sealed class CountingApprovalHandler : IToolApprovalHandler

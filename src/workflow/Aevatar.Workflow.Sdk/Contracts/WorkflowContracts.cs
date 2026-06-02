@@ -1,5 +1,4 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Sdk.Contracts;
 
@@ -9,7 +8,6 @@ public sealed record ChatRunRequest
     public IReadOnlyList<ChatRunContentPart>? InputParts { get; init; }
     public string? ScopeId { get; init; }
     public string? Workflow { get; init; }
-    public string? AgentId { get; init; }
     public string? SessionId { get; init; }
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
@@ -71,58 +69,38 @@ public sealed record WorkflowSignalResponse
     public string? CommandId { get; init; }
 }
 
-public sealed record WorkflowOutputFrame
-{
-    public required string Type { get; init; }
-    public long? Timestamp { get; init; }
-    public string? ThreadId { get; init; }
-    public JsonElement? Result { get; init; }
-    public string? Message { get; init; }
-    public string? Code { get; init; }
-    public string? StepName { get; init; }
-    public string? MessageId { get; init; }
-    public string? Role { get; init; }
-    public string? Delta { get; init; }
-    public JsonElement? Snapshot { get; init; }
-    public string? ToolCallId { get; init; }
-    public string? ToolName { get; init; }
-    public string? Name { get; init; }
-    public JsonElement? Value { get; init; }
-
-    [JsonExtensionData]
-    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
-}
-
 public static class WorkflowEventTypes
 {
-    public const string RunStarted = "RUN_STARTED";
-    public const string RunFinished = "RUN_FINISHED";
-    public const string RunError = "RUN_ERROR";
-    public const string StepStarted = "STEP_STARTED";
-    public const string StepFinished = "STEP_FINISHED";
-    public const string TextMessageStart = "TEXT_MESSAGE_START";
-    public const string TextMessageContent = "TEXT_MESSAGE_CONTENT";
-    public const string TextMessageEnd = "TEXT_MESSAGE_END";
-    public const string StateSnapshot = "STATE_SNAPSHOT";
-    public const string ToolCallStart = "TOOL_CALL_START";
-    public const string ToolCallEnd = "TOOL_CALL_END";
-    public const string Custom = "CUSTOM";
+    public const string RunStarted = WorkflowRunEventTypes.RunStarted;
+    public const string RunFinished = WorkflowRunEventTypes.RunFinished;
+    public const string RunError = WorkflowRunEventTypes.RunError;
+    public const string RunStopped = WorkflowRunEventTypes.RunStopped;
+    public const string StepStarted = WorkflowRunEventTypes.StepStarted;
+    public const string StepFinished = WorkflowRunEventTypes.StepFinished;
+    public const string TextMessageStart = WorkflowRunEventTypes.TextMessageStart;
+    public const string TextMessageContent = WorkflowRunEventTypes.TextMessageContent;
+    public const string TextMessageEnd = WorkflowRunEventTypes.TextMessageEnd;
+    public const string StateSnapshot = WorkflowRunEventTypes.StateSnapshot;
+    public const string ToolCallStart = WorkflowRunEventTypes.ToolCallStart;
+    public const string ToolCallEnd = WorkflowRunEventTypes.ToolCallEnd;
+    public const string Custom = WorkflowRunEventTypes.Custom;
 }
 
 public sealed record WorkflowEvent
 {
-    public required WorkflowOutputFrame Frame { get; init; }
+    public required WorkflowRunEventEnvelope Frame { get; init; }
 
-    public string Type => Frame.Type;
+    public string Type => WorkflowRunEventTypes.GetEventType(Frame);
 
     public bool IsRunError =>
-        string.Equals(Type, WorkflowEventTypes.RunError, StringComparison.Ordinal);
+        Frame.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError;
 
     public bool IsTerminal =>
-        string.Equals(Type, WorkflowEventTypes.RunFinished, StringComparison.Ordinal) ||
-        string.Equals(Type, WorkflowEventTypes.RunError, StringComparison.Ordinal);
+        Frame.EventCase is WorkflowRunEventEnvelope.EventOneofCase.RunFinished
+            or WorkflowRunEventEnvelope.EventOneofCase.RunError
+            or WorkflowRunEventEnvelope.EventOneofCase.RunStopped;
 
-    public static WorkflowEvent FromFrame(WorkflowOutputFrame frame) =>
+    public static WorkflowEvent FromFrame(WorkflowRunEventEnvelope frame) =>
         new() { Frame = frame };
 }
 
@@ -134,5 +112,5 @@ public sealed record WorkflowRunResult(IReadOnlyList<WorkflowEvent> Events)
 
     public bool Succeeded =>
         RunErrorEvent is null &&
-        string.Equals(TerminalEvent?.Type, WorkflowEventTypes.RunFinished, StringComparison.Ordinal);
+        TerminalEvent?.Frame.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunFinished;
 }

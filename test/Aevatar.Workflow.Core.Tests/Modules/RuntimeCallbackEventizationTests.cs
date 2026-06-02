@@ -759,10 +759,13 @@ public class RuntimeCallbackEventizationTests
 
         var chatRequest = ctx.Published.Select(x => x.Event).OfType<ChatRequestEvent>().Single();
         ctx.Published.Clear();
-        var responseEnvelope = Wrap(new ChatResponseEvent
+        var responseEnvelope = Wrap(new WorkflowRoleReplyRecordedEvent
         {
+            RoleActorId = "role-worker",
+            RoleId = "assistant",
             SessionId = chatRequest.SessionId,
             Content = "ok",
+            ContentEmitted = true,
         });
 
         await FluentActions
@@ -1417,6 +1420,23 @@ public class RuntimeCallbackEventizationTests
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
+
+        public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+        {
+            ApplyDelta(ExecutionContextState, delta);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
+            return Task.CompletedTask;
+        }
+
         public Any? GetExecutionState(string scopeKey) =>
             _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
@@ -1452,6 +1472,33 @@ public class RuntimeCallbackEventizationTests
     private sealed class NullServiceProvider : IServiceProvider
     {
         public object? GetService(System.Type serviceType) => null;
+    }
+
+    private static void ApplyDelta(
+        WorkflowRunExecutionContextState state,
+        WorkflowRunExecutionContextDelta delta)
+    {
+        if (delta.ClearLlm)
+            state.Llm = null;
+        if (delta.ClearConnector)
+            state.Connector = null;
+        if (delta.Llm != null)
+        {
+            state.Llm = new WorkflowLlmExecutionContextState
+            {
+                NyxidAccessToken = delta.Llm.NyxidAccessToken,
+                ModelOverride = delta.Llm.ModelOverride,
+                NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+            };
+        }
+
+        if (delta.Connector != null)
+        {
+            state.Connector = new WorkflowConnectorExecutionContextState
+            {
+                HttpAuthorization = delta.Connector.HttpAuthorization,
+            };
+        }
     }
 
     private sealed record ScheduledCallback(

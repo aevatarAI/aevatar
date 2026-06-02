@@ -165,7 +165,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldResolveScopeIdFromRequestScopeBeforeMetadataFallbacks()
+    public async Task DispatchAsync_ShouldResolveScopeIdFromTypedPayloadBeforeScopeAnnotations()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -190,6 +190,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
             {
                 Prompt = "hello",
                 ScopeId = "request-scope",
+                Headers =
+                {
+                    [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-header-scope",
+                    ["scope_id"] = "legacy-header-scope",
+                },
                 Metadata =
                 {
                     [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-metadata-scope",
@@ -205,7 +210,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldResolveScopeIdFromWorkflowMetadataKey_WhenRequestScopeIsBlank()
+    public async Task DispatchAsync_ShouldIgnoreWorkflowScopeAnnotations_WhenTypedScopeIsBlank()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -230,6 +235,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Payload = Any.Pack(new ChatRequestEvent
             {
                 Prompt = "hello",
+                Headers =
+                {
+                    [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-header-scope",
+                    ["scope_id"] = "legacy-header-scope",
+                },
                 Metadata =
                 {
                     [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-metadata-scope",
@@ -239,11 +249,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
         });
 
         workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].ScopeId.Should().Be("workflow-metadata-scope");
+        workflowPort.CreateRunCalls[0].ScopeId.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldResolveScopeIdFromLegacyMetadataKey_WhenOtherSourcesAreBlank()
+    public async Task DispatchAsync_ShouldIgnoreLegacyScopeMetadata_WhenTypedScopeIsBlank()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -276,7 +286,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         });
 
         workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].ScopeId.Should().Be("legacy-scope");
+        workflowPort.CreateRunCalls[0].ScopeId.Should().BeEmpty();
     }
 
     [Fact]

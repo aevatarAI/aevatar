@@ -87,6 +87,9 @@ internal static class VoicePresenceSessionDispatch
             case VoiceTransportRelayStopped relayStopped:
                 signal.TransportRelayStopped = relayStopped.Clone();
                 break;
+            case VoiceTransportLifetimeCompleted lifetimeCompleted:
+                signal.TransportLifetimeCompleted = lifetimeCompleted.Clone();
+                break;
             case VoiceProviderEventReceived providerReceived:
                 signal.ProviderEventReceived = providerReceived.Clone();
                 break;

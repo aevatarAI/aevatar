@@ -453,23 +453,23 @@ public class TelegramToolsTests
 
     private sealed class AgentToolRequestMetadataScope : IDisposable
     {
-        private readonly IReadOnlyDictionary<string, string>? _previous;
+        private readonly AgentToolExecutionContext? _previous;
 
         public AgentToolRequestMetadataScope(string? accessToken = null)
         {
-            _previous = AgentToolRequestContext.CurrentMetadata;
+            _previous = AgentToolRequestContext.Current;
             if (string.IsNullOrWhiteSpace(accessToken))
             {
-                AgentToolRequestContext.CurrentMetadata = null;
+                AgentToolRequestContext.Current = null;
                 return;
             }
 
-            AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken,
-            };
+            });
         }
 
-        public void Dispose() => AgentToolRequestContext.CurrentMetadata = _previous;
+        public void Dispose() => AgentToolRequestContext.Current = _previous;
     }
 }

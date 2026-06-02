@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Workflow.Core.Primitives;
+using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -14,32 +13,25 @@ internal interface IWorkflowExecutionRuntimeContextAccessor
     WorkflowExecutionRuntimeContext RuntimeContext { get; }
 }
 
-// Refactor (iter16/cluster-031):
-//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-//                bag for request metadata, LLM overrides, authorization, secure values
-//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
+// Refactor (iter115/cluster-3):
+//   Old pattern: durable LLM, connector authorization, and secure captured values
+//                were held as authority inside per-process runtime context fields.
+//   New principle: runtime context only carries same-turn passthrough metadata; durable
+//                  control and security facts live in typed actor state.
 internal sealed class WorkflowExecutionRuntimeContext
 {
-    public WorkflowConnectorRuntimeContext Connector { get; } = new();
-
     public WorkflowRequestPassthroughMetadata RequestPassthroughMetadata { get; } = new();
-
-    public CapturedSecureInputs CapturedSecureInputs { get; } = new();
 
     public AgentToolExecutionContext? ToolContext { get; private set; }
 
     public void Clear()
     {
-        Connector.Clear();
         RequestPassthroughMetadata.Clear();
-        CapturedSecureInputs.Clear();
         ToolContext = null;
     }
 
     public void ApplyRequestMetadata(IReadOnlyDictionary<string, string>? metadata)
     {
-        Connector.Clear();
         RequestPassthroughMetadata.Clear();
 
         if (metadata == null || metadata.Count == 0)
@@ -51,14 +43,6 @@ internal sealed class WorkflowExecutionRuntimeContext
             var value = Normalize(pair.Value);
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
-
-            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
-
-            if (string.Equals(key, ConnectorRequest.HttpAuthorizationMetadataKey, StringComparison.Ordinal))
-            {
-                Connector.Authorization = value;
-                continue;
-            }
 
             RequestPassthroughMetadata.Set(key, value);
         }
@@ -73,28 +57,23 @@ internal sealed class WorkflowExecutionRuntimeContext
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
 
-// Refactor (iter16/cluster-031):
-//   Old pattern: connector authorization used the generic item bag key
-//                `http.authorization`.
-//   New principle: connector runtime inputs live in a typed connector section
-//                  owned by the run actor.
-internal sealed class WorkflowConnectorRuntimeContext
-{
-    public string? Authorization { get; set; }
-
-    public void Clear()
-    {
-        Authorization = null;
-    }
-}
-
-// Refactor (iter16/cluster-031):
-//   Old pattern: request metadata was copied wholesale into generic runtime
-//                items, mixing control values with passthrough values.
-//   New principle: only filtered passthrough metadata remains in this typed
-//                  runtime section after control values are promoted.
+// Refactor (iter115/cluster-3):
+//   Old pattern: request metadata was copied wholesale into runtime context,
+//                allowing control/security fields to flow back as passthrough.
+//   New principle: runtime passthrough is same-turn only and rejects known
+//                  durable control/security keys.
 internal sealed class WorkflowRequestPassthroughMetadata
 {
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+
+    private static readonly HashSet<string> BlockedKeys =
+    [
+        LegacyConnectorHttpAuthorizationBlockedKey,
+        LLMRequestMetadataKeys.NyxIdAccessToken,
+        LLMRequestMetadataKeys.ModelOverride,
+        LLMRequestMetadataKeys.NyxIdRoutePreference,
+    ];
+
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
 
     public IReadOnlyDictionary<string, string> Values => _values;
@@ -103,89 +82,17 @@ internal sealed class WorkflowRequestPassthroughMetadata
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        _values[key.Trim()] = value.Trim();
-    }
 
-    public void Clear() => _values.Clear();
-}
-
-// Refactor (iter16/cluster-031):
-//   Old pattern: captured secure input values were held in the generic item bag
-//                under string-composed keys.
-//   New principle: captured secure values live in a typed non-durable runtime
-//                  section owned by the run actor.
-internal sealed class CapturedSecureInputs
-{
-    private readonly Dictionary<CapturedSecureInputKey, string> _values = new();
-
-    public IReadOnlyDictionary<CapturedSecureInputKey, string> Values => _values;
-
-    public void Set(string? runId, string? variable, string? value)
-    {
-        if (!TryCreateKey(runId, variable, out var key))
+        var normalizedKey = key.Trim();
+        if (IsBlockedKey(normalizedKey))
             return;
 
-        _values[key] = value ?? string.Empty;
-    }
-
-    public bool TryGet(string? runId, string? variable, out string value)
-    {
-        if (TryCreateKey(runId, variable, out var key) &&
-            _values.TryGetValue(key, out value!))
-        {
-            return true;
-        }
-
-        value = string.Empty;
-        return false;
-    }
-
-    public bool Remove(string? runId, string? variable)
-    {
-        if (!TryCreateKey(runId, variable, out var key))
-            return false;
-
-        return _values.Remove(key);
-    }
-
-    public void RemoveRun(string? runId)
-    {
-        var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
-        if (string.IsNullOrWhiteSpace(normalizedRunId))
-            return;
-
-        foreach (var key in _values.Keys.Where(x => x.RunId == normalizedRunId).ToList())
-        {
-            _values.Remove(key);
-        }
+        _values[normalizedKey] = value.Trim();
     }
 
     public void Clear() => _values.Clear();
 
-    private static bool TryCreateKey(
-        string? runId,
-        string? variable,
-        out CapturedSecureInputKey key)
-    {
-        var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
-        var normalizedVariable = string.IsNullOrWhiteSpace(variable) ? string.Empty : variable.Trim();
-        if (string.IsNullOrWhiteSpace(normalizedRunId) ||
-            string.IsNullOrWhiteSpace(normalizedVariable))
-        {
-            key = default;
-            return false;
-        }
-
-        key = new CapturedSecureInputKey(normalizedRunId, normalizedVariable);
-        return true;
-    }
+    public static bool IsBlockedKey(string? key) =>
+        !string.IsNullOrWhiteSpace(key) &&
+        BlockedKeys.Contains(key.Trim());
 }
-
-// Refactor (iter16/cluster-031):
-//   Old pattern: captured secure input values used string-composed keys such as
-//                "{runId}::{variable}" inside the generic execution item bag.
-//   New principle: secure input capture uses a typed key in the actor-owned
-//                  non-durable runtime context.
-internal readonly record struct CapturedSecureInputKey(
-    string RunId,
-    string Variable);

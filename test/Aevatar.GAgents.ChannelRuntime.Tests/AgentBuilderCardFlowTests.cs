@@ -27,7 +27,7 @@ public sealed class AgentBuilderCardFlowTests
               "agents": [
                 {
                   "agent_id": "skill-runner-card-click-1",
-                  "template": "daily",
+                  "template": "summary",
                   "status": "running",
                   "next_scheduled_run": "2026-04-23T09:00:00Z"
                 }
@@ -42,6 +42,89 @@ public sealed class AgentBuilderCardFlowTests
         // No raw Lark JSON envelope leaks into the body.
         result.Cards.Single().Text.Should().NotContain("\"config\"");
         result.Cards.Single().Text.Should().NotContain("\"elements\"");
+    }
+
+    [Fact]
+    public void FormatToolResult_ListAgents_ReturnsSingleCardWithoutPerAgentButtons()
+    {
+        // Refactor (iter9/cluster-1305-hybrid-minimal-delete):
+        // Old pattern: a retired relay builder flow had separate list rendering semantics.
+        // New principle: unified AgentBuilderCardFlow keeps the consolidated `/agents` card contract.
+        var decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
+        var result = AgentBuilderCardFlow.FormatToolResult(
+            decision,
+            """
+            {
+              "agents": [
+                {
+                  "agent_id": "skill-runner-94d754dfdfbb416aa5a676cecd0d7a71",
+                  "template": "legacy-template",
+                  "status": "running",
+                  "next_scheduled_run": "2026-04-23T09:00:00Z",
+                  "last_run_at": "2026-04-22T09:00:00Z"
+                }
+              ]
+            }
+            """);
+
+        result.Cards.Should().ContainSingle();
+        var card = result.Cards.Single();
+        card.BlockId.Should().Be("agents_list");
+        card.Title.Should().Be("Your Agents (1)");
+        card.Text.Should().Contain("legacy-template");
+        card.Text.Should().Contain("skill-runner-94d754dfdfbb416aa5a676cecd0d7a71");
+        card.Text.Should().Contain("running");
+        card.Text.Should().Contain("/agent-status <id>");
+        card.Text.Should().Contain("/run-agent <id>");
+        card.Text.Should().Contain("/delete-agent <id> confirm");
+
+        result.Actions.Should().NotContain(a => a.ActionId == "agent_status");
+        result.Actions.Should().NotContain(a => a.Arguments.ContainsKey("agent_id"));
+        result.Actions.Select(a => a.ActionId).Should().BeEquivalentTo(new[] { "list_agents" });
+    }
+
+    [Theory]
+    [InlineData("/agent-status skill-runner-1", "agent_status", "skill-runner-1")]
+    [InlineData("/run-agent skill-runner-2", "run_agent", "skill-runner-2")]
+    [InlineData("/disable-agent skill-runner-3", "disable_agent", "skill-runner-3")]
+    [InlineData("/enable-agent skill-runner-4", "enable_agent", "skill-runner-4")]
+    public async Task TryResolveAsync_SimpleAgentTextCommand_ReturnsToolCall(
+        string text,
+        string expectedAction,
+        string expectedAgentId)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            RegistrationScopeId = "scope-1",
+            Text = text,
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be(expectedAction);
+
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("action").GetString().Should().Be(expectedAction);
+        body.RootElement.GetProperty("agent_id").GetString().Should().Be(expectedAgentId);
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_SimpleAgentTextCommand_WithoutAgentId_ReturnsUsage()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/agent-status",
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Be("Usage: /agent-status <agent_id>");
     }
 
     [Fact]
@@ -86,7 +169,7 @@ public sealed class AgentBuilderCardFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily",
+              "template": "summary",
               "status": "running",
               "schedule_cron": "0 9 * * *",
               "schedule_timezone": "UTC",
@@ -106,7 +189,7 @@ public sealed class AgentBuilderCardFlowTests
         var deleteButton = result.Actions.Should().Contain(a => a.ActionId == "confirm_delete_agent").Subject;
         deleteButton.IsDanger.Should().BeTrue();
         deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("agent_id", "skill-runner-1"));
-        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("template", "daily"));
+        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("template", "summary"));
     }
 
     [Fact]
@@ -118,7 +201,7 @@ public sealed class AgentBuilderCardFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily",
+              "template": "summary",
               "status": "running",
               "note": "Manual run dispatched."
             }
@@ -188,6 +271,75 @@ public sealed class AgentBuilderCardFlowTests
     }
 
     [Fact]
+    public async Task TryResolveAsync_DeleteAgentTextCommand_WithoutAgentId_ReturnsUsage()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = "/delete-agent",
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Be("Usage: /delete-agent <agent_id>");
+    }
+
+    [Theory]
+    [InlineData("/foobar")]
+    [InlineData("/goal draft Q2 launch")]
+    [InlineData("/summary")]
+    [InlineData("/summary alice")]
+    [InlineData("/SUMMARY alice schedule_time=09:00")]
+    public async Task TryResolveAsync_UnknownAndOrnnSlashCommands_FallThrough(string text)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = text,
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_KnownTextCommandInGroup_ReturnsPrivateChatRestriction()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "group",
+            Text = "/agents",
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("private chat");
+        decision.ReplyPayload.Should().Contain("/agents");
+    }
+
+    [Theory]
+    [InlineData("hello there")]
+    [InlineData("现在就是私聊")]
+    [InlineData("   ")]
+    public async Task TryResolveAsync_NonSlashText_FallsThrough(string text)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = text,
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().BeNull();
+    }
+
+    [Fact]
     public async Task TryResolveAsync_ConfirmDeleteAgent_ReturnsStructuredCardNotJsonText()
     {
         // Pre-fix this branch returned DirectReply with a Lark card JSON string in ReplyPayload
@@ -200,7 +352,7 @@ public sealed class AgentBuilderCardFlowTests
         };
         inbound.Extra["agent_builder_action"] = "confirm_delete_agent";
         inbound.Extra["agent_id"] = "skill-runner-1";
-        inbound.Extra["template"] = "daily";
+        inbound.Extra["template"] = "summary";
 
         var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
 
@@ -210,7 +362,7 @@ public sealed class AgentBuilderCardFlowTests
         decision.ReplyContent!.Text.Should().BeNullOrEmpty();
         decision.ReplyContent.Cards.Should().ContainSingle(card =>
             card.BlockId == "delete_confirm:skill-runner-1");
-        decision.ReplyContent.Cards.Single().Text.Should().Contain("daily");
+        decision.ReplyContent.Cards.Single().Text.Should().Contain("summary");
         var confirmButton = decision.ReplyContent.Actions.Should()
             .Contain(a => a.ActionId == "delete_agent").Subject;
         confirmButton.IsDanger.Should().BeTrue();

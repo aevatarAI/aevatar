@@ -59,30 +59,18 @@ public sealed class SkillDefinition
     /// <summary>关联文件内容（远程技能可能附带多个文件）。</summary>
     public IReadOnlyDictionary<string, string>? AssociatedFiles { get; init; }
 
-    /// <summary>
-    /// 技能附带的可执行工作流。来源：skill 包内 <c>workflows/*.yaml</c>，
-    /// 若该目录不存在则从 <c>assets/*.yaml</c> 中识别（要求顶层有 <c>name:</c> 与 <c>steps:</c>）。
-    /// </summary>
-    public IReadOnlyList<SkillWorkflow>? Workflows { get; init; }
+    /// <summary>技能附带的可运行 workflow YAML 描述。</summary>
+    public IReadOnlyList<SkillWorkflowDescriptor> Workflows { get; init; } = [];
 }
 
 /// <summary>
-/// 技能附带的工作流。承载 <c>aevatar_start_workflow</c> 调用所需的 inline YAML 与对 LLM 的可调用语义。
+/// Skill package workflow YAML handoff descriptor.
 /// </summary>
-public sealed class SkillWorkflow
+public sealed class SkillWorkflowDescriptor
 {
-    /// <summary>工作流名称（YAML 顶层 <c>name</c>，作为 <c>workflow_id</c> 传给 <c>aevatar_start_workflow</c>）。</summary>
-    public required string Name { get; init; }
+    /// <summary>Workflow identifier passed to aevatar_start_workflow.workflow_id.</summary>
+    public required string WorkflowId { get; init; }
 
-    /// <summary>工作流描述（YAML 顶层 <c>description</c>）。</summary>
-    public string? Description { get; init; }
-
-    /// <summary>何时使用此工作流（YAML 顶层 <c>when_to_use</c>，给 LLM 的触发指引）。</summary>
-    public string? WhenToUse { get; init; }
-
-    /// <summary>工作流文件名（如 <c>workflows/simple_qa.yaml</c>），仅供调试/展示。</summary>
-    public required string FileName { get; init; }
-
-    /// <summary>工作流 YAML 原文，<c>aevatar_start_workflow</c> 通过 <c>workflow_yamls</c> 字段透传。</summary>
-    public required string Yaml { get; init; }
+    /// <summary>Workflow YAML bundle passed to aevatar_start_workflow.workflow_yamls in stable path order.</summary>
+    public required IReadOnlyList<string> WorkflowYamls { get; init; }
 }

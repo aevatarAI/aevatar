@@ -12,7 +12,6 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Workflow Chat API 能力说明（框架层）](canon/chat-api.md)
 - [Connector 配置与执行逻辑](canon/connector.md)
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
-- [/daily Command Pipeline — Test Reference](canon/daily-command-pipeline.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
 - [Aevatar 前端设计基线](canon/frontend-design.md)
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
@@ -87,7 +86,6 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Audit Scorecard
 
 - [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
-- [2026-04-27-daily-pipeline-architecture-review.md](audit-scorecard/2026-04-27-daily-pipeline-architecture-review.md)
 - [2026-05-13-lark-bot-reply-chain-test-coverage-audit.md](audit-scorecard/2026-05-13-lark-bot-reply-chain-test-coverage-audit.md)
 - [2026-05-19-auto-refactor-loop-summary.md](audit-scorecard/2026-05-19-auto-refactor-loop-summary.md)
 - [2026-05-19-meta-audit-loop-depth-diagnosis.md](audit-scorecard/2026-05-19-meta-audit-loop-depth-diagnosis.md)
@@ -96,4 +94,3 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Templates
 
 - [architecture.md](templates/architecture.md)
-

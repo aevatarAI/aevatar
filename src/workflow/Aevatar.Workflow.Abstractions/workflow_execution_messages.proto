@@ -29,7 +29,31 @@ message WorkflowRunExecutionStartedEvent
   string input = 3;
   string definition_actor_id = 4;
   string scope_id = 5;
+  WorkflowRunExecutionContextDelta execution_context_delta = 6;
 }
+message WorkflowRunExecutionContextDelta
+{
+  WorkflowRunLlmExecutionContextDelta llm = 1;
+  WorkflowRunConnectorExecutionContextDelta connector = 2;
+  bool clear_llm = 3;
+  bool clear_connector = 4;
+}
+message WorkflowRunLlmExecutionContextDelta
+{
+  string nyxid_access_token = 1;
+  string model_override = 2;
+  string nyxid_route_preference = 3;
+}
+message WorkflowRunConnectorExecutionContextDelta
+{
+  string http_authorization = 1;
+}
+message WorkflowRunExecutionContextUpdatedEvent
+{
+  string run_id = 1;
+  WorkflowRunExecutionContextDelta execution_context_delta = 2;
+}
+message WorkflowRunExecutionContextClearedEvent { string run_id = 1; }
 message WorkflowCommandObservedEvent { string command_id = 1; }
 message WorkflowExecutionStateUpsertedEvent
 {
@@ -190,6 +214,15 @@ message WorkflowSuspendedEvent
   string delivery_target_id = 9;
   bool secure = 10;
   string redacted_output = 11;
+  WorkflowToolApprovalSuspension tool_approval = 12;
+}
+message WorkflowToolApprovalSuspension
+{
+  string execution_id = 1;
+  string tool_name = 2;
+  string tool_call_id = 3;
+  string approval_request_id = 4;
+  string arguments_json = 5;
 }
 message WorkflowResumedEvent
 {
@@ -248,6 +281,18 @@ message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; i
 message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id = 2; int32 delay_ms = 3; int32 next_attempt = 4; }
 message DelayStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 duration_ms = 3; }
 message LlmCallWatchdogTimeoutFiredEvent { string run_id = 1; string step_id = 2; string session_id = 3; int32 timeout_ms = 4; }
+message WorkflowConnectorTimeoutFiredEvent { string run_id = 1; string step_id = 2; string operation_id = 3; int32 timeout_ms = 4; int32 attempt = 5; }
+message WorkflowConnectorAttemptCompletedEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string operation_id = 3;
+  int32 attempt = 4;
+  bool success = 5;
+  string output = 6;
+  string error = 7;
+  map<string, string> annotations = 8;
+  string execution_id = 9;
+}
 message WorkflowSignalBufferedEvent
 {
   string run_id = 1;

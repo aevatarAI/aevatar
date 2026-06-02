@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -5,6 +8,7 @@ using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -102,6 +106,26 @@ public sealed class LlmSessionGAgentTests
         ResponsesJsonValues.ToBoundaryJson(call.Arguments).Should().Be("""{"city":"Singapore"}""");
         call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
         call.Expiry.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void RuntimeToolArgumentsValue_WithLegacyJsonOnly_ShouldParseArguments()
+    {
+        var method = typeof(LlmSessionGAgent).GetMethod(
+            "RuntimeToolArgumentsValue",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        var result = (Google.Protobuf.WellKnownTypes.Value)method!.Invoke(null,
+        [
+            new LlmSessionRuntimeToolCall
+            {
+                CallId = "call_legacy",
+                ToolName = "get_weather",
+                ArgumentsJson = """{"city":"Paris"}""",
+            },
+        ])!;
+
+        result.StructValue.Fields["city"].StringValue.Should().Be("Paris");
     }
 
     [Fact]
@@ -629,11 +653,726 @@ public sealed class LlmSessionGAgentTests
         call.ResolvedAt.Should().BeNull();
     }
 
-    private static LlmSessionGAgent CreateActor(string responseId) =>
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldCompleteFromStreamingText()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk { DeltaContent = "hello " },
+                new LLMStreamChunk
+                {
+                    DeltaContent = "world",
+                    Usage = new TokenUsage(3, 2, 5),
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1"));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.RunId.Should().Be("run_1");
+        actor.State.ActiveRun.OutputText.Should().Be("hello world");
+        actor.State.ActiveRun.Usage!.TotalTokens.Should().Be(5);
+        actor.State.Completion!.OutputText.Should().Be("hello world");
+        actor.State.Completion.Usage!.PromptTokens.Should().Be(3);
+        provider.Requests.Should().ContainSingle()
+            .Which.CallerContext!.ResponseId.Should().Be("resp_1");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldRecordForwardedToolCallCompletion()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":""",
+                    },
+                },
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = "\"Singapore\"}",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1", BuildForwardedSelection()));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Completed);
+        actor.State.ForwardedToolCalls.Should().ContainSingle();
+        var forwarded = actor.State.ForwardedToolCalls[0];
+        forwarded.CallId.Should().Be("call_1");
+        forwarded.ToolName.Should().Be("get_weather");
+        forwarded.SchemaHash.Should().Be("schema-1");
+        forwarded.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
+        ResponsesJsonValues.ToBoundaryJson(forwarded.Arguments).Should().Be("""{"city":"Singapore"}""");
+        actor.State.ActiveRun!.ObservedToolCalls.Should().ContainSingle()
+            .Which.Arguments.Fields["city"].StringValue.Should().Be("Singapore");
+        actor.State.Completion!.ToolCalls.Should().ContainSingle()
+            .Which.ToolName.Should().Be("get_weather");
+        ResponsesJsonValues.ToBoundaryJson(actor.State.Completion.ToolCalls[0].Result)
+            .Should().Be("""{"city":"Singapore"}""");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldPreferTypedRuntimeMessageToolArguments()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_typed_runtime_message", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_typed_runtime_message"),
+        });
+        var request = BuildRunRequest("resp_typed_runtime_message");
+        request.Messages.Clear();
+        request.Messages.Add(new LlmSessionRuntimeChatMessage
+        {
+            Role = "assistant",
+            ToolCalls =
+            {
+                new LlmSessionRuntimeToolCall
+                {
+                    CallId = "call_typed_args",
+                    ToolName = "get_weather",
+                    ArgumentsJson = "not json {",
+                    Arguments = new Struct
+                    {
+                        Fields =
+                        {
+                            ["city"] = Google.Protobuf.WellKnownTypes.Value.ForString("Singapore"),
+                        },
+                    },
+                },
+            },
+        });
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var requestMessage = provider.Requests.Should().ContainSingle().Subject.Messages
+            .Single(message => message.ToolCalls != null && message.ToolCalls.Count == 1);
+        var toolCall = requestMessage.ToolCalls![0];
+        toolCall.ArgumentsJson.Should().Contain("Singapore");
+        toolCall.ArgumentsJson.Should().NotBe("not json {");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseLegacyRuntimeMessageToolArguments_WhenTypedArgumentsAreEmpty()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_legacy_runtime_message", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_legacy_runtime_message"),
+        });
+        var request = BuildRunRequest("resp_legacy_runtime_message");
+        request.Messages.Clear();
+        request.Messages.Add(new LlmSessionRuntimeChatMessage
+        {
+            Role = "assistant",
+            ToolCalls =
+            {
+                new LlmSessionRuntimeToolCall
+                {
+                    CallId = "call_legacy_args",
+                    ToolName = "get_weather",
+                    ArgumentsJson = """{"city":"Paris"}""",
+                },
+            },
+        });
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var toolCall = provider.Requests.Should().ContainSingle().Subject.Messages
+            .Single(message => message.ToolCalls != null && message.ToolCalls.Count == 1)
+            .ToolCalls![0];
+        toolCall.ArgumentsJson.Should().Be("""{"city":"Paris"}""");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseTypedToolDeclarationParametersBeforeLegacyJson()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_typed_parameters", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_typed_parameters"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.ForwardedTools[0].ParametersJson = "not json {";
+        selection.ForwardedTools[0].Parameters = new Struct
+        {
+            Fields =
+            {
+                ["type"] = Google.Protobuf.WellKnownTypes.Value.ForString("object"),
+                ["typed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+            },
+        };
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_typed_parameters", selection));
+
+        provider.Requests.Should().ContainSingle().Subject.Tools
+            .Should()
+            .ContainSingle(tool => tool.Name == "get_weather")
+            .Which.ParametersSchema.Should().Contain("\"typed\": true");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseLegacyToolDeclarationParameters_WhenTypedParametersAreEmpty()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_legacy_parameters", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_legacy_parameters"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.ForwardedTools[0].Parameters.Fields.Clear();
+        selection.ForwardedTools[0].ParametersJson = """{"type":"object","legacy":true}""";
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_legacy_parameters", selection));
+
+        provider.Requests.Should().ContainSingle().Subject.Tools
+            .Should()
+            .ContainSingle(tool => tool.Name == "get_weather")
+            .Which.ParametersSchema.Should().Be("""{"type":"object","legacy":true}""");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseTypedToolChoiceHintArgumentsBeforeLegacyJson()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_typed_hint", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_typed_hint"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.ToolChoiceHintName = "get_weather";
+        selection.ToolChoiceHintArgumentsJson = "not json {";
+        selection.ToolChoiceHintArguments = new Struct
+        {
+            Fields =
+            {
+                ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString("actor-from-typed-hint"),
+            },
+        };
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_typed_hint", selection));
+
+        var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
+        forwarded.Arguments.StructValue.Fields["actor_id"].StringValue.Should().Be("actor-from-typed-hint");
+        forwarded.Arguments.StructValue.Fields["city"].StringValue.Should().Be("Singapore");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseLegacyToolChoiceHintArguments_WhenTypedArgumentsAreEmpty()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_legacy_hint", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_legacy_hint"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.ToolChoiceHintName = "get_weather";
+        selection.ToolChoiceHintArgumentsJson = """{"actor_id":"actor-from-legacy-hint"}""";
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_legacy_hint", selection));
+
+        var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
+        forwarded.Arguments.StructValue.Fields["actor_id"].StringValue.Should().Be("actor-from-legacy-hint");
+        forwarded.Arguments.StructValue.Fields["city"].StringValue.Should().Be("Singapore");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldMergeTypedToolCallDeltasForSameCall()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = "{\"city\":\"Singapore\",",
+                    },
+                },
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = "\"unit\":\"celsius\"}",
+                    },
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_merge_tool_deltas", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_merge_tool_deltas"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_merge_tool_deltas", BuildForwardedSelection()));
+
+        var forwarded = actor.State.ForwardedToolCalls.Should().ContainSingle().Subject;
+        forwarded.Arguments.StructValue.Fields["city"].StringValue.Should().Be("Singapore");
+        forwarded.Arguments.StructValue.Fields["unit"].StringValue.Should().Be("celsius");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldExecuteSubstitutedToolAndContinueNextRound()
+    {
+        var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "local result accepted",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor(
+            "resp_1",
+            services =>
+            {
+                services.AddSingleton<ILLMProviderFactory>(provider);
+                services.AddSingleton<IResponsesToolProvider>(toolProvider);
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var selection = BuildForwardedSelection();
+        selection.SubstitutedToolNames.Add("get_weather");
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1", selection));
+
+        tool.Executions.Should().ContainSingle().Which.Should().Be("""{"city":"Singapore"}""");
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Messages.Should().Contain(message =>
+            string.Equals(message.Role, "tool", StringComparison.Ordinal) &&
+            string.Equals(message.Content, """{"temperature":28}""", StringComparison.Ordinal));
+        actor.State.ForwardedToolCalls.Should().BeEmpty();
+        actor.State.ActiveRun!.Status.Should().Be(2);
+        actor.State.Completion!.OutputText.Should().Be("local result accepted");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldPersistTypedLocalToolResultPayload()
+    {
+        var eventStore = new InMemoryEventStore();
+        var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "local result accepted",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActorWithStore(
+            "resp_typed_local_result",
+            eventStore,
+            services =>
+            {
+                services.AddSingleton<ILLMProviderFactory>(provider);
+                services.AddSingleton<IResponsesToolProvider>(toolProvider);
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_typed_local_result"),
+        });
+        var selection = BuildForwardedSelection();
+        selection.SubstitutedToolNames.Add("get_weather");
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_typed_local_result", selection));
+
+        var localObserved = (await eventStore.GetEventsAsync(actor.Id))
+            .Select(static evt => evt.EventData)
+            .Where(static payload => payload.Is(LlmToolCallObserved.Descriptor))
+            .Select(static payload => payload.Unpack<LlmToolCallObserved>())
+            .Should()
+            .ContainSingle(observed => !observed.Forwarded)
+            .Subject;
+        localObserved.LocalResultJson.Should().Be("""{"temperature":28}""");
+        localObserved.LocalResult.StructValue.Fields["temperature"].NumberValue.Should().Be(28);
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldPropagateTypedToolContextAcrossProviderAndToolScopes()
+    {
+        var tool = new RecordingAgentTool("get_weather", """{"temperature":28}""");
+        var toolProvider = new StaticResponsesToolProvider(substituteTools: [tool]);
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call_1",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"Singapore"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor(
+            "resp_1",
+            services =>
+            {
+                services.AddSingleton<ILLMProviderFactory>(provider);
+                services.AddSingleton<IResponsesToolProvider>(toolProvider);
+            });
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var selection = BuildForwardedSelection();
+        selection.SubstitutedToolNames.Add("get_weather");
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1", selection));
+
+        provider.Requests.Should().HaveCount(2);
+        foreach (var request in provider.Requests)
+        {
+            request.ToolContext.Should().NotBeNull();
+            request.ToolContext!.Request.RequestId.Should().Be("resp_1");
+            request.ToolContext.Request.CallId.Should().BeNull();
+            request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token-1");
+            request.ToolContext.Caller.ScopeId.Should().Be("user-1");
+            request.ToolContext.Caller.OwnerSubject.Should().Be("user-1");
+            request.ToolContext.Caller.ResponseId.Should().Be("resp_1");
+            request.ToolContext.Routing.NyxIdRoutePreference.Should().BeNull();
+        }
+
+        provider.StreamContexts.Should().HaveCount(2);
+        foreach (var context in provider.StreamContexts)
+        {
+            context.Should().NotBeNull();
+            context!.Request.RequestId.Should().Be("resp_1");
+            context.Request.CallId.Should().BeNull();
+            context.Credentials.NyxIdAccessToken.Should().Be("token-1");
+            context.Caller.ScopeId.Should().Be("user-1");
+            context.Caller.OwnerSubject.Should().Be("user-1");
+            context.Caller.ResponseId.Should().Be("resp_1");
+        }
+
+        toolProvider.SubstituteContexts.Should().ContainSingle();
+        var requestToolContext = provider.Requests[0].ToolContext;
+        requestToolContext.Should().NotBeNull();
+        toolProvider.SubstituteContexts[0].ToolContext.Should().BeEquivalentTo(
+            requestToolContext!,
+            options => options.Excluding(context => context.Channel.Platform));
+        toolProvider.SubstituteContexts[0].ToolContext.Channel.Platform.Should().Be("ApiKey");
+
+        tool.Executions.Should().ContainSingle().Which.Should().Be("""{"city":"Singapore"}""");
+        tool.ExecutionContexts.Should().ContainSingle();
+        tool.ExecutionContexts[0].Should().NotBeNull();
+        tool.ExecutionContexts[0].Should().BeEquivalentTo(
+            requestToolContext!,
+            options => options.Excluding(context => context.Request.CallId));
+        tool.ExecutionContexts[0]!.Request.CallId.Should().Be("call_1");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldPreferCommandToolContextOverLegacyScalars()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var request = BuildRunRequest("resp_1");
+        request.ScopeId = "legacy-scope";
+        request.OwnerSubject = "legacy-owner";
+        request.BearerToken = "legacy-token";
+        request.RoutePreference = "legacy-route";
+        request.ToolContext = NewCommandToolContext(
+            requestId: "typed-request",
+            scopeId: "typed-scope",
+            ownerSubject: "typed-owner",
+            responseId: "typed-response",
+            token: "typed-token",
+            routePreference: "typed-route").ToPayload();
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var llmRequest = provider.Requests.Should().ContainSingle().Subject;
+        llmRequest.ToolContext.Should().NotBeNull();
+        llmRequest.ToolContext!.Request.RequestId.Should().Be("typed-request");
+        llmRequest.CallerContext.Should().NotBeNull();
+        llmRequest.CallerContext!.ScopeId.Should().Be("typed-scope");
+        llmRequest.CallerContext.OwnerSubject.Should().Be("typed-owner");
+        llmRequest.CallerContext.ResponseId.Should().Be("typed-response");
+        llmRequest.CallerContext.Credentials.NyxIdBearer.Should().Be("typed-token");
+        llmRequest.LlmControl.Should().NotBeNull();
+        llmRequest.LlmControl!.NyxIdAccessToken.Should().Be("typed-token");
+        llmRequest.LlmControl.NyxIdRoutePreference.Should().Be("typed-route");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldUseLegacyScalars_WhenCommandToolContextIsAbsent()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var request = BuildRunRequest("resp_1");
+        request.RoutePreference = "legacy-route";
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var llmRequest = provider.Requests.Should().ContainSingle().Subject;
+        llmRequest.ToolContext.Should().NotBeNull();
+        llmRequest.ToolContext!.Request.RequestId.Should().Be("resp_1");
+        llmRequest.ToolContext.Caller.ScopeId.Should().Be("user-1");
+        llmRequest.ToolContext.Caller.OwnerSubject.Should().Be("user-1");
+        llmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token-1");
+        llmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("legacy-route");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_ShouldNotWriteOwnedControlKeysToProviderMetadata_WhenToolContextIsTyped()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "done",
+                    IsLast = true,
+                },
+            ],
+        ]);
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        var request = BuildRunRequest("resp_1");
+        request.ToolContext = NewCommandToolContext(
+            requestId: "typed-request",
+            scopeId: "typed-scope",
+            ownerSubject: "typed-owner",
+            responseId: "typed-response",
+            token: "typed-token",
+            routePreference: "typed-route").ToPayload();
+
+        await actor.HandleLlmRunRequestedAsync(request);
+
+        var llmRequest = provider.Requests.Should().ContainSingle().Subject;
+        llmRequest.Metadata.Should().NotBeNull();
+        llmRequest.Metadata!.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        llmRequest.Metadata.Should().NotContainKey("scope_id");
+        llmRequest.RequestId.Should().Be("resp_1");
+        llmRequest.CallerContext!.ScopeId.Should().Be("typed-scope");
+        llmRequest.ToolContext!.Caller.ScopeId.Should().Be("typed-scope");
+        llmRequest.LlmControl!.NyxIdRoutePreference.Should().Be("typed-route");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenProviderThrows_ShouldRecordFailedCompletion()
+    {
+        var provider = new ThrowingLlmProviderFactory(
+            new NyxIdAuthenticationRequiredException("nyxid"));
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1"));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Failed);
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.Status.Should().Be(3);
+        actor.State.ActiveRun.FailureCode.Should().Be("authentication_required");
+        actor.State.Completion.Should().NotBeNull();
+        actor.State.Completion!.FailureCode.Should().Be("authentication_required");
+        actor.State.Completion.FailureMessage.Should().Contain("NyxID authentication required");
+    }
+
+    [Fact]
+    public async Task HandleLlmRunRequestedAsync_WhenProviderCancels_ShouldRecordCancelledCompletion()
+    {
+        var provider = new ThrowingLlmProviderFactory(new OperationCanceledException());
+        var actor = CreateActor("resp_1", services => services.AddSingleton<ILLMProviderFactory>(provider));
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+
+        await actor.HandleLlmRunRequestedAsync(BuildRunRequest("resp_1"));
+
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Cancelled);
+        actor.State.Record.CancelledAt.Should().NotBeNull();
+        actor.State.ActiveRun.Should().NotBeNull();
+        actor.State.ActiveRun!.Status.Should().Be(4);
+        actor.State.Completion.Should().NotBeNull();
+        actor.State.Completion!.FailureCode.Should().Be("request_cancelled");
+        actor.State.Completion.FailureMessage.Should().Be("LLM run was cancelled.");
+    }
+
+    private static LlmSessionGAgent CreateActor(
+        string responseId,
+        Action<IServiceCollection>? configureServices = null) =>
         GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
             new InMemoryEventStore(),
             "response-session-actor-" + responseId,
-            static () => new LlmSessionGAgent());
+            static () => new LlmSessionGAgent(),
+            configureServices);
+
+    private static LlmSessionGAgent CreateActorWithStore(
+        string responseId,
+        InMemoryEventStore eventStore,
+        Action<IServiceCollection>? configureServices = null) =>
+        GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
+            eventStore,
+            "response-session-actor-" + responseId,
+            static () => new LlmSessionGAgent(),
+            configureServices);
 
     private static LlmSessionRecord BuildRecord(string responseId) =>
         new()
@@ -679,4 +1418,164 @@ public sealed class LlmSessionGAgentTests
     private static DateTimeOffset ResolveExpiry(LlmSessionRecord record) =>
         (record.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow)
         .Add(record.Ttl?.ToTimeSpan() ?? TimeSpan.FromHours(24));
+
+    private static LlmRunRequested BuildRunRequest(
+        string responseId,
+        LlmSessionRuntimeToolSelection? selection = null) =>
+        new()
+        {
+            ResponseId = responseId,
+            RunId = "run_1",
+            ScopeId = "user-1",
+            OwnerSubject = "user-1",
+            BearerToken = "token-1",
+            Model = "test-model",
+            ToolSelection = selection,
+            Messages =
+            {
+                new LlmSessionRuntimeChatMessage
+                {
+                    Role = "user",
+                    Content = "What is the weather?",
+                },
+            },
+        };
+
+    private static AgentToolExecutionContext NewCommandToolContext(
+        string requestId,
+        string scopeId,
+        string ownerSubject,
+        string responseId,
+        string token,
+        string routePreference) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Credentials = new AgentToolCredentials(token, null, null),
+            Caller = new AgentToolCallerContext(scopeId, ownerSubject, responseId),
+            Routing = new LLMRequestRoutingContext(null, routePreference, null, null),
+        };
+
+    private static LlmSessionRuntimeToolSelection BuildForwardedSelection() =>
+        new()
+        {
+            ForwardedTools =
+            {
+                new LlmSessionRuntimeToolDeclaration
+                {
+                    ToolName = "get_weather",
+                    Description = "Get weather",
+                    ParametersJson = """{"type":"object"}""",
+                    Parameters = new Struct
+                    {
+                        Fields =
+                        {
+                            ["type"] = Google.Protobuf.WellKnownTypes.Value.ForString("object"),
+                        },
+                    },
+                    SchemaHash = "schema-1",
+                },
+            },
+        };
+
+    private sealed class ScriptedLlmProviderFactory(
+        IReadOnlyList<IReadOnlyList<LLMStreamChunk>> responses) : ILLMProviderFactory, ILLMProvider
+    {
+        private int _nextResponseIndex;
+
+        public List<LLMRequest> Requests { get; } = [];
+        public List<AgentToolExecutionContext?> StreamContexts { get; } = [];
+
+        public string Name => "test";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            StreamContexts.Add(AgentToolRequestContext.Current);
+            var response = responses[Math.Min(_nextResponseIndex, responses.Count - 1)];
+            _nextResponseIndex++;
+            foreach (var chunk in response)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return chunk;
+            }
+
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingLlmProviderFactory(Exception exception) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "test";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            await Task.CompletedTask;
+            throw exception;
+            #pragma warning disable CS0162
+            yield return new LLMStreamChunk();
+            #pragma warning restore CS0162
+        }
+    }
+
+    private sealed class StaticResponsesToolProvider(
+        IReadOnlyList<IAgentTool>? substituteTools = null,
+        IReadOnlyList<IAgentTool>? additiveTools = null) : IResponsesToolProvider
+    {
+        public List<ResponsesToolProviderContext> SubstituteContexts { get; } = [];
+        public List<ResponsesToolProviderContext> AdditiveContexts { get; } = [];
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default)
+        {
+            SubstituteContexts.Add(context);
+            return ValueTask.FromResult(substituteTools ?? []);
+        }
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default)
+        {
+            AdditiveContexts.Add(context);
+            return ValueTask.FromResult(additiveTools ?? []);
+        }
+    }
+
+    private sealed class RecordingAgentTool(string name, string resultJson) : IAgentTool
+    {
+        public List<string> Executions { get; } = [];
+        public List<AgentToolExecutionContext?> ExecutionContexts { get; } = [];
+
+        public string Name { get; } = name;
+
+        public string Description => "test tool";
+
+        public string ParametersSchema => """{"type":"object"}""";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            Executions.Add(argumentsJson);
+            ExecutionContexts.Add(AgentToolRequestContext.Current);
+            return Task.FromResult(resultJson);
+        }
+    }
 }

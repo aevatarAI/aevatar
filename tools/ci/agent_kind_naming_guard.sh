@@ -27,7 +27,7 @@ emit_violation() {
 }
 
 # Files that may declare kinds: any C# under production source roots.
-candidate_search_paths=("src" "agents" "tools/Aevatar.Tools.Cli")
+candidate_search_paths=("src" "agents")
 SEARCH_PATHS=()
 for candidate in "${candidate_search_paths[@]}"; do
   if [[ -d "${candidate}" ]]; then

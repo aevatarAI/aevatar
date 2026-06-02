@@ -31,9 +31,9 @@ public sealed class SkillWorkflowsWiringTests
 
         skill.Should().NotBeNull();
         skill!.Workflows.Should().ContainSingle();
-        skill.Workflows![0].Name.Should().Be("translate_flow");
-        skill.Workflows[0].WhenToUse.Should().Be("When user asks to translate");
-        skill.Workflows[0].FileName.Should().Be("workflows/translate.yaml");
+        skill.Workflows![0].WorkflowId.Should().Be("translate");
+        skill.Workflows[0].WorkflowYamls.Should().ContainSingle()
+            .Which.Should().Contain("name: translate_flow");
 
         // Workflow file must not also appear in AssociatedFiles.
         skill.AssociatedFiles.Should().NotBeNull();
@@ -61,8 +61,9 @@ public sealed class SkillWorkflowsWiringTests
 
         var skill = await fetcher.FetchSkillAsync("token", "Translator");
 
-        skill!.Workflows.Should().ContainSingle(w => w.Name == "translate_asset");
-        skill.Workflows![0].FileName.Should().Be("assets/translate.yaml");
+        skill!.Workflows.Should().ContainSingle(w => w.WorkflowId == "translate_asset");
+        skill.Workflows![0].WorkflowYamls.Should().ContainSingle()
+            .Which.Should().Contain("name: translate_asset");
         skill.AssociatedFiles.Should().NotContainKey("assets/translate.yaml");
         skill.AssociatedFiles.Should().ContainKey("assets/prompt.txt");
     }
@@ -79,13 +80,13 @@ public sealed class SkillWorkflowsWiringTests
             Source = SkillSource.Local,
             Workflows =
             [
-                new SkillWorkflow
+                new SkillWorkflowDescriptor
                 {
-                    Name = "translate_flow",
-                    Description = "Run translation",
-                    WhenToUse = "User asks to translate",
-                    FileName = "workflows/translate.yaml",
-                    Yaml = "name: translate_flow\nsteps:\n  - id: do\n    type: llm_call\n",
+                    WorkflowId = "translate_flow",
+                    WorkflowYamls =
+                    [
+                        "name: translate_flow\nsteps:\n  - id: do\n    type: llm_call\n",
+                    ],
                 },
             ],
         });
@@ -93,12 +94,11 @@ public sealed class SkillWorkflowsWiringTests
         var tool = new UseSkillTool(catalog);
         var output = await tool.ExecuteAsync("""{"skill":"translator"}""");
 
-        output.Should().Contain("## Available Workflows");
+        output.Should().Contain("## aevatar_start_workflow Handoff");
         output.Should().Contain("aevatar_start_workflow");
         output.Should().Contain("workflow_yamls");
         output.Should().Contain("translate_flow");
-        output.Should().Contain("When to use: User asks to translate");
-        output.Should().Contain("```yaml");
+        output.Should().Contain("```json");
         output.Should().Contain("type: llm_call");
     }
 
@@ -117,7 +117,7 @@ public sealed class SkillWorkflowsWiringTests
         var tool = new UseSkillTool(catalog);
         var output = await tool.ExecuteAsync("""{"skill":"plain"}""");
 
-        output.Should().NotContain("## Available Workflows");
+        output.Should().NotContain("## aevatar_start_workflow Handoff");
         output.Should().NotContain("aevatar_start_workflow");
     }
 
@@ -150,8 +150,9 @@ public sealed class SkillWorkflowsWiringTests
         skills.Should().ContainSingle();
         skills[0].Name.Should().Be("translator");
         skills[0].Workflows.Should().ContainSingle();
-        skills[0].Workflows![0].Name.Should().Be("translate_flow");
-        skills[0].Workflows![0].FileName.Should().Be("workflows/translate.yaml");
+        skills[0].Workflows![0].WorkflowId.Should().Be("translate_flow");
+        skills[0].Workflows![0].WorkflowYamls.Should().ContainSingle()
+            .Which.Should().Contain("name: translate_flow");
     }
 
     private static OrnnSkillClient CreateClient(OrnnTestHttpMessageHandler handler)

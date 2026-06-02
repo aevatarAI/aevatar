@@ -394,8 +394,7 @@ public static class ServiceCollectionExtensions
         };
 
     private static bool IsOpenAIVoiceConfigured(VoiceProviderConfig config) =>
-        !string.IsNullOrWhiteSpace(config.ApiKey) ||
-        !string.IsNullOrWhiteSpace(config.Endpoint);
+        !string.IsNullOrWhiteSpace(config.ApiKey);
 
     private static bool IsMiniCpmVoiceConfigured(VoiceProviderConfig config) =>
         !string.IsNullOrWhiteSpace(config.Endpoint);

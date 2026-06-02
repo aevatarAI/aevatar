@@ -3,7 +3,6 @@ import { message } from "antd";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { studioApi } from "@/shared/studio/api";
@@ -13,19 +12,15 @@ import {
 } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
 
+// Refactor (iter2/cluster-issue1593): Old pattern: Team detail tests kept stale
+// actor-graph mocks and legacy event-tab deep links after the Team surface narrowed
+// to overview/members. New principle: keep coverage on observable unknown-tab
+// fallback behavior without preserving removed topology/event dependencies.
 async function openTeamTestDialog() {
   fireEvent.click(await screen.findByRole("button", { name: "测试团队" }));
   await screen.findByLabelText("测试问题");
   return screen.getByTestId("team-test-modal-body");
 }
-
-jest.mock("@/shared/graphs/GraphCanvas", () => ({
-  __esModule: true,
-  default: () => {
-    const React = require("react");
-    return React.createElement("div", null, "Graph canvas");
-  },
-}));
 
 jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
@@ -444,60 +439,6 @@ jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   },
 }));
 
-jest.mock("@/shared/api/runtimeActorsApi", () => ({
-  runtimeActorsApi: {
-    getActorGraphEnriched: jest.fn(async () => ({
-      snapshot: {
-        actorId: "actor-intake",
-        workflowName: "support-triage",
-        lastCommandId: "cmd-1",
-        completionStatusValue: 1,
-        stateVersion: 2,
-        lastEventId: "evt-2",
-        lastUpdatedAt: "2026-04-09T09:05:00Z",
-        lastSuccess: false,
-        lastOutput: "",
-        lastError: "Waiting on approval",
-        totalSteps: 4,
-        requestedSteps: 2,
-        completedSteps: 2,
-        roleReplyCount: 1,
-      },
-      subgraph: {
-        rootNodeId: "actor-intake",
-        nodes: [
-          {
-            nodeId: "actor-intake",
-            nodeType: "actor",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {
-              role: "triage lead",
-            },
-          },
-          {
-            nodeId: "actor-risk",
-            nodeType: "actor",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {
-              role: "risk review",
-            },
-          },
-        ],
-        edges: [
-          {
-            edgeId: "edge-1",
-            fromNodeId: "actor-intake",
-            toNodeId: "actor-risk",
-            edgeType: "handoff",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {},
-          },
-        ],
-      },
-    })),
-  },
-}));
-
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
     listServices: jest.fn(async () => [
@@ -771,7 +712,6 @@ describe("TeamDetailPage", () => {
     (scopesApi.listWorkflows as jest.Mock).mockClear();
     (scopesApi.listScripts as jest.Mock).mockClear();
     (runtimeGAgentApi.listActors as jest.Mock).mockClear();
-    (runtimeActorsApi.getActorGraphEnriched as jest.Mock).mockClear();
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockReset();
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockImplementation(
       async () => mockCreateServiceRevisionCatalog(),
@@ -858,7 +798,6 @@ describe("TeamDetailPage", () => {
       expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
       expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();
       expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
-      expect(runtimeActorsApi.getActorGraphEnriched).not.toHaveBeenCalled();
     });
   });
 
@@ -879,6 +818,9 @@ describe("TeamDetailPage", () => {
     const configurationHeading = screen.getByText("配置明细");
     expect(screen.getByRole("button", { name: "测试团队" })).toBeTruthy();
     expect(currentPostureHeading).toBeTruthy();
+    expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
+    expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
+    expect(await screen.findByText("运行 · 等待处理")).toBeTruthy();
     expect(compositionHeading).toBeTruthy();
     expect(configurationHeading).toBeTruthy();
     expect(screen.queryByLabelText("Team test prompt")).toBeNull();
@@ -907,6 +849,7 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("button", { name: "处理等待 Run" })).toBeNull();
     expect(screen.queryByRole("button", { name: "治理绑定" })).toBeNull();
     expect(screen.queryByRole("button", { name: "部署记录" })).toBeNull();
+    expect(screen.queryByText("稳定")).toBeNull();
     expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
   });
 
@@ -938,6 +881,9 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
+    expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
     expect(screen.queryByText("Comparing run run-current against baseline run-good.")).toBeNull();
     expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();
@@ -1093,17 +1039,16 @@ describe("TeamDetailPage", () => {
     expect(window.location.search).not.toContain("step=bind");
   });
 
-  it("falls legacy event deep links back to the overview tab", async () => {
+  it("normalizes unknown tab deep links back to the overview tab", async () => {
     window.history.replaceState(
       {},
       "",
-      "/teams/scope-1/t-alpha?serviceId=default&tab=events",
+      "/teams/scope-1/t-alpha?serviceId=default&tab=legacy-tab",
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前态势")).toBeTruthy();
-    expect(screen.queryByText("当前任务事件流")).toBeNull();
 
     await waitFor(() => {
       const params = new URLSearchParams(window.location.search);
@@ -1150,6 +1095,33 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText("参与者结构")).toBeNull();
     expect(screen.queryByText("运行时参与者身份")).toBeNull();
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
+  });
+
+  it("marks the route-selected member in the members tab", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(screen.getByText("当前选中")).toBeTruthy();
+  });
+
+  it("shows the route-selected member in the overview status cards", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-team-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("当前成员")).toBeTruthy();
+    expect(screen.getAllByText("member-team-alpha").length).toBeGreaterThan(0);
+    expect(screen.getByText("memberId · member-team-alpha")).toBeTruthy();
   });
 
   it("shows the configured Team entry member without treating it as the service target", async () => {
@@ -1261,6 +1233,24 @@ describe("TeamDetailPage", () => {
     });
     expect(await screen.findByText("Team response")).toBeTruthy();
     expect(await screen.findByText(/上次测试/)).toBeTruthy();
+  });
+
+  it("explains when Team Test uses the entry member instead of the selected member", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-support&testTeam=1",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await screen.findByTestId("team-test-modal-body");
+
+    expect(
+      within(dialog).getByText(
+        "当前页面选中的是 member-support，Team 测试仍通过入口成员发起。",
+      ),
+    ).toBeTruthy();
   });
 
   it("auto-opens Team Test from the Team Detail route intent", async () => {

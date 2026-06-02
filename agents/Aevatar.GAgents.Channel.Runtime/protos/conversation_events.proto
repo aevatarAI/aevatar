@@ -52,8 +52,9 @@ message NeedsLlmReplyEvent {
   // command copy may carry it so AgentRunGAgent can apply the route before execution.
   // Never persist to event store, projection, read model, or actor state.
   aevatar.chat_routing.v1.ChatRouteAction target_ref = 10;
-  // Stable run identity owned by AgentRunGAgent. Dispatcher adapters may use
-  // correlation_id only as a bounded fallback for older persisted requests.
+  // Stable run identity owned by AgentRunGAgent. New dispatch MUST set this
+  // explicitly before persistence and before handoff to the run dispatcher.
+  // correlation_id is trace-only and MUST NOT be used to derive actor identity.
   string run_id = 11;
   // Runtime command-only LLM control carrier. ConversationGAgent clears this on
   // the copy persisted to actor state; the run-bound command may carry it to the
@@ -143,9 +144,12 @@ message LlmReplyReadyEvent {
   // NeedsLlmReplyEvent verbatim.
   string reply_token = 10;
   int64 reply_token_expires_at_unix_ms = 11;
+  // AgentRunGAgent run_id producing this reply. correlation_id remains trace-only
+  // and MUST NOT be used as actor/run identity.
+  string run_id = 12;
   // History entries produced by this LLM turn. ConversationGAgent persists
   // them only after the reply reaches a terminal user-visible outcome.
-  repeated ConversationHistoryEntry appended_history = 12;
+  repeated ConversationHistoryEntry appended_history = 13;
 }
 
 enum ConversationReplyLifecycleMode {
@@ -344,6 +348,17 @@ message LarkCardOperationTimeoutFiredEvent {
   int64 fired_at_unix_ms = 12;
 }
 
+message ReplyOperationStepEvent {
+  string operation_id = 1;
+  string operation_name = 2;
+  string correlation_id = 3;
+  int64 lease_epoch = 4;
+  oneof payload {
+    NyxRelayTextOperationStepPayload nyx_relay_text = 5;
+    LarkCardOperationStepPayload lark_card = 6;
+  }
+}
+
 enum NyxRelayTextOperationResultState {
   NYX_RELAY_TEXT_OPERATION_RESULT_STATE_UNSPECIFIED = 0;
   NYX_RELAY_TEXT_OPERATION_RESULT_STATE_SUCCEEDED = 1;
@@ -351,6 +366,9 @@ enum NyxRelayTextOperationResultState {
   NYX_RELAY_TEXT_OPERATION_RESULT_STATE_FAULTED = 3;
 }
 
+// Refactor (iter1535/cluster-issue-1535): Old pattern: Nyx relay continuations inferred retry
+// behavior from raw strings and edit_unsupported flags. New principle: actor-owned continuation
+// events carry typed failure classification plus sanitized adapter diagnostics.
 message NyxRelayTextOperationRawResult {
   string platform_message_id = 1;
   bool edit_unsupported = 2;
@@ -358,6 +376,11 @@ message NyxRelayTextOperationRawResult {
   string raw_error_summary = 4;
   string exception_type = 5;
   string exception_message = 6;
+  aevatar.gagents.channel.abstractions.FailureKind failure_kind = 7;
+  int64 retry_after_ms = 8;
+  int32 http_status = 9;
+  string raw_error_key = 10;
+  int32 raw_error_code_value = 11;
 }
 
 message NyxRelayTextOperationCompletedEvent {
@@ -388,6 +411,36 @@ message NyxRelayTextOperationTimeoutFiredEvent {
   string last_flushed_text = 9;
   int32 edit_count = 10;
   int64 fired_at_unix_ms = 11;
+}
+
+// Refactor helper, no behavior change: typed payload for one actor-owned Nyx relay text IO continuation.
+message NyxRelayTextOperationStepPayload {
+  NyxRelayTextOperationKind operation = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  LlmReplyStreamChunkEvent chunk = 4;
+  string current_platform_message_id = 5;
+  string command_id = 6;
+  string final_text = 7;
+  string last_flushed_text = 8;
+  int32 edit_count = 9;
+}
+
+// Refactor helper, no behavior change: typed payload for one actor-owned Lark CardKit IO continuation.
+message LarkCardOperationStepPayload {
+  LarkCardOperationPhase operation = 1;
+  int64 sequence = 2;
+  int64 operation_generation = 3;
+  LlmReplyCardStreamChunkEvent chunk = 4;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 5;
+  string command_id = 6;
+  string final_text = 7;
+  string last_flushed_text = 8;
+  string card_id = 9;
+  string card_message_id = 10;
+  string streaming_element_id = 11;
+  bool final_differs = 12;
+  repeated ConversationHistoryEntry appended_history = 13;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {
@@ -463,7 +516,7 @@ message ConversationContinueFailedEvent {
   string command_id = 1;
   string correlation_id = 2;
   string causation_id = 3;
-  FailureKind kind = 4;
+  aevatar.gagents.channel.abstractions.FailureKind kind = 4;
   string error_code = 5;
   string error_summary = 6;
   oneof retry_policy {
@@ -471,14 +524,6 @@ message ConversationContinueFailedEvent {
     int64 retry_after_ms = 8;
   }
   int64 failed_at_unix_ms = 9;
-}
-
-enum FailureKind {
-  FAILURE_KIND_UNSPECIFIED = 0;
-  FAILURE_KIND_TRANSIENT_ADAPTER_ERROR = 1;
-  FAILURE_KIND_PERMANENT_ADAPTER_ERROR = 2;
-  FAILURE_KIND_CREDENTIAL_RESOLUTION_FAILED = 3;
-  FAILURE_KIND_PLATFORM_UNAVAILABLE = 4;
 }
 
 // Persisted by ConversationGAgent after the channel sink (e.g. Lark
@@ -489,8 +534,7 @@ enum FailureKind {
 // or other side-channel signals.
 message LlmReplyDeliveredEvent {
   string correlation_id = 1;
-  // AgentRunGAgent run_id producing this reply (used to anchor delivery
-  // against a specific committed reply).
+  // AgentRunGAgent run_id producing this reply.
   string run_id = 2;
   int64 acked_at_unix_ms = 3;
   // Channel-side message id from the sink ack (e.g. Lark message_id).
