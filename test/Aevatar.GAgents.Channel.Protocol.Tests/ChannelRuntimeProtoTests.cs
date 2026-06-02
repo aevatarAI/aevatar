@@ -61,6 +61,33 @@ public sealed class ChannelRuntimeProtoTests
     }
 
     [Fact]
+    public void ConversationReplyLifecycleStateAndEvent_ShouldRoundtripNyxRelayRetryAttempt()
+    {
+        var state = new ConversationReplyLifecycleState
+        {
+            CorrelationId = "corr-retry",
+            Mode = ConversationReplyLifecycleMode.NyxRelayText,
+            Phase = ConversationReplyLifecyclePhase.TextStreaming,
+            NyxRelayRetryAttempt = 2,
+        };
+        var evt = new ConversationReplyLifecycleChangedEvent
+        {
+            CorrelationId = "corr-retry",
+            Mode = ConversationReplyLifecycleMode.NyxRelayText,
+            PreviousPhase = ConversationReplyLifecyclePhase.TextStreaming,
+            Phase = ConversationReplyLifecyclePhase.TextStreaming,
+            NyxRelayRetryAttempt = 2,
+        };
+
+        var parsedState = ConversationReplyLifecycleState.Parser.ParseFrom(state.ToByteArray());
+        var parsedEvent = ConversationReplyLifecycleChangedEvent.Parser.ParseFrom(evt.ToByteArray());
+
+        parsedState.NyxRelayRetryAttempt.ShouldBe(2);
+        parsedEvent.HasNyxRelayRetryAttempt.ShouldBeTrue();
+        parsedEvent.NyxRelayRetryAttempt.ShouldBe(2);
+    }
+
+    [Fact]
     public void LeaseToken_ShouldKeepOwnerBytesAtFieldOneAndExpiryAtFieldTwo()
     {
         var ownerField = LeaseToken.Descriptor.FindFieldByNumber(1);

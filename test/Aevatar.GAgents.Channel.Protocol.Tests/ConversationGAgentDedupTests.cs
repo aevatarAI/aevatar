@@ -2143,6 +2143,179 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_TransientInterimEditFailure_RetriesImmediateSelfOperation()
+    {
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                return callCount switch
+                {
+                    1 => ConversationStreamChunkResult.Succeeded("om_retry_success"),
+                    2 => ConversationStreamChunkResult.Failed(
+                        "relay_reply_update_rejected",
+                        "transient",
+                        failureKind: FailureKind.TransientAdapterError),
+                    _ => ConversationStreamChunkResult.Succeeded(pmid ?? "om_retry_success"),
+                };
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-interim-retry", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry", "relay-msg-1", "hello world"));
+        var failed = await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        var lifecycleAfterRetryQueued = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycleAfterRetryQueued.NyxRelayRetryAttempt.ShouldBe(1);
+        lifecycleAfterRetryQueued.NyxRelayOperationGeneration.ShouldBe(failed.OperationGeneration + 1);
+        lifecycleAfterRetryQueued.NyxRelayInFlightSequence.ShouldBe(failed.Sequence);
+
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        callCount.ShouldBe(3);
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextStreaming);
+        lifecycle.LastFlushedText.ShouldBe("hello world");
+        lifecycle.NyxRelayRetryAttempt.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_TransientInterimEditRetryExhaustion_SuppressesInterimButAllowsFinalEdit()
+    {
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_retry_exhaust");
+                if (callCount <= 4)
+                    return ConversationStreamChunkResult.Failed(
+                        "relay_reply_update_rejected",
+                        "transient",
+                        failureKind: FailureKind.TransientAdapterError);
+                return ConversationStreamChunkResult.Succeeded(pmid ?? "om_retry_exhaust");
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-interim-retry-exhaust", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry-exhaust", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry-exhaust", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        var suppressed = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        suppressed.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextSuppressingInterim);
+        suppressed.NyxRelayRetryAttempt.ShouldBe(0);
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry-exhaust", "relay-msg-1", "hello dropped"));
+        callCount.ShouldBe(4);
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-interim-retry-exhaust",
+            RegistrationId = "reg-1",
+            RunId = "act-stream-interim-retry-exhaust",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-stream-interim-retry-exhaust", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        runner.LlmReplyCount.ShouldBe(0);
+        callCount.ShouldBe(5);
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(
+            (await store.GetEventsAsync(agent.Id)).Last().EventData.Value);
+        completed.Outbound.Text.ShouldBe("hello final");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_PermanentInterimEditFailure_DoesNotRetry()
+    {
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_permanent_no_retry");
+                return ConversationStreamChunkResult.Failed(
+                    "relay_reply_edit_unsupported",
+                    "edit unsupported",
+                    editUnsupported: true,
+                    failureKind: FailureKind.PermanentAdapterError,
+                    rawErrorKey: "edit_unsupported");
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-permanent-no-retry", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-permanent-no-retry", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-permanent-no-retry", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        callCount.ShouldBe(2);
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextSuppressingInterim);
+        lifecycle.NyxRelayRetryAttempt.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_TransientInterimEditFailureWithPositiveRetryAfter_DoesNotScheduleRetry()
+    {
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_retry_after_no_retry");
+                return ConversationStreamChunkResult.Failed(
+                    "relay_reply_update_rejected",
+                    "rate limited",
+                    failureKind: FailureKind.TransientAdapterError,
+                    retryAfter: TimeSpan.FromSeconds(4),
+                    rawErrorKey: "rate_limited");
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-retry-after-no-retry", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-retry-after-no-retry", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-retry-after-no-retry", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        callCount.ShouldBe(2);
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextSuppressingInterim);
+        lifecycle.NyxRelayRetryAttempt.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenTokenAlreadyConsumedAndInterimEditFailed_RetriesFinalEditInsteadOfReusingToken()
     {
         // Regression for PR#374 P1 review: final LlmReplyReady must try the final /reply/update
@@ -2306,6 +2479,7 @@ public sealed class ConversationGAgentDedupTests
         // Two RunStreamChunkAsync calls: first chunk + failure-edit.
         callCount.ShouldBe(2);
         // The placeholder was edited with the classified failure text.
+        lastEditedText.ShouldNotBeNull();
         lastEditedText.ShouldContain("rate limited");
 
         var events = await store.GetEventsAsync(agent.Id);
