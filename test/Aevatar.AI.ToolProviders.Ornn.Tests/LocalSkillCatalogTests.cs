@@ -135,6 +135,100 @@ public sealed class LocalSkillCatalogTests
     }
 
     [Fact]
+    public async Task UseSkillTool_DoesNotMountWorkflowsByDefault()
+    {
+        var catalog = new LocalSkillCatalog();
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
+        catalog.Register(MakeSkill(
+            "workflow-skill",
+            workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "summary-report",
+                    WorkflowYamls = ["name: summary-report\nsteps: []"],
+                }
+            ]));
+
+        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
+
+        ExtractLoaded(result).Should().BeTrue();
+        mountPort.Requests.Should().BeEmpty();
+        ExtractWorkflowMount(result).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountsWorkflows_WhenExplicitlyRequested()
+    {
+        var catalog = new LocalSkillCatalog();
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
+        catalog.Register(MakeSkill(
+            "workflow-skill",
+            workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "summary-report",
+                    WorkflowYamls = ["name: summary-report\nsteps: []"],
+                }
+            ]));
+
+        using var _ = BeginMetadataScope(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.ScopeId] = "scope-1",
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
+        });
+        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill","mount_workflows":true}""");
+
+        ExtractLoaded(result).Should().BeTrue();
+        mountPort.Requests.Should().ContainSingle();
+        mountPort.Requests[0].ScopeId.Should().Be("scope-1");
+        mountPort.Requests[0].NyxIdAccessToken.Should().Be("token-a");
+        mountPort.Requests[0].Workflows.Should().ContainSingle(x => x.WorkflowId == "summary-report");
+
+        using var document = JsonDocument.Parse(result);
+        var workflowMount = document.RootElement.GetProperty("workflow_mount");
+        workflowMount.GetProperty("status").GetString().Should().Be("mounted");
+        workflowMount.GetProperty("mounted").GetBoolean().Should().BeTrue();
+        workflowMount.GetProperty("workflows")[0].GetProperty("service_id").GetString().Should().Be("summary-report");
+        workflowMount.GetProperty("workflows")[0].GetProperty("endpoint_id").GetString().Should().Be("chat");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_MountWorkflows_SafelyDegrades_WhenScopeMissing()
+    {
+        var catalog = new LocalSkillCatalog();
+        var mountPort = new RecordingSkillWorkflowMountPort();
+        var tool = new UseSkillTool(catalog, workflowMountPort: mountPort);
+        catalog.Register(MakeSkill(
+            "workflow-skill",
+            workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "summary-report",
+                    WorkflowYamls = ["name: summary-report\nsteps: []"],
+                }
+            ]));
+
+        using var _ = BeginMetadataScope(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-a",
+        });
+        var result = await tool.ExecuteAsync("""{"skill":"workflow-skill","mount_workflows":true}""");
+
+        ExtractLoaded(result).Should().BeTrue();
+        mountPort.Requests.Should().BeEmpty();
+
+        using var document = JsonDocument.Parse(result);
+        var workflowMount = document.RootElement.GetProperty("workflow_mount");
+        workflowMount.GetProperty("status").GetString().Should().Be("missing_scope");
+        workflowMount.GetProperty("mounted").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
     public void SkillFrontmatterParser_ParsesWorkflowEntryScalar()
     {
         var parser = new SkillFrontmatterParser();
@@ -194,6 +288,27 @@ public sealed class LocalSkillCatalogTests
         }
     }
 
+    private sealed class RecordingSkillWorkflowMountPort : ISkillWorkflowMountPort
+    {
+        public List<SkillWorkflowMountRequest> Requests { get; } = [];
+
+        public Task<SkillWorkflowMountResult> MountAsync(
+            SkillWorkflowMountRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new SkillWorkflowMountResult(
+                Status: "mounted",
+                Mounted: true,
+                Workflows: request.Workflows.Select(workflow => new MountedSkillWorkflow(
+                    workflow.WorkflowId,
+                    workflow.WorkflowId,
+                    "chat",
+                    "rev-1")).ToArray(),
+                Message: "Mounted."));
+        }
+    }
+
     private static SkillDefinition MakeSkill(
         string name,
         string instructions = "body",
@@ -215,12 +330,16 @@ public sealed class LocalSkillCatalogTests
 
     private static IDisposable BeginTokenScope(string token)
     {
-        var previous = AgentToolRequestContext.CurrentMetadata;
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        return BeginMetadataScope(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
-        };
+        });
+    }
 
+    private static IDisposable BeginMetadataScope(IReadOnlyDictionary<string, string> metadata)
+    {
+        var previous = AgentToolRequestContext.CurrentMetadata;
+        AgentToolRequestContext.CurrentMetadata = metadata;
         return new RestoreContextScope(previous);
     }
 
@@ -269,5 +388,14 @@ public sealed class LocalSkillCatalogTests
     {
         using var document = JsonDocument.Parse(json);
         return document.RootElement.GetProperty("loaded").GetBoolean();
+    }
+
+    private static JsonElement? ExtractWorkflowMount(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.TryGetProperty("workflow_mount", out var workflowMount) &&
+               workflowMount.ValueKind != JsonValueKind.Null
+            ? workflowMount.Clone()
+            : null;
     }
 }

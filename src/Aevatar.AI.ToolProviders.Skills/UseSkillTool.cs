@@ -20,13 +20,23 @@ namespace Aevatar.AI.ToolProviders.Skills;
 //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
 public sealed class UseSkillTool : IAgentTool
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
+
     private readonly LocalSkillCatalog _localCatalog;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
+    private readonly ISkillWorkflowMountPort _workflowMountPort;
 
-    public UseSkillTool(LocalSkillCatalog localCatalog, IRemoteSkillFetcher? remoteFetcher = null)
+    public UseSkillTool(
+        LocalSkillCatalog localCatalog,
+        IRemoteSkillFetcher? remoteFetcher = null,
+        ISkillWorkflowMountPort? workflowMountPort = null)
     {
         _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
+        _workflowMountPort = workflowMountPort ?? new NoOpSkillWorkflowMountPort();
     }
 
     public string Name => "use_skill";
@@ -42,7 +52,11 @@ public sealed class UseSkillTool : IAgentTool
           "type": "object",
           "properties": {
             "skill": { "type": "string", "description": "The skill name to invoke" },
-            "args": { "type": "string", "description": "Optional arguments for the skill" }
+            "args": { "type": "string", "description": "Optional arguments for the skill" },
+            "mount_workflows": {
+              "type": "boolean",
+              "description": "When true, mount the skill's workflow YAML bundles into the current scope as callable workflows. Default false."
+            }
           },
           "required": ["skill"]
         }
@@ -53,6 +67,7 @@ public sealed class UseSkillTool : IAgentTool
         // ─── 解析参数 ───
         string skillName = "";
         string args = "";
+        var mountWorkflows = false;
 
         try
         {
@@ -61,6 +76,11 @@ public sealed class UseSkillTool : IAgentTool
                 skillName = s.GetString() ?? "";
             if (doc.RootElement.TryGetProperty("args", out var a))
                 args = a.GetString() ?? "";
+            if (doc.RootElement.TryGetProperty("mount_workflows", out var mount) &&
+                mount.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                mountWorkflows = mount.GetBoolean();
+            }
         }
         catch { /* use defaults */ }
 
@@ -79,12 +99,15 @@ public sealed class UseSkillTool : IAgentTool
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
         //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
         if (_localCatalog.TryGet(skillName, out skill) && skill != null)
-            return BuildLoadResult(
+            return await BuildLoadResultAsync(
                 skillName: skill.Name,
                 loaded: true,
                 error: null,
                 status: "success",
-                text: BuildSkillResponse(skill, args));
+                text: BuildSkillResponse(skill, args),
+                skill: skill,
+                mountWorkflows: mountWorkflows,
+                ct: ct);
 
         if (_remoteFetcher != null)
         {
@@ -94,12 +117,15 @@ public sealed class UseSkillTool : IAgentTool
                 skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
                 if (skill != null)
                 {
-                    return BuildLoadResult(
+                    return await BuildLoadResultAsync(
                         skillName: skill.Name,
                         loaded: true,
                         error: null,
                         status: "success",
-                        text: BuildSkillResponse(skill, args));
+                        text: BuildSkillResponse(skill, args),
+                        skill: skill,
+                        mountWorkflows: mountWorkflows,
+                        ct: ct);
                 }
             }
         }
@@ -110,6 +136,82 @@ public sealed class UseSkillTool : IAgentTool
             error: $"Skill '{skillName}' not found.",
             status: "not_found",
             text: BuildErrorWithAvailableSkills($"Skill '{skillName}' not found."));
+    }
+
+    private async Task<string> BuildLoadResultAsync(
+        string? skillName,
+        bool loaded,
+        string? error,
+        string status,
+        string text,
+        SkillDefinition? skill,
+        bool mountWorkflows,
+        CancellationToken ct)
+    {
+        SkillWorkflowMountResult? workflowMount = null;
+        if (loaded && mountWorkflows)
+            workflowMount = await TryMountWorkflowsAsync(skill, ct);
+
+        return BuildLoadResult(
+            skillName,
+            loaded,
+            error,
+            status,
+            text,
+            workflowMount);
+    }
+
+    private async Task<SkillWorkflowMountResult> TryMountWorkflowsAsync(
+        SkillDefinition? skill,
+        CancellationToken ct)
+    {
+        if (skill == null || skill.Workflows.Count == 0)
+        {
+            return new SkillWorkflowMountResult(
+                Status: "no_workflows",
+                Mounted: false,
+                Workflows: [],
+                Message: "The skill does not expose workflow YAML bundles.");
+        }
+
+        var scopeId = AgentToolRequestContext.ScopeId;
+        if (string.IsNullOrWhiteSpace(scopeId))
+        {
+            return new SkillWorkflowMountResult(
+                Status: "missing_scope",
+                Mounted: false,
+                Workflows: [],
+                Message: "Workflow mounting skipped because scope_id is missing from the request context.");
+        }
+
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return new SkillWorkflowMountResult(
+                Status: "missing_identity",
+                Mounted: false,
+                Workflows: [],
+                Message: "Workflow mounting skipped because nyxid access token is missing from the request context.");
+        }
+
+        try
+        {
+            return await _workflowMountPort.MountAsync(
+                new SkillWorkflowMountRequest(scopeId.Trim(), token.Trim(), skill.Workflows),
+                ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new SkillWorkflowMountResult(
+                Status: "mount_failed",
+                Mounted: false,
+                Workflows: [],
+                Message: $"Workflow mounting failed: {ex.GetType().Name}.");
+        }
     }
 
     private static string BuildSkillResponse(SkillDefinition skill, string args)
@@ -225,7 +327,8 @@ public sealed class UseSkillTool : IAgentTool
         bool loaded,
         string? error,
         string status,
-        string text)
+        string text,
+        SkillWorkflowMountResult? workflowMount = null)
     {
         return JsonSerializer.Serialize(new
         {
@@ -236,6 +339,7 @@ public sealed class UseSkillTool : IAgentTool
             error,
             http_status = (int?)null,
             text,
-        });
+            workflow_mount = workflowMount,
+        }, s_jsonOptions);
     }
 }
