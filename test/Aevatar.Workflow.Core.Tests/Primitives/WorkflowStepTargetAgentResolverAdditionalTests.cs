@@ -20,14 +20,14 @@ public sealed class WorkflowStepTargetAgentResolverAdditionalTests
     [Theory]
     [InlineData("evaluate")]
     [InlineData("reflect")]
-    public void ResolveEffectiveTargetRole_WhenImplicitLlmStepOmitsTargetRole_ShouldUseImplicitAssistant(string stepType)
+    public void ResolveEffectiveTargetRole_WhenWorkflowOwnedLlmStepOmitsTargetRole_ShouldUseWorkflowRunActor(string stepType)
     {
         var role = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
             workflow: null,
             configuredTargetRole: null,
             stepType: stepType);
 
-        role.Should().Be(WorkflowImplicitLlmRolePolicy.DefaultRoleId);
+        role.Should().BeEmpty();
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public sealed class WorkflowStepTargetAgentResolverAdditionalTests
     }
 
     [Fact]
-    public void ResolveEffectiveTargetRole_WhenExplicitDefaultRoleExists_ShouldUseItsTrimmedId()
+    public void ResolveEffectiveTargetRole_WhenExplicitDefaultRoleExistsForReflect_ShouldUseWorkflowRunActor()
     {
         var workflow = new WorkflowDefinition
         {
@@ -70,11 +70,11 @@ public sealed class WorkflowStepTargetAgentResolverAdditionalTests
             configuredTargetRole: null,
             stepType: "reflect");
 
-        role.Should().Be(WorkflowImplicitLlmRolePolicy.DefaultRoleId);
+        role.Should().BeEmpty();
     }
 
     [Fact]
-    public void GetEffectiveRoles_ShouldCreateImplicitRoleForNestedLlmStepWithoutTargetRole()
+    public void GetEffectiveRoles_ShouldNotCreateImplicitRoleForNestedWorkflowOwnedLlmStepWithoutTargetRole()
     {
         var workflow = new WorkflowDefinition
         {
@@ -99,10 +99,8 @@ public sealed class WorkflowStepTargetAgentResolverAdditionalTests
 
         var roles = WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(workflow);
 
-        roles.Should().HaveCount(2);
-        roles.Should().ContainSingle(x =>
-            x.Id == WorkflowImplicitLlmRolePolicy.DefaultRoleId &&
-            x.Name == WorkflowImplicitLlmRolePolicy.DefaultRoleName);
+        roles.Should().ContainSingle();
+        roles[0].Id.Should().Be("writer");
     }
 
     [Fact]

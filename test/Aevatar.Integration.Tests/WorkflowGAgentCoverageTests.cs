@@ -1156,15 +1156,15 @@ public class WorkflowGAgentCoverageTests
 
         (await agent.GetDescriptionAsync()).Should().Contain("bound");
 
-        await agent.HandleChatRequest(new WorkflowChatRequestEvent
-        {
-            Prompt = "hello",
-            SessionId = "session-1",
-            Headers =
+        await agent.HandleEventAsync(Envelope(
+            new WorkflowChatRequestEvent
             {
-                ["workflow.command_id"] = "cmd-123",
+                Prompt = "hello",
+                SessionId = "session-1",
             },
-        });
+            "client",
+            TopologyAudience.Self,
+            id: "cmd-123"));
 
         agent.RunId.Should().Be("run-command");
         agent.State.LastCommandId.Should().Be("cmd-123");
@@ -2027,11 +2027,15 @@ public class WorkflowGAgentCoverageTests
         return services.BuildServiceProvider();
     }
 
-    private static EventEnvelope Envelope(IMessage message, string publisherId, TopologyAudience direction)
+    private static EventEnvelope Envelope(
+        IMessage message,
+        string publisherId,
+        TopologyAudience direction,
+        string? id = null)
     {
         return new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(message),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, direction),

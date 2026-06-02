@@ -383,7 +383,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ctx,
             CancellationToken.None);
 
-        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        var intent = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
         intent.RunId.Should().Be("default");
         intent.StepId.Should().Be("evaluate-annotations");
         intent.SessionId.Should().Be("agent-1:default:evaluate-annotations:a1");
@@ -427,7 +427,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             }),
             ctx,
             CancellationToken.None);
-        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        var intent = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
 
         await module.HandleAsync(
             Wrap(new WorkflowLlmInvocationCompletedEvent
@@ -595,7 +595,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ctx,
             CancellationToken.None);
 
-        var intent = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
+        var intent = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Single();
         intent.RunId.Should().Be("default");
         intent.StepId.Should().Be("reflect-trim");
         intent.SessionId.Should().Be("agent-1:default:reflect-trim_r0_critique:a1");
@@ -613,7 +613,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ctx,
             CancellationToken.None);
 
-        var improve = ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Last();
+        var improve = ctx.Published.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>().Last();
         improve.SessionId.Should().Be("agent-1:default:reflect-trim_r1_improve:a1");
         ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
     }
@@ -631,6 +631,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 StepType = "reflect",
                 RunId = "run-reflect-improve-fails",
                 Input = "draft",
+                TargetRole = "reviewer",
             }),
             ctx,
             CancellationToken.None);
@@ -666,6 +667,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 StepType = "reflect",
                 RunId = "run-reflect-critique-fails",
                 Input = "draft",
+                TargetRole = "reviewer",
             }),
             ctx,
             CancellationToken.None);
