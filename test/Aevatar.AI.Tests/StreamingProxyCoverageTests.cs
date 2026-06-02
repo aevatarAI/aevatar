@@ -1854,6 +1854,65 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public async Task GAgent_HandleParticipantReplyObservedRequested_ShouldCompleteTerminal_WhenFinalReplyExhaustsLifecycle()
+    {
+        using var provider = AgentCoverageTestSupport.BuildServiceProvider();
+        var agent = CreateAgent(provider, "room-1");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "Discuss the roadmap.",
+            SessionId = "session-1",
+            ScopeId = "scope-1",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "access-token",
+                },
+            }).ToPayload(),
+        });
+        await agent.HandleChatParticipantsResolvedRequested(new StreamingProxyChatParticipantsResolvedRequested
+        {
+            SessionId = "session-1",
+            Participants =
+            {
+                new StreamingProxyChatLifecycleParticipant
+                {
+                    ParticipantId = "participant-1",
+                    DisplayName = "Participant 1",
+                },
+            },
+        });
+        publisher.Sent.Clear();
+        publisher.Published.Clear();
+
+        await agent.HandleParticipantReplyObservedRequested(new StreamingProxyChatParticipantReplyObservedRequested
+        {
+            SessionId = "session-1",
+            ParticipantId = "participant-1",
+            Round = 1,
+            ParticipantIndex = 0,
+            Content = " final reply ",
+        });
+
+        agent.State.ChatLifecycles.Should().NotContainKey("session-1");
+        var terminal = agent.State.TerminalSessions["session-1"];
+        terminal.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
+        terminal.ErrorMessage.Should().BeEmpty();
+        agent.State.Messages.Should().Contain(message =>
+            message.SenderAgentId == "participant-1" &&
+            message.Content == "final reply");
+        publisher.Sent.Should().BeEmpty();
+        publisher.Published.OfType<GroupChatMessageEvent>()
+            .Should()
+            .ContainSingle(message => message.AgentId == "participant-1" && message.Content == "final reply");
+    }
+
+    [Fact]
     public async Task GAgent_HandleParticipantReplyObservedRequested_ShouldIgnoreStaleCursorObservation()
     {
         using var provider = AgentCoverageTestSupport.BuildServiceProvider();
@@ -2064,6 +2123,57 @@ public class StreamingProxyCoverageTests
             command.SessionId == "session-1" &&
             command.ParticipantId == "participant-1" &&
             command.FailureKind == StreamingProxyChatParticipantReplyFailureKind.ParticipantUnavailable);
+    }
+
+    [Fact]
+    public async Task ChatLifecycleContinuationRunner_ShouldReportSuccessfulParticipantReplyObservation()
+    {
+        var roomCommands = new StubRoomCommandService();
+        var coordinator = CreateNyxCoordinator(
+            roomCommands,
+            responseFactory: _ => new LLMResponse { Content = " useful reply " });
+        var streamProvider = new StubStreamProvider();
+        var runner = new StreamingProxyChatLifecycleContinuationRunner(
+            streamProvider,
+            new StubActorEventSubscriptionProvider(streamProvider),
+            coordinator,
+            roomCommands,
+            NullLogger<StreamingProxyChatLifecycleContinuationRunner>.Instance);
+
+        await runner.RunParticipantReplyAsync(new StreamingProxyChatParticipantReplyRequested
+        {
+            RoomId = "room-1",
+            SessionId = "session-1",
+            ParticipantId = "participant-1",
+            DisplayName = "Participant 1",
+            RoutePreference = "/api/v1/proxy/s/openclaw/node-a",
+            Round = 2,
+            ParticipantIndex = 1,
+            Prompt = "Discuss the roadmap.",
+            AccessToken = "access-token",
+            MaxRounds = 2,
+            ActiveParticipants =
+            {
+                new StreamingProxyChatLifecycleParticipant
+                {
+                    ParticipantId = "participant-1",
+                    DisplayName = "Participant 1",
+                    RoutePreference = "/api/v1/proxy/s/openclaw/node-a",
+                    Status = StreamingProxyChatLifecycleParticipantStatus.Active,
+                },
+            },
+        });
+
+        roomCommands.ReplyObservedCommands.Should().ContainSingle(command =>
+            command.RoomId == "room-1" &&
+            command.SessionId == "session-1" &&
+            command.ParticipantId == "participant-1" &&
+            command.Round == 2 &&
+            command.ParticipantIndex == 1 &&
+            command.Content == "useful reply");
+        roomCommands.ReplyFailedCommands.Should().BeEmpty();
+        roomCommands.PostMessageCommands.Should().BeEmpty();
+        roomCommands.TerminalCommands.Should().BeEmpty();
     }
 
     [Fact]

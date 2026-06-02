@@ -81,17 +81,11 @@ public sealed record StreamingProxyRoomTerminalStateCommand(
     StreamingProxyChatSessionTerminalStatus Status,
     string? ErrorMessage);
 
-// Refactor (iter104/cluster-1):
-//   Old pattern: runner/coordinator held participant progression and terminal counters.
-//   New principle: room actor receives typed participant resolution and owns lifecycle cursor/terminal facts.
 public sealed record StreamingProxyRoomParticipantsResolvedCommand(
     string RoomId,
     string SessionId,
     IReadOnlyList<StreamingProxyChatLifecycleParticipant> Participants);
 
-// Refactor (iter104/cluster-1):
-//   Old pattern: successful participant replies were posted as already-committed messages from host-side orchestration.
-//   New principle: the room actor reconciles reply observations against its active lifecycle cursor.
 public sealed record StreamingProxyRoomParticipantReplyObservedCommand(
     string RoomId,
     string SessionId,
@@ -100,9 +94,6 @@ public sealed record StreamingProxyRoomParticipantReplyObservedCommand(
     int ParticipantIndex,
     string Content);
 
-// Refactor (iter104/cluster-1):
-//   Old pattern: participant failure pruning and terminal failure were inferred by coordinator-local state.
-//   New principle: participant failures enter the room actor as typed observations before state advances.
 public sealed record StreamingProxyRoomParticipantReplyFailedCommand(
     string RoomId,
     string SessionId,

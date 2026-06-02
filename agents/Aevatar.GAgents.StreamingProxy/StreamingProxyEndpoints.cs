@@ -238,9 +238,6 @@ public static class StreamingProxyEndpoints
             var accessToken = ExtractBearerToken(http);
             var preferredRoute = request.LlmRoute?.Trim();
             var defaultModel = request.LlmModel?.Trim();
-            // Refactor (iter104/cluster-1):
-            //   Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer.
-            //   New principle: StreamingProxyGAgent owns typed lifecycle facts; deprecated compat endpoints only normalize and dispatch typed commands.
             var result = await interactionService.ExecuteAsync(
                 new StreamingProxyRoomChatCommand(
                     roomId,
@@ -450,9 +447,6 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            // Refactor (iter104/cluster-1):
-            //   Old pattern: endpoint used a shallow participant service facade.
-            //   New principle: query endpoint reads the room participants readmodel port directly.
             var snapshot = await participantsQueryPort.GetAsync(roomId, ct);
             return Results.Ok(snapshot?.Participants.Select(participant => new ParticipantResponse(
                 participant.AgentId,
