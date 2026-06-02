@@ -253,6 +253,110 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("generic-agent-1");
     }
 
+    [Fact]
+    public async Task HandleEventAsync_ShouldIgnoreStaleCallbackWithoutDispatchOrReschedule()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        var request = scheduler.TimeoutRequests.Single();
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(request, generation: 99, fireIndex: 1));
+
+        dispatch.Dispatches.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        scheduler.Canceled.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        agent.State.NextFireLease!.Generation.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ShouldIgnoreDisabledNonManualFireWithoutLeaseEnvelope()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
+            Manual = false,
+        });
+
+        dispatch.Dispatches.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        agent.State.FireCount.Should().Be(0);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ShouldRecordFailure_WhenDispatchIsNotAccepted()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort
+        {
+            AdmissionFactory = (_, envelope) => new DispatchAdmission(
+                Accepted: false,
+                CommandId: envelope.Id,
+                AckedAt: DateTimeOffset.UtcNow,
+                ActorId: string.Empty,
+                CorrelationId: envelope.Propagation?.CorrelationId ?? envelope.Id),
+        };
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        dispatch.Dispatches.Should().ContainSingle();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Be("Scheduled dispatch was not accepted.");
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+        agent.State.FireRecords[idempotencyKey].Error.Should().Be("Scheduled dispatch was not accepted.");
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ShouldRecordFailure_WhenDispatchThrows()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort
+        {
+            DispatchException = new InvalidOperationException("dispatch unavailable"),
+        };
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        dispatch.Dispatches.Should().ContainSingle();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Be("dispatch unavailable");
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+        agent.State.FireRecords[idempotencyKey].Error.Should().Be("dispatch unavailable");
+    }
+
     private static ScheduledDispatchGAgent CreateAgent(
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
@@ -332,13 +436,21 @@ public sealed class ScheduledDispatchGAgentTests
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
+        public Func<string, EventEnvelope, DispatchAdmission> AdmissionFactory { get; set; } =
+            DispatchAdmissionFactory.Create;
+
+        public Exception? DispatchException { get; set; }
+
         public Task<DispatchAdmission> DispatchAsync(
             string actorId,
             EventEnvelope envelope,
             CancellationToken ct = default)
         {
             Dispatches.Add((actorId, envelope.Clone()));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+            if (DispatchException != null)
+                throw DispatchException;
+
+            return Task.FromResult(AdmissionFactory(actorId, envelope));
         }
     }
 
