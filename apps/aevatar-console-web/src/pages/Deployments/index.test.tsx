@@ -310,6 +310,60 @@ describe("DeploymentsPage", () => {
     expect(await screen.findByText("发布服务列表")).toBeInTheDocument();
     expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
     expect(screen.queryByText("发布摘要")).toBeNull();
+    expect(screen.queryByText("正在加载发布服务")).toBeNull();
+  });
+
+  it("keeps the deployment inventory in a loading state until the first response resolves", async () => {
+    let resolveServices: (value: unknown[]) => void = () => {};
+    mockServicesApi.listServices.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveServices = resolve;
+        }),
+    );
+
+    renderDeploymentsPage();
+
+    expect(await screen.findByText("正在加载发布服务")).toBeInTheDocument();
+    expect(
+      screen.getByText("发布对象清单仍在加载，返回前不会把当前范围误判为空。"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(4);
+    expect(screen.queryByText("当前范围没有服务")).toBeNull();
+
+    resolveServices([]);
+
+    expect(await screen.findByText("当前范围没有服务")).toBeInTheDocument();
+  });
+
+  it("separates deployment inventory failures from a true empty scope", async () => {
+    mockServicesApi.listServices.mockRejectedValueOnce(
+      new Error("deployment inventory unavailable"),
+    );
+
+    renderDeploymentsPage();
+
+    expect(await screen.findByText("发布服务列表暂不可用")).toBeInTheDocument();
+    expect(screen.getByText("deployment inventory unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试发布列表" })).toBeInTheDocument();
+    expect(screen.queryByText("当前范围没有服务")).toBeNull();
+  });
+
+  it("shows an actionable deployment empty state only after an empty response", async () => {
+    mockServicesApi.listServices.mockResolvedValueOnce([]);
+
+    renderDeploymentsPage();
+
+    expect(await screen.findByText("当前范围没有服务")).toBeInTheDocument();
+    expect(
+      screen.getByText("当前 Team、App 和 Namespace 下没有可发布服务。可以调整范围后重新加载。"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "调整发布范围" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/deployments");
+    });
   });
 
   it("warns when scope edits have not been loaded yet", async () => {

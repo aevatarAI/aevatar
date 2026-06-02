@@ -7,7 +7,7 @@ import {
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Space, Tabs, Tag, Typography, theme } from "antd";
+import { Button, Empty, Space, Tabs, Tag, Typography, theme } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import ServiceQueryCard from "@/pages/services/components/ServiceQueryCard";
 import {
@@ -45,6 +45,7 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import { AevatarCompactText, aevatarMonoFontFamily } from "@/shared/ui/compactText";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import InventoryReadinessState from "@/shared/ui/InventoryReadinessState";
 import {
   codeBlockStyle,
   embeddedPanelStyle,
@@ -540,6 +541,7 @@ const ServicesPage: React.FC = () => {
     () => buildServiceDigestMetrics(servicesQuery.data ?? []),
     [servicesQuery.data],
   );
+  const serviceInventoryReady = servicesQuery.data !== undefined && !servicesQuery.error;
 
   const selectedService = selectedServiceQuery.data;
   const selectedRevisions = revisionsQuery.data?.revisions ?? [];
@@ -613,28 +615,28 @@ const ServicesPage: React.FC = () => {
                 icon={<AppstoreOutlined />}
                 label="可见服务"
                 tone="info"
-                value={digest.services}
+                value={serviceInventoryReady ? digest.services : "—"}
               />
               <ServiceSignalCard
                 caption="已经挂到 serving 的服务"
                 icon={<DeploymentUnitOutlined />}
                 label="已挂 Serving"
                 tone="success"
-                value={digest.servingServices}
+                value={serviceInventoryReady ? digest.servingServices : "—"}
               />
               <ServiceSignalCard
                 caption="需要补主 Actor 的服务"
                 icon={<NodeIndexOutlined />}
                 label="缺主 Actor"
                 tone="warning"
-                value={digest.servicesWithoutOwner}
+                value={serviceInventoryReady ? digest.servicesWithoutOwner : "—"}
               />
               <ServiceSignalCard
                 caption="当前没有公开入口"
                 icon={<ApiOutlined />}
                 label="无公开入口"
                 tone="default"
-                value={digest.servicesWithoutEndpoints}
+                value={serviceInventoryReady ? digest.servicesWithoutEndpoints : "—"}
               />
             </div>
           </div>
@@ -646,19 +648,29 @@ const ServicesPage: React.FC = () => {
           padding={0}
           title="服务目录"
         >
-          {servicesQuery.error ? (
-            <Alert
-              title={
+          {servicesQuery.isLoading ? (
+            <InventoryReadinessState
+              description="服务目录请求仍在进行，指标会在返回后更新。"
+              kind="loading"
+              title="正在加载服务目录"
+            />
+          ) : servicesQuery.error ? (
+            <InventoryReadinessState
+              action={{
+                label: "重试服务目录",
+                onClick: () => {
+                  void servicesQuery.refetch();
+                },
+              }}
+              description={
                 servicesQuery.error instanceof Error
                   ? servicesQuery.error.message
-                  : "Failed to load services."
+                  : "服务目录请求失败，请重试。"
               }
-              showIcon
-              type="error"
+              kind="error"
+              title="服务目录暂不可用"
             />
-          ) : null}
-
-          {servicesQuery.data?.length ? (
+          ) : servicesQuery.data?.length ? (
             <div style={{ overflowX: "auto" }}>
               <table
                 style={{
@@ -809,10 +821,11 @@ const ServicesPage: React.FC = () => {
               </table>
             </div>
           ) : (
-            <Empty
-              description="当前范围没有服务"
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              style={{ padding: 24 }}
+            <InventoryReadinessState
+              action={{ label: "调整服务范围", onClick: handleReset }}
+              description="当前 Team、App 和 Namespace 下没有可见服务。可以调整范围后重新加载。"
+              kind="empty"
+              title="当前范围没有服务"
             />
           )}
         </AevatarPanel>

@@ -64,6 +64,7 @@ import {
   aevatarMonoFontFamily,
   truncateMiddle,
 } from "@/shared/ui/compactText";
+import InventoryReadinessState from "@/shared/ui/InventoryReadinessState";
 import {
   aevatarDrawerBodyStyle,
   aevatarDrawerScrollStyle,
@@ -1253,6 +1254,8 @@ const DeploymentsPage: React.FC = () => {
     }),
     [servicesQuery.data],
   );
+  const deploymentInventoryReady =
+    servicesQuery.data !== undefined && !servicesQuery.error;
 
   const invalidateDetailQueries = useCallback(async () => {
     await invalidateServiceResourceQueries(queryClient);
@@ -1732,21 +1735,37 @@ const DeploymentsPage: React.FC = () => {
           <MetricCard
             label="可见服务"
             tone="info"
-            value={String(visibleServiceDigest.services)}
+            value={
+              deploymentInventoryReady
+                ? String(visibleServiceDigest.services)
+                : "—"
+            }
           />
           <MetricCard
             label="已挂 Serving"
             tone="success"
-            value={String(visibleServiceDigest.servingServices)}
+            value={
+              deploymentInventoryReady
+                ? String(visibleServiceDigest.servingServices)
+                : "—"
+            }
           />
           <MetricCard
             label="待挂 Serving"
             tone="warning"
-            value={String(visibleServiceDigest.waitingServices)}
+            value={
+              deploymentInventoryReady
+                ? String(visibleServiceDigest.waitingServices)
+                : "—"
+            }
           />
           <MetricCard
             label="有入口服务"
-            value={String(visibleServiceDigest.endpointServices)}
+            value={
+              deploymentInventoryReady
+                ? String(visibleServiceDigest.endpointServices)
+                : "—"
+            }
           />
         </div>
 
@@ -1799,19 +1818,29 @@ const DeploymentsPage: React.FC = () => {
             </Space>
           </div>
 
-          {servicesQuery.error ? (
-            <Alert
-              message={
+          {servicesQuery.isLoading ? (
+            <InventoryReadinessState
+              description="发布对象清单仍在加载，返回前不会把当前范围误判为空。"
+              kind="loading"
+              title="正在加载发布服务"
+            />
+          ) : servicesQuery.error ? (
+            <InventoryReadinessState
+              action={{
+                label: "重试发布列表",
+                onClick: () => {
+                  void servicesQuery.refetch();
+                },
+              }}
+              description={
                 servicesQuery.error instanceof Error
                   ? servicesQuery.error.message
-                  : "加载服务发布列表失败。"
+                  : "加载服务发布列表失败，请重试。"
               }
-              showIcon
-              type="error"
+              kind="error"
+              title="发布服务列表暂不可用"
             />
-          ) : null}
-
-          {servicesQuery.data?.length ? (
+          ) : servicesQuery.data?.length ? (
             <div style={{ overflowX: "auto" }}>
               <table
                 style={{
@@ -1957,10 +1986,11 @@ const DeploymentsPage: React.FC = () => {
               </table>
             </div>
           ) : (
-            <Empty
-              description="当前范围没有服务"
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              style={{ padding: 24 }}
+            <InventoryReadinessState
+              action={{ label: "调整发布范围", onClick: handleReset }}
+              description="当前 Team、App 和 Namespace 下没有可发布服务。可以调整范围后重新加载。"
+              kind="empty"
+              title="当前范围没有服务"
             />
           )}
         </div>
