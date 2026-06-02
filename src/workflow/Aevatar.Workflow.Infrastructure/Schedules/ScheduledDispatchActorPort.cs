@@ -21,6 +21,7 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
     public async Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var actorId = ScheduledDispatchActorId.Format(scheduleId);
         var existing = await _runtime.GetAsync(actorId);
         if (existing != null)
@@ -38,7 +39,7 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         return existing?.Id;
     }
 
-    public Task DispatchConfigureAsync(
+    public Task<DispatchAdmission> DispatchConfigureAsync(
         string actorId,
         ScheduledDispatchConfiguration configuration,
         CancellationToken ct = default)
@@ -63,7 +64,7 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         return DispatchAsync(actorId, command, ct);
     }
 
-    public Task DispatchEnableAsync(
+    public Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default)
@@ -72,7 +73,7 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         return DispatchAsync(actorId, new ScheduledDispatchEnableCommand { Reason = reason ?? string.Empty }, ct);
     }
 
-    public Task DispatchDisableAsync(
+    public Task<DispatchAdmission> DispatchDisableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default)
@@ -81,7 +82,7 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         return DispatchAsync(actorId, new ScheduledDispatchDisableCommand { Reason = reason ?? string.Empty }, ct);
     }
 
-    public Task DispatchRunNowAsync(
+    public Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
         CancellationToken ct = default)
@@ -94,7 +95,7 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         }, ct);
     }
 
-    private Task DispatchAsync<TCommand>(
+    private Task<DispatchAdmission> DispatchAsync<TCommand>(
         string actorId,
         TCommand command,
         CancellationToken ct)

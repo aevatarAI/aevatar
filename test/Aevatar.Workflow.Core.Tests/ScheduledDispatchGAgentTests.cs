@@ -81,6 +81,27 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleConfigureAsync_WhenNextFirePersistFails_ShouldCancelNewLease()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        eventStore.ThrowOnAppendEventType = ScheduledDispatchNextFireScheduledEvent.Descriptor.FullName;
+
+        var act = () => agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        scheduler.Canceled.Should().ContainSingle();
+        scheduler.Canceled[0].ActorId.Should().Be(ScheduleActorId);
+        scheduler.Canceled[0].CallbackId.Should().Be(NextFireCallbackId);
+        scheduler.Canceled[0].Generation.Should().Be(1);
+        agent.State.NextFireLease.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleDisableAsync_ShouldCancelExistingLeaseBeforeDisabledStateClearsIt()
     {
         var eventStore = new TestEventStore();
@@ -466,6 +487,45 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_WhenCanceled_ShouldNotRecordBusinessFailureOrScheduleNextFire()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort
+        {
+            DispatchException = new OperationCanceledException("shutdown"),
+        };
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        var act = () => agent.HandleFireAsync(
+            new ScheduledDispatchFireCommand
+            {
+                ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+                Manual = false,
+            },
+            CreateFiredCallbackEnvelope(scheduler.TimeoutRequests.Single(), generation: 1, fireIndex: 1),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Started);
+        agent.State.FireCount.Should().Be(0);
+        agent.State.FailureCount.Should().Be(0);
+        agent.State.LastError.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ScheduledDispatchFireRecordState_ShouldDefaultToUnspecifiedStatus()
+    {
+        new ScheduledDispatchFireRecordState()
+            .Status.Should().Be(ScheduledDispatchFireStatusState.Unspecified);
+    }
+
+    [Fact]
     public void ScheduledDispatchState_ShouldNormalizeNullableTimestampsAndLeaseCodec()
     {
         var localTime = new DateTimeOffset(2026, 5, 29, 17, 0, 0, TimeSpan.FromHours(8));
@@ -753,6 +813,7 @@ public sealed class ScheduledDispatchGAgentTests
     {
         private readonly Dictionary<string, List<StateEvent>> _streams = new(StringComparer.Ordinal);
         public bool ThrowOnAppend { get; set; }
+        public string? ThrowOnAppendEventType { get; set; }
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,
@@ -763,6 +824,11 @@ public sealed class ScheduledDispatchGAgentTests
             ct.ThrowIfCancellationRequested();
             if (ThrowOnAppend)
                 throw new InvalidOperationException("append failed");
+            if (!string.IsNullOrWhiteSpace(ThrowOnAppendEventType) &&
+                events.Any(x => string.Equals(x.EventType, ThrowOnAppendEventType, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("append failed");
+            }
 
             var stream = _streams.GetValueOrDefault(agentId) ?? [];
             var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;

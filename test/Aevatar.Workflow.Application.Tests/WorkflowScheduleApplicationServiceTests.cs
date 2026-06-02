@@ -134,6 +134,72 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task RunNowAsync_WhenDispatchAdmissionIsRejected_ShouldReturnRejectedReceipt()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            AdmissionFactory = (actorId, envelope) => new DispatchAdmission(
+                Accepted: false,
+                CommandId: envelope.Id,
+                AckedAt: DateTimeOffset.UtcNow,
+                ActorId: actorId,
+                CorrelationId: envelope.Propagation?.CorrelationId ?? envelope.Id),
+        };
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
+        var service = CreateService(actorPort, queryPort);
+
+        var receipt = await service.RunNowAsync("schedule-1");
+
+        receipt.Accepted.Should().BeFalse();
+        actorPort.RunNowRequests.Should().ContainSingle()
+            .Which.ActorId.Should().Be("actor:schedule-1");
+    }
+
+    [Fact]
+    public async Task EnableAsync_WhenDispatchAdmissionIsRejected_ShouldReturnRejectedReceipt()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            AdmissionFactory = (actorId, envelope) => new DispatchAdmission(
+                Accepted: false,
+                CommandId: envelope.Id,
+                AckedAt: DateTimeOffset.UtcNow,
+                ActorId: actorId,
+                CorrelationId: envelope.Propagation?.CorrelationId ?? envelope.Id),
+        };
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
+        var service = CreateService(actorPort, queryPort);
+
+        var receipt = await service.EnableAsync("schedule-1", "resume");
+
+        receipt.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", false));
+        actorPort.Enabled.Should().ContainSingle()
+            .Which.Should().Be(("actor:schedule-1", "resume"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDispatchAdmissionIsRejected_ShouldReturnRejectedReceipt()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            AdmissionFactory = (actorId, envelope) => new DispatchAdmission(
+                Accepted: false,
+                CommandId: envelope.Id,
+                AckedAt: DateTimeOffset.UtcNow,
+                ActorId: actorId,
+                CorrelationId: envelope.Propagation?.CorrelationId ?? envelope.Id),
+        };
+        var service = CreateService(actorPort);
+
+        var receipt = await service.CreateAsync(CreateConfiguration("schedule-1"));
+
+        receipt.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", false));
+        actorPort.Configured.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task DisableAsync_ShouldReturnNotFound_WhenScheduleReadModelDoesNotExist()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
@@ -503,6 +569,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
         public string? ResolveActorId { get; set; }
+        public Func<string, EventEnvelope, DispatchAdmission> AdmissionFactory { get; set; } =
+            DispatchAdmissionFactory.Create;
 
         public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default)
         {
@@ -516,42 +584,52 @@ public sealed class WorkflowScheduleApplicationServiceTests
             return Task.FromResult<string?>(ResolveActorId ?? $"actor:{scheduleId}");
         }
 
-        public Task DispatchConfigureAsync(
+        public Task<DispatchAdmission> DispatchConfigureAsync(
             string actorId,
             WorkflowScheduleConfiguration configuration,
             ScheduledDispatchPreparation dispatch,
             CancellationToken ct = default)
         {
             Configured.Add((actorId, configuration, dispatch));
-            return Task.CompletedTask;
+            return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
         }
 
-        public Task DispatchEnableAsync(
+        public Task<DispatchAdmission> DispatchEnableAsync(
             string actorId,
             string reason,
             CancellationToken ct = default)
         {
             Enabled.Add((actorId, reason));
-            return Task.CompletedTask;
+            return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
         }
 
-        public Task DispatchDisableAsync(
+        public Task<DispatchAdmission> DispatchDisableAsync(
             string actorId,
             string reason,
             CancellationToken ct = default)
         {
             Disabled.Add((actorId, reason));
-            return Task.CompletedTask;
+            return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
         }
 
-        public Task DispatchRunNowAsync(
+        public Task<DispatchAdmission> DispatchRunNowAsync(
             string actorId,
             DateTimeOffset scheduledFireAt,
             CancellationToken ct = default)
         {
             RunNowRequests.Add((actorId, scheduledFireAt));
-            return Task.CompletedTask;
+            return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
         }
+
+        private static EventEnvelope CreateAdmissionEnvelope() =>
+            new()
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = Guid.NewGuid().ToString("N"),
+                },
+            };
     }
 
     private sealed class FakeWorkflowScheduledDispatchPreparationService : IWorkflowScheduledDispatchPreparationService

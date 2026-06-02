@@ -276,7 +276,7 @@ public sealed class WorkflowScheduleEndpointsTests
             triggerEnvelope,
             Any.Pack(new Empty()).TypeUrl);
 
-        await port.DispatchConfigureAsync(
+        var admission = await port.DispatchConfigureAsync(
             "schedule-actor",
             new WorkflowScheduleConfiguration(
                 "schedule-1",
@@ -289,6 +289,7 @@ public sealed class WorkflowScheduleEndpointsTests
                 new Dictionary<string, string> { ["trace"] = "1" }),
             dispatch);
 
+        admission.Accepted.Should().BeTrue();
         var configured = scheduledPort.Configured.Should().ContainSingle().Subject;
         configured.ActorId.Should().Be("schedule-actor");
         configured.Configuration.ScheduleId.Should().Be("schedule-1");
@@ -361,6 +362,21 @@ public sealed class WorkflowScheduleEndpointsTests
         fire.Manual.Should().BeTrue();
         fire.ScheduledFireAt.ToDateTimeOffset().Should().Be(
             new DateTimeOffset(2026, 5, 29, 9, 30, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchActorPort_EnsureScheduleActorAsync_ShouldRespectAlreadyCanceledToken()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.Existing["scheduled-dispatch:schedule-1"] = new RecordingActor("scheduled-dispatch:schedule-1");
+        var port = new ScheduledDispatchActorPort(runtime, new RecordingActorDispatchPort());
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var act = () => port.EnsureScheduleActorAsync("schedule-1", cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        runtime.GetRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -522,32 +538,45 @@ public sealed class WorkflowScheduleEndpointsTests
         public Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default) =>
             Task.FromResult<string?>($"scheduled-dispatch:{scheduleId}");
 
-        public Task DispatchConfigureAsync(
+        public Task<DispatchAdmission> DispatchConfigureAsync(
             string actorId,
             ScheduledDispatchConfiguration configuration,
             CancellationToken ct = default)
         {
             Configured.Add((actorId, configuration));
-            return Task.CompletedTask;
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+            }));
         }
 
-        public Task DispatchEnableAsync(string actorId, string reason, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task<DispatchAdmission> DispatchEnableAsync(string actorId, string reason, CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+            }));
 
-        public Task DispatchDisableAsync(string actorId, string reason, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task<DispatchAdmission> DispatchDisableAsync(string actorId, string reason, CancellationToken ct = default) =>
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+            }));
 
-        public Task DispatchRunNowAsync(
+        public Task<DispatchAdmission> DispatchRunNowAsync(
             string actorId,
             DateTimeOffset scheduledFireAt,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
+            Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+            }));
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {
         public Dictionary<string, IActor> Existing { get; } = new(StringComparer.Ordinal);
         public List<(string ActorId, System.Type AgentType)> Created { get; } = [];
+        public List<string> GetRequests { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -562,8 +591,11 @@ public sealed class WorkflowScheduleEndpointsTests
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult(Existing.GetValueOrDefault(id));
+        public Task<IActor?> GetAsync(string id)
+        {
+            GetRequests.Add(id);
+            return Task.FromResult(Existing.GetValueOrDefault(id));
+        }
 
         public Task<bool> ExistsAsync(string id) =>
             Task.FromResult(Existing.ContainsKey(id));

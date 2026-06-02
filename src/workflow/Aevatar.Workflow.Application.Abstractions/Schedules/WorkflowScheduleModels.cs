@@ -117,23 +117,23 @@ public interface IWorkflowScheduleActorPort
 
     Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default);
 
-    Task DispatchConfigureAsync(
+    Task<DispatchAdmission> DispatchConfigureAsync(
         string actorId,
         WorkflowScheduleConfiguration configuration,
         ScheduledDispatchPreparation dispatch,
         CancellationToken ct = default);
 
-    Task DispatchEnableAsync(
+    Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default);
 
-    Task DispatchDisableAsync(
+    Task<DispatchAdmission> DispatchDisableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default);
 
-    Task DispatchRunNowAsync(
+    Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
         CancellationToken ct = default);
@@ -145,22 +145,22 @@ public interface IScheduledDispatchActorPort
 
     Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default);
 
-    Task DispatchConfigureAsync(
+    Task<DispatchAdmission> DispatchConfigureAsync(
         string actorId,
         ScheduledDispatchConfiguration configuration,
         CancellationToken ct = default);
 
-    Task DispatchEnableAsync(
+    Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default);
 
-    Task DispatchDisableAsync(
+    Task<DispatchAdmission> DispatchDisableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default);
 
-    Task DispatchRunNowAsync(
+    Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
         CancellationToken ct = default);

@@ -190,6 +190,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 }, ct);
             }
         }
+        catch (OperationCanceledException)
+        {
+            Logger.LogInformation("Scheduled dispatch {ActorId} fire was canceled.", Id);
+            throw;
+        }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Scheduled dispatch {ActorId} dispatch failed.", Id);
@@ -334,6 +339,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return;
         }
 
+        ct.ThrowIfCancellationRequested();
         await CancelNextFireLeaseAsync(ct);
         var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
         var lease = await ScheduleSelfDurableTimeoutAsync(
@@ -346,11 +352,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             },
             ct: ct);
 
-        await PersistDomainEventAsync(new ScheduledDispatchNextFireScheduledEvent
+        try
         {
-            NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
-            Lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToState(lease),
-        }, ct);
+            await PersistDomainEventAsync(new ScheduledDispatchNextFireScheduledEvent
+            {
+                NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
+                Lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToState(lease),
+            }, ct);
+        }
+        catch
+        {
+            await CancelNextFireLeaseAsync(lease, CancellationToken.None);
+            throw;
+        }
     }
 
     private async Task CancelNextFireLeaseAsync(CancellationToken ct)

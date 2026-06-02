@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 
 namespace Aevatar.Workflow.Infrastructure.Schedules;
@@ -17,7 +18,7 @@ internal sealed class WorkflowScheduleActorPort : IWorkflowScheduleActorPort
     public Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default) =>
         _scheduledDispatchActorPort.ResolveScheduleActorAsync(scheduleId, ct);
 
-    public Task DispatchConfigureAsync(
+    public Task<DispatchAdmission> DispatchConfigureAsync(
         string actorId,
         WorkflowScheduleConfiguration configuration,
         ScheduledDispatchPreparation dispatch,
@@ -41,19 +42,19 @@ internal sealed class WorkflowScheduleActorPort : IWorkflowScheduleActorPort
             ct);
     }
 
-    public Task DispatchEnableAsync(
+    public Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default) =>
         _scheduledDispatchActorPort.DispatchEnableAsync(actorId, reason, ct);
 
-    public Task DispatchDisableAsync(
+    public Task<DispatchAdmission> DispatchDisableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default) =>
         _scheduledDispatchActorPort.DispatchDisableAsync(actorId, reason, ct);
 
-    public Task DispatchRunNowAsync(
+    public Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
         CancellationToken ct = default) =>

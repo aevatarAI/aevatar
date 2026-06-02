@@ -32,8 +32,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             BuildScheduleCorrelationId(normalized.ScheduleId),
             ct);
         var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
-        await _actorPort.DispatchConfigureAsync(actorId, normalized, dispatch, ct);
-        return new WorkflowScheduleMutationReceipt(normalized.ScheduleId, actorId, Accepted: true);
+        var admission = await _actorPort.DispatchConfigureAsync(actorId, normalized, dispatch, ct);
+        return new WorkflowScheduleMutationReceipt(normalized.ScheduleId, actorId, admission.Accepted);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> UpdateAsync(
@@ -53,8 +53,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             BuildScheduleCorrelationId(normalized.ScheduleId),
             ct);
         var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
-        await _actorPort.DispatchConfigureAsync(actorId, normalized, dispatch, ct);
-        return new WorkflowScheduleMutationReceipt(normalized.ScheduleId, actorId, Accepted: true);
+        var admission = await _actorPort.DispatchConfigureAsync(actorId, normalized, dispatch, ct);
+        return new WorkflowScheduleMutationReceipt(normalized.ScheduleId, actorId, admission.Accepted);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> EnableAsync(
@@ -64,8 +64,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var actorId = await ResolveConfiguredScheduleActorAsync(normalizedScheduleId, ct);
-        await _actorPort.DispatchEnableAsync(actorId, NormalizeOptional(reason), ct);
-        return new WorkflowScheduleMutationReceipt(normalizedScheduleId, actorId, Accepted: true);
+        var admission = await _actorPort.DispatchEnableAsync(actorId, NormalizeOptional(reason), ct);
+        return new WorkflowScheduleMutationReceipt(normalizedScheduleId, actorId, admission.Accepted);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> DisableAsync(
@@ -75,8 +75,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var actorId = await ResolveConfiguredScheduleActorAsync(normalizedScheduleId, ct);
-        await _actorPort.DispatchDisableAsync(actorId, NormalizeOptional(reason), ct);
-        return new WorkflowScheduleMutationReceipt(normalizedScheduleId, actorId, Accepted: true);
+        var admission = await _actorPort.DispatchDisableAsync(actorId, NormalizeOptional(reason), ct);
+        return new WorkflowScheduleMutationReceipt(normalizedScheduleId, actorId, admission.Accepted);
     }
 
     public Task<WorkflowScheduleDetail?> GetAsync(
@@ -122,13 +122,13 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var actorId = await ResolveConfiguredScheduleActorAsync(normalizedScheduleId, ct);
         var scheduledFireAt = DateTimeOffset.UtcNow;
-        await _actorPort.DispatchRunNowAsync(actorId, scheduledFireAt, ct);
+        var admission = await _actorPort.DispatchRunNowAsync(actorId, scheduledFireAt, ct);
         return new WorkflowScheduleRunNowReceipt(
             normalizedScheduleId,
             actorId,
             scheduledFireAt,
             WorkflowScheduleCalculator.BuildIdempotencyKey(normalizedScheduleId, scheduledFireAt),
-            Accepted: true);
+            admission.Accepted);
     }
 
     private async Task<string> ResolveConfiguredScheduleActorAsync(string scheduleId, CancellationToken ct)
