@@ -391,6 +391,41 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowSuspendedToolApproval_ShouldMapTypedPayloadWithoutMetadataRecoveryKeys()
+    {
+        var suspended = CreateMapper().Map(WrapCommitted(new WorkflowSuspendedEvent
+        {
+            RunId = "run-tool",
+            StepId = "step-tool",
+            SuspensionType = "tool_approval",
+            Metadata =
+            {
+                ["approval_request_id"] = "legacy-approval",
+                ["tool_call_id"] = "legacy-call",
+            },
+            ToolApproval = new WorkflowToolApprovalSuspension
+            {
+                ExecutionId = "exec-tool",
+                ToolName = "dangerous_tool",
+                ToolCallId = "call-tool",
+                ApprovalRequestId = "approval-tool",
+                ArgumentsJson = """{"danger":true}""",
+            },
+        }));
+
+        suspended.Should().ContainSingle();
+        suspended[0].Custom.Name.Should().Be("aevatar.tool_approval.pending");
+        var payload = suspended[0].Custom.Payload.Unpack<WorkflowToolApprovalSuspensionCustomPayload>();
+        payload.RunId.Should().Be("run-tool");
+        payload.StepId.Should().Be("step-tool");
+        payload.ExecutionId.Should().Be("exec-tool");
+        payload.ToolName.Should().Be("dangerous_tool");
+        payload.ToolCallId.Should().Be("call-tool");
+        payload.ApprovalRequestId.Should().Be("approval-tool");
+        payload.ArgumentsJson.Should().Be("""{"danger":true}""");
+    }
+
+    [Fact]
     public void WaitingForSignalEvent_WhenTypedRunIdMissing_ShouldNotMap()
     {
         var envelope = WrapObserved(new WaitingForSignalEvent

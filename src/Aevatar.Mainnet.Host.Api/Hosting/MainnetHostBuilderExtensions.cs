@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
@@ -205,6 +206,7 @@ public static class MainnetHostBuilderExtensions
         // actor-owned remote continuation (NyxIdRemoteToolApprovalPort submit/status
         // -> RoleGAgent.HandleRemoteApprovalStatusCheck). See iter23/cluster-001.
         builder.Services.TryAddSingleton<IToolApprovalHandler, YieldApprovalHandler>();
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IToolCallMiddleware, ToolApprovalMiddleware>());
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
