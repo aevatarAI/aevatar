@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Core.Primitives;
@@ -22,8 +21,6 @@ internal interface IWorkflowExecutionRuntimeContextAccessor
 //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
 internal sealed class WorkflowExecutionRuntimeContext
 {
-    public WorkflowLlmRuntimeOverrides LlmOverrides { get; } = new();
-
     public WorkflowConnectorRuntimeContext Connector { get; } = new();
 
     public WorkflowRequestPassthroughMetadata RequestPassthroughMetadata { get; } = new();
@@ -34,7 +31,6 @@ internal sealed class WorkflowExecutionRuntimeContext
 
     public void Clear()
     {
-        LlmOverrides.Clear();
         Connector.Clear();
         RequestPassthroughMetadata.Clear();
         CapturedSecureInputs.Clear();
@@ -43,7 +39,6 @@ internal sealed class WorkflowExecutionRuntimeContext
 
     public void ApplyRequestMetadata(IReadOnlyDictionary<string, string>? metadata)
     {
-        LlmOverrides.Clear();
         Connector.Clear();
         RequestPassthroughMetadata.Clear();
 
@@ -72,39 +67,10 @@ internal sealed class WorkflowExecutionRuntimeContext
     public void ApplyToolContext(AgentToolExecutionContext? context)
     {
         ToolContext = context;
-        LlmOverrides.Clear();
-
-        if (context == null)
-            return;
-
-        LlmOverrides.NyxIdAccessToken = Normalize(context.Credentials.NyxIdAccessToken);
-        LlmOverrides.ModelOverride = Normalize(context.Routing.ModelOverride);
-        LlmOverrides.NyxIdRoutePreference = Normalize(context.Routing.NyxIdRoutePreference);
     }
 
     private static string Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
-}
-
-// Refactor (iter16/cluster-031):
-//   Old pattern: LLM request overrides were stored as string-key entries in the
-//                generic workflow execution item bag.
-//   New principle: LLM override values live in a typed runtime section owned by
-//                  the run actor.
-internal sealed class WorkflowLlmRuntimeOverrides
-{
-    public string? NyxIdAccessToken { get; set; }
-
-    public string? ModelOverride { get; set; }
-
-    public string? NyxIdRoutePreference { get; set; }
-
-    public void Clear()
-    {
-        NyxIdAccessToken = null;
-        ModelOverride = null;
-        NyxIdRoutePreference = null;
-    }
 }
 
 // Refactor (iter16/cluster-031):

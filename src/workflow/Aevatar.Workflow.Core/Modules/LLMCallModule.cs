@@ -333,59 +333,74 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
-    private static void ApplyTypedLlmControl(
+    private static void ApplyWorkflowToolContext(
         IWorkflowExecutionContext ctx,
         ChatRequestEvent chatRequest)
     {
-        if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
+        var toolContext = WorkflowToolExecutionRuntimeContextAccess.GetToolContext(ctx);
+        if (toolContext == null)
             return;
 
-        var overrides = runtimeAccessor.RuntimeContext.LlmOverrides;
-        if (string.IsNullOrWhiteSpace(overrides.NyxIdAccessToken) &&
-            string.IsNullOrWhiteSpace(overrides.ModelOverride) &&
-            string.IsNullOrWhiteSpace(overrides.NyxIdRoutePreference))
-        {
-            return;
-        }
+        var control = BuildLlmControlFromToolContext(toolContext);
+        if (HasNarrowLlmControl(control))
+            chatRequest.LlmControl = control.ToPayload();
 
-        chatRequest.LlmControl = new LLMControlContext(
-            NyxIdAccessToken: Normalize(overrides.NyxIdAccessToken),
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
-            ModelOverride: Normalize(overrides.ModelOverride),
-            NyxIdRoutePreference: Normalize(overrides.NyxIdRoutePreference),
-            MaxToolRoundsOverride: null,
-            UserMemoryPrompt: null).ToPayload();
+        if (HasNonControlToolContext(toolContext))
+            chatRequest.ToolContext = toolContext.ToPayload();
     }
 
-    private static AgentToolExecutionContext BuildLlmControlToolContext(LLMControlContext control) =>
-        AgentToolExecutionContext.Empty with
-        {
-            Credentials = AgentToolCredentials.Empty with
-            {
-                NyxIdAccessToken = control.NyxIdAccessToken,
-                NyxIdOrgToken = control.NyxIdOrgToken,
-                SenderNyxIdAccessToken = control.SenderNyxIdAccessToken,
-            },
-            Routing = LLMRequestRoutingContext.Empty with
-            {
-                ModelOverride = control.ModelOverride,
-                NyxIdRoutePreference = control.NyxIdRoutePreference,
-                MaxToolRoundsOverride = control.MaxToolRoundsOverride,
-                UserMemoryPrompt = control.UserMemoryPrompt,
-            },
-        };
+    private static LLMControlContext BuildLlmControlFromToolContext(AgentToolExecutionContext toolContext) =>
+        new(
+            NyxIdAccessToken: Normalize(toolContext.Credentials.NyxIdAccessToken),
+            NyxIdOrgToken: Normalize(toolContext.Credentials.NyxIdOrgToken),
+            SenderNyxIdAccessToken: Normalize(toolContext.Credentials.SenderNyxIdAccessToken),
+            ModelOverride: Normalize(toolContext.Routing.ModelOverride),
+            NyxIdRoutePreference: Normalize(toolContext.Routing.NyxIdRoutePreference),
+            MaxToolRoundsOverride: toolContext.Routing.MaxToolRoundsOverride,
+            UserMemoryPrompt: Normalize(toolContext.Routing.UserMemoryPrompt));
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: LLM override metadata was forwarded from generic execution
-    //                item values after string-key lookup.
-    //   New principle: LLM override metadata is copied from typed runtime
-    //                  override fields after blank-value filtering.
+    private static bool HasNarrowLlmControl(LLMControlContext control) =>
+        !string.IsNullOrWhiteSpace(control.NyxIdAccessToken) ||
+        !string.IsNullOrWhiteSpace(control.NyxIdOrgToken) ||
+        !string.IsNullOrWhiteSpace(control.SenderNyxIdAccessToken) ||
+        !string.IsNullOrWhiteSpace(control.ModelOverride) ||
+        !string.IsNullOrWhiteSpace(control.NyxIdRoutePreference) ||
+        control.MaxToolRoundsOverride.HasValue ||
+        !string.IsNullOrWhiteSpace(control.UserMemoryPrompt);
+
+    private static bool HasNonControlToolContext(AgentToolExecutionContext toolContext) =>
+        HasRequestIdentity(toolContext.Request) ||
+        HasCallerContext(toolContext.Caller) ||
+        HasChannelContext(toolContext.Channel) ||
+        !string.IsNullOrWhiteSpace(toolContext.SenderBinding.BindingId) ||
+        !string.IsNullOrWhiteSpace(toolContext.ConnectedServices.ContextJson) ||
+        toolContext.ExternalMetadata.Count > 0 ||
+        HasSkillRecoveryContext(toolContext.SkillRecovery);
+
+    private static bool HasRequestIdentity(AgentToolRequestIdentity request) =>
+        !string.IsNullOrWhiteSpace(request.RequestId) ||
+        !string.IsNullOrWhiteSpace(request.CallId);
+
+    private static bool HasCallerContext(AgentToolCallerContext caller) =>
+        !string.IsNullOrWhiteSpace(caller.ScopeId) ||
+        !string.IsNullOrWhiteSpace(caller.OwnerSubject) ||
+        !string.IsNullOrWhiteSpace(caller.ResponseId);
+
+    private static bool HasChannelContext(AgentToolChannelContext channel) =>
+        !string.IsNullOrWhiteSpace(channel.Platform) ||
+        !string.IsNullOrWhiteSpace(channel.SenderId) ||
+        !string.IsNullOrWhiteSpace(channel.RegistrationScopeId) ||
+        !string.IsNullOrWhiteSpace(channel.MessageId) ||
+        !string.IsNullOrWhiteSpace(channel.PlatformMessageId);
+
+    private static bool HasSkillRecoveryContext(AgentSkillRecoveryContext skillRecovery) =>
+        skillRecovery.RequireInitialOrnnSearch ||
+        skillRecovery.RequireOrnnSearchOnBlocker ||
+        !string.IsNullOrWhiteSpace(skillRecovery.CommandName) ||
+        !string.IsNullOrWhiteSpace(skillRecovery.OriginalCommand) ||
+        !string.IsNullOrWhiteSpace(skillRecovery.PrimarySkillName) ||
+        skillRecovery.MaxOrnnSearchAttempts != 0;
+
     private static void CopyParametersToChatRequest(
         StepRequestEvent request,
         ChatRequestEvent chatRequest,
@@ -637,7 +652,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             TimeoutMs = timeoutMs,
             Telegram = new TelegramBridgeRequest(),
         };
-        ApplyTypedLlmControl(ctx, chatRequest);
+        ApplyWorkflowToolContext(ctx, chatRequest);
         CopyParametersToChatRequest(request, chatRequest, timeoutMs);
         chatRequest.Telegram.RunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         chatRequest.Telegram.StepId = stepId;

@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Core.Execution;
 using FluentAssertions;
 using Google.Protobuf;
@@ -30,12 +31,19 @@ public sealed class WorkflowExecutionContextAdapterTests
     public void RuntimeContext_ShouldExposeStateHostRuntimeContext()
     {
         var host = new RecordingStateHost();
-        host.RuntimeContext.LlmOverrides.ModelOverride = "model-x";
+        host.RuntimeContext.ApplyToolContext(AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "token-x",
+            },
+        });
 
         var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
 
         adapter.RuntimeContext.Should().BeSameAs(host.RuntimeContext);
-        adapter.RuntimeContext.LlmOverrides.ModelOverride.Should().Be("model-x");
+        adapter.RuntimeContext.ToolContext.Should().BeSameAs(host.RuntimeContext.ToolContext);
+        adapter.RuntimeContext.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-x");
     }
 
     [Fact]

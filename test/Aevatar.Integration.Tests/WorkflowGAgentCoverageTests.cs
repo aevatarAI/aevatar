@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -1570,9 +1572,20 @@ public class WorkflowGAgentCoverageTests
     private static void SeedRuntimeContext(WorkflowRunGAgent agent)
     {
         var runtimeContext = ((IWorkflowExecutionStateHost)agent).RuntimeContext;
-        runtimeContext.LlmOverrides.NyxIdAccessToken = "token";
-        runtimeContext.LlmOverrides.ModelOverride = "model";
-        runtimeContext.LlmOverrides.NyxIdRoutePreference = "route";
+        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
+            (IWorkflowExecutionStateHost)agent,
+            AgentToolExecutionContext.Empty with
+            {
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "token",
+                },
+                Routing = LLMRequestRoutingContext.Empty with
+                {
+                    ModelOverride = "model",
+                    NyxIdRoutePreference = "route",
+                },
+            });
         runtimeContext.Connector.Authorization = "Bearer secret";
         runtimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
         runtimeContext.CapturedSecureInputs.Set(agent.RunId, "api_key", "secret");
@@ -1581,9 +1594,7 @@ public class WorkflowGAgentCoverageTests
     private static void AssertRuntimeContextCleared(WorkflowRunGAgent agent)
     {
         var runtimeContext = ((IWorkflowExecutionStateHost)agent).RuntimeContext;
-        runtimeContext.LlmOverrides.NyxIdAccessToken.Should().BeNull();
-        runtimeContext.LlmOverrides.ModelOverride.Should().BeNull();
-        runtimeContext.LlmOverrides.NyxIdRoutePreference.Should().BeNull();
+        runtimeContext.ToolContext.Should().BeNull();
         runtimeContext.Connector.Authorization.Should().BeNull();
         runtimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
         runtimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
