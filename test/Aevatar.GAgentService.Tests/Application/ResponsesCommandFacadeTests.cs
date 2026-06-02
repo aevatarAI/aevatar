@@ -306,6 +306,64 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithAlreadyResolvedToolResults_ShouldReturnCommittedCompletionWithoutReadModelPolling()
+    {
+        const string previousResponseId = "resp_previous";
+        var previousSnapshot = BuildSnapshot(
+            previousResponseId,
+            scopeId: "scope-1",
+            forwardedToolCalls:
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    "schema-1",
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Resolved,
+                    DateTimeOffset.UtcNow.AddHours(1),
+                    """{"temperature":"31C"}""",
+                    DateTimeOffset.UtcNow.AddMinutes(-2),
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    DateTimeOffset.UtcNow.AddSeconds(-30)),
+            ]);
+        var queryPort = new RecordingSessionQueryPort
+        {
+            Snapshot = previousSnapshot,
+        };
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            queryPort: queryPort,
+            dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            null,
+            [
+                new ResponsesToolResultInput(
+                    "call_1",
+                    """{"from":"client"}""",
+                    "schema-1"),
+            ],
+            false,
+            previousResponseId,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().BeNull();
+        result.Completed.Should().NotBeNull();
+        result.Completed!.CompletionStage.Should().Be(ResponsesCompletionStage.Committed);
+        result.Completed.Completion.OutputText.Should().Be("""{"temperature":"31C"}""");
+        sessions.RecordedCompletions.Should().ContainSingle()
+            .Which.OutputText.Should().Be("""{"temperature":"31C"}""");
+        queryPort.ReadCount.Should().Be(1, "the facade should validate previous_response_id but must not poll the completion readmodel");
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CancelAsync_ShouldRejectInvisibleResponse_AndUpdateVisibleResponse()
     {
         var queryPort = new RecordingSessionQueryPort
@@ -524,7 +582,9 @@ public sealed class ResponsesCommandFacadeTests
     private static LlmSessionSnapshot BuildSnapshot(
         string responseId,
         string scopeId,
-        LlmSessionStatus status = LlmSessionStatus.Accepted) =>
+        LlmSessionStatus status = LlmSessionStatus.Accepted,
+        IReadOnlyList<LlmSessionForwardedToolCallSnapshot>? forwardedToolCalls = null,
+        LlmSessionCompletionSnapshot? completion = null) =>
         new(
             responseId,
             scopeId,
@@ -537,7 +597,9 @@ public sealed class ResponsesCommandFacadeTests
             null,
             "actor-1",
             1,
-            "event-1");
+            "event-1",
+            forwardedToolCalls,
+            completion);
 
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
@@ -787,9 +849,6 @@ public sealed class ResponsesCommandFacadeTests
             CancellationToken ct = default)
         {
             RecordedCompletions.Add(completion.Clone());
-            QueryPort.Snapshot = QueryPort.Snapshot is null
-                ? BuildSnapshot(responseId, "scope-1", LlmSessionStatus.Completed) with { Completion = ToSnapshot(completion) }
-                : QueryPort.Snapshot with { Completion = ToSnapshot(completion) };
             return Task.CompletedTask;
         }
 
@@ -839,8 +898,13 @@ public sealed class ResponsesCommandFacadeTests
     {
         public LlmSessionSnapshot? Snapshot { get; set; }
 
-        public Task<LlmSessionSnapshot?> GetByResponseIdAsync(string responseId, CancellationToken ct = default) =>
-            Task.FromResult(Snapshot);
+        public int ReadCount { get; private set; }
+
+        public Task<LlmSessionSnapshot?> GetByResponseIdAsync(string responseId, CancellationToken ct = default)
+        {
+            ReadCount++;
+            return Task.FromResult(Snapshot);
+        }
     }
 
 }
