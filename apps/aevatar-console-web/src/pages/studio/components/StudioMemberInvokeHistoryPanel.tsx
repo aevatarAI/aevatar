@@ -144,6 +144,17 @@ const historyActionsStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
+const historySelectedNoticeStyle: React.CSSProperties = {
+  background: studioInvokeColors.surfaceActive,
+  border: `1px solid ${studioInvokeColors.borderStrong}`,
+  borderRadius: 8,
+  color: studioInvokeColors.textSoft,
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+  padding: '8px 10px',
+};
+
 const StudioMemberInvokeHistoryPanel: React.FC<
   StudioMemberInvokeHistoryPanelProps
 > = ({
@@ -241,51 +252,62 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                 </div>
               </button>
               {isSelected ? (
-                <div style={historyActionsStyle}>
-                  <Button
-                    disabled={!hasInput}
-                    icon={<CopyOutlined />}
-                    size="small"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCopyInput(entry.id);
-                    }}
+                <>
+                  <div
+                    data-testid="studio-invoke-history-readonly-guidance"
+                    style={historySelectedNoticeStyle}
                   >
-                    Copy input
-                  </Button>
-                  <Button
-                    disabled={!hasOutput}
-                    icon={<CopyOutlined />}
-                    size="small"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCopyOutput(entry.id);
-                    }}
-                  >
-                    Copy output
-                  </Button>
-                  <Button
-                    disabled={!runId}
-                    icon={<CopyOutlined />}
-                    size="small"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCopyRunId(entry.id);
-                    }}
-                  >
-                    Copy run id
-                  </Button>
-                  <Button
-                    icon={<ReloadOutlined />}
-                    size="small"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onRetryAsNewRun(entry.id);
-                    }}
-                  >
-                    Retry as new run
-                  </Button>
-                </div>
+                    <Typography.Text style={helperTextStyle}>
+                      Historical run is read-only. Retry as new run restores the
+                      prompt without changing this record.
+                    </Typography.Text>
+                  </div>
+                  <div style={historyActionsStyle}>
+                    <Button
+                      disabled={!hasInput}
+                      icon={<CopyOutlined />}
+                      size="small"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onCopyInput(entry.id);
+                      }}
+                    >
+                      Copy input
+                    </Button>
+                    <Button
+                      disabled={!hasOutput}
+                      icon={<CopyOutlined />}
+                      size="small"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onCopyOutput(entry.id);
+                      }}
+                    >
+                      Copy output
+                    </Button>
+                    <Button
+                      disabled={!runId}
+                      icon={<CopyOutlined />}
+                      size="small"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onCopyRunId(entry.id);
+                      }}
+                    >
+                      Copy run id
+                    </Button>
+                    <Button
+                      icon={<ReloadOutlined />}
+                      size="small"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onRetryAsNewRun(entry.id);
+                      }}
+                    >
+                      Retry as new run
+                    </Button>
+                  </div>
+                </>
               ) : null}
             </div>
           );

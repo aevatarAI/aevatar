@@ -97,6 +97,12 @@ type SmokeTestResult = {
   readonly status: 'idle' | 'running' | 'success' | 'error';
 };
 
+type BindFlowGuidance = {
+  readonly message: string;
+  readonly stage: 'waiting' | 'ready' | 'blocked' | 'failed';
+  readonly type: 'success' | 'info' | 'warning' | 'error';
+};
+
 function isStudioMemberBindingRunTerminal(
   run: StudioMemberBindingRunStatusResponse | null | undefined,
 ): boolean {
@@ -145,6 +151,101 @@ function describeStudioMemberBindingRunStatus(
   return {
     message:
       'Binding request accepted. Studio is waiting for the member authority; this does not mean the member is bound yet.',
+    type: 'info',
+  };
+}
+
+function buildBindFlowGuidance(input: {
+  readonly currentBindingRun: StudioMemberBindingRunStatusResponse | null;
+  readonly hasEndpointOptions: boolean;
+  readonly hasMember: boolean;
+  readonly hasPublishedService: boolean;
+  readonly pendingBindingCandidate:
+    | StudioMemberBindPanelProps['pendingBindingCandidate']
+    | null
+    | undefined;
+  readonly smokeTestStatus: SmokeTestResult['status'];
+}): BindFlowGuidance {
+  const { currentBindingRun } = input;
+  if (currentBindingRun && !isStudioMemberBindingRunTerminal(currentBindingRun)) {
+    return {
+      message:
+        'Bind accepted the publication request. Stay here until Studio observes the published contract, then continue to Invoke.',
+      stage: 'waiting',
+      type: 'info',
+    };
+  }
+
+  if (
+    currentBindingRun &&
+    (currentBindingRun.status === 'failed' || currentBindingRun.status === 'rejected')
+  ) {
+    return {
+      message:
+        'Bind did not publish this member. Return to Build to adjust the member definition before retrying publication.',
+      stage: 'failed',
+      type: 'error',
+    };
+  }
+
+  if (currentBindingRun?.status === 'succeeded' && !input.hasEndpointOptions) {
+    return {
+      message:
+        'Bind completed, and Studio is refreshing the published contract. Continue to Invoke after endpoint data appears.',
+      stage: 'waiting',
+      type: 'info',
+    };
+  }
+
+  if (input.pendingBindingCandidate && !input.hasPublishedService) {
+    return {
+      message:
+        'This member still needs Bind. Publish the current revision before trying Invoke or Observe.',
+      stage: 'blocked',
+      type: 'warning',
+    };
+  }
+
+  if (!input.hasMember) {
+    return {
+      message:
+        'Bind can inspect this service, but Invoke stays blocked until Studio resolves a Team member target.',
+      stage: 'blocked',
+      type: 'info',
+    };
+  }
+
+  if (!input.hasEndpointOptions) {
+    return {
+      message:
+        'The member is published, but Studio has no callable endpoint yet. Wait for the contract to refresh before continuing.',
+      stage: 'waiting',
+      type: 'warning',
+    };
+  }
+
+  if (input.smokeTestStatus === 'success') {
+    return {
+      message:
+        'Smoke test passed. Continue to Invoke for a full run transcript, then use Observe for backend events.',
+      stage: 'ready',
+      type: 'success',
+    };
+  }
+
+  if (input.smokeTestStatus === 'error') {
+    return {
+      message:
+        'Smoke test failed only this contract check. Retry here, or use Invoke when you need full events and typed payload debugging.',
+      stage: 'failed',
+      type: 'warning',
+    };
+  }
+
+  return {
+    message:
+      'Bind is ready. Run a quick smoke test or continue to Invoke for the full transcript and Observe handoff.',
+    stage: 'ready',
     type: 'info',
   };
 }
@@ -421,6 +522,23 @@ const smokeActionStackStyle: React.CSSProperties = {
   gap: 10,
   minWidth: 0,
   width: '100%',
+};
+
+const flowGuidanceCardStyle: React.CSSProperties = {
+  ...surfaceCardStyle,
+  background: '#f8fafc',
+  display: 'grid',
+  gap: 8,
+  padding: 12,
+};
+
+const flowGuidanceHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'space-between',
+  minWidth: 0,
 };
 
 const contractUrlCardStyle: React.CSSProperties = {
@@ -734,8 +852,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const publishedSmokeRequiresAuth =
     !runsCurrentWorkflowDraft &&
     Boolean(bindContract?.authEnabled && !bindContract.authAuthenticated);
+  const bindingPublicationReady = !currentBindingRun ||
+    isStudioMemberBindingRunTerminal(currentBindingRun);
   const canUsePublishedMemberInvoke = Boolean(
-    normalizedMemberId && selectedService && selectedEndpoint && bindContract,
+    normalizedMemberId &&
+      selectedService &&
+      selectedEndpoint &&
+      bindContract &&
+      bindingPublicationReady,
   );
 
   useEffect(() => {
@@ -892,6 +1016,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     selectedService && !hasEndpointOptions
       ? 'This published service has no endpoint data available yet.'
       : '';
+  const bindFlowGuidance = buildBindFlowGuidance({
+    currentBindingRun,
+    hasEndpointOptions,
+    hasMember: Boolean(normalizedMemberId),
+    hasPublishedService: services.length > 0,
+    pendingBindingCandidate,
+    smokeTestStatus: smokeTestResult.status,
+  });
   const bindSurfaceIdentity = useMemo(() => {
     const pendingCandidateIdentity = pendingBindingCandidate
       ? `candidate:${scopeId}:${pendingBindingCandidate.kind}:${pendingBindingCandidate.displayName}`
@@ -1034,10 +1166,24 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Alert
                   showIcon
                   message={currentBindingRunNotice.message}
-                  description={`Run ${currentBindingRun?.bindingRunId}`}
+                  description={`Run ${currentBindingRun?.bindingRunId}. ${bindFlowGuidance.message}`}
                   type={currentBindingRunNotice.type}
                 />
               ) : null}
+              <div
+                data-testid="studio-bind-flow-guidance"
+                style={flowGuidanceCardStyle}
+              >
+                <div style={flowGuidanceHeaderStyle}>
+                  <Typography.Text strong>Lifecycle guidance</Typography.Text>
+                  <Tag color={bindFlowGuidance.stage === 'ready' ? 'green' : 'blue'}>
+                    {bindFlowGuidance.stage}
+                  </Tag>
+                </div>
+                <Typography.Text type="secondary">
+                  {bindFlowGuidance.message}
+                </Typography.Text>
+              </div>
               {postBindEntryActions ? (
                 <Alert
                   showIcon
@@ -1241,6 +1387,28 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 type="info"
               />
             ) : null}
+            <div
+              data-testid="studio-bind-flow-guidance"
+              style={flowGuidanceCardStyle}
+            >
+              <div style={flowGuidanceHeaderStyle}>
+                <Typography.Text strong>Lifecycle guidance</Typography.Text>
+                <Tag
+                  color={
+                    bindFlowGuidance.stage === 'ready'
+                      ? 'green'
+                      : bindFlowGuidance.stage === 'failed'
+                        ? 'red'
+                        : 'blue'
+                  }
+                >
+                  {bindFlowGuidance.stage}
+                </Tag>
+              </div>
+              <Typography.Text type="secondary">
+                {bindFlowGuidance.message}
+              </Typography.Text>
+            </div>
           </div>
         </AevatarPanel>
 
@@ -1377,6 +1545,16 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 />
               ) : null}
               <div style={smokeActionStackStyle}>
+                <Alert
+                  showIcon
+                  message="Next step"
+                  description={
+                    canUsePublishedMemberInvoke
+                      ? 'Continue to Invoke opens a full run transcript for the same member and endpoint. Observe will receive the latest run context after Invoke starts.'
+                      : bindFlowGuidance.message
+                  }
+                  type={bindFlowGuidance.type}
+                />
                 <Button
                   block
                   icon={<CheckCircleOutlined />}

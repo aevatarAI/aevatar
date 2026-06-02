@@ -96,6 +96,17 @@ const typedPayloadGridStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
+const composerGuidanceStyle: React.CSSProperties = {
+  background: studioInvokeColors.surfaceActive,
+  border: `1px solid ${studioInvokeColors.borderStrong}`,
+  borderRadius: 8,
+  color: studioInvokeColors.textSoft,
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+  padding: '8px 10px',
+};
+
 export const StudioMemberInvokeComposerPanel: React.FC<
   StudioMemberInvokeComposerPanelProps
 > = ({
@@ -197,16 +208,24 @@ export const StudioMemberInvokeComposerPanel: React.FC<
         {formError ? (
           <Typography.Text type="danger">{formError}</Typography.Text>
         ) : isHistoricalRunSelected ? (
-          <Typography.Text
-            style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
-            type="secondary"
+          <div
+            data-testid="studio-invoke-composer-guidance"
+            style={composerGuidanceStyle}
           >
-            Sending this prompt will create a new independent Run.
-          </Typography.Text>
+            <Typography.Text style={promptDockHintStyle} type="secondary">
+              Historical run is read-only. Sending this prompt creates a new
+              independent Run and fresh Observe handoff.
+            </Typography.Text>
+          </div>
         ) : !canInvoke ? (
-          <Typography.Text style={promptDockHintStyle} type="secondary">
-            {blockedReason || '请选择可调用的 Team member 和 endpoint。'}
-          </Typography.Text>
+          <div
+            data-testid="studio-invoke-composer-guidance"
+            style={composerGuidanceStyle}
+          >
+            <Typography.Text style={promptDockHintStyle} type="secondary">
+              {blockedReason || '请选择可调用的 Team member 和 endpoint。'}
+            </Typography.Text>
+          </div>
         ) : isChatEndpoint ? (
           <Typography.Text
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
