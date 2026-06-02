@@ -454,6 +454,40 @@ describe('DeploymentsPage', () => {
     ).toBeInTheDocument();
   });
 
+  it('does not present rollout control as an action when no rollout is active', async () => {
+    mockServicesApi.getRollout.mockResolvedValueOnce(null);
+
+    renderDeploymentsPage(
+      '/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent',
+    );
+
+    expect(await screen.findByText('发布摘要')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发布控制' })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: '无活动控制' }),
+    ).toBeDisabled();
+  });
+
+  it('does not present traffic adjustment as an action when no serving targets exist', async () => {
+    mockServicesApi.getServingSet.mockResolvedValueOnce({
+      activeRolloutId: '',
+      generation: 0,
+      serviceKey: 'scope-1:trade-agent',
+      targets: [],
+      updatedAt: '2026-03-30T10:00:00Z',
+    });
+
+    renderDeploymentsPage(
+      '/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent',
+    );
+
+    expect(await screen.findByText('发布摘要')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '调整流量' })).toBeNull();
+    expect(
+      screen.getAllByRole('button', { name: '查看流量状态' })[0],
+    ).toBeDisabled();
+  });
+
   it('dispatches the candidate revision from the candidate drawer', async () => {
     renderDeploymentsPage(
       '/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent',
@@ -594,5 +628,34 @@ describe('DeploymentsPage', () => {
     expect(
       screen.getByRole('button', { name: '停用 deployment' }),
     ).toBeInTheDocument();
+  });
+
+  it('does not present deactivate as an action for inactive deployments', async () => {
+    mockServicesApi.getDeployments.mockResolvedValueOnce({
+      deployments: [
+        {
+          activatedAt: '2026-03-29T10:05:00Z',
+          deploymentId: 'dep-1',
+          primaryActorId: 'actor-1',
+          revisionId: 'rev-11',
+          status: 'inactive',
+          updatedAt: '2026-03-30T10:00:00Z',
+        },
+      ],
+      serviceKey: 'scope-1:trade-agent',
+      updatedAt: '2026-03-30T10:00:00Z',
+    });
+
+    renderDeploymentsPage(
+      '/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent&deploymentId=dep-1',
+    );
+
+    expect(await screen.findByText('发布摘要')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('tab', { name: '部署目录' }));
+    fireEvent.click(await screen.findByRole('button', { name: '查看详情' }));
+
+    expect(await screen.findByText('Deployment 详情')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '停用 deployment' })).toBeNull();
+    expect(screen.getByRole('button', { name: '不可停用' })).toBeDisabled();
   });
 });

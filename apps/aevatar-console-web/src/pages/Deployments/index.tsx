@@ -88,6 +88,7 @@ import {
   type DeploymentReleaseEvidenceSnapshot,
   type DeploymentReleaseEvidenceStatus,
 } from './releaseEvidence';
+import { buildDeploymentDeactivateAvailability } from './deploymentActionAvailability';
 import {
   buildRolloutActionAvailability,
   type RolloutControlAction,
@@ -1522,6 +1523,33 @@ const DeploymentsPage: React.FC = () => {
     () => buildRolloutActionAvailability(rolloutQuery.data),
     [rolloutQuery.data],
   );
+  const servingEntryAvailability = useMemo(() => {
+    const targetCount = servingQuery.data?.targets.length ?? 0;
+
+    return {
+      enabled: targetCount > 0,
+      reason:
+        targetCount > 0
+          ? '打开流量权重后，提交前会校验权重合计和 serving 状态。'
+          : '当前没有 serving targets，不能提交流量调整。',
+    };
+  }, [servingQuery.data?.targets.length]);
+  const rolloutControlEntryAvailability = useMemo(() => {
+    const enabled = Object.values(rolloutActionAvailability).some(
+      (availability) => availability.enabled,
+    );
+
+    return {
+      enabled,
+      reason: enabled
+        ? '打开发布控制后，只会保留当前 rollout 生命周期允许的动作。'
+        : rolloutActionAvailability.advance.reason,
+    };
+  }, [rolloutActionAvailability]);
+  const deploymentDeactivateAvailability = useMemo(
+    () => buildDeploymentDeactivateAvailability(inspectedDeployment),
+    [inspectedDeployment],
+  );
 
   const invalidateDetailQueries = useCallback(async () => {
     await invalidateServiceResourceQueries(queryClient);
@@ -1703,6 +1731,13 @@ const DeploymentsPage: React.FC = () => {
     mutationFn: (deploymentId: string) => {
       if (!deploymentId.trim()) {
         throw new Error('请选择 deployment。');
+      }
+      const deployment = deploymentsQuery.data?.deployments.find(
+        (item) => item.deploymentId === deploymentId,
+      );
+      const availability = buildDeploymentDeactivateAvailability(deployment);
+      if (!availability.enabled) {
+        throw new Error(availability.reason);
       }
 
       return servicesApi.deactivateDeployment(
@@ -2387,18 +2422,32 @@ const DeploymentsPage: React.FC = () => {
               >
                 部署候选版本
               </Button>
-              <Button
-                icon={<PercentageOutlined />}
-                onClick={() => openDrawer('weights')}
-              >
-                调整流量
-              </Button>
-              <Button
-                icon={<RollbackOutlined />}
-                onClick={() => openDrawer('control')}
-              >
-                发布控制
-              </Button>
+              <Tooltip title={servingEntryAvailability.reason}>
+                <span>
+                  <Button
+                    disabled={!servingEntryAvailability.enabled}
+                    icon={<PercentageOutlined />}
+                    onClick={() => openDrawer('weights')}
+                  >
+                    {servingEntryAvailability.enabled
+                      ? '调整流量'
+                      : '查看流量状态'}
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={rolloutControlEntryAvailability.reason}>
+                <span>
+                  <Button
+                    disabled={!rolloutControlEntryAvailability.enabled}
+                    icon={<RollbackOutlined />}
+                    onClick={() => openDrawer('control')}
+                  >
+                    {rolloutControlEntryAvailability.enabled
+                      ? '发布控制'
+                      : '无活动控制'}
+                  </Button>
+                </span>
+              </Tooltip>
             </Space>
           ) : null
         }
@@ -2598,12 +2647,19 @@ const DeploymentsPage: React.FC = () => {
                                 {servingQuery.data.activeRolloutId}
                               </Tag>
                             ) : null}
-                            <Button
-                              icon={<PercentageOutlined />}
-                              onClick={() => openDrawer('weights')}
-                            >
-                              调整流量
-                            </Button>
+                            <Tooltip title={servingEntryAvailability.reason}>
+                              <span>
+                                <Button
+                                  disabled={!servingEntryAvailability.enabled}
+                                  icon={<PercentageOutlined />}
+                                  onClick={() => openDrawer('weights')}
+                                >
+                                  {servingEntryAvailability.enabled
+                                    ? '调整流量'
+                                    : '查看流量状态'}
+                                </Button>
+                              </span>
+                            </Tooltip>
                           </Space>
                         }
                       >
@@ -2644,12 +2700,19 @@ const DeploymentsPage: React.FC = () => {
                             <Tag>
                               Generation {trafficQuery.data?.generation ?? 0}
                             </Tag>
-                            <Button
-                              icon={<PercentageOutlined />}
-                              onClick={() => openDrawer('weights')}
-                            >
-                              调整流量
-                            </Button>
+                            <Tooltip title={servingEntryAvailability.reason}>
+                              <span>
+                                <Button
+                                  disabled={!servingEntryAvailability.enabled}
+                                  icon={<PercentageOutlined />}
+                                  onClick={() => openDrawer('weights')}
+                                >
+                                  {servingEntryAvailability.enabled
+                                    ? '调整流量'
+                                    : '查看流量状态'}
+                                </Button>
+                              </span>
+                            </Tooltip>
                           </Space>
                         }
                       >
@@ -3380,22 +3443,29 @@ const DeploymentsPage: React.FC = () => {
                     >
                       调整流量
                     </Button>
-                    <Button
-                      danger
-                      icon={<StopOutlined />}
-                      loading={
-                        deactivateMutation.isPending &&
-                        deactivateMutation.variables ===
-                          inspectedDeployment.deploymentId
-                      }
-                      onClick={() =>
-                        deactivateMutation.mutate(
-                          inspectedDeployment.deploymentId,
-                        )
-                      }
-                    >
-                      停用 deployment
-                    </Button>
+                    <Tooltip title={deploymentDeactivateAvailability.reason}>
+                      <span>
+                        <Button
+                          danger
+                          disabled={!deploymentDeactivateAvailability.enabled}
+                          icon={<StopOutlined />}
+                          loading={
+                            deactivateMutation.isPending &&
+                            deactivateMutation.variables ===
+                              inspectedDeployment.deploymentId
+                          }
+                          onClick={() =>
+                            deactivateMutation.mutate(
+                              inspectedDeployment.deploymentId,
+                            )
+                          }
+                        >
+                          {deploymentDeactivateAvailability.enabled
+                            ? '停用 deployment'
+                            : '不可停用'}
+                        </Button>
+                      </span>
+                    </Tooltip>
                   </Space>
                 </DrawerSection>
               </div>
