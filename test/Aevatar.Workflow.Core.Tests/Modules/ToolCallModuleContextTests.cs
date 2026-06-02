@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
@@ -126,9 +127,9 @@ public sealed class ToolCallModuleContextTests
 
         await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "call_proxy", executionId: "exec-1");
 
-        ctx.Published.Select(x => x.Event).OfType<ToolCallEvent>().Single().CallId
+        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallStartedEvent>().Single().CallId
             .Should().Be("workflow:run-1:call_proxy:exec-1");
-        ctx.Published.Select(x => x.Event).OfType<ToolResultEvent>().Single().CallId
+        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single().CallId
             .Should().Be("workflow:run-1:call_proxy:exec-1");
     }
 
@@ -350,7 +351,7 @@ public sealed class ToolCallModuleContextTests
         await ExecuteToolCallAsync(module, ctx, tool.Name);
 
         tool.ExecuteCalls.Should().Be(0);
-        var toolResult = ctx.Published.Select(x => x.Event).OfType<ToolResultEvent>().Single();
+        var toolResult = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
         toolResult.Success.Should().BeFalse();
         toolResult.Error.Should().Contain("execution port is not configured");
         var completed = LastCompleted(ctx);
@@ -412,7 +413,7 @@ public sealed class ToolCallModuleContextTests
         await ExecuteToolCallAsync(module, ctx, tool.Name);
 
         tool.ExecuteCalls.Should().Be(0);
-        var toolResult = ctx.Published.Select(x => x.Event).OfType<ToolResultEvent>().Single();
+        var toolResult = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
         toolResult.Success.Should().BeFalse();
         toolResult.Error.Should().Contain($"{status} blocked");
         var completed = LastCompleted(ctx);
@@ -440,7 +441,7 @@ public sealed class ToolCallModuleContextTests
             executionId: "approval-exec");
 
         tool.ExecuteCalls.Should().Be(0);
-        ctx.Published.Select(x => x.Event).OfType<ToolResultEvent>().Should().BeEmpty();
+        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
         ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
         var suspended = ctx.Published.Select(x => x.Event).OfType<WorkflowSuspendedEvent>().Should().ContainSingle().Subject;
         suspended.ToolApproval.Should().NotBeNull();
@@ -551,12 +552,24 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
-    private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
+    private sealed class SingleToolSource(IAgentTool tool) : IWorkflowToolSource
     {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+            return Task.FromResult<IReadOnlyList<IWorkflowTool>>([new AgentWorkflowTool(tool)]);
+        }
+    }
+
+    private sealed class AgentWorkflowTool(IAgentTool tool) : IWorkflowAgentTool
+    {
+        public string Name => tool.Name;
+
+        public IAgentTool AgentTool => tool;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            return tool.ExecuteAsync(argumentsJson, ct);
         }
     }
 
@@ -677,10 +690,11 @@ public sealed class ToolCallModuleContextTests
             {
                 ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
                 {
-                    NyxidAccessToken = delta.Llm.NyxidAccessToken,
                     ModelOverride = delta.Llm.ModelOverride,
-                    NyxidRoutePreference = delta.Llm.NyxidRoutePreference,
+                    UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
                 };
+                if (delta.Llm.HasMaxToolRoundsOverride)
+                    ExecutionContextState.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
             }
 
             if (delta.Connector != null)

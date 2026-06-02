@@ -1,6 +1,5 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
-using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -64,22 +63,17 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
-                ToolContext: input.ToolContext,
                 ConnectorHttpAuthorization: NormalizeOptional(trustedConnectorHttpAuthorization),
                 Headers: normalizedContext.Headers));
     }
 
-    private static LLMControlContext? NormalizeLlmControl(ChatLlmControlInput? source)
+    private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)
     {
         if (source == null)
             return null;
 
-        return new LLMControlContext(
-            NormalizeOptional(source.NyxIdAccessToken),
-            NormalizeOptional(source.NyxIdOrgToken),
-            NormalizeOptional(source.SenderNyxIdAccessToken),
+        return new WorkflowLlmControl(
             NormalizeOptional(source.ModelOverride),
-            NormalizeOptional(source.NyxIdRoutePreference),
             source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,
             NormalizeOptional(source.UserMemoryPrompt));
     }

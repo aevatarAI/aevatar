@@ -446,8 +446,8 @@ public static class ScopeWorkflowEndpoints
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
-                LlmControl: llmControl,
                 ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                LlmControl: ToWorkflowLlmControl(llmControl),
                 Headers: headers),
             chatRunService,
             ct);
@@ -581,6 +581,25 @@ public static class ScopeWorkflowEndpoints
         };
     }
 
+    private static WorkflowLlmControl? ToWorkflowLlmControl(LLMControlContext? control)
+    {
+        if (control == null)
+            return null;
+
+        var model = NormalizeOptional(control.ModelOverride);
+        var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
+        var maxToolRounds = control.MaxToolRoundsOverride is > 0
+            ? control.MaxToolRoundsOverride
+            : null;
+        if (model == null && userMemoryPrompt == null && maxToolRounds == null)
+            return null;
+
+        return new WorkflowLlmControl(
+            model,
+            maxToolRounds,
+            userMemoryPrompt);
+    }
+
     internal static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
         HttpContext? http,
         CancellationToken cancellationToken = default)
@@ -628,6 +647,9 @@ public static class ScopeWorkflowEndpoints
 
         return control == LLMControlContext.Empty ? null : control;
     }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string? ExtractBearerToken(HttpContext http)
     {

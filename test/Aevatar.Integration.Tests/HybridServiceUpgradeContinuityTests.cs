@@ -1,5 +1,3 @@
-using Aevatar.AI.Abstractions.Agents;
-using Aevatar.AI.Core.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -26,7 +24,6 @@ public sealed class HybridServiceUpgradeContinuityTests
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
         services.AddScriptCapability();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();

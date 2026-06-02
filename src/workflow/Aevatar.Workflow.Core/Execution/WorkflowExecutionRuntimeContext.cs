@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -48,13 +47,13 @@ internal sealed class WorkflowExecutionRuntimeContext
         }
     }
 
+    private static string Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
     public void ApplyToolContext(AgentToolExecutionContext? context)
     {
         ToolContext = context;
     }
-
-    private static string Normalize(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
 
 // Refactor (iter115/cluster-3):
@@ -69,9 +68,12 @@ internal sealed class WorkflowRequestPassthroughMetadata
     private static readonly HashSet<string> BlockedKeys =
     [
         LegacyConnectorHttpAuthorizationBlockedKey,
-        LLMRequestMetadataKeys.NyxIdAccessToken,
-        LLMRequestMetadataKeys.ModelOverride,
-        LLMRequestMetadataKeys.NyxIdRoutePreference,
+        "llm.model_override",
+        "model_override",
+        "llm.max_tool_rounds",
+        "max_tool_rounds",
+        "llm.user_memory_prompt",
+        "user_memory_prompt",
     ];
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

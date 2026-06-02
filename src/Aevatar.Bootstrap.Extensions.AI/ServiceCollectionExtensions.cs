@@ -3,7 +3,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Voice;
-using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.Core.Middleware;
@@ -24,7 +23,9 @@ using Aevatar.AI.Infrastructure.Local.Adapters;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Integration.AI;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -97,7 +98,8 @@ public static class ServiceCollectionExtensions
         var options = new AevatarAIFeatureOptions();
         configure?.Invoke(options);
 
-        services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.TryAddSingleton<IRoleAgentTypeResolver, WorkflowRoleGAgentTypeResolver>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
         services.TryAddSingleton<IAgentToolExecutionPort>(sp =>

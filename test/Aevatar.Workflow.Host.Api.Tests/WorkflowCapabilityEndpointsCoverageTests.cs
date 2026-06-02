@@ -2,8 +2,6 @@ using System.Text.Json;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 
@@ -187,46 +185,11 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Succeeded.Should().BeTrue();
         result.Request!.Source.Should().BeEquivalentTo(
             WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto"));
-        result.Request.LlmControl.Should().Be(new LLMControlContext(
-            "token",
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+        result.Request.LlmControl.Should().Be(new WorkflowLlmControl(
             "model",
-            "route",
             3,
             UserMemoryPrompt: null));
         result.Request.Metadata.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void ChatRunRequestNormalizer_ShouldPreserveTypedToolContext()
-    {
-        var toolContext = AgentToolExecutionContext.Empty with
-        {
-            Request = new AgentToolRequestIdentity(" req-1 ", " call-1 "),
-            Caller = new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
-            Routing = LLMRequestRoutingContext.Empty with
-            {
-                ModelOverride = " model-a ",
-                NyxIdRoutePreference = " route-a ",
-                MaxToolRoundsOverride = 2,
-            },
-            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["trace-id"] = "trace-1",
-            },
-        };
-        var input = new ChatInput
-        {
-            Prompt = "hello",
-            ToolContext = toolContext,
-        };
-
-        var result = ChatRunRequestNormalizer.Normalize(input);
-
-        result.Succeeded.Should().BeTrue();
-        result.Request!.ToolContext.Should().BeSameAs(toolContext);
-        result.Request.LlmControl.Should().BeNull();
     }
 
     [Fact]
@@ -642,12 +605,12 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 [
                     new WorkflowChatInputPart
                     {
-                        Kind = WorkflowChatInputPartKind.Text,
+                        Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Text,
                         Text = "describe this",
                     },
                     new WorkflowChatInputPart
                     {
-                        Kind = WorkflowChatInputPartKind.Image,
+                        Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
                         Uri = "https://example.com/cat.png",
                         MediaType = "image/png",
                         Name = "cat",

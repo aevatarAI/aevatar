@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.WellKnownTypes;
@@ -9,7 +8,7 @@ internal static class WorkflowRoleAgentEnvelopeFactory
 {
     public static EventEnvelope CreateInitializeEnvelope(RoleDefinition role, string actorId)
     {
-        var initialize = new InitializeRoleAgentEvent
+        var initialize = new WorkflowRoleInitializeEvent
         {
             // Refactor (iter15/cluster-028):
             //   Old pattern: role actors received display/config data and downstream code recovered RoleId from actor id text.
