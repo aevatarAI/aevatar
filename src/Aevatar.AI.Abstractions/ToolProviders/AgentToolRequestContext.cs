@@ -45,17 +45,29 @@ public static class AgentToolRequestContext
     }
 
     /// <summary>
-    /// Legacy test/boundary shim. Production control flow should use typed accessors or
-    /// <see cref="AgentToolExecutionContextMapper"/> when entering from an old metadata surface.
+    /// Legacy adapter/test bridge for old or third-party metadata-only tool surfaces.
+    /// Application, Domain, and Core production code must use typed accessors on
+    /// <see cref="AgentToolExecutionContext"/> instead of reading control semantics from this bag.
     /// </summary>
-    public static IReadOnlyDictionary<string, string>? CurrentMetadata
+    public static IReadOnlyDictionary<string, string>? LegacyMetadata
     {
         get => s_context.Value?.ToLegacyMetadata();
         set => s_context.Value = AgentToolExecutionContextMapper.FromMetadata(value);
     }
 
     /// <summary>
+    /// Legacy test-only alias kept so older test fixtures do not have to migrate all at once.
+    /// New production code must use <see cref="LegacyMetadata"/> only at explicit adapter boundaries.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string>? CurrentMetadata
+    {
+        get => LegacyMetadata;
+        set => LegacyMetadata = value;
+    }
+
+    /// <summary>
     /// Legacy mapper-only shim for older tests and adapters while production consumers migrate.
+    /// Production control flow must read typed properties from <see cref="Current"/>.
     /// </summary>
     public static string? TryGet(string key)
     {

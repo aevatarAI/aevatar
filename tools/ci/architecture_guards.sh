@@ -1234,14 +1234,15 @@ if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevata
 fi
 
 tool_context_metadata_hits="$(
-  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()" src agents \
+  rg -n "AgentToolRequestContext\\.(LegacyMetadata|CurrentMetadata|TryGet\\()|ToLegacyMetadata\\(" src agents \
     -g '*.cs' \
-    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolRequestContext.cs' || true
+    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolRequestContext.cs' \
+    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolExecutionContext.cs' || true
 )"
 
 if [ -n "${tool_context_metadata_hits}" ]; then
   echo "${tool_context_metadata_hits}"
-  echo "Agent tool control facts must use typed AgentToolExecutionContext accessors. CurrentMetadata/TryGet are legacy mapper shims only."
+  echo "Agent tool control facts must use typed AgentToolExecutionContext accessors. LegacyMetadata/CurrentMetadata/TryGet/ToLegacyMetadata are legacy adapter shims only."
   exit 1
 fi
 

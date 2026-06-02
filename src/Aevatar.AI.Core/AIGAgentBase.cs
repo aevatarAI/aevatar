@@ -214,8 +214,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        var maxRounds = ResolveMaxToolRounds(metadata);
-        return _chat!.ChatStreamAsync([ContentPart.TextPart(userMessage)], maxRounds, requestId, metadata, ct);
+        return _chat!.ChatStreamAsync([ContentPart.TextPart(userMessage)], EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
     }
 
     /// <summary>流式 Chat（多模态内容），显式传入稳定 request id 和 metadata。</summary>
@@ -226,8 +225,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        var maxRounds = ResolveMaxToolRounds(metadata);
-        return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, metadata, ct);
+        return _chat!.ChatStreamAsync(userContent, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
     }
 
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
@@ -253,24 +251,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        var maxRounds = toolContext?.Routing.MaxToolRoundsOverride ?? ResolveMaxToolRounds(metadata);
+        var maxRounds = toolContext?.Routing.MaxToolRoundsOverride ?? EffectiveConfig.MaxToolRounds;
         return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, toolContext, metadata, ct);
-    }
-
-    /// <summary>
-    /// Resolve maxToolRounds: metadata override > EffectiveConfig > int.MaxValue (no limit).
-    /// </summary>
-    private int ResolveMaxToolRounds(IReadOnlyDictionary<string, string>? metadata)
-    {
-        if (metadata != null
-            && metadata.TryGetValue(LLMRequestMetadataKeys.MaxToolRoundsOverride, out var overrideValue)
-            && int.TryParse(overrideValue, out var overrideRounds)
-            && overrideRounds > 0)
-        {
-            return overrideRounds;
-        }
-
-        return EffectiveConfig.MaxToolRounds;
     }
 
     /// <summary>注册单个工具。</summary>
