@@ -33,9 +33,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ["empty"] = " ",
             });
 
-        host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().BeNull();
-        host.RuntimeContext.LlmOverrides.ModelOverride.Should().BeNull();
-        host.RuntimeContext.LlmOverrides.NyxIdRoutePreference.Should().BeNull();
+        host.RuntimeContext.ToolContext.Should().BeNull();
         host.RuntimeContext.Connector.Authorization.Should().Be("Bearer secret");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainKeys(
             "trace-id",
@@ -47,7 +45,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public void SetToolContext_ShouldPromoteLlmRuntimeValuesFromTypedContext()
+    public void SetToolContext_ShouldStoreToolContextAsOnlyRuntimeFact()
     {
         var host = new RecordingStateHost();
         var toolContext = AgentToolExecutionContext.Empty with
@@ -69,9 +67,10 @@ public sealed class WorkflowExecutionRuntimeContextTests
             toolContext);
 
         host.RuntimeContext.ToolContext.Should().BeSameAs(toolContext);
-        host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().Be("token");
-        host.RuntimeContext.LlmOverrides.ModelOverride.Should().Be("model");
-        host.RuntimeContext.LlmOverrides.NyxIdRoutePreference.Should().Be("route");
+        typeof(WorkflowExecutionRuntimeContext)
+            .GetProperty("LlmOverrides")
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -91,7 +90,6 @@ public sealed class WorkflowExecutionRuntimeContextTests
         WorkflowToolExecutionRuntimeContextAccess.SetToolContext(host, null);
 
         host.RuntimeContext.ToolContext.Should().BeNull();
-        host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().BeNull();
     }
 
     [Fact]
@@ -128,7 +126,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(host, null);
 
-        host.RuntimeContext.LlmOverrides.ModelOverride.Should().BeNull();
+        host.RuntimeContext.ToolContext.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
@@ -138,8 +136,32 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [" "] = " ",
             });
 
-        host.RuntimeContext.LlmOverrides.ModelOverride.Should().BeNull();
+        host.RuntimeContext.ToolContext.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void SetRequestMetadata_ShouldNotMutateExistingToolContext()
+    {
+        var host = new RecordingStateHost();
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "token",
+            },
+        };
+        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(host, toolContext);
+
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
+            host,
+            new Dictionary<string, string>
+            {
+                ["trace-id"] = "abc",
+            });
+
+        host.RuntimeContext.ToolContext.Should().BeSameAs(toolContext);
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().Contain("trace-id", "abc");
     }
 
     [Fact]
