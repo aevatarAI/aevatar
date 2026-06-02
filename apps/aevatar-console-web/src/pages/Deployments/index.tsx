@@ -82,6 +82,21 @@ import {
   summaryFieldLabelStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
+import {
+  buildDeploymentReleaseHandoff,
+  type DeploymentReleaseHandoff,
+  type DeploymentReleaseHandoffAction,
+} from "./releaseHandoff";
+import {
+  buildDeploymentReleaseEvidenceSnapshot,
+  type DeploymentReleaseEvidenceSnapshot,
+  type DeploymentReleaseEvidenceStatus,
+} from "./releaseEvidence";
+import {
+  buildRolloutActionAvailability,
+  type RolloutControlAction,
+} from "./releaseActionAvailability";
+import { buildServingTargetPlanStatus } from "./servingTargetPlan";
 
 type DeploymentWorkbenchView =
   | "catalog"
@@ -90,6 +105,14 @@ type DeploymentWorkbenchView =
   | "traffic";
 
 type DeploymentDrawerTab = "candidate" | "weights" | "control";
+
+type RolloutControlDefinition = {
+  action: RolloutControlAction;
+  danger?: boolean;
+  icon: React.ReactNode;
+  label: string;
+  primary?: boolean;
+};
 
 type DeploymentDrawerState = {
   open: boolean;
@@ -161,6 +184,30 @@ const compactMonoValueStyle: React.CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
+const rolloutControlDefinitions: RolloutControlDefinition[] = [
+  {
+    action: "advance",
+    icon: <SendOutlined />,
+    label: "推进 rollout",
+    primary: true,
+  },
+  {
+    action: "pause",
+    icon: <PauseCircleOutlined />,
+    label: "暂停",
+  },
+  {
+    action: "resume",
+    icon: <ReloadOutlined />,
+    label: "恢复",
+  },
+  {
+    action: "rollback",
+    danger: true,
+    icon: <RollbackOutlined />,
+    label: "回滚 rollout",
+  },
+];
 
 function buildScopePreview(
   tenantId: string,
@@ -882,6 +929,153 @@ const DrawerSection: React.FC<{
   );
 };
 
+const ReleaseHandoffPanel: React.FC<{
+  evidence: DeploymentReleaseEvidenceSnapshot;
+  handoff: DeploymentReleaseHandoff;
+  onClose: () => void;
+  onOpenEvidence: () => void;
+}> = ({ evidence, handoff, onClose, onOpenEvidence }) => {
+  const { token } = theme.useToken();
+  const surfaceToken = token as AevatarThemeSurfaceToken;
+  const statusCopy: Record<
+    DeploymentReleaseEvidenceStatus,
+    {
+      color: string;
+      label: string;
+    }
+  > = {
+    observed: {
+      color: "green",
+      label: "已观察",
+    },
+    pending: {
+      color: "gold",
+      label: "待观察",
+    },
+    review: {
+      color: "blue",
+      label: "需核对",
+    },
+  };
+
+  return (
+    <section
+      aria-label="release action handoff"
+      style={{
+        background: "rgba(255, 251, 230, 0.72)",
+        border: `1px solid ${surfaceToken.colorWarningBorder}`,
+        borderRadius: surfaceToken.borderRadiusLG,
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          alignItems: "flex-start",
+          display: "flex",
+          gap: 12,
+          justifyContent: "space-between",
+        }}
+      >
+        <Space orientation="vertical" size={4}>
+          <Space wrap size={[8, 8]}>
+            <Tag color="gold" style={compactHintTagStyle}>
+              {handoff.pendingLabel}
+            </Tag>
+            <Tag color="blue" style={compactHintTagStyle}>
+              {handoff.evidenceViewLabel}
+            </Tag>
+          </Space>
+          <Typography.Text
+            strong
+            style={{
+              color: surfaceToken.colorTextHeading,
+              fontSize: 15,
+            }}
+          >
+            {handoff.title}
+          </Typography.Text>
+          <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
+            {handoff.evidenceDescription}
+          </Typography.Text>
+          <Typography.Text strong style={{ color: surfaceToken.colorText }}>
+            {evidence.summary}
+          </Typography.Text>
+        </Space>
+        <Space wrap size={[8, 8]} style={{ justifyContent: "flex-end" }}>
+          <Button size="small" onClick={onOpenEvidence}>
+            查看{handoff.evidenceViewLabel}证据
+          </Button>
+          <Button size="small" type="text" onClick={onClose}>
+            关闭
+          </Button>
+        </Space>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 8,
+          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+        }}
+      >
+        {handoff.summaryItems.map((item) => (
+          <div
+            key={`${handoff.id}-${item.label}`}
+            style={{
+              background: surfaceToken.colorBgContainer,
+              border: `1px solid ${surfaceToken.colorBorderSecondary}`,
+              borderRadius: surfaceToken.borderRadius,
+              minWidth: 0,
+              padding: "10px 12px",
+            }}
+          >
+            <Typography.Text style={summaryFieldLabelStyle}>
+              {item.label}
+            </Typography.Text>
+            <div style={{ marginTop: 4, minWidth: 0 }}>
+              <CompactIdentifierText
+                color={surfaceToken.colorText}
+                maxWidth="100%"
+                singleLine
+                value={item.value}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {evidence.checks.map((check) => (
+          <div
+            key={`${handoff.id}-${check.key}`}
+            style={{
+              alignItems: "flex-start",
+              display: "grid",
+              gap: 8,
+              gridTemplateColumns: "auto minmax(0, 1fr)",
+            }}
+          >
+            <Tag color={statusCopy[check.status].color} style={compactHintTagStyle}>
+              {statusCopy[check.status].label}
+            </Tag>
+            <Space orientation="vertical" size={2} style={{ minWidth: 0 }}>
+              <Typography.Text strong style={{ color: surfaceToken.colorText }}>
+                {check.label}
+              </Typography.Text>
+              <Typography.Text style={{ color: surfaceToken.colorTextSecondary }}>
+                {check.detail}
+              </Typography.Text>
+            </Space>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+};
+
 const DeploymentsPage: React.FC = () => {
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
@@ -914,6 +1108,8 @@ const DeploymentsPage: React.FC = () => {
   >([]);
   const [candidateRevisionId, setCandidateRevisionId] = useState("");
   const [notice, setNotice] = useState<DeploymentNotice | null>(null);
+  const [releaseHandoff, setReleaseHandoff] =
+    useState<DeploymentReleaseHandoff | null>(null);
 
   const authSessionQuery = useQuery({
     queryKey: ["deployments", "auth-session"],
@@ -1257,6 +1453,34 @@ const DeploymentsPage: React.FC = () => {
   const deploymentInventoryReady =
     servicesQuery.data !== undefined && !servicesQuery.error;
 
+  const releaseEvidence = useMemo(
+    () =>
+      releaseHandoff
+        ? buildDeploymentReleaseEvidenceSnapshot({
+            deployments: deploymentsQuery.data?.deployments ?? [],
+            handoff: releaseHandoff,
+            rollout: rolloutQuery.data,
+            serving: servingQuery.data,
+            traffic: trafficQuery.data,
+          })
+        : null,
+    [
+      deploymentsQuery.data?.deployments,
+      releaseHandoff,
+      rolloutQuery.data,
+      servingQuery.data,
+      trafficQuery.data,
+    ],
+  );
+  const servingTargetPlanStatus = useMemo(
+    () => buildServingTargetPlanStatus(editableTargets),
+    [editableTargets],
+  );
+  const rolloutActionAvailability = useMemo(
+    () => buildRolloutActionAvailability(rolloutQuery.data),
+    [rolloutQuery.data],
+  );
+
   const invalidateDetailQueries = useCallback(async () => {
     await invalidateServiceResourceQueries(queryClient);
   }, [queryClient]);
@@ -1278,6 +1502,55 @@ const DeploymentsPage: React.FC = () => {
     [],
   );
 
+  const recordReleaseHandoff = useCallback(
+    (
+      action: DeploymentReleaseHandoffAction,
+      receipt: Parameters<typeof buildDeploymentReleaseHandoff>[0]["receipt"],
+      options: {
+        deploymentId?: string;
+      } = {},
+    ) => {
+      const handoff = buildDeploymentReleaseHandoff({
+        action,
+        activeRevisionId,
+        candidateRevisionId:
+          action === "deploy-candidate" ? candidateRevisionId : undefined,
+        deploymentId:
+          options.deploymentId ||
+          focusDeployment?.deploymentId ||
+          selectedDeploymentId ||
+          undefined,
+        endpointCount: trafficRows.length,
+        receipt,
+        rolloutId: rolloutQuery.data?.rolloutId,
+        rolloutStageLabel:
+          currentStage && rolloutQuery.data
+            ? `${currentStage.stageIndex + 1}/${rolloutQuery.data.stages.length}`
+            : undefined,
+        serviceId: selectedServiceId,
+        targetCount: servingQuery.data?.targets.length ?? editableTargets.length,
+      });
+
+      setReleaseHandoff(handoff);
+      setNotice({
+        message: handoff.noticeMessage,
+        tone: handoff.noticeTone,
+      });
+    },
+    [
+      activeRevisionId,
+      candidateRevisionId,
+      currentStage,
+      editableTargets.length,
+      focusDeployment?.deploymentId,
+      rolloutQuery.data,
+      selectedDeploymentId,
+      selectedServiceId,
+      servingQuery.data?.targets.length,
+      trafficRows.length,
+    ],
+  );
+
   const deployMutation = useMutation({
     mutationFn: () => {
       if (!candidateRevisionId.trim()) {
@@ -1290,45 +1563,51 @@ const DeploymentsPage: React.FC = () => {
       });
     },
     onError: (error: Error) => {
+      setReleaseHandoff(null);
       setNotice({
         message: error.message || "发布候选版本失败。",
         tone: "error",
       });
     },
-    onSuccess: async () => {
-      setNotice({
-        message: "候选版本已提交到发布控制面。",
-        tone: "success",
-      });
+    onSuccess: async (receipt) => {
+      recordReleaseHandoff("deploy-candidate", receipt);
       await invalidateDetailQueries();
     },
   });
 
   const weightsMutation = useMutation({
-    mutationFn: () =>
-      servicesApi.replaceServingTargets(selectedServiceId, {
+    mutationFn: () => {
+      if (!servingTargetPlanStatus.enabled) {
+        throw new Error(servingTargetPlanStatus.reason);
+      }
+
+      return servicesApi.replaceServingTargets(selectedServiceId, {
         ...query,
         reason: drawerReason,
         rolloutId: rolloutQuery.data?.rolloutId,
         targets: editableTargets,
-      }),
+      });
+    },
     onError: (error: Error) => {
+      setReleaseHandoff(null);
       setNotice({
         message: error.message || "应用 serving targets 失败。",
         tone: "error",
       });
     },
-    onSuccess: async () => {
-      setNotice({
-        message: "新的 serving targets 已提交。",
-        tone: "success",
-      });
+    onSuccess: async (receipt) => {
+      recordReleaseHandoff("replace-serving-targets", receipt);
       await invalidateDetailQueries();
     },
   });
 
   const rolloutMutation = useMutation({
     mutationFn: async (kind: "advance" | "pause" | "resume" | "rollback") => {
+      const availability = rolloutActionAvailability[kind];
+      if (!availability.enabled) {
+        throw new Error(availability.reason);
+      }
+
       const rolloutId = rolloutQuery.data?.rolloutId;
       if (!rolloutId) {
         throw new Error("当前服务没有活动 rollout。");
@@ -1355,16 +1634,23 @@ const DeploymentsPage: React.FC = () => {
       });
     },
     onError: (error: Error) => {
+      setReleaseHandoff(null);
       setNotice({
         message: error.message || "发布控制动作提交失败。",
         tone: "error",
       });
     },
-    onSuccess: async () => {
-      setNotice({
-        message: "发布控制动作已提交。",
-        tone: "success",
-      });
+    onSuccess: async (receipt, kind) => {
+      const actionByKind: Record<
+        RolloutControlAction,
+        DeploymentReleaseHandoffAction
+      > = {
+        advance: "advance-rollout",
+        pause: "pause-rollout",
+        resume: "resume-rollout",
+        rollback: "rollback-rollout",
+      };
+      recordReleaseHandoff(actionByKind[kind], receipt);
       await invalidateDetailQueries();
     },
   });
@@ -1382,15 +1668,15 @@ const DeploymentsPage: React.FC = () => {
       );
     },
     onError: (error: Error) => {
+      setReleaseHandoff(null);
       setNotice({
         message: error.message || "停用 deployment 失败。",
         tone: "error",
       });
     },
-    onSuccess: async () => {
-      setNotice({
-        message: "停用 deployment 的请求已提交。",
-        tone: "warning",
+    onSuccess: async (receipt, deploymentId) => {
+      recordReleaseHandoff("deactivate-deployment", receipt, {
+        deploymentId,
       });
       await invalidateDetailQueries();
     },
@@ -1643,6 +1929,7 @@ const DeploymentsPage: React.FC = () => {
     setDraft(nextDraft);
     setSelectedServiceId("");
     setSelectedDeploymentId("");
+    setReleaseHandoff(null);
   }, []);
 
   const openServiceWorkbench = useCallback(
@@ -1650,6 +1937,7 @@ const DeploymentsPage: React.FC = () => {
       setSelectedServiceId(service.serviceId);
       setSelectedDeploymentId(service.deploymentId || "");
       setInspectorState({ open: false });
+      setReleaseHandoff(null);
       setView("catalog");
     },
     [],
@@ -1659,6 +1947,7 @@ const DeploymentsPage: React.FC = () => {
     setSelectedServiceId("");
     setSelectedDeploymentId("");
     setInspectorState({ open: false });
+    setReleaseHandoff(null);
     setDrawerState((current) => ({
       ...current,
       open: false,
@@ -1689,6 +1978,7 @@ const DeploymentsPage: React.FC = () => {
     setSelectedDeploymentId("");
     setCandidateRevisionId("");
     setDrawerReason("");
+    setReleaseHandoff(null);
     setView("catalog");
   }, [isScopeDirty, query, resolvedScope?.scopeId]);
 
@@ -2034,6 +2324,15 @@ const DeploymentsPage: React.FC = () => {
           <AevatarInspectorEmpty description="选择一个服务" />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {releaseHandoff && releaseEvidence ? (
+              <ReleaseHandoffPanel
+                evidence={releaseEvidence}
+                handoff={releaseHandoff}
+                onClose={() => setReleaseHandoff(null)}
+                onOpenEvidence={() => setView(releaseHandoff.evidenceView)}
+              />
+            ) : null}
+
             <WorkbenchSection title="发布摘要">
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <Space wrap size={[8, 8]}>
@@ -2571,14 +2870,25 @@ const DeploymentsPage: React.FC = () => {
                       value={drawerReason}
                       onChange={(event) => setDrawerReason(event.target.value)}
                     />
-                    <Button
-                      icon={<PercentageOutlined />}
-                      loading={weightsMutation.isPending}
-                      onClick={() => weightsMutation.mutate()}
-                      type="primary"
-                    >
-                      应用权重
-                    </Button>
+                    <Alert
+                      message={servingTargetPlanStatus.summary}
+                      description={servingTargetPlanStatus.reason}
+                      showIcon
+                      type={servingTargetPlanStatus.enabled ? "info" : "warning"}
+                    />
+                    <Tooltip title={servingTargetPlanStatus.reason}>
+                      <span style={{ display: "inline-flex", width: "fit-content" }}>
+                        <Button
+                          disabled={!servingTargetPlanStatus.enabled}
+                          icon={<PercentageOutlined />}
+                          loading={weightsMutation.isPending}
+                          onClick={() => weightsMutation.mutate()}
+                          type="primary"
+                        >
+                          应用权重
+                        </Button>
+                      </span>
+                    </Tooltip>
                   </div>
                 ),
                 key: "weights",
@@ -2598,37 +2908,47 @@ const DeploymentsPage: React.FC = () => {
                       value={drawerReason}
                       onChange={(event) => setDrawerReason(event.target.value)}
                     />
+                    <Alert
+                      message={
+                        rolloutQuery.data?.rolloutId
+                          ? `当前 rollout 状态：${formatAevatarStatusLabel(rolloutQuery.data.status || "unknown")}`
+                          : "当前没有活动 rollout"
+                      }
+                      description={
+                        rolloutQuery.data?.rolloutId
+                          ? "只有与当前生命周期匹配的控制动作会保持可执行；提交后仍需等待证据刷新。"
+                          : "发布控制动作需要先存在活动 rollout。"
+                      }
+                      showIcon
+                      type={rolloutQuery.data?.rolloutId ? "info" : "warning"}
+                    />
                     <Space wrap size={[8, 8]}>
-                      <Button
-                        icon={<SendOutlined />}
-                        loading={rolloutMutation.isPending}
-                        onClick={() => rolloutMutation.mutate("advance")}
-                        type="primary"
-                      >
-                        推进 rollout
-                      </Button>
-                      <Button
-                        icon={<PauseCircleOutlined />}
-                        loading={rolloutMutation.isPending}
-                        onClick={() => rolloutMutation.mutate("pause")}
-                      >
-                        暂停
-                      </Button>
-                      <Button
-                        icon={<ReloadOutlined />}
-                        loading={rolloutMutation.isPending}
-                        onClick={() => rolloutMutation.mutate("resume")}
-                      >
-                        恢复
-                      </Button>
-                      <Button
-                        danger
-                        icon={<RollbackOutlined />}
-                        loading={rolloutMutation.isPending}
-                        onClick={() => rolloutMutation.mutate("rollback")}
-                      >
-                        回滚 rollout
-                      </Button>
+                      {rolloutControlDefinitions.map((definition) => {
+                        const availability =
+                          rolloutActionAvailability[definition.action];
+
+                        return (
+                          <Tooltip
+                            key={definition.action}
+                            title={availability.reason}
+                          >
+                            <span>
+                              <Button
+                                danger={definition.danger}
+                                disabled={!availability.enabled}
+                                icon={definition.icon}
+                                loading={rolloutMutation.isPending}
+                                onClick={() =>
+                                  rolloutMutation.mutate(definition.action)
+                                }
+                                type={definition.primary ? "primary" : "default"}
+                              >
+                                {definition.label}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        );
+                      })}
                     </Space>
                   </div>
                 ),

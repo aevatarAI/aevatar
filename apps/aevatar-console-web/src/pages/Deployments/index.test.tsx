@@ -459,6 +459,62 @@ describe("DeploymentsPage", () => {
     });
   });
 
+  it("keeps a release handoff after candidate submission without marking serving observed", async () => {
+    renderDeploymentsPage(
+      "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent",
+    );
+
+    expect(await screen.findByText("发布摘要")).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "部署候选版本" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "发布候选版本" }),
+    );
+
+    expect(
+      await screen.findByText("候选版本部署已提交"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("已提交，不代表已完成")).toBeInTheDocument();
+    expect(
+      screen.getByText("这只表示候选版本部署命令已接收，尚未说明候选 revision 已经被 serving 观察到。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("所有关键证据都已出现或需要人工核对。"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("已观察").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByText("Serving targets 已包含 rev-12")).toBeInTheDocument();
+    expect(screen.getByText("Traffic split 已包含 rev-12")).toBeInTheDocument();
+    expect(screen.getByText("候选 revision")).toBeInTheDocument();
+    expect(screen.getAllByText("rev-12").length).toBeGreaterThan(0);
+    expect(screen.queryByText("候选版本已在 serving 生效")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看Rollout证据" }));
+
+    expect(
+      await screen.findByRole("tab", { name: "Rollout", selected: true }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows rollback as a pending baseline evidence handoff", async () => {
+    renderDeploymentsPage(
+      "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent",
+    );
+
+    expect(await screen.findByText("发布摘要")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "发布控制" }));
+    fireEvent.click(await screen.findByRole("button", { name: "回滚 rollout" }));
+
+    expect(await screen.findByText("Rollout 回滚已提交")).toBeInTheDocument();
+    expect(screen.getByText("已提交，不代表已完成")).toBeInTheDocument();
+    expect(
+      screen.getByText("这只表示回滚命令已接收，不代表 serving 已经回到 baseline。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Rollout 回滚请求已提交，等待 baseline 证据刷新。")).toBeInTheDocument();
+    expect(screen.getAllByText("需核对").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByText("Traffic split")).toBeInTheDocument();
+  });
+
   it("opens the deployment detail drawer from the catalog table", async () => {
     renderDeploymentsPage(
       "/deployments?tenantId=scope-1&appId=trade-app&namespace=cn.market&serviceId=trade-agent",
