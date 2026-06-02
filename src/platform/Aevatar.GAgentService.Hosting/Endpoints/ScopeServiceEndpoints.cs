@@ -1536,9 +1536,6 @@ public static class ScopeServiceEndpoints
                             },
                             SessionId = request.SessionId,
                             ScopeId = scopeId,
-                            // Fix (remote-ci/coverage-quality): workflow capability normalization keeps Metadata
-                            // and Headers separate; stream service requests must forward sanitized client
-                            // extension headers through both surfaces.
                             Metadata = scopedHeaders,
                             Headers = scopedHeaders,
                             LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
