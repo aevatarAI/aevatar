@@ -1,5 +1,4 @@
 import type {
-  MissionExecutionEvent,
   MissionHandoffCue,
   MissionHandoffSeverity,
   MissionInterventionActionKind,

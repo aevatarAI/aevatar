@@ -17,7 +17,6 @@ export type MissionOperatorHandoff = {
   readonly expectedResult: string;
   readonly inputLabel: string;
   readonly isActionable: boolean;
-  readonly statusLabel: string;
 };
 
 function describeInterventionInput(kind: MissionInterventionKind): string {
@@ -98,7 +97,6 @@ export function buildMissionOperatorHandoff(
         'Continue observing. If a blocker appears, Mission Control will open the intervention panel.',
       inputLabel: 'Observation only',
       isActionable: false,
-      statusLabel: formatMissionLabel(snapshot.summary.status),
     };
   }
 
@@ -114,6 +112,5 @@ export function buildMissionOperatorHandoff(
     expectedResult: describeExpectedResult(intervention.kind),
     inputLabel: describeInterventionInput(intervention.kind),
     isActionable: !actionBlocked,
-    statusLabel: formatMissionLabel(snapshot.summary.status),
   };
 }

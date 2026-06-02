@@ -249,9 +249,23 @@ describe('Mission Control runtimeAdapter', () => {
       (node) => node.id === 'step:root-actor:run-1:approval',
     );
     expect(approvalStep?.status).toBe('waiting');
+    expect(approvalStep?.handoff).toMatchObject({
+      severity: 'action',
+      title: 'Operator handoff',
+    });
+    expect(approvalStep?.handoff.nextStep).toContain('approve or reject');
     expect(approvalStep?.reasoningChain[0]).toMatchObject({
       title: 'Workflow suspended',
     });
+
+    const suspendedEvent = snapshot.events.find(
+      (event) => event.type === 'workflow_suspended',
+    );
+    expect(suspendedEvent?.handoff).toMatchObject({
+      severity: 'action',
+      title: 'Action handoff',
+    });
+    expect(suspendedEvent?.handoff.nextStep).toContain('intervention panel');
   });
 
   it('builds an honest empty snapshot when runtime context is missing', () => {
