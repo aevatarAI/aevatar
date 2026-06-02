@@ -36,7 +36,6 @@ import type {
   ServiceRevisionSnapshot,
 } from "@/shared/models/services";
 import {
-  AEVATAR_GLOBAL_UI_SPEC,
   buildAevatarPanelStyle,
   buildAevatarTagStyle,
   buildAevatarViewportStyle,
@@ -71,6 +70,12 @@ import {
   readGovernanceWorkbenchView,
   type GovernanceDraft,
 } from "./governanceQuery";
+import {
+  buildGovernanceCommandReceipt,
+  observeGovernanceReceipt,
+  type GovernanceCatalogKind,
+  type GovernanceCommandReceipt,
+} from "./governanceCommandReceipt";
 
 type GovernanceNotice = {
   message: string;
@@ -502,6 +507,8 @@ const GovernanceWorkbench: React.FC = () => {
   const [draft, setDraft] = useState<GovernanceDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<GovernanceDraft>(initialDraft);
   const [notice, setNotice] = useState<GovernanceNotice | null>(null);
+  const [commandReceipt, setCommandReceipt] =
+    useState<GovernanceCommandReceipt | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [drawerTarget, setDrawerTarget] = useState<GovernanceInspectorTarget | null>(
     null,
@@ -771,6 +778,26 @@ const GovernanceWorkbench: React.FC = () => {
       selectedService?.updatedAt,
     ],
   );
+  const commandReceiptObservation = useMemo(() => {
+    if (!commandReceipt) {
+      return null;
+    }
+
+    if (commandReceipt.catalogKind === "bindings") {
+      return observeGovernanceReceipt(commandReceipt, bindingsQuery.data);
+    }
+
+    if (commandReceipt.catalogKind === "endpoints") {
+      return observeGovernanceReceipt(commandReceipt, endpointsQuery.data);
+    }
+
+    return observeGovernanceReceipt(commandReceipt, policiesQuery.data);
+  }, [
+    bindingsQuery.data,
+    commandReceipt,
+    endpointsQuery.data,
+    policiesQuery.data,
+  ]);
 
   const governanceMetrics = useMemo(
     () => [
@@ -1003,7 +1030,7 @@ const GovernanceWorkbench: React.FC = () => {
               })
             }
           >
-            配置
+            {record.retired ? "查看" : "配置"}
           </Button>
         ),
       },
@@ -1079,7 +1106,7 @@ const GovernanceWorkbench: React.FC = () => {
               })
             }
           >
-            配置
+            {record.retired ? "查看" : "配置"}
           </Button>
         ),
       },
@@ -1178,6 +1205,8 @@ const GovernanceWorkbench: React.FC = () => {
   const runGovernanceAction = useCallback(
     async (
       action: string,
+      catalogKind: GovernanceCatalogKind,
+      targetId: string,
       successMessage: string,
       task: () => Promise<unknown>,
       closeDrawer = false,
@@ -1185,6 +1214,13 @@ const GovernanceWorkbench: React.FC = () => {
       setBusyAction(action);
       try {
         await task();
+        setCommandReceipt(
+          buildGovernanceCommandReceipt({
+            catalogKind,
+            commandLabel: successMessage,
+            targetId,
+          }),
+        );
         setNotice({
           message: successMessage,
           tone: resolveAevatarSemanticTone("governance", action).startsWith("error")
@@ -1214,6 +1250,8 @@ const GovernanceWorkbench: React.FC = () => {
     async (input: ServicePolicyInput) => {
       await runGovernanceAction(
         "create-policy",
+        "policies",
+        input.policyId,
         `Policy ${input.policyId} was accepted for governance creation.`,
         () => governanceApi.createPolicy(activeDraft.serviceId, input),
         true,
@@ -1226,6 +1264,8 @@ const GovernanceWorkbench: React.FC = () => {
     async (input: ServiceBindingInput) => {
       await runGovernanceAction(
         "create-binding",
+        "bindings",
+        input.bindingId,
         `Binding ${input.bindingId} was accepted for governance creation.`,
         () => governanceApi.createBinding(activeDraft.serviceId, input),
         true,
@@ -1238,6 +1278,8 @@ const GovernanceWorkbench: React.FC = () => {
     async (bindingId: string, input: ServiceBindingInput) => {
       await runGovernanceAction(
         "save-binding",
+        "bindings",
+        bindingId,
         `Binding ${bindingId} was accepted for update.`,
         () => governanceApi.updateBinding(activeDraft.serviceId, bindingId, input),
         true,
@@ -1250,6 +1292,8 @@ const GovernanceWorkbench: React.FC = () => {
     async (policyId: string, input: ServicePolicyInput) => {
       await runGovernanceAction(
         "save-policy",
+        "policies",
+        policyId,
         `Policy ${policyId} was accepted for update.`,
         () => governanceApi.updatePolicy(activeDraft.serviceId, policyId, input),
         true,
@@ -1266,6 +1310,8 @@ const GovernanceWorkbench: React.FC = () => {
 
       await runGovernanceAction(
         "retire-policy",
+        "policies",
+        policyId,
         `Policy ${policyId} was accepted for retirement.`,
         () => governanceApi.retirePolicy(activeDraft.serviceId, policyId, activeIdentity),
         true,
@@ -1282,6 +1328,8 @@ const GovernanceWorkbench: React.FC = () => {
 
       await runGovernanceAction(
         "retire-binding",
+        "bindings",
+        bindingId,
         `Binding ${bindingId} was accepted for retirement.`,
         () =>
           governanceApi.retireBinding(
@@ -1315,6 +1363,8 @@ const GovernanceWorkbench: React.FC = () => {
 
       await runGovernanceAction(
         `set-endpoint-exposure:${exposureKind}`,
+        "endpoints",
+        endpointId,
         `Endpoint ${endpointId} was accepted for ${formatAevatarStatusLabel(exposureKind).toLowerCase()} exposure.`,
         () => governanceApi.updateEndpointCatalog(activeDraft.serviceId, payload),
         true,
@@ -1337,6 +1387,8 @@ const GovernanceWorkbench: React.FC = () => {
 
       await runGovernanceAction(
         "create-endpoint",
+        "endpoints",
+        input.endpointId,
         `Endpoint ${input.endpointId} was accepted for governance creation.`,
         () =>
           endpointsQuery.data
@@ -1363,6 +1415,8 @@ const GovernanceWorkbench: React.FC = () => {
 
       await runGovernanceAction(
         "save-endpoint",
+        "endpoints",
+        endpointId,
         `Endpoint ${endpointId} was accepted for update.`,
         () => governanceApi.updateEndpointCatalog(activeDraft.serviceId, payload),
         true,
@@ -1869,6 +1923,16 @@ const GovernanceWorkbench: React.FC = () => {
             onClose={() => setNotice(null)}
           />
         ) : null}
+        {commandReceipt && commandReceiptObservation ? (
+          <Alert
+            closable
+            description={`${commandReceipt.commandLabel} 目标 ${commandReceipt.targetId}。${commandReceiptObservation.summary}`}
+            message="治理命令已接收"
+            showIcon
+            type={commandReceiptObservation.observed ? "success" : "info"}
+            onClose={() => setCommandReceipt(null)}
+          />
+        ) : null}
 
         <GovernanceQueryCard
           draft={draft}
@@ -1881,6 +1945,7 @@ const GovernanceWorkbench: React.FC = () => {
             const nextActiveDraft = normalizeGovernanceDraft(draft);
             setDraft(nextActiveDraft);
             setActiveDraft(nextActiveDraft);
+            setCommandReceipt(null);
             navigateToGovernanceView(view, nextActiveDraft);
           }}
           onReset={() => {
@@ -1894,6 +1959,7 @@ const GovernanceWorkbench: React.FC = () => {
               : readGovernanceDraft("");
             setDraft(nextDraft);
             setActiveDraft(nextDraft);
+            setCommandReceipt(null);
             navigateToGovernanceView(view, nextDraft);
           }}
           revisionOptions={revisionOptions}

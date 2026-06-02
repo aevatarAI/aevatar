@@ -40,6 +40,12 @@ import {
 } from "@/shared/ui/aevatarWorkbench";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import type { GovernanceAuditEvent } from "./GovernanceAuditTimeline";
+import {
+  resolveBindingAffordance,
+  resolveEndpointAffordance,
+  resolveEndpointExposureAction,
+  resolvePolicyAffordance,
+} from "./governanceAffordance";
 
 export type GovernanceInspectorTarget =
   | {
@@ -184,6 +190,16 @@ function renderList(values: string[]) {
   );
 }
 
+function renderFactNotice(summary: string) {
+  return (
+    <Alert
+      message={summary}
+      showIcon
+      type="info"
+    />
+  );
+}
+
 function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.ReactNode {
   if (!target) {
     return "治理详情";
@@ -310,6 +326,28 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
   const canManage = Boolean(identity && serviceId.trim());
   const bindingKind = Form.useWatch("bindingKind", bindingForm) ?? "service";
+  const policyAffordance =
+    target?.kind === "policy" ? resolvePolicyAffordance(target.record) : null;
+  const bindingAffordance =
+    target?.kind === "binding" ? resolveBindingAffordance(target.record) : null;
+  const endpointAffordance =
+    target?.kind === "endpoint" && target.mode === "edit"
+      ? resolveEndpointAffordance(target.record, endpointCatalog)
+      : null;
+  const endpointExposureAction =
+    target?.kind === "endpoint" && target.mode === "edit"
+      ? resolveEndpointExposureAction(target.record, endpointCatalog)
+      : null;
+  const canEditPolicy =
+    canManage && (target?.kind !== "policy" || policyAffordance?.editMode === "writable");
+  const canEditBinding =
+    canManage &&
+    (target?.kind !== "binding" || bindingAffordance?.editMode === "writable");
+  const canEditEndpoint =
+    canManage &&
+    (target?.kind !== "endpoint" ||
+      target.mode === "create" ||
+      endpointAffordance?.editMode === "writable");
 
   const policyAction =
     target?.kind === "policy" && target.mode === "create"
@@ -469,18 +507,21 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     style={buildAevatarTagStyle(
                       surfaceToken,
                       "governance",
-                      buildPolicyStatus(target.record),
+                      policyAffordance?.status ?? buildPolicyStatus(target.record),
                     )}
                   >
-                    {formatAevatarStatusLabel(buildPolicyStatus(target.record))}
+                    {policyAffordance?.statusLabel ??
+                      formatAevatarStatusLabel(buildPolicyStatus(target.record))}
                   </span>
                 ) : null}
               </Space>
 
+              {policyAffordance ? renderFactNotice(policyAffordance.summary) : null}
+
               <Form<PolicyFormValues>
                 form={policyForm}
                 layout="vertical"
-                disabled={!canManage}
+                disabled={!canEditPolicy}
               >
                 <Form.Item
                   label="策略 ID"
@@ -524,14 +565,16 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               </Form>
 
               <Space wrap>
-                <Button
-                  loading={busyAction === policyAction}
-                  onClick={() => void submitPolicy()}
-                  type="primary"
-                >
-                  {target.mode === "create" ? "创建策略" : "保存策略"}
-                </Button>
-                {target.mode === "edit" ? (
+                {canEditPolicy ? (
+                  <Button
+                    loading={busyAction === policyAction}
+                    onClick={() => void submitPolicy()}
+                    type="primary"
+                  >
+                    {target.mode === "create" ? "创建策略" : "保存策略"}
+                  </Button>
+                ) : null}
+                {target.mode === "edit" && canEditPolicy ? (
                   <Button
                     danger
                     loading={busyAction === "retire-policy"}
@@ -570,18 +613,21 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     style={buildAevatarTagStyle(
                       surfaceToken,
                       "governance",
-                      buildBindingStatus(target.record),
+                      bindingAffordance?.status ?? buildBindingStatus(target.record),
                     )}
                   >
-                    {formatAevatarStatusLabel(buildBindingStatus(target.record))}
+                    {bindingAffordance?.statusLabel ??
+                      formatAevatarStatusLabel(buildBindingStatus(target.record))}
                   </span>
                 ) : null}
               </Space>
 
+              {bindingAffordance ? renderFactNotice(bindingAffordance.summary) : null}
+
               <Form<BindingFormValues>
                 form={bindingForm}
                 layout="vertical"
-                disabled={!canManage}
+                disabled={!canEditBinding}
               >
                 <div
                   style={{
@@ -727,14 +773,16 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               </Form>
 
               <Space wrap>
-                <Button
-                  loading={busyAction === bindingAction}
-                  onClick={() => void submitBinding()}
-                  type="primary"
-                >
-                  {target.mode === "create" ? "创建绑定" : "保存绑定"}
-                </Button>
-                {target.mode === "edit" ? (
+                {canEditBinding ? (
+                  <Button
+                    loading={busyAction === bindingAction}
+                    onClick={() => void submitBinding()}
+                    type="primary"
+                  >
+                    {target.mode === "create" ? "创建绑定" : "保存绑定"}
+                  </Button>
+                ) : null}
+                {target.mode === "edit" && canEditBinding ? (
                   <Button
                     danger
                     loading={busyAction === "retire-binding"}
@@ -773,18 +821,21 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     style={buildAevatarTagStyle(
                       surfaceToken,
                       "governance",
-                      buildEndpointStatus(target.record),
+                      endpointAffordance?.status ?? buildEndpointStatus(target.record),
                     )}
                   >
-                    {formatAevatarStatusLabel(buildEndpointStatus(target.record))}
+                    {endpointAffordance?.statusLabel ??
+                      formatAevatarStatusLabel(buildEndpointStatus(target.record))}
                   </span>
                 ) : null}
               </Space>
 
+              {endpointAffordance ? renderFactNotice(endpointAffordance.summary) : null}
+
               <Form<EndpointFormValues>
                 form={endpointForm}
                 layout="vertical"
-                disabled={!canManage || (target.mode === "edit" && !endpointCatalog)}
+                disabled={!canEditEndpoint}
               >
                 <div
                   style={{
@@ -881,24 +932,33 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
               <Space wrap>
                 <Button
-                  disabled={!canManage || (target.mode === "edit" && !endpointCatalog)}
+                  disabled={!canEditEndpoint}
                   loading={busyAction === endpointAction}
                   onClick={() => void submitEndpoint()}
                   type="primary"
                 >
                   {target.mode === "create" ? "创建入口" : "保存入口"}
                 </Button>
-                {target.mode === "edit" ? (
+                {target.mode === "edit" && endpointExposureAction ? (
                   <Button
+                    disabled={endpointExposureAction.disabled}
                     loading={busyAction === "set-endpoint-exposure:public"}
                     onClick={() =>
-                      void onSetEndpointExposure(target.record.endpointId, "public")
+                      void onSetEndpointExposure(
+                        target.record.endpointId,
+                        endpointExposureAction.nextExposureKind,
+                      )
                     }
                   >
-                    快速公开
+                    {endpointExposureAction.label}
                   </Button>
                 ) : null}
               </Space>
+              {target.mode === "edit" && endpointExposureAction ? (
+                <Typography.Text type="secondary">
+                  {endpointExposureAction.reason}
+                </Typography.Text>
+              ) : null}
             </Space>
           </div>
         ) : null}
@@ -914,6 +974,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
             }}
           >
             <Space orientation="vertical" size={16} style={{ display: "flex" }}>
+              {renderFactNotice(
+                "激活校验是当前 revision 与治理目录的只读诊断事实；这里不提交配置变更。",
+              )}
               <Space size={8} wrap>
                 <Typography.Text strong>版本</Typography.Text>
                 {target.record.revisionId ? (

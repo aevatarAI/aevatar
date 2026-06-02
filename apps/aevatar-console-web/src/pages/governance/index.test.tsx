@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import GovernanceIndexPage from './index';
+import { governanceApi } from '@/shared/api/governanceApi';
 
 jest.mock('@/shared/api/servicesApi', () => ({
   servicesApi: {
@@ -67,12 +68,37 @@ jest.mock('@/shared/api/governanceApi', () => ({
     getEndpointCatalog: jest.fn(async () => ({
       serviceKey: 'tenant-a/app-a/default/service-alpha',
       updatedAt: '2026-03-25T10:00:00Z',
-      endpoints: [],
+      endpoints: [
+        {
+          description: 'Invoke command',
+          displayName: 'Invoke',
+          endpointId: 'invoke',
+          exposureKind: 'internal',
+          kind: 'command',
+          policyIds: [],
+          requestTypeUrl: 'type.googleapis.com/demo.Invoke',
+          responseTypeUrl: '',
+        },
+      ],
     })),
     getPolicies: jest.fn(async () => ({
       serviceKey: 'tenant-a/app-a/default/service-alpha',
       updatedAt: '2026-03-25T10:00:00Z',
-      policies: [],
+      policies: [
+        {
+          activationRequiredBindingIds: [],
+          displayName: 'Retired Policy',
+          invokeAllowedCallerServiceKeys: [],
+          invokeRequiresActiveDeployment: false,
+          policyId: 'policy-retired',
+          retired: true,
+        },
+      ],
+    })),
+    updateEndpointCatalog: jest.fn(async () => ({
+      commandId: 'command-1',
+      correlationId: 'correlation-1',
+      targetActorId: 'actor://governance',
     })),
   },
 }));
@@ -148,5 +174,39 @@ describe('GovernanceIndexPage', () => {
 
     expect(await screen.findByText('选择一个服务')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '新建绑定' })).toBeNull();
+  });
+
+  it('labels retired policy rows as view-only entries', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/governance?tenantId=tenant-a&appId=app-a&namespace=default&serviceId=service-alpha&view=policies',
+    );
+
+    renderWithQueryClient(React.createElement(GovernanceIndexPage));
+
+    expect(await screen.findByText('Retired Policy')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看' })).toBeInTheDocument();
+  });
+
+  it('keeps endpoint update receipts separate from observed catalog refresh', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/governance?tenantId=tenant-a&appId=app-a&namespace=default&serviceId=service-alpha&view=endpoints',
+    );
+
+    renderWithQueryClient(React.createElement(GovernanceIndexPage));
+
+    fireEvent.click(await screen.findByRole('button', { name: '配置' }));
+    fireEvent.click(await screen.findByRole('button', { name: '保存入口' }));
+
+    await waitFor(() => {
+      expect(governanceApi.updateEndpointCatalog).toHaveBeenCalled();
+    });
+    expect(await screen.findByText('治理命令已接收')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Endpoint invoke was accepted for update.*暂不能当作已观察/),
+    ).toBeInTheDocument();
   });
 });
