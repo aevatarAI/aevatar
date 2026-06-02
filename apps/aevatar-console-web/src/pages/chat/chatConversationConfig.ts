@@ -9,6 +9,7 @@ export const LLM_ROUTE_HEADER_KEY = "nyxid.route_preference";
 export const LLM_MODEL_HEADER_KEY = "aevatar.model_override";
 export const CONVERSATION_ROUTE_DEFAULT_VALUE = "__config_default__";
 export const CONVERSATION_ROUTE_GATEWAY_VALUE = "__gateway__";
+const USER_LLM_ROUTE_GATEWAY_LABEL = "Gateway";
 
 export type ConversationRouteOption = {
   label: string;
@@ -93,7 +94,9 @@ export function describeConversationRoute(
     return "Config default";
   }
 
-  return routeOptions.find((option) => option.value === route)?.label || route;
+  return routeOptions.find((option) => option.value === route)?.label ||
+    route ||
+    USER_LLM_ROUTE_GATEWAY_LABEL;
 }
 
 export function buildConversationRouteOptions(
@@ -111,7 +114,7 @@ export function buildConversationRouteOptions(
 
     seen.add(route);
     options.push({
-      label: option.label.trim() || route || "NyxID Gateway",
+      label: option.label.trim() || route || USER_LLM_ROUTE_GATEWAY_LABEL,
       value: route,
     });
   }
@@ -121,7 +124,10 @@ export function buildConversationRouteOptions(
       const normalizedRoute = normalizeUserLlmRoute(route);
       if (!seen.has(normalizedRoute)) {
         seen.add(normalizedRoute);
-        options.push({ label: normalizedRoute || "NyxID Gateway", value: normalizedRoute });
+        options.push({
+          label: normalizedRoute || USER_LLM_ROUTE_GATEWAY_LABEL,
+          value: normalizedRoute,
+        });
       }
     }
   }

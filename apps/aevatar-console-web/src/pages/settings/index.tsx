@@ -478,14 +478,24 @@ const SettingsPage: React.FC = () => {
         : draft.preferredLlmRoute,
     [draft, loadedDraft, userLlmSettingsQuery.data?.effectiveRoute],
   );
-  const routeFallbackActive = draftsEqual(draft, loadedDraft)
+  const draftMatchesLoaded = draftsEqual(draft, loadedDraft);
+  const routeFallbackActive = draftMatchesLoaded
     ? Boolean(userLlmSettingsQuery.data?.routeFallbackActive)
     : false;
-  const routeSummaryLabel = describeConversationRoute(effectiveRoute, routeOptions);
-  const preferredRouteLabel = describeConversationRoute(
-    draft.preferredLlmRoute,
-    routeOptions,
+  const backendEffectiveRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.effectiveRouteLabel,
   );
+  const backendSavedRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.savedRouteLabel,
+  );
+  const routeSummaryLabel =
+    draftMatchesLoaded && backendEffectiveRouteLabel
+      ? backendEffectiveRouteLabel
+      : describeConversationRoute(effectiveRoute, routeOptions);
+  const preferredRouteLabel =
+    draftMatchesLoaded && backendSavedRouteLabel
+      ? backendSavedRouteLabel
+      : describeConversationRoute(draft.preferredLlmRoute, routeOptions);
   const modelGroups = React.useMemo(
     () =>
       buildConversationModelGroups({
@@ -811,7 +821,7 @@ const SettingsPage: React.FC = () => {
               <SummaryMetric
                 label="Effective route"
                 tone={routeFallbackActive ? "warning" : "success"}
-                value={routeSummaryLabel || "NyxID Gateway"}
+                value={routeSummaryLabel}
               />
               <SummaryMetric
                 label="Default model"
@@ -945,7 +955,7 @@ const SettingsPage: React.FC = () => {
                         </div>
                         <Typography.Text type="secondary">
                           Current route resolves through{" "}
-                          {routeSummaryLabel || "NyxID Gateway"}.
+                          {routeSummaryLabel}.
                         </Typography.Text>
                         {providerDisplayList.length > 0 ? (
                           <div style={providerRailStyle}>
@@ -1041,7 +1051,7 @@ const SettingsPage: React.FC = () => {
                       <SummaryField label="Saved route" value={preferredRouteLabel} />
                       <SummaryField
                         label="Effective route"
-                        value={routeSummaryLabel || "NyxID Gateway"}
+                        value={routeSummaryLabel}
                       />
                       <SummaryField label="Runtime mode" value={runtimeModeLabel} />
                       <SummaryField
