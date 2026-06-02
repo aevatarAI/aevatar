@@ -192,6 +192,67 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         return DispatchRoomEnvelopeAsync(roomId, envelope, cancellationToken);
     }
 
+    public Task SubmitParticipantsResolvedAsync(
+        StreamingProxyRoomParticipantsResolvedCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
+        var envelope = BuildRoomEnvelope(
+            roomId,
+            new StreamingProxyChatParticipantsResolvedRequested
+            {
+                SessionId = NormalizeRequiredValue(command.SessionId, nameof(command.SessionId)),
+                Participants = { command.Participants },
+            });
+
+        return DispatchRoomEnvelopeAsync(roomId, envelope, cancellationToken);
+    }
+
+    public Task SubmitParticipantReplyObservedAsync(
+        StreamingProxyRoomParticipantReplyObservedCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
+        var envelope = BuildRoomEnvelope(
+            roomId,
+            new StreamingProxyChatParticipantReplyObservedRequested
+            {
+                SessionId = NormalizeRequiredValue(command.SessionId, nameof(command.SessionId)),
+                ParticipantId = NormalizeRequiredValue(command.ParticipantId, nameof(command.ParticipantId)),
+                Round = command.Round,
+                ParticipantIndex = command.ParticipantIndex,
+                Content = NormalizeRequiredValue(command.Content, nameof(command.Content)),
+            });
+
+        return DispatchRoomEnvelopeAsync(roomId, envelope, cancellationToken);
+    }
+
+    public Task SubmitParticipantReplyFailedAsync(
+        StreamingProxyRoomParticipantReplyFailedCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
+        var envelope = BuildRoomEnvelope(
+            roomId,
+            new StreamingProxyChatParticipantReplyFailedRequested
+            {
+                SessionId = NormalizeRequiredValue(command.SessionId, nameof(command.SessionId)),
+                ParticipantId = NormalizeRequiredValue(command.ParticipantId, nameof(command.ParticipantId)),
+                Round = command.Round,
+                ParticipantIndex = command.ParticipantIndex,
+                FailureKind = command.FailureKind,
+                ErrorMessage = command.ErrorMessage ?? string.Empty,
+            });
+
+        return DispatchRoomEnvelopeAsync(roomId, envelope, cancellationToken);
+    }
+
     private static string NormalizeRequiredScopeId(string? scopeId)
     {
         var normalized = scopeId?.Trim();

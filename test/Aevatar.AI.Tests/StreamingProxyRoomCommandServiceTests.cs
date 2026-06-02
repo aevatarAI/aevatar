@@ -408,6 +408,109 @@ public sealed class StreamingProxyRoomCommandServiceTests
         terminal.ErrorMessage.Should().Be("failed");
     }
 
+    [Fact]
+    public async Task SubmitParticipantsResolvedAsync_ShouldDispatchTypedParticipantsResolvedRequest()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-a", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        await service.SubmitParticipantsResolvedAsync(
+            new StreamingProxyRoomParticipantsResolvedCommand(
+                " room-a ",
+                " session-1 ",
+                [
+                    new StreamingProxyChatLifecycleParticipant
+                    {
+                        ParticipantId = "participant-1",
+                        DisplayName = "Participant 1",
+                        RoutePreference = "route-a",
+                        Model = "model-a",
+                    },
+                ]),
+            CancellationToken.None);
+
+        dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
+        var resolved = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<StreamingProxyChatParticipantsResolvedRequested>();
+        resolved.SessionId.Should().Be("session-1");
+        resolved.Participants.Should().ContainSingle().Which.Should().BeEquivalentTo(new StreamingProxyChatLifecycleParticipant
+        {
+            ParticipantId = "participant-1",
+            DisplayName = "Participant 1",
+            RoutePreference = "route-a",
+            Model = "model-a",
+        });
+    }
+
+    [Fact]
+    public async Task SubmitParticipantReplyObservedAsync_ShouldDispatchTrimmedReplyObservation()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-a", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        await service.SubmitParticipantReplyObservedAsync(
+            new StreamingProxyRoomParticipantReplyObservedCommand(
+                " room-a ",
+                " session-1 ",
+                " participant-1 ",
+                2,
+                1,
+                " reply body "),
+            CancellationToken.None);
+
+        dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
+        var observed = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<StreamingProxyChatParticipantReplyObservedRequested>();
+        observed.SessionId.Should().Be("session-1");
+        observed.ParticipantId.Should().Be("participant-1");
+        observed.Round.Should().Be(2);
+        observed.ParticipantIndex.Should().Be(1);
+        observed.Content.Should().Be("reply body");
+    }
+
+    [Fact]
+    public async Task SubmitParticipantReplyFailedAsync_ShouldDispatchTypedFailureObservation()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-a", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        await service.SubmitParticipantReplyFailedAsync(
+            new StreamingProxyRoomParticipantReplyFailedCommand(
+                " room-a ",
+                " session-1 ",
+                " participant-1 ",
+                2,
+                1,
+                StreamingProxyChatParticipantReplyFailureKind.Error,
+                null),
+            CancellationToken.None);
+
+        dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
+        var failed = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<StreamingProxyChatParticipantReplyFailedRequested>();
+        failed.SessionId.Should().Be("session-1");
+        failed.ParticipantId.Should().Be("participant-1");
+        failed.Round.Should().Be(2);
+        failed.ParticipantIndex.Should().Be(1);
+        failed.FailureKind.Should().Be(StreamingProxyChatParticipantReplyFailureKind.Error);
+        failed.ErrorMessage.Should().BeEmpty();
+    }
+
     private sealed class RecordingGAgentActorRegistryCommandPort(List<string> operations)
         : IGAgentActorRegistryCommandPort
     {
