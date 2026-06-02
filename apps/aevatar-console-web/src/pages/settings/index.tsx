@@ -560,10 +560,12 @@ const SettingsPage: React.FC = () => {
 
   const userConfigQuery = useQuery({
     queryKey: ["settings", "user-config"],
+    enabled: activeSection === llmTabKey,
     queryFn: () => studioApi.getUserConfig(),
   });
   const userConfigModelsQuery = useQuery({
     queryKey: ["settings", "user-config-models"],
+    enabled: activeSection === llmTabKey,
     queryFn: () => studioApi.getUserConfigModels(),
   });
 

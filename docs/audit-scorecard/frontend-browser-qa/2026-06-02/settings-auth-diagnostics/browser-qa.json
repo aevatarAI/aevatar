@@ -1,0 +1,80 @@
+{
+  "status": "PASS",
+  "browser": "Puppeteer Core with Google Chrome",
+  "appUrl": "http://localhost:5173",
+  "routes": [
+    "/settings?section=account"
+  ],
+  "flows": [
+    "Seed a local restorable browser session in real Chrome automation",
+    "Open Settings Account diagnostics",
+    "Verify Browser session and Backend session panels are distinct",
+    "Verify browser active-token state and backend unauthenticated empty state are visible",
+    "Capture desktop and mobile screenshots"
+  ],
+  "viewports": [
+    "desktop",
+    "mobile"
+  ],
+  "consoleChecked": true,
+  "networkChecked": true,
+  "consoleErrors": [],
+  "networkFailures": [],
+  "artifacts": {
+    "screenshots": [
+      "docs/audit-scorecard/frontend-browser-qa/2026-06-02/settings-auth-diagnostics/desktop.png",
+      "docs/audit-scorecard/frontend-browser-qa/2026-06-02/settings-auth-diagnostics/mobile.png"
+    ]
+  },
+  "redaction": "No real user credentials used; temporary QA token labels only.",
+  "details": {
+    "failedChecks": [],
+    "results": [
+      {
+        "label": "desktop",
+        "viewport": {
+          "width": 1440,
+          "height": 1100,
+          "deviceScaleFactor": 1
+        },
+        "screenshot": "docs/audit-scorecard/frontend-browser-qa/2026-06-02/settings-auth-diagnostics/desktop.png",
+        "checks": {
+          "url": "http://localhost:5173/settings?section=account",
+          "hasSessionOverview": true,
+          "hasBrowserSession": true,
+          "hasBackendSession": true,
+          "hasBrowserUser": true,
+          "hasAccessTokenActive": true,
+          "hasBackendNoSession": true,
+          "hasBackendEmptyExplanation": true,
+          "hasProvider": true,
+          "hasScopeSourceOrUnavailable": true,
+          "noLoginRedirect": true
+        }
+      },
+      {
+        "label": "mobile",
+        "viewport": {
+          "width": 390,
+          "height": 844,
+          "deviceScaleFactor": 2,
+          "isMobile": true
+        },
+        "screenshot": "docs/audit-scorecard/frontend-browser-qa/2026-06-02/settings-auth-diagnostics/mobile.png",
+        "checks": {
+          "url": "http://localhost:5173/settings?section=account",
+          "hasSessionOverview": true,
+          "hasBrowserSession": true,
+          "hasBackendSession": true,
+          "hasBrowserUser": true,
+          "hasAccessTokenActive": true,
+          "hasBackendNoSession": true,
+          "hasBackendEmptyExplanation": true,
+          "hasProvider": true,
+          "hasScopeSourceOrUnavailable": true,
+          "noLoginRedirect": true
+        }
+      }
+    ]
+  }
+}

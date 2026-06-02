@@ -11,6 +11,7 @@ jest.mock("@/shared/studio/api", () => ({
   studioApi: {
     getUserConfig: jest.fn(),
     getUserConfigModels: jest.fn(),
+    getAuthSession: jest.fn(),
     saveUserConfig: jest.fn(),
   },
 }));
@@ -21,9 +22,24 @@ const { studioApi: mockStudioApi } = jest.requireMock(
   studioApi: {
     getUserConfig: jest.Mock;
     getUserConfigModels: jest.Mock;
+    getAuthSession: jest.Mock;
     saveUserConfig: jest.Mock;
   };
 };
+
+function mockBackendAuthSession(overrides = {}) {
+  mockStudioApi.getAuthSession.mockResolvedValue({
+    enabled: true,
+    authenticated: true,
+    providerDisplayName: "NyxID",
+    invokeAuthMode: "studio-session",
+    name: "Ada Lovelace",
+    email: "ada@example.com",
+    scopeId: "scope-123",
+    scopeSource: "nyxid",
+    ...overrides,
+  });
+}
 
 describe("SettingsPage", () => {
   beforeEach(() => {
@@ -94,6 +110,7 @@ describe("SettingsPage", () => {
       remoteRuntimeBaseUrl: "",
       maxToolRounds: 40,
     }));
+    mockBackendAuthSession();
   });
 
   afterEach(() => {
@@ -143,9 +160,96 @@ describe("SettingsPage", () => {
       expect(window.location.search).toBe("?section=account");
     });
     expect(screen.queryByRole("button", { name: "Save config" })).toBeNull();
-    expect(await screen.findByText("Profile")).toBeTruthy();
-    expect(screen.getByText("Ada Lovelace")).toBeTruthy();
-    expect(screen.getByText("Authentication")).toBeTruthy();
+    expect(await screen.findByText("Session overview")).toBeTruthy();
+    expect(screen.getAllByText("Ada Lovelace").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Browser session").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Backend session").length).toBeGreaterThan(0);
+    expect(await screen.findByText("Access token active")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getAllByText("Authenticated").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("Stored in this browser and used to attach bearer tokens to frontend API calls.")).toBeTruthy();
+    expect(screen.getByText("Returned by the backend auth endpoint and used to confirm what the server currently recognizes.")).toBeTruthy();
+    expect(screen.getAllByText("NyxID").length).toBeGreaterThan(0);
+  });
+
+  it("separates a restorable browser session from an unauthenticated backend session", async () => {
+    mockBackendAuthSession({
+      authenticated: false,
+      name: undefined,
+      email: undefined,
+      scopeId: null,
+      scopeSource: null,
+    });
+    persistAuthSession({
+      tokens: {
+        accessToken: "expired-token",
+        tokenType: "Bearer",
+        expiresIn: 3600,
+        expiresAt: Date.now() - 60_000,
+        refreshToken: "refresh-token",
+      },
+      user: {
+        sub: "user-456",
+        email: "grace@example.com",
+        email_verified: false,
+        name: "Grace Hopper",
+      },
+    });
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Account" }));
+
+    expect(await screen.findByText("Grace Hopper")).toBeTruthy();
+    expect(screen.getByText("Refresh available")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getAllByText("No backend session").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("The backend responded, but it does not recognize an authenticated session.")).toBeTruthy();
+    expect(screen.getByText("Expired")).toBeTruthy();
+  });
+
+  it("shows an empty browser session while still checking backend state", async () => {
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Account" }));
+
+    expect(await screen.findByText("Session diagnostics")).toBeTruthy();
+    expect(screen.getByText("No browser session is stored in this browser.")).toBeTruthy();
+    expect(screen.getByText("No local session")).toBeTruthy();
+    expect(screen.getByText("No restorable browser session is stored in this browser.")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getAllByText("Authenticated").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("shows a backend session error independently from the browser session", async () => {
+    mockStudioApi.getAuthSession.mockRejectedValue(new Error("Auth service unavailable"));
+    persistAuthSession({
+      tokens: {
+        accessToken: "token",
+        tokenType: "Bearer",
+        expiresIn: 3600,
+        expiresAt: Date.now() + 60_000,
+      },
+      user: {
+        sub: "user-789",
+        email: "lin@example.com",
+        email_verified: true,
+        name: "Lin Chen",
+      },
+    });
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Account" }));
+
+    expect(await screen.findByText("Lin Chen")).toBeTruthy();
+    expect(screen.getByText("Access token active")).toBeTruthy();
+    expect(await screen.findByText("Backend session check failed")).toBeTruthy();
+    expect(screen.getAllByText("Check failed").length).toBeGreaterThan(0);
+    expect(screen.getByText("Auth service unavailable")).toBeTruthy();
   });
 
   it("shows gateway models from every ready gateway provider", async () => {
