@@ -256,6 +256,13 @@ public static class MainnetHostBuilderExtensions
                 [ToolSetNames.WorkspaceDefault],
                 [],
                 "Lark route tool composition with the default workspace tools.");
+            // Opt-in only: connected-service tools carry per-user NyxID surfaces, so this set
+            // is referenced by route policy (not folded into workspace.default) to avoid
+            // injecting every caller's connected services by default.
+            options.AddToolSet(
+                ToolSetNames.NyxIdConnectedServices,
+                [CreateToolSource<NyxIdConnectedServiceToolSource>],
+                "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
         });
 
         return builder;

@@ -75,6 +75,12 @@ public sealed class ResponsesDirectToolPlanService(
             ResponsesToolProviderContext context,
             CancellationToken ct = default)
         {
+            // Discovery runs on behalf of this request's caller, so the request's typed tool
+            // context (NyxID access token, scope, channel) must be visible to context-aware
+            // sources. IAgentToolSource.DiscoverToolsAsync has no context parameter, so publish
+            // it through the AsyncLocal the tools already read at execution time.
+            using var _ = AgentToolContextScope.Push(context.ToolContext);
+
             var tools = new List<IAgentTool>();
             foreach (var source in _sources)
                 tools.AddRange(await source.DiscoverToolsAsync(ct));

@@ -269,6 +269,14 @@ public sealed class NyxIdApiClient : IDisposable
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
         GetAsync(token, NyxIdLlmCatalogRoutes.ProxyServicesPath, ct);
 
+    /// <summary>
+    /// Fetches the NyxID proxy-aware OpenAPI document for a connected service
+    /// (<c>GET /api/v1/proxy/services/{service_id}/openapi.json</c>). NyxID rewrites
+    /// server URLs so the document describes calls routed through the proxy.
+    /// </summary>
+    public Task<string> GetProxyServiceOpenApiAsync(string token, string serviceId, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/proxy/services/{Uri.EscapeDataString(serviceId)}/openapi.json", ct);
+
     // ─── API Keys (additions) ───
 
     public Task<string> GetApiKeyAsync(string token, string id, CancellationToken ct) =>
