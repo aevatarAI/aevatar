@@ -12,6 +12,7 @@ import type { theme } from 'antd';
 import React from 'react';
 import type {
   MissionFeedbackTone,
+  MissionHandoffSeverity,
   MissionInterventionKind,
   MissionInspectorPresentation,
   MissionNodeStatus,
@@ -227,5 +228,33 @@ export function resolveFeedbackTagColor(
       return 'error';
     default:
       return 'processing';
+  }
+}
+
+export function formatHandoffSeverityLabel(severity: MissionHandoffSeverity) {
+  switch (severity) {
+    case 'action':
+      return 'Action';
+    case 'blocked':
+      return 'Blocked';
+    case 'confirming':
+      return 'Confirming';
+    default:
+      return 'Observe';
+  }
+}
+
+export function resolveHandoffTagColor(
+  severity: MissionHandoffSeverity,
+): 'default' | 'processing' | 'success' | 'warning' | 'error' {
+  switch (severity) {
+    case 'action':
+      return 'warning';
+    case 'blocked':
+      return 'error';
+    case 'confirming':
+      return 'processing';
+    default:
+      return 'default';
   }
 }

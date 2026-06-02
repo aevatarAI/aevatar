@@ -15,7 +15,7 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Tooltip, Typography, theme } from 'antd';
+import { Tag, Tooltip, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
 import type {
   MissionControlSnapshot,
@@ -26,8 +26,10 @@ import type {
 import {
   formatMissionLabel,
   formatConnectionLabel,
+  formatHandoffSeverityLabel,
   renderMissionKindIcon,
   resolveConnectionTagColor,
+  resolveHandoffTagColor,
   resolveMissionStatusTone,
   resolveObservationTone,
   type MissionThemeToken,
@@ -231,6 +233,39 @@ function TopologyNodeCard({
       >
         {node.summary}
       </Typography.Paragraph>
+      <Tooltip title={node.handoff.nextStep}>
+        <div
+          aria-label="Mission Control node handoff"
+          style={{
+            background: token.colorFillQuaternary,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 4,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            marginBottom: 12,
+            padding: '8px 10px',
+          }}
+        >
+          <Typography.Text
+            style={{
+              color: token.colorTextHeading,
+              display: 'block',
+              fontSize: 12,
+              fontWeight: 700,
+              lineHeight: 1.25,
+            }}
+          >
+            {node.handoff.title}
+          </Typography.Text>
+          <Typography.Text
+            ellipsis
+            style={{ color: token.colorTextTertiary, fontSize: 11 }}
+          >
+            {node.handoff.evidence}
+          </Typography.Text>
+        </div>
+      </Tooltip>
       <div
         style={{
           borderTop: `1px solid ${token.colorBorderSecondary}`,
@@ -269,6 +304,17 @@ function TopologyNodeCard({
           >
             {node.freshnessLabel}
           </Typography.Text>
+        </div>
+        <div>
+          <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
+            Handoff
+          </Typography.Text>
+          <Tag
+            color={resolveHandoffTagColor(node.handoff.severity)}
+            style={{ display: 'block', fontSize: 11, marginInlineEnd: 0, marginTop: 2 }}
+          >
+            {formatHandoffSeverityLabel(node.handoff.severity)}
+          </Tag>
         </div>
       </div>
       <Handle
