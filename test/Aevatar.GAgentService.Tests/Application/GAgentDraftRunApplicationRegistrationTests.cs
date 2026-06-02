@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using DraftRunObservationScopeLeasePreparation = Aevatar.GAgentService.Abstractions.ScopeGAgents.GAgentDraftRunObservationScopeLeasePreparation;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -24,7 +25,7 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         services.AddSingleton<IGAgentDraftRunProjectionPort, RecordingDraftRunProjectionPort>();
         services.AddSingleton<IGAgentRunTerminalProjectionPort, RecordingTerminalProjectionPort>();
         services.AddSingleton<IGAgentRunTerminalQueryPort, NoopTerminalQueryPort>();
-        services.AddSingleton<IGAgentDraftRunObservationScopeActivationPort, RecordingActivationPort>();
+        services.AddSingleton<IGAgentDraftRunObservationScopeLeasePreparationPort, RecordingPreparationPort>();
 
         services.AddScopeGAgentDraftRunInteraction();
 
@@ -187,18 +188,18 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
             Task.FromResult<GAgentRunTerminalSnapshot?>(null);
     }
 
-    private sealed class RecordingActivationPort : IGAgentDraftRunObservationScopeActivationPort
+    private sealed class RecordingPreparationPort : IGAgentDraftRunObservationScopeLeasePreparationPort
     {
-        public Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
+        public Task<DraftRunObservationScopeLeasePreparation?> PrepareAsync(
             string actorId,
             string commandId,
             string correlationId,
             CancellationToken ct = default) =>
-            Task.FromResult<GAgentDraftRunObservationScopeActivation?>(
-                new GAgentDraftRunObservationScopeActivation(actorId, commandId, correlationId));
+            Task.FromResult<DraftRunObservationScopeLeasePreparation?>(
+                new DraftRunObservationScopeLeasePreparation(actorId, commandId, correlationId));
 
         public Task ReleaseAsync(
-            GAgentDraftRunObservationScopeActivation activation,
+            DraftRunObservationScopeLeasePreparation activation,
             CancellationToken ct = default) =>
             Task.CompletedTask;
     }

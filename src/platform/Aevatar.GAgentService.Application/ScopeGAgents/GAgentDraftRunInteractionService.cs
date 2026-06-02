@@ -19,7 +19,6 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
     private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
     private readonly IScopeResourceAdmissionPort _admissionPort;
     private readonly ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> _interactionService;
-    private readonly IGAgentDraftRunObservationScopeActivationPort _observationScopeActivationPort;
     private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ILogger<GAgentDraftRunInteractionService>? _logger;
 
@@ -28,7 +27,6 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         IGAgentActorRegistryCommandPort registryCommandPort,
         IScopeResourceAdmissionPort admissionPort,
         ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
-        IGAgentDraftRunObservationScopeActivationPort observationScopeActivationPort,
         IAgentKindRegistry? agentKindRegistry = null,
         ILogger<GAgentDraftRunInteractionService>? logger = null)
     {
@@ -36,8 +34,6 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
         _admissionPort = admissionPort ?? throw new ArgumentNullException(nameof(admissionPort));
         _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
-        _observationScopeActivationPort = observationScopeActivationPort
-            ?? throw new ArgumentNullException(nameof(observationScopeActivationPort));
         _agentKindRegistry = agentKindRegistry;
         _logger = logger;
     }
@@ -58,18 +54,6 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         var actor = preparedActor.Actor!;
         var commandId = CreateInteractionId();
         var correlationId = CreateInteractionId();
-        var activation = await _observationScopeActivationPort.ActivateAsync(
-            actor.ActorId,
-            commandId,
-            correlationId,
-            ct);
-        if (activation == null)
-        {
-            await RollbackAsync(actor, CancellationToken.None);
-            return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
-                GAgentDraftRunStartError.ProjectionUnavailable);
-        }
-
         var accepted = false;
         try
         {
@@ -103,7 +87,6 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
             var result = await _interactionService.ExecuteAsync(command, emitAsync, OnAcceptedAsync, ct);
             if (!result.Succeeded && !accepted)
             {
-                await _observationScopeActivationPort.ReleaseAsync(activation, CancellationToken.None);
                 await RollbackAsync(actor, CancellationToken.None);
             }
 
@@ -113,7 +96,6 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         {
             if (!accepted)
             {
-                await _observationScopeActivationPort.ReleaseAsync(activation, CancellationToken.None);
                 await RollbackAsync(actor, CancellationToken.None);
             }
 

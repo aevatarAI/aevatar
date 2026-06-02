@@ -130,7 +130,7 @@ public static class ServiceCollectionExtensions
             static context => new ScriptServiceAguiRuntimeLease(context));
 
         services.TryAddSingleton<IGAgentRunTerminalProjectionPort, GAgentRunTerminalProjectionPort>();
-        services.TryAddSingleton<IGAgentDraftRunObservationScopeActivationPort, GAgentDraftRunObservationScopeActivationPort>();
+        services.TryAddSingleton<IGAgentDraftRunObservationScopeLeasePreparationPort, GAgentDraftRunObservationScopeLeasePreparationPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
         services.TryAddSingleton<IGAgentDraftRunProjectionPort, GAgentDraftRunProjectionPort>();
