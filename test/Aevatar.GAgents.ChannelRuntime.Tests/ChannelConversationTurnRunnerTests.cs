@@ -946,8 +946,8 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ornn_search_skills");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("goal");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ship daily command fix");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/goal ship daily command fix");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ship command fix");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/goal ship command fix");
         var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
         recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();

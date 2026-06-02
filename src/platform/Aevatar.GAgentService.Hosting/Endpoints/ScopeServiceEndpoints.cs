@@ -1536,6 +1536,7 @@ public static class ScopeServiceEndpoints
                             },
                             SessionId = request.SessionId,
                             ScopeId = scopeId,
+                            Metadata = scopedHeaders,
                             Headers = scopedHeaders,
                             LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                         },
