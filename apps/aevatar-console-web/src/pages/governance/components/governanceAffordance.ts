@@ -77,21 +77,21 @@ export function resolveEndpointExposureAction(
   catalog: ServiceEndpointCatalogSnapshot | null,
 ): EndpointExposureAction | null {
   const currentExposure = normalizeGovernanceStatus(endpoint.exposureKind) || "internal";
+  if (!catalog) {
+    return {
+      disabled: true,
+      label: currentExposure === "public" ? "已公开" : "公开入口",
+      nextExposureKind: "public",
+      reason: "需要先读取 endpoint catalog，才能确认或提交暴露状态更新。",
+    };
+  }
+
   if (currentExposure === "public") {
     return {
       disabled: true,
       label: "已公开",
       nextExposureKind: "public",
       reason: "当前 endpoint catalog 已经观察到 public 状态，不再显示重复的公开切换。",
-    };
-  }
-
-  if (!catalog) {
-    return {
-      disabled: true,
-      label: "公开入口",
-      nextExposureKind: "public",
-      reason: "需要先读取 endpoint catalog，才能提交暴露状态更新。",
     };
   }
 

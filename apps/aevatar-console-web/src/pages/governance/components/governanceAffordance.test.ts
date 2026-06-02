@@ -90,6 +90,11 @@ describe("governanceAffordance", () => {
       disabled: true,
       reason: expect.stringContaining("endpoint catalog"),
     });
+    expect(resolveEndpointExposureAction({ ...endpoint, exposureKind: "public" }, null)).toMatchObject({
+      disabled: true,
+      label: "已公开",
+      reason: expect.stringContaining("确认或提交"),
+    });
   });
 
   it("marks endpoint facts read-only when the catalog is missing", () => {
