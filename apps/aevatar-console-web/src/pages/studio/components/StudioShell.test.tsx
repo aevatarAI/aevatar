@@ -187,6 +187,28 @@ describe('StudioShell', () => {
     });
   });
 
+  it('can hide the member rail and lifecycle for focused launchpad empty states', () => {
+    render(
+      <StudioShell
+        currentLifecycleStep="build"
+        lifecycleSteps={lifecycleSteps}
+        members={members}
+        onSelectLifecycleStep={jest.fn()}
+        onSelectMember={jest.fn()}
+        pageTitle="Studio page"
+        selectedMemberKey="workflow:workspace-demo"
+        showLifecycle={false}
+        showMemberRail={false}
+      >
+        <div>Script launchpad</div>
+      </StudioShell>,
+    );
+
+    expect(screen.queryByLabelText('Team members')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('studio-lifecycle-section')).not.toBeInTheDocument();
+    expect(screen.getByText('Script launchpad')).toBeInTheDocument();
+  });
+
   it('lets page-scroll mode grow content in document flow while the main pane scrolls', () => {
     render(
       <StudioShell

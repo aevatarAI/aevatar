@@ -2013,6 +2013,11 @@ jest.mock("./components/StudioBuildPanels", () => {
     }, [dirty, props.onRegisterLeaveGuard]);
 
     mockReact.useEffect(() => {
+      if (!selectedScriptId) {
+        props.onScriptBuildStateChange?.(null);
+        return () => props.onScriptBuildStateChange?.(null);
+      }
+
       props.onScriptBuildStateChange?.({
         scriptId: selectedScriptId,
         displayName: selectedScriptId,
@@ -2027,20 +2032,29 @@ jest.mock("./components/StudioBuildPanels", () => {
       return () => props.onScriptBuildStateChange?.(null);
     }, [dirty, props.onScriptBuildStateChange, selectedScriptId]);
 
+    if (!selectedScriptId) {
+      return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
+        mockReact.createElement("div", { key: "title" }, "Script source"),
+        mockReact.createElement(
+          "p",
+          { key: "empty-copy" },
+          "No script is selected yet. Start a script draft to open the editor."
+        ),
+        mockReact.createElement(
+          "button",
+          {
+            key: "add-script",
+            type: "button",
+            onClick: () => props.onCreateScriptDraft?.(),
+          },
+          "Add script"
+        ),
+      ]);
+    }
+
     return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
       mockReact.createElement("div", { key: "title" }, "Script source"),
       mockReact.createElement("div", { key: "provenance" }, "lints · partial"),
-      !selectedScriptId
-        ? mockReact.createElement(
-            "button",
-            {
-              key: "add-script",
-              type: "button",
-              onClick: () => props.onCreateScriptDraft?.(),
-            },
-            "Add script"
-          )
-        : null,
       mockReact.createElement("input", {
         key: "script-id",
         "aria-label": "Script ID",
@@ -2207,6 +2221,8 @@ jest.mock("./components/StudioShell", () => ({
     onSelectMember,
     onSelectPage,
     selectedMemberKey,
+    showLifecycle = true,
+    showMemberRail = true,
   }: any) => {
     const React = require("react");
     const filterOptions = [
@@ -2232,7 +2248,7 @@ jest.mock("./components/StudioShell", () => ({
         React.createElement("div", { key: "workbench" }, "Workbench"),
         contextBar ? React.createElement("div", { key: "context-bar" }, contextBar) : null,
         alerts ? React.createElement("div", { key: "alerts" }, alerts) : null,
-        React.createElement(
+        showMemberRail ? React.createElement(
           "div",
           { key: "members", "aria-label": "Team members" },
           [
@@ -2272,8 +2288,8 @@ jest.mock("./components/StudioShell", () => ({
               )
             ),
           ]
-        ),
-        ...lifecycleSteps.map((step: any) =>
+        ) : null,
+        ...(showLifecycle ? lifecycleSteps : []).map((step: any) =>
           React.createElement(
             "button",
             {
@@ -3981,8 +3997,29 @@ describe("StudioPage", () => {
         scripts: true,
       },
     });
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValueOnce([
+      {
+        available: true,
+        scopeId: "scope-1",
+        script: {
+          scopeId: "scope-1",
+          scriptId: "script-alpha",
+          catalogActorId: "catalog-1",
+          definitionActorId: "definition-1",
+          activeRevision: "rev-script-1",
+          activeSourceHash: "hash-1",
+          updatedAt: "2026-03-18T00:00:00Z",
+        },
+        source: {
+          sourceText: "using System;",
+          definitionActorId: "definition-1",
+          revision: "rev-script-1",
+          sourceHash: "hash-1",
+        },
+      },
+    ]);
 
-    renderStudioPage("/studio?tab=scripts");
+    renderStudioPage("/studio?scopeId=scope-1&focus=script%3Ascript-alpha&tab=scripts");
 
     await screen.findByLabelText("Script ID");
     fireEvent.change(screen.getByLabelText("Script source editor"), {
@@ -4596,6 +4633,16 @@ describe("StudioPage", () => {
     });
 
     renderStudioPage("/studio?tab=scripts");
+
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("Create a script");
+    expect(screen.getByText("No script is selected yet. Start a script draft to open the editor.")).toBeTruthy();
+    expect(screen.queryByLabelText("Team members")).toBeNull();
+    expect(screen.queryByTestId("studio-lifecycle-section")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Observe" })).toBeNull();
+    expect(screen.queryByLabelText("Script ID")).toBeNull();
+    expect(screen.queryByText("Script draft run")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save draft" })).toBeNull();
 
     fireEvent.click(await screen.findByRole("button", { name: "Add script" }));
 
@@ -5776,64 +5823,50 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:10:00Z",
       },
     ]);
-    mockScopeRuntimeApi.listServices
-      .mockResolvedValueOnce([
+    let draft1ServicePublished = false;
+    const draft2Service = {
+      serviceId: "draft2",
+      displayName: "draft2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-draft2",
+      endpoints: [
         {
-          serviceId: "draft2",
-          displayName: "draft2",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft2",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft2.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
+          endpointId: "chat",
+          displayName: "Chat",
+          kind: "chat",
+          description: "Chat with draft2.",
+          requestTypeUrl: "",
+          responseTypeUrl: "",
         },
-      ])
-      .mockResolvedValueOnce([
+      ],
+    };
+    const draft1Service = {
+      serviceId: "draft1",
+      displayName: "draft1",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-draft1",
+      endpoints: [
         {
-          serviceId: "draft2",
-          displayName: "draft2",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft2",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft2.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
+          endpointId: "chat",
+          displayName: "Chat",
+          kind: "chat",
+          description: "Chat with draft1.",
+          requestTypeUrl: "",
+          responseTypeUrl: "",
         },
-        {
-          serviceId: "draft1",
-          displayName: "draft1",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft1",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft1.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
-        },
-      ]);
-    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValueOnce({
+      ],
+    };
+    mockScopeRuntimeApi.listServices.mockImplementation(async () =>
+      draft1ServicePublished ? [draft2Service, draft1Service] : [draft2Service],
+    );
+    (studioApi.bindMemberWorkflow as jest.Mock).mockImplementationOnce(async () => {
+      draft1ServicePublished = true;
+      return {
       status: "accepted",
       bindingRunId: "bind-draft1",
       scopeId: "scope-1",
       memberId: "draft1",
+      };
     });
     (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValueOnce({
       bindingRunId: "bind-draft1",

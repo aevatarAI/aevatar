@@ -238,6 +238,21 @@ jest.mock("./components/RunsLaunchRail", () => {
         null,
         props.variant === "chat" ? "Run context" : "Run setup"
       ),
+      props.runReadiness
+        ? React.createElement(
+            "div",
+            {
+              "data-testid": "mock-run-readiness",
+            },
+            [
+              props.runReadiness.ready ? "Ready to send" : "Send readiness",
+              props.runReadiness.blockingReason ?? "",
+              ...props.runReadiness.items.map(
+                (item: any) => `${item.label}: ${item.value}`
+              ),
+            ].join(" | ")
+          )
+        : null,
       props.showPromptField !== false
         ? React.createElement("textarea", {
             "aria-label": "Prompt",
@@ -368,7 +383,13 @@ describe("RunsPage", () => {
     expect(container.textContent).toContain("Route: direct");
     expect(container.textContent).toContain("Endpoint: chat");
     expect(container.textContent).toContain(
-      "Add a workspace ID in Run context before sending."
+      "Workspace is required before the prompt can be sent."
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Send readiness"
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Workspace: Required"
     );
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
@@ -387,6 +408,9 @@ describe("RunsPage", () => {
     expect(container.textContent).toContain("Workspace: required");
     const sendButton = screen.getByRole("button", { name: "Send" });
     expect(sendButton).toBeDisabled();
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Send readiness"
+    );
 
     fireEvent.change(screen.getByLabelText("Workspace ID"), {
       target: { value: "scope-1" },
@@ -394,7 +418,13 @@ describe("RunsPage", () => {
 
     expect(container.textContent).toContain("Workspace: scope-1");
     expect(container.textContent).not.toContain(
-      "Add a workspace ID in Run context before sending."
+      "Workspace is required before the prompt can be sent."
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Ready to send"
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Workspace: scope-1"
     );
     expect(sendButton).toBeEnabled();
 

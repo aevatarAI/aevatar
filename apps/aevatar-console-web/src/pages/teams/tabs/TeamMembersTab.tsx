@@ -108,6 +108,10 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           </Typography.Text>
         }
       >
+        <Typography.Text type="secondary">
+          从这里确认入口成员：Set entry 决定 Team Test 的起点，Build / Edit in Studio
+          用来补齐成员实现和绑定，完成后回到 Team Detail 测试团队。
+        </Typography.Text>
         {rosterSyncing ? (
           <AevatarInspectorEmpty
             compact

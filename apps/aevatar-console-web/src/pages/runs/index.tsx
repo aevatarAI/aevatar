@@ -105,6 +105,7 @@ import {
 } from "./runEventPresentation";
 import {
   builtInPresets,
+  buildRunReadinessSummary,
   type ConsoleViewKey,
   defaultRunRouteName,
   formatElapsedDuration,
@@ -1955,7 +1956,16 @@ const RunsPage: React.FC = () => {
   const composerRouteLabel =
     routeName || (scopeDraftPayload ? scopeDraftPayload.bundleName : "Workspace default");
   const composerEndpointLabel = endpointName || "chat";
-  const composerReady = Boolean(composerScopeId.trim());
+  const runReadiness = useMemo(
+    () =>
+      buildRunReadinessSummary({
+        endpointLabel: composerEndpointLabel,
+        routeLabel: composerRouteLabel,
+        scopeId: composerScopeId,
+      }),
+    [composerEndpointLabel, composerRouteLabel, composerScopeId]
+  );
+  const composerReady = runReadiness.ready;
 
   const handleSubmitResume = useCallback(
     async (values: ResumeFormValues) => {
@@ -2126,6 +2136,7 @@ const RunsPage: React.FC = () => {
       visiblePresets={visiblePresets}
       workflowCatalogLoading={workflowCatalogQuery.isLoading}
       routeOptions={routeOptions}
+      runReadiness={isChatConsole ? runReadiness : undefined}
       onAbortRun={abortRun}
       onCatalogSearchChange={setCatalogSearch}
       onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
@@ -2323,7 +2334,7 @@ const RunsPage: React.FC = () => {
                 </div>
                 {!composerReady ? (
                   <div style={runsChatComposerWarningStyle}>
-                    Add a workspace ID in Run context before sending.
+                    {runReadiness.blockingReason}
                   </div>
                 ) : null}
                 <div className={runsChatComposerBodyClassName}>

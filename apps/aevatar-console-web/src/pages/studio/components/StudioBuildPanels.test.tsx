@@ -569,19 +569,25 @@ describe('StudioWorkflowBuildPanel', () => {
 
     expect(
       screen.getByText(
-        'Create or select a script first. Validation, save, bind, and dry-run unlock after there is a script to work on.',
+        'Create a script to start editing. Saved workspace scripts appear here when this catalog has one.',
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(
-        'Create a script capability or select a saved workspace script. After that, this panel will show validation, save, bind, and dry-run controls.',
-      ),
+      screen.getByText('No script is selected yet. Start a script draft to open the editor.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('Create a script before running it')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Script ID')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Script lifecycle status')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Script dry run input')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Validation, save, bind/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/dry-run controls/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Bind becomes available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Create a script before running it')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Validate' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save script' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Load fixture' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load sample input' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue to Bind' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Promotion')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add script' }));
     expect(handleCreateScriptDraft).toHaveBeenCalled();

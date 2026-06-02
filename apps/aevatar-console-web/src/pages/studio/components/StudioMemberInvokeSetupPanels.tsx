@@ -13,6 +13,7 @@ import {
 } from './studioInvokeUi';
 
 type StudioMemberInvokeComposerPanelProps = {
+  readonly blockedReason?: string;
   readonly canInvoke: boolean;
   readonly defaultPrompt: string;
   readonly formError: string;
@@ -98,6 +99,7 @@ const typedPayloadGridStyle: React.CSSProperties = {
 export const StudioMemberInvokeComposerPanel: React.FC<
   StudioMemberInvokeComposerPanelProps
 > = ({
+  blockedReason = '',
   canInvoke,
   defaultPrompt,
   formError,
@@ -203,7 +205,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
           </Typography.Text>
         ) : !canInvoke ? (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            请选择可调用的 Team member 和 endpoint。
+            {blockedReason || '请选择可调用的 Team member 和 endpoint。'}
           </Typography.Text>
         ) : isChatEndpoint ? (
           <Typography.Text
@@ -220,10 +222,9 @@ export const StudioMemberInvokeComposerPanel: React.FC<
       </div>
 
       {!isChatEndpoint ? (
-        <Collapse
-          bordered={false}
-          defaultActiveKey={['typed-payload']}
-          items={[
+          <Collapse
+            bordered={false}
+            items={[
             {
               key: 'typed-payload',
               label: 'Advanced typed payload',

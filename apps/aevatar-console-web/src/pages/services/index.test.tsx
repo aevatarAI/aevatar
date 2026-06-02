@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import ServicesPage from './index';
@@ -103,6 +103,14 @@ jest.mock('@/shared/api/servicesApi', () => ({
   },
 }));
 
+const { servicesApi: mockServicesApi } = jest.requireMock(
+  '@/shared/api/servicesApi',
+) as {
+  servicesApi: {
+    listServices: jest.Mock;
+  };
+};
+
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
     getAuthSession: jest.fn(async () => ({
@@ -115,6 +123,7 @@ jest.mock('@/shared/studio/api', () => ({
 
 describe('ServicesPage', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     window.history.replaceState({}, '', '/services');
   });
 
@@ -141,6 +150,58 @@ describe('ServicesPage', () => {
     expect(screen.getByRole('button', { name: '打开治理' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '筛选服务' })).toBeTruthy();
     expect(screen.queryByText('对象摘要')).toBeNull();
+    expect(screen.queryByText('当前范围没有服务')).toBeNull();
+  });
+
+  it('keeps the services inventory in a loading state until the first response resolves', async () => {
+    let resolveServices: (value: unknown[]) => void = () => {};
+    mockServicesApi.listServices.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveServices = resolve;
+        }),
+    );
+
+    renderWithQueryClient(React.createElement(ServicesPage));
+
+    expect(await screen.findByText('正在加载服务目录')).toBeTruthy();
+    expect(screen.getByText('服务目录请求仍在进行，指标会在返回后更新。')).toBeTruthy();
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
+    expect(screen.queryByText('当前范围没有服务')).toBeNull();
+
+    resolveServices([]);
+
+    expect(await screen.findByText('当前范围没有服务')).toBeTruthy();
+  });
+
+  it('separates services inventory failures from a true empty scope', async () => {
+    mockServicesApi.listServices.mockRejectedValueOnce(
+      new Error('service catalog unavailable'),
+    );
+
+    renderWithQueryClient(React.createElement(ServicesPage));
+
+    expect(await screen.findByText('服务目录暂不可用')).toBeTruthy();
+    expect(screen.getByText('service catalog unavailable')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '重试服务目录' })).toBeTruthy();
+    expect(screen.queryByText('当前范围没有服务')).toBeNull();
+  });
+
+  it('shows an actionable services empty state only after an empty response', async () => {
+    mockServicesApi.listServices.mockResolvedValueOnce([]);
+
+    renderWithQueryClient(React.createElement(ServicesPage));
+
+    expect(await screen.findByText('当前范围没有服务')).toBeTruthy();
+    expect(
+      screen.getByText('当前 Team、App 和 Namespace 下没有可见服务。可以调整范围后重新加载。'),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '调整服务范围' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/services');
+    });
   });
 
   it('renders authority detail in drawer after selecting a service', async () => {

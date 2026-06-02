@@ -1147,6 +1147,11 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Set entry 决定 Team Test 的起点，Build \/ Edit in Studio 用来补齐成员实现和绑定/,
+      ),
+    ).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
     expect(screen.getByText("入口成员")).toBeTruthy();

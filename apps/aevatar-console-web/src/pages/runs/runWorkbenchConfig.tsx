@@ -99,6 +99,22 @@ export type SelectedRouteRecord = {
   description: string;
 };
 
+export type RunReadinessStatus = "ready" | "required" | "context";
+
+export type RunReadinessItem = {
+  key: "workspace" | "route" | "endpoint";
+  label: string;
+  value: string;
+  status: RunReadinessStatus;
+  helper: string;
+};
+
+export type RunReadinessSummary = {
+  ready: boolean;
+  blockingReason?: string;
+  items: RunReadinessItem[];
+};
+
 export type WaitingSignalRecord = {
   signalName: string;
   stepId: string;
@@ -636,6 +652,56 @@ export function formatRunRouteLabel(
     normalizedRouteName !== normalizedEndpointId
     ? `${normalizedEndpointId} · ${normalizedRouteName}`
     : normalizedEndpointId;
+}
+
+export function buildRunReadinessSummary({
+  endpointLabel,
+  routeLabel,
+  scopeId,
+}: {
+  endpointLabel?: string | null;
+  routeLabel?: string | null;
+  scopeId?: string | null;
+}): RunReadinessSummary {
+  const normalizedScopeId = trimOptional(scopeId);
+  const normalizedRouteLabel = trimOptional(routeLabel) ?? "Workspace default";
+  const normalizedEndpointLabel = trimOptional(endpointLabel) ?? "chat";
+  const ready = Boolean(normalizedScopeId);
+
+  return {
+    ready,
+    blockingReason: ready
+      ? undefined
+      : "Workspace is required before the prompt can be sent.",
+    items: [
+      {
+        key: "workspace",
+        label: "Workspace",
+        value: normalizedScopeId ?? "Required",
+        status: normalizedScopeId ? "ready" : "required",
+        helper: normalizedScopeId
+          ? "Run requests are scoped to this workspace."
+          : "Add a workspace ID to unlock Send.",
+      },
+      {
+        key: "route",
+        label: "Route",
+        value: normalizedRouteLabel,
+        status: "context",
+        helper:
+          normalizedRouteLabel === "Workspace default"
+            ? "No route override; the workspace default binding will be used."
+            : "The prompt will target this chat route.",
+      },
+      {
+        key: "endpoint",
+        label: "Endpoint",
+        value: normalizedEndpointLabel,
+        status: "context",
+        helper: "Advanced endpoint and payload controls stay available below.",
+      },
+    ],
+  };
 }
 
 export function describeRunReturnTarget(returnTo?: string | null): string {
