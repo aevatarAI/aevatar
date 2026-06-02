@@ -65,7 +65,12 @@ public sealed class UseSkillTool : IAgentTool
         catch { /* use defaults */ }
 
         if (string.IsNullOrWhiteSpace(skillName))
-            return BuildErrorWithAvailableSkills("Error: skill name is required.");
+            return BuildLoadResult(
+                skillName: null,
+                loaded: false,
+                error: "skill name is required.",
+                status: "error",
+                text: BuildErrorWithAvailableSkills("Error: skill name is required."));
 
         // ─── 查找技能 ───
         SkillDefinition? skill = null;
@@ -74,7 +79,12 @@ public sealed class UseSkillTool : IAgentTool
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
         //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
         if (_localCatalog.TryGet(skillName, out skill) && skill != null)
-            return BuildSkillResponse(skill, args);
+            return BuildLoadResult(
+                skillName: skill.Name,
+                loaded: true,
+                error: null,
+                status: "success",
+                text: BuildSkillResponse(skill, args));
 
         if (_remoteFetcher != null)
         {
@@ -84,12 +94,22 @@ public sealed class UseSkillTool : IAgentTool
                 skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
                 if (skill != null)
                 {
-                    return BuildSkillResponse(skill, args);
+                    return BuildLoadResult(
+                        skillName: skill.Name,
+                        loaded: true,
+                        error: null,
+                        status: "success",
+                        text: BuildSkillResponse(skill, args));
                 }
             }
         }
 
-        return BuildErrorWithAvailableSkills($"Skill '{skillName}' not found.");
+        return BuildLoadResult(
+            skillName: skillName,
+            loaded: false,
+            error: $"Skill '{skillName}' not found.",
+            status: "not_found",
+            text: BuildErrorWithAvailableSkills($"Skill '{skillName}' not found."));
     }
 
     private static string BuildSkillResponse(SkillDefinition skill, string args)
@@ -198,5 +218,24 @@ public sealed class UseSkillTool : IAgentTool
         sb.AppendLine("You can also use ornn_search_skills to discover more skills from the user's library.");
 
         return sb.ToString();
+    }
+
+    private static string BuildLoadResult(
+        string? skillName,
+        bool loaded,
+        string? error,
+        string status,
+        string text)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            result_type = "skill_load",
+            status,
+            skill_name = skillName,
+            loaded,
+            error,
+            http_status = (int?)null,
+            text,
+        });
     }
 }

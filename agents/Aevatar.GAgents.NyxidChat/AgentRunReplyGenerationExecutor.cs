@@ -316,7 +316,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         foreach (var toolResult in results)
         {
             toolStepResult.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
-                ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.Result)));
+                ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.ToolName, toolResult.Result)));
         }
 
         return new AgentRunNextToolStepRequestedEvent

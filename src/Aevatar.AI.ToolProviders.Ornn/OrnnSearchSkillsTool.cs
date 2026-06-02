@@ -42,7 +42,16 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+        {
+            return BuildStructuredResult(
+                status: "error",
+                query: null,
+                scope: null,
+                error: "No NyxID access token available. User must be authenticated.",
+                matches: Array.Empty<object>(),
+                httpStatus: null,
+                text: "Error: No NyxID access token available. User must be authenticated.");
+        }
 
         string query = "";
         string scope = "mixed";
@@ -60,10 +69,28 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         var result = await _client.SearchSkillsAsync(token, query, scope, ct: ct);
 
         if (!string.IsNullOrEmpty(result.Error))
-            return $"Search failed: {result.Error}";
+        {
+            return BuildStructuredResult(
+                status: "error",
+                query: query,
+                scope: scope,
+                error: result.Error,
+                matches: Array.Empty<object>(),
+                httpStatus: null,
+                text: $"Search failed: {result.Error}");
+        }
 
         if (result.Items.Count == 0)
-            return $"No skills found for query '{query}' (scope: {scope}).";
+        {
+            return BuildStructuredResult(
+                status: "no_match",
+                query: query,
+                scope: scope,
+                error: null,
+                matches: Array.Empty<object>(),
+                httpStatus: null,
+                text: $"No skills found for query '{query}' (scope: {scope}).");
+        }
 
         var lines = new List<string>
         {
@@ -84,6 +111,43 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         }
 
         lines.Add("Use use_skill with the skill name to load and activate a skill.");
-        return string.Join("\n", lines);
+        var matches = result.Items.Select(skill => new
+        {
+            skill_name = skill.Name ?? string.Empty,
+            description = skill.Description,
+            is_private = skill.IsPrivate,
+            category = skill.Metadata?.Category,
+            tags = skill.Tags ?? skill.Metadata?.Tags ?? [],
+        }).ToArray();
+        return BuildStructuredResult(
+            status: "success",
+            query: query,
+            scope: scope,
+            error: null,
+            matches: matches,
+            httpStatus: null,
+            text: string.Join("\n", lines));
+    }
+
+    private static string BuildStructuredResult(
+        string status,
+        string? query,
+        string? scope,
+        string? error,
+        object matches,
+        int? httpStatus,
+        string text)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            result_type = "skill_search",
+            status,
+            query,
+            scope,
+            error,
+            http_status = httpStatus,
+            matches,
+            text,
+        });
     }
 }

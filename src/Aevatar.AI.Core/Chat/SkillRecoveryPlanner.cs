@@ -84,17 +84,6 @@ internal static class SkillRecoveryPlanner
         "blocker",
     ];
 
-    private static readonly string[] OrnnSearchNoMatchPhrases =
-    [
-        "no skills found",
-        "search failed",
-        "error:",
-        "no nyxid access token",
-        "not reachable",
-        "not available",
-        "unavailable",
-    ];
-
     public static bool TryPlanNextDirective(
         AgentSkillRecoveryContext recovery,
         IReadOnlyList<ChatMessage> messages,
@@ -140,7 +129,9 @@ internal static class SkillRecoveryPlanner
         if (TryGetLatestOrnnSearchWithMatches(messages, out var latestSearchIndex, out var latestSearchResult) &&
             !HasToolCallAfter(messages, UseSkillToolName, latestSearchIndex))
         {
-            var skillName = ExtractFirstSkillName(latestSearchResult);
+            var skillName = latestSearchResult.Matches.Count > 0
+                ? latestSearchResult.Matches[0].SkillName
+                : null;
             directive = !string.IsNullOrWhiteSpace(skillName)
                 ? new RecoveryDirective(
                     BuildUseSkillToolCall(
@@ -154,7 +145,7 @@ internal static class SkillRecoveryPlanner
                     : new RecoveryDirective(
                     ToolCall: null,
                     ConsumesOrnnSearchAttempt: true,
-                    Nudge: BuildUseDiscoveredSkillNudge(recovery, latestSearchResult));
+                    Nudge: BuildUseDiscoveredSkillNudge(recovery, latestSearchResult.DisplayText));
             return directive.ToolCall is not null || !string.IsNullOrWhiteSpace(directive.Nudge);
         }
 
@@ -267,10 +258,10 @@ internal static class SkillRecoveryPlanner
     private static bool TryGetLatestOrnnSearchWithMatches(
         IReadOnlyList<ChatMessage> messages,
         out int searchMessageIndex,
-        out string searchResult)
+        out SkillSearchToolResultView searchResult)
     {
         searchMessageIndex = -1;
-        searchResult = string.Empty;
+        searchResult = new SkillSearchToolResultView(ToolResultViewStatus.Unknown, false, [], null, null, string.Empty);
 
         for (var i = messages.Count - 1; i >= 0; i--)
         {
@@ -285,18 +276,21 @@ internal static class SkillRecoveryPlanner
                     continue;
 
                 searchMessageIndex = i;
-                searchResult = FindToolResult(messages, call.Id, i + 1);
-                return SearchResultHasMatches(searchResult);
+                var toolResult = FindToolResult(messages, call.Id, i + 1);
+                searchResult = toolResult?.ToolResultView?.SkillSearch
+                               ?? new SkillSearchToolResultView(ToolResultViewStatus.Unknown, false, [], null, null, string.Empty);
+                return searchResult.Status == ToolResultViewStatus.Success &&
+                       searchResult.HasMatches;
             }
         }
 
         return false;
     }
 
-    private static string FindToolResult(IReadOnlyList<ChatMessage> messages, string? callId, int startIndex)
+    private static ChatMessage? FindToolResult(IReadOnlyList<ChatMessage> messages, string? callId, int startIndex)
     {
         if (string.IsNullOrWhiteSpace(callId))
-            return string.Empty;
+            return null;
 
         for (var i = Math.Max(0, startIndex); i < messages.Count; i++)
         {
@@ -304,23 +298,11 @@ internal static class SkillRecoveryPlanner
             if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(message.ToolCallId, callId, StringComparison.Ordinal))
             {
-                return message.Content ?? string.Empty;
+                return message;
             }
         }
 
-        return string.Empty;
-    }
-
-    private static bool SearchResultHasMatches(string? result)
-    {
-        if (string.IsNullOrWhiteSpace(result))
-            return false;
-
-        if (ContainsAny(result, OrnnSearchNoMatchPhrases))
-            return false;
-
-        return result.Contains("Found ", StringComparison.OrdinalIgnoreCase) &&
-               result.Contains("skill", StringComparison.OrdinalIgnoreCase);
+        return null;
     }
 
     private static bool HasBlockerAfterLastOrnnSearch(IReadOnlyList<ChatMessage> messages, string? finalContent)
@@ -339,7 +321,7 @@ internal static class SkillRecoveryPlanner
         {
             var message = messages[i];
             if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
-                ContainsAny(message.Content, BlockerPhrases))
+                IsToolBlocker(message))
             {
                 return true;
             }
@@ -360,6 +342,22 @@ internal static class SkillRecoveryPlanner
         }
 
         return false;
+    }
+
+    private static bool IsToolBlocker(ChatMessage message)
+    {
+        var view = message.ToolResultView;
+        if (view?.SkillSearch is { } searchResult)
+        {
+            return searchResult.Status == ToolResultViewStatus.Error;
+        }
+
+        if (view?.SkillLoad is { } loadResult)
+        {
+            return loadResult.Status is ToolResultViewStatus.Error or ToolResultViewStatus.NotFound;
+        }
+
+        return ContainsAny(message.Content, BlockerPhrases);
     }
 
     private static string BuildUseDiscoveredSkillNudge(AgentSkillRecoveryContext recovery, string searchResult)
@@ -392,46 +390,20 @@ internal static class SkillRecoveryPlanner
             : string.Empty;
     }
 
-    private static string? ExtractFirstSkillName(string searchResult)
-    {
-        foreach (var rawLine in searchResult.Split('\n'))
-        {
-            var line = rawLine.Trim();
-            if (!line.StartsWith("- ", StringComparison.Ordinal))
-                continue;
-
-            var item = line[2..].Trim();
-            if (item.StartsWith("**", StringComparison.Ordinal))
-            {
-                var end = item.IndexOf("**", 2, StringComparison.Ordinal);
-                if (end > 2)
-                    return item[2..end].Trim();
-            }
-
-            var paren = item.IndexOf(" (", StringComparison.Ordinal);
-            var colon = item.IndexOf(':', StringComparison.Ordinal);
-            var endIndex = item.Length;
-            if (paren > 0)
-                endIndex = Math.Min(endIndex, paren);
-            if (colon > 0)
-                endIndex = Math.Min(endIndex, colon);
-
-            var candidate = item[..endIndex].Trim().Trim('*', '`');
-            if (!string.IsNullOrWhiteSpace(candidate))
-                return candidate;
-        }
-
-        return null;
-    }
-
     private static string SummarizeBlocker(IReadOnlyList<ChatMessage> messages, string? finalContent)
     {
         for (var i = messages.Count - 1; i >= 0; i--)
         {
             var message = messages[i];
             if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
-                ContainsAny(message.Content, BlockerPhrases))
+                IsToolBlocker(message))
             {
+                if (message.ToolResultView?.SkillSearch is { Error: { } searchError })
+                    return TrimForPrompt(searchError);
+
+                if (message.ToolResultView?.SkillLoad is { Error: { } loadError })
+                    return TrimForPrompt(loadError);
+
                 return TrimForPrompt(message.Content);
             }
         }

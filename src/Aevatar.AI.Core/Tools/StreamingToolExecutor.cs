@@ -16,7 +16,7 @@ using System.Runtime.CompilerServices;
 namespace Aevatar.AI.Core.Tools;
 
 /// <summary>Tool execution result with call-id for message pairing.</summary>
-public readonly record struct ToolExecutionResult(string CallId, string Result, bool IsError);
+public readonly record struct ToolExecutionResult(string CallId, string ToolName, string Result, bool IsError);
 
 /// <summary>
 /// Streaming tool executor that starts executing tools as soon as they appear,
@@ -72,10 +72,11 @@ public sealed class StreamingToolExecutor
         if (state.Discarded)
         {
             tracked.Status = ToolStatus.Completed;
-            tracked.Result = new ToolExecutionResult(
-                toolCall.Id,
-                "Tool execution was discarded",
-                IsError: true);
+                tracked.Result = new ToolExecutionResult(
+                    toolCall.Id,
+                    toolCall.Name,
+                    "Tool execution was discarded",
+                    IsError: true);
         }
 
         Advance(state);
@@ -158,6 +159,7 @@ public sealed class StreamingToolExecutor
                 completion = new ToolExecutionCompletion(
                     new ToolExecutionResult(
                         tracked.Call.Id,
+                        tracked.Call.Name,
                         "Tool execution was discarded",
                         IsError: true),
                     SchedulerFault: false);
@@ -168,6 +170,7 @@ public sealed class StreamingToolExecutor
                 completion = new ToolExecutionCompletion(
                     new ToolExecutionResult(
                         tracked.Call.Id,
+                        tracked.Call.Name,
                         ToolManager.BuildErrorJson(ex.Message),
                         IsError: true),
                     SchedulerFault: false);
@@ -196,6 +199,7 @@ public sealed class StreamingToolExecutor
                 tracked.Status = ToolStatus.Completed;
                 tracked.Result = new ToolExecutionResult(
                     tracked.Call.Id,
+                    tracked.Call.Name,
                     state.Discarded ? "Tool execution was discarded" : "Skipped due to prior tool error",
                     IsError: true);
                 continue;
@@ -259,6 +263,7 @@ public sealed class StreamingToolExecutor
             tracked.Status = ToolStatus.Completed;
             tracked.Result = new ToolExecutionResult(
                 tracked.Call.Id,
+                tracked.Call.Name,
                 "Tool execution was discarded",
                 IsError: true);
         }
@@ -297,6 +302,7 @@ public sealed class StreamingToolExecutor
                     return new ToolExecutionCompletion(
                         new ToolExecutionResult(
                             call.Id,
+                            call.Name,
                             ToolManager.BuildErrorJson("Tool hook rewrote a concurrent read-only call to a non-read-only tool."),
                             IsError: true),
                         SchedulerFault: true);
@@ -338,11 +344,11 @@ public sealed class StreamingToolExecutor
 
             if (ct.IsCancellationRequested)
                 return new ToolExecutionCompletion(
-                    new ToolExecutionResult(call.Id, "Tool execution was discarded", IsError: true),
+                new ToolExecutionResult(call.Id, call.Name, "Tool execution was discarded", IsError: true),
                     SchedulerFault: false);
 
             return new ToolExecutionCompletion(
-                new ToolExecutionResult(call.Id, toolResult, IsError: false),
+                new ToolExecutionResult(call.Id, call.Name, toolResult, IsError: false),
                 SchedulerFault: false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -350,6 +356,7 @@ public sealed class StreamingToolExecutor
             return new ToolExecutionCompletion(
                 new ToolExecutionResult(
                     tracked.Call.Id,
+                    tracked.Call.Name,
                     "Tool execution was discarded",
                     IsError: true),
                 SchedulerFault: false);
@@ -359,6 +366,7 @@ public sealed class StreamingToolExecutor
             return new ToolExecutionCompletion(
                 new ToolExecutionResult(
                     tracked.Call.Id,
+                    tracked.Call.Name,
                     ToolManager.BuildErrorJson(ex.Message),
                     IsError: true),
                 SchedulerFault: false);

@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
+using System.Text.Json;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -17,7 +18,8 @@ public sealed class OrnnSearchSkillsToolTests
 
             var result = await tool.ExecuteAsync("""{ "query": "translate" }""");
 
-            result.Should().Contain("No NyxID access token");
+            ExtractText(result).Should().Contain("No NyxID access token");
+            ExtractStatus(result).Should().Be("error");
         }
         finally
         {
@@ -53,11 +55,13 @@ public sealed class OrnnSearchSkillsToolTests
             var tool = CreateTool(handler);
 
             var result = await tool.ExecuteAsync("""{ "query": "translate", "scope": "private" }""");
+            var text = ExtractText(result);
 
-            result.Should().Contain("Found 1 skills");
-            result.Should().Contain("**Translate** (private, text)");
-            result.Should().Contain("Translate text");
-            result.Should().Contain("Tags: language");
+            text.Should().Contain("Found 1 skills");
+            text.Should().Contain("**Translate** (private, text)");
+            text.Should().Contain("Translate text");
+            text.Should().Contain("Tags: language");
+            ExtractStatus(result).Should().Be("success");
 
             var request = handler.Requests.Should().ContainSingle().Subject;
             request.Authorization!.Parameter.Should().Be("access-token");
@@ -86,7 +90,8 @@ public sealed class OrnnSearchSkillsToolTests
 
             var result = await tool.ExecuteAsync("""{ "query": "translate" }""");
 
-            result.Should().Contain("Search failed:");
+            ExtractText(result).Should().Contain("Search failed:");
+            ExtractStatus(result).Should().Be("error");
         }
         finally
         {
@@ -109,7 +114,8 @@ public sealed class OrnnSearchSkillsToolTests
 
             var result = await tool.ExecuteAsync("not-json");
 
-            result.Should().Contain("No skills found for query '' (scope: mixed).");
+            ExtractText(result).Should().Contain("No skills found for query '' (scope: mixed).");
+            ExtractStatus(result).Should().Be("no_match");
         }
         finally
         {
@@ -127,5 +133,17 @@ public sealed class OrnnSearchSkillsToolTests
             nyxClient);
 
         return new OrnnSearchSkillsTool(client);
+    }
+
+    private static string ExtractText(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("text").GetString() ?? string.Empty;
+    }
+
+    private static string ExtractStatus(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("status").GetString() ?? string.Empty;
     }
 }
