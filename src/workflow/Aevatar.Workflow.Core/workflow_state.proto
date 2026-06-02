@@ -289,6 +289,23 @@ message SecureInputModuleState
   map<string, CapturedSecureInputState> captured = 2;
 }
 
+message PendingToolCallApprovalState
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  string tool_call_id = 5;
+  string approval_request_id = 6;
+  string arguments_json = 7;
+  string input = 8;
+}
+
+message ToolCallModuleState
+{
+  map<string, PendingToolCallApprovalState> pending_approvals = 1;
+}
+
 message PendingApprovalState
 {
   string step_id = 1;
