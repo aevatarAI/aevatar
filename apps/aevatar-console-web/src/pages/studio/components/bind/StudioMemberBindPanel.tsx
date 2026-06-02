@@ -852,8 +852,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const publishedSmokeRequiresAuth =
     !runsCurrentWorkflowDraft &&
     Boolean(bindContract?.authEnabled && !bindContract.authAuthenticated);
+  const bindingPublicationReady = !currentBindingRun ||
+    isStudioMemberBindingRunTerminal(currentBindingRun);
   const canUsePublishedMemberInvoke = Boolean(
-    normalizedMemberId && selectedService && selectedEndpoint && bindContract,
+    normalizedMemberId &&
+      selectedService &&
+      selectedEndpoint &&
+      bindContract &&
+      bindingPublicationReady,
   );
 
   useEffect(() => {

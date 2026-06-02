@@ -533,6 +533,7 @@ const StudioMemberCurrentRunPanel: React.FC<
     ? formatHistoryTimestamp(activeRunCompletedAt)
     : '';
   const observeHandoffText = getStudioInvokeObserveHandoffText({
+    mode: invokeResult.mode,
     runViewMode,
     status: invokeResult.status,
   });

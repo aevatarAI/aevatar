@@ -118,6 +118,7 @@ export function cloneInvokeResult(result: InvokeResultState): InvokeResultState 
 }
 
 export function getStudioInvokeObserveHandoffText(input: {
+  readonly mode: InvokeResultState['mode'];
   readonly runViewMode: StudioInvokeRunViewMode;
   readonly status: InvokeResultState['status'];
 }): string {
@@ -130,6 +131,10 @@ export function getStudioInvokeObserveHandoffText(input: {
   }
 
   if (input.status === 'success') {
+    if (input.mode === 'invoke') {
+      return 'Invoke receipt was captured. Switch to Observe to watch backend events and read-model materialization catch up for this member.';
+    }
+
     return 'This run is ready for Observe. Switch to Observe to inspect backend events, audit frames, and the runtime trail for this member.';
   }
 

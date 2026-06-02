@@ -784,6 +784,9 @@ describe('StudioMemberInvokePanel', () => {
     });
 
     expect(await screen.findByText('Run history (1)')).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
+      'Invoke receipt was captured. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
+    );
     expect(
       screen.getByTestId('studio-invoke-history-scroll').style.overflow,
     ).toBe('visible');

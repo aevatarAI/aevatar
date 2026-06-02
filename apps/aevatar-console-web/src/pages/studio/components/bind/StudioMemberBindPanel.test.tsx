@@ -883,9 +883,113 @@ describe('StudioMemberBindPanel', () => {
         /Platform publication is still running; Invoke is not ready/,
       ),
     ).toBeTruthy();
-    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
-      'Bind accepted the publication request. Stay here until Studio observes the published contract, then continue to Invoke.',
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+        'Bind accepted the publication request. Stay here until Studio observes the published contract, then continue to Invoke.',
+      );
+    });
+  });
+
+  it('blocks smoke test and Invoke while a newer bind run is still publishing over an old contract', async () => {
+    const handleContinueToInvoke = jest.fn();
+    (studioApi.getMemberBinding as jest.Mock).mockImplementationOnce(async () => ({
+      available: true,
+      scopeId: 'scope-1',
+      serviceId: 'default',
+      displayName: 'workspace-demo',
+      serviceKey: 'scope-1:default:workspace-demo',
+      defaultServingRevisionId: 'rev-2',
+      activeServingRevisionId: 'rev-2',
+      deploymentId: 'dep-2',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-default',
+      updatedAt: '2026-03-26T08:00:00Z',
+      revisions: [],
+      lastBinding: {
+        boundAt: '2026-03-26T08:00:00Z',
+        implementationKind: 'workflow',
+        revisionId: 'rev-2',
+      },
+      currentBindingRun: {
+        bindingRunId: 'bind-member-2',
+        completedAtUtc: null,
+        createdAtUtc: '2026-06-02T03:30:00Z',
+        failure: null,
+        memberId: 'default',
+        message: '',
+        scopeId: 'scope-1',
+        stateVersion: 4,
+        status: 'platform_binding_pending',
+        targetServiceId: 'default',
+        updatedAtUtc: '2026-06-02T03:30:05Z',
+      },
+    }));
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'default',
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        onContinueToInvoke: handleContinueToInvoke,
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'Chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+                description: 'Chat with the previous workflow contract.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
     );
+
+    await waitFor(() => {
+      expect(studioApi.getMemberBinding).toHaveBeenCalledWith(
+        'scope-1',
+        'default',
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+        'Bind accepted the publication request. Stay here until Studio observes the published contract, then continue to Invoke.',
+      );
+    });
+
+    const smokeButton = screen.getByRole('button', { name: 'Send smoke test' });
+    const continueButton = screen.getByRole('button', { name: 'Continue to Invoke' });
+    expect(smokeButton).toBeDisabled();
+    expect(continueButton).toBeDisabled();
+
+    fireEvent.click(smokeButton);
+    fireEvent.click(continueButton);
+
+    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
+    expect(handleContinueToInvoke).not.toHaveBeenCalled();
   });
 
   it('clears the previous member bind notice when the bind candidate changes', async () => {

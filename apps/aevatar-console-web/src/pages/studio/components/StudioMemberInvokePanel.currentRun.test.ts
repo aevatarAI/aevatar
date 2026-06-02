@@ -95,6 +95,7 @@ describe('StudioMemberInvokePanel current run model', () => {
   it('describes when Invoke can hand the latest run to Observe', () => {
     expect(
       getStudioInvokeObserveHandoffText({
+        mode: 'stream',
         runViewMode: 'latest',
         status: 'success',
       }),
@@ -103,6 +104,7 @@ describe('StudioMemberInvokePanel current run model', () => {
     );
     expect(
       getStudioInvokeObserveHandoffText({
+        mode: 'stream',
         runViewMode: 'latest',
         status: 'running',
       }),
@@ -111,6 +113,7 @@ describe('StudioMemberInvokePanel current run model', () => {
     );
     expect(
       getStudioInvokeObserveHandoffText({
+        mode: 'stream',
         runViewMode: 'historical',
         status: 'success',
       }),
@@ -119,9 +122,22 @@ describe('StudioMemberInvokePanel current run model', () => {
     );
     expect(
       getStudioInvokeObserveHandoffText({
+        mode: 'stream',
         runViewMode: 'latest',
         status: 'error',
       }),
     ).toBe('');
+  });
+
+  it('keeps non-stream invoke receipts honest about Observe freshness', () => {
+    expect(
+      getStudioInvokeObserveHandoffText({
+        mode: 'invoke',
+        runViewMode: 'latest',
+        status: 'success',
+      }),
+    ).toBe(
+      'Invoke receipt was captured. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
+    );
   });
 });
