@@ -1004,9 +1004,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             var metadata = await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
-                    ResolveUserAccessToken(activity, runtimeContext),
                     ct);
-            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(metadata)))
+            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
+                       inboundEvent,
+                       activity,
+                       ResolveUserAccessToken(activity, runtimeContext),
+                       metadata)))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
@@ -1388,7 +1391,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["scope_id"] = inboundEvent.RegistrationScopeId,
             [ChannelMetadataKeys.Platform] = inboundEvent.Platform,
             [ChannelMetadataKeys.SenderId] = inboundEvent.SenderId,
             [ChannelMetadataKeys.SenderName] = inboundEvent.SenderName,
@@ -1436,27 +1438,26 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     }
 
     private static AgentToolExecutionContext BuildAgentBuilderToolContext(
+        ChannelInboundEvent inboundEvent,
+        ChatActivity activity,
+        string? userAccessToken,
         IReadOnlyDictionary<string, string> metadata)
     {
-        static string? Get(IReadOnlyDictionary<string, string> source, string key) =>
-            source.TryGetValue(key, out var value) ? NormalizeOptional(value) : null;
-
+        var token = NormalizeOptional(userAccessToken);
         return AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentials(
-                Get(metadata, LLMRequestMetadataKeys.NyxIdAccessToken),
-                Get(metadata, LLMRequestMetadataKeys.NyxIdOrgToken),
-                null),
+            Request = new AgentToolRequestIdentity(inboundEvent.MessageId, null),
+            Credentials = new AgentToolCredentials(token, token, null),
             Caller = new AgentToolCallerContext(
-                Get(metadata, "scope_id"),
+                inboundEvent.RegistrationScopeId,
                 null,
-                null),
+                inboundEvent.MessageId),
             Channel = new AgentToolChannelContext(
-                Get(metadata, ChannelMetadataKeys.Platform),
-                Get(metadata, ChannelMetadataKeys.SenderId),
-                Get(metadata, "scope_id"),
-                Get(metadata, ChannelMetadataKeys.MessageId),
-                Get(metadata, ChannelMetadataKeys.PlatformMessageId)),
+                inboundEvent.Platform,
+                inboundEvent.SenderId,
+                inboundEvent.RegistrationScopeId,
+                inboundEvent.MessageId,
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
     }
@@ -1464,7 +1465,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
-        string? userAccessToken,
         CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(
@@ -1473,11 +1473,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
-        if (!string.IsNullOrWhiteSpace(userAccessToken))
-        {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken.Trim();
-            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken.Trim();
-        }
         return metadata;
     }
 
