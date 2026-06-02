@@ -2,7 +2,6 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Core.Middleware;
 
-/// <summary>refactor helper, no behavior change: fail-closed fallback when no approval handler is registered.</summary>
 public sealed class MissingApprovalHandler : IToolApprovalHandler
 {
     public static MissingApprovalHandler Instance { get; } = new();
