@@ -95,12 +95,22 @@ export function resolveConsoleEnvironment(): string {
   );
 }
 
+export function normalizeConsolePublicPath(value?: string): string {
+  const normalized = value?.trim();
+  if (!normalized || normalized === "/") {
+    return "/";
+  }
+
+  const rootRelative = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  return rootRelative.endsWith("/") ? rootRelative : `${rootRelative}/`;
+}
+
 function resolvePublicPath(): string {
-  return trimRuntimeValue(
+  return normalizeConsolePublicPath(
     typeof process === "undefined"
       ? undefined
       : process.env.AEVATAR_CONSOLE_PUBLIC_PATH,
-  ) || "/";
+  );
 }
 
 function resolveBrowserOrigin(): string {

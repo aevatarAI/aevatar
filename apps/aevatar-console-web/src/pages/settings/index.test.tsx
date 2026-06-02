@@ -5,6 +5,7 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
+import { normalizeConsolePublicPath } from "./diagnosticsContent";
 import SettingsPage, { buildSettingsRouteSelectOptions } from "./index";
 
 jest.mock("@/shared/studio/api", () => ({
@@ -188,6 +189,28 @@ describe("SettingsPage", () => {
     expect(screen.getAllByText("https://runtime.example.com").length).toBeGreaterThan(0);
     expect(screen.getByText("Session active")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+  });
+
+  it("keeps diagnostics usable when the stored session payload is malformed", async () => {
+    window.localStorage.setItem("aevatar-console:nyxid:session", JSON.stringify({}));
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Diagnostics" }));
+
+    expect(await screen.findByText("Runtime checks")).toBeTruthy();
+    expect(screen.getByText("Session missing")).toBeTruthy();
+    expect(screen.getByText("No browser session is stored for this console.")).toBeTruthy();
+    expect(window.localStorage.getItem("aevatar-console:nyxid:session")).toBeNull();
+  });
+
+  it("normalizes the diagnostics public path like the Umi build config", () => {
+    expect(normalizeConsolePublicPath(undefined)).toBe("/");
+    expect(normalizeConsolePublicPath("")).toBe("/");
+    expect(normalizeConsolePublicPath("/")).toBe("/");
+    expect(normalizeConsolePublicPath("console")).toBe("/console/");
+    expect(normalizeConsolePublicPath("/console")).toBe("/console/");
+    expect(normalizeConsolePublicPath("/console/")).toBe("/console/");
   });
 
   it("shows gateway models from every ready gateway provider", async () => {

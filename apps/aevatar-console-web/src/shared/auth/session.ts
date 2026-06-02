@@ -66,6 +66,83 @@ function safeParse<T>(raw: string | null): T | null {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readStringField(
+  record: Record<string, unknown>,
+  fieldName: string,
+): string | undefined {
+  const value = record[fieldName];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function readOptionalStringField(
+  record: Record<string, unknown>,
+  fieldName: string,
+): string | undefined {
+  const value = record[fieldName];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readNumberField(
+  record: Record<string, unknown>,
+  fieldName: string,
+): number | undefined {
+  const value = record[fieldName];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const entries = value.filter((entry): entry is string => typeof entry === 'string');
+  return entries.length === value.length ? entries : undefined;
+}
+
+function normalizeAuthSession(value: unknown): NyxIDAuthSession | null {
+  if (!isRecord(value) || !isRecord(value.tokens) || !isRecord(value.user)) {
+    return null;
+  }
+
+  const accessToken = readStringField(value.tokens, 'accessToken');
+  const tokenType = readStringField(value.tokens, 'tokenType');
+  const expiresIn = readNumberField(value.tokens, 'expiresIn');
+  const expiresAt = readNumberField(value.tokens, 'expiresAt');
+  const sub = readStringField(value.user, 'sub');
+  if (!accessToken || !tokenType || expiresIn === undefined || expiresAt === undefined || !sub) {
+    return null;
+  }
+
+  return {
+    tokens: {
+      accessToken,
+      tokenType,
+      expiresIn,
+      expiresAt,
+      refreshToken: readOptionalStringField(value.tokens, 'refreshToken'),
+      idToken: readOptionalStringField(value.tokens, 'idToken'),
+      scope: readOptionalStringField(value.tokens, 'scope'),
+    },
+    user: {
+      sub,
+      email: readOptionalStringField(value.user, 'email'),
+      email_verified:
+        typeof value.user.email_verified === 'boolean'
+          ? value.user.email_verified
+          : undefined,
+      name: readOptionalStringField(value.user, 'name'),
+      picture: readOptionalStringField(value.user, 'picture'),
+      roles: normalizeStringArray(value.user.roles),
+      groups: normalizeStringArray(value.user.groups),
+      permissions: normalizeStringArray(value.user.permissions),
+    },
+  };
+}
+
 export function hasActiveAccessToken(tokens: NyxIDTokenSet | undefined): boolean {
   if (!tokens) {
     return false;
@@ -80,9 +157,10 @@ export function readStoredAuthSession(): NyxIDAuthSession | null {
     return null;
   }
 
-  const session = safeParse<NyxIDAuthSession>(
+  const parsedSession = safeParse<unknown>(
     storage.getItem(AUTH_SESSION_STORAGE_KEY),
   );
+  const session = normalizeAuthSession(parsedSession);
 
   if (!session) {
     storage.removeItem(AUTH_SESSION_STORAGE_KEY);

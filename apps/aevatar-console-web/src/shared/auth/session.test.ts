@@ -103,6 +103,13 @@ describe('auth session storage', () => {
     expect(readStoredAuthSession()).not.toBeNull();
   });
 
+  it('drops malformed persisted session payloads', () => {
+    window.localStorage.setItem('aevatar-console:nyxid:session', JSON.stringify({}));
+
+    expect(readStoredAuthSession()).toBeNull();
+    expect(window.localStorage.length).toBe(0);
+  });
+
   it('accepts only safe in-app redirect targets', () => {
     expect(sanitizeReturnTo('/runs?tab=active')).toBe('/runtime/runs?tab=active');
     expect(sanitizeReturnTo('/gagents?scopeId=scope-a')).toBe('/runtime/gagents?scopeId=scope-a');
