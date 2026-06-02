@@ -88,6 +88,14 @@ const buildWorkbenchGridStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
+const scriptLaunchpadGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  minHeight: 0,
+  minWidth: 0,
+};
+
 const buildWorkbenchPrimaryColumnStyle: React.CSSProperties = {
   alignSelf: 'start',
   display: 'grid',
@@ -2846,7 +2854,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   }
 
   return (
-    <div data-testid="studio-script-build-panel" style={buildWorkbenchGridStyle}>
+    <div
+      data-testid="studio-script-build-panel"
+      style={hasActiveScript ? buildWorkbenchGridStyle : scriptLaunchpadGridStyle}
+    >
       <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
         <section style={buildSurfaceCardStyle}>
           <div style={{ display: 'grid', gap: 4 }}>
@@ -2854,7 +2865,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             <div style={sectionDescriptionStyle}>
               {hasActiveScript
                 ? 'Script mode 只做一件事：围绕当前 script draft 的 typed source、lints 和 dry-run 迭代实现。'
-                : 'Create or select a script first. Validation, save, bind, and dry-run unlock after there is a script to work on.'}
+                : 'Create a script to start editing. Saved workspace scripts appear here when this catalog has one.'}
             </div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
@@ -2867,40 +2878,42 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                   </Tag>
                 </>
               ) : null}
-              <Select
-                aria-label="Script ID"
-                style={{ minWidth: 220 }}
-                placeholder="Create or select a script"
-                value={activeScript?.script?.scriptId || undefined}
-                onChange={onSelectScriptId}
-                options={[
-                  ...(pendingScriptDraft?.scriptId
-                    ? [
-                        {
-                          label: `${pendingScriptDraft.scriptId} (draft)`,
-                          value: pendingScriptDraft.scriptId,
-                        },
-                      ]
-                    : []),
-                  ...(observedAppliedScript?.script?.scriptId &&
-                  !pendingScriptDraft?.scriptId &&
-                  !availableScripts.some(
-                    (detail) =>
-                      detail.script?.scriptId === observedAppliedScript.script?.scriptId,
-                  )
-                    ? [
-                        {
-                          label: `${observedAppliedScript.script.scriptId} (applied)`,
-                          value: observedAppliedScript.script.scriptId,
-                        },
-                      ]
-                    : []),
-                  ...availableScripts.map((detail) => ({
-                    label: detail.script?.scriptId || 'script',
-                    value: detail.script?.scriptId || '',
-                  })),
-                ]}
-              />
+              {hasActiveScript ? (
+                <Select
+                  aria-label="Script ID"
+                  style={{ minWidth: 220 }}
+                  placeholder="Select a script"
+                  value={activeScript?.script?.scriptId || undefined}
+                  onChange={onSelectScriptId}
+                  options={[
+                    ...(pendingScriptDraft?.scriptId
+                      ? [
+                          {
+                            label: `${pendingScriptDraft.scriptId} (draft)`,
+                            value: pendingScriptDraft.scriptId,
+                          },
+                        ]
+                      : []),
+                    ...(observedAppliedScript?.script?.scriptId &&
+                    !pendingScriptDraft?.scriptId &&
+                    !availableScripts.some(
+                      (detail) =>
+                        detail.script?.scriptId === observedAppliedScript.script?.scriptId,
+                    )
+                      ? [
+                          {
+                            label: `${observedAppliedScript.script.scriptId} (applied)`,
+                            value: observedAppliedScript.script.scriptId,
+                          },
+                        ]
+                      : []),
+                    ...availableScripts.map((detail) => ({
+                      label: detail.script?.scriptId || 'script',
+                      value: detail.script?.scriptId || '',
+                    })),
+                  ]}
+                />
+              ) : null}
             </Space>
             {hasActiveScript ? (
               <Space wrap size={[8, 8]}>
@@ -3207,7 +3220,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             </div>
           ) : (
             <Empty
-              description="Create a script capability or select a saved workspace script. After that, this panel will show validation, save, bind, and dry-run controls."
+              description="No script is selected yet. Start a script draft to open the editor."
             >
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -3236,21 +3249,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               Continue to Bind
             </Button>
           </div>
-        ) : (
-          <div
-            style={{
-              background: '#fffdf8',
-              border: '1px solid #efe7da',
-              borderRadius: 16,
-              color: '#667085',
-              fontSize: 13,
-              lineHeight: '20px',
-              padding: '12px 14px',
-            }}
-          >
-            Start with Add script or select an existing script. Bind becomes available only after a saved catalog revision exists.
-          </div>
-        )}
+        ) : null}
 
         <ScriptLeaveDialog
           open={leaveDialogOpen}
@@ -3259,9 +3258,8 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         />
       </div>
 
-      <aside style={dryRunAsideStyle}>
-        {hasActiveScript ? (
-          <>
+      {hasActiveScript ? (
+        <aside style={dryRunAsideStyle}>
             <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
               <div style={{ display: 'grid', gap: 4 }}>
                 <div style={sectionEyebrowStyle}>Dry-run</div>
@@ -3345,19 +3343,6 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               <div style={sectionEyebrowStyle}>Output</div>
               <pre style={dryRunOutputStyle}>{runOutput}</pre>
             </div>
-          </>
-        ) : (
-          <div style={{ display: 'grid', gap: 12 }}>
-            <div style={{ display: 'grid', gap: 4 }}>
-              <div style={sectionEyebrowStyle}>Dry-run</div>
-              <Typography.Text strong>Create a script before running it</Typography.Text>
-            </div>
-            <Typography.Text type="secondary">
-              The run input, fixture loader, and output stream appear after a script draft or saved script is selected.
-            </Typography.Text>
-          </div>
-        )}
-        {hasActiveScript ? (
           <details
             aria-label="Script promotion history"
             style={{
@@ -3428,8 +3413,8 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               )}
             </div>
           </details>
-        ) : null}
-      </aside>
+        </aside>
+      ) : null}
     </div>
   );
 };

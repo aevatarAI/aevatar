@@ -4524,6 +4524,16 @@ const StudioPage: React.FC = () => {
       : buildSurface === 'gagent'
         ? 'gagent'
         : 'workflow';
+  const isScriptBuildLaunchpadEmpty =
+    isBuildScriptsSurface &&
+    Boolean(resolvedStudioScopeId) &&
+    Boolean(appContextQuery.data?.features.scripts) &&
+    !scopeScriptsQuery.isLoading &&
+    !scopeScriptsQuery.isFetching &&
+    availableScopeScripts.length === 0 &&
+    !trimOptional(selectedScriptId) &&
+    !trimOptional(pendingScriptDraft?.scriptId) &&
+    !trimOptional(scriptBuildState?.scriptId);
   const buildPendingBindCandidate = useMemo(() => {
     if (!resolvedStudioScopeId) {
       return null;
@@ -9713,7 +9723,9 @@ const StudioPage: React.FC = () => {
     Boolean(invokeTargetServiceId) &&
     Boolean(invokeTargetDefaultEndpointId);
   const lifecycleSteps = useMemo<readonly StudioLifecycleStep[]>(
-    () => [
+    () => isScriptBuildLaunchpadEmpty
+      ? []
+      : [
       {
         key: 'build',
         label: 'Build',
@@ -9747,6 +9759,7 @@ const StudioPage: React.FC = () => {
     ],
     [
       currentLifecycleStep,
+      isScriptBuildLaunchpadEmpty,
       resolvedStudioScopeId,
       selectedMemberCanBind,
       selectedMemberCanInvoke,
@@ -9756,7 +9769,7 @@ const StudioPage: React.FC = () => {
     () => getDefaultBuildModeCards(Boolean(appContextQuery.data?.features.scripts)),
     [appContextQuery.data?.features.scripts],
   );
-  const buildModeCards = isBuildSurface ? (
+  const buildModeCards = isBuildSurface && !isScriptBuildLaunchpadEmpty ? (
     <div
       data-testid="studio-build-mode-switcher"
       style={{
@@ -10009,12 +10022,14 @@ const StudioPage: React.FC = () => {
         : 'Select a member'
       : isBuildEditorSurface
         ? activeWorkflowName || templateWorkflow || 'Workflow 构建'
-      : isBuildGAgentSurface
+        : isBuildGAgentSurface
           ? hasSelectedMemberFocus
             ? currentMemberLabel
             : 'GAgent 构建'
         : isBuildScriptsSurface
-          ? selectedScriptId || 'Script 构建'
+          ? isScriptBuildLaunchpadEmpty
+            ? 'Create a script'
+            : selectedScriptId || 'Script 构建'
         : isObserveSurface
           ? hasSelectedMemberFocus
             ? currentMemberLabel
@@ -10038,7 +10053,9 @@ const StudioPage: React.FC = () => {
         : isBuildGAgentSurface
           ? '在 Build 内定义 GAgent 类型、角色、初始 prompt、工具和状态持久化'
         : isBuildScriptsSurface
-          ? '围绕 script source、diagnostics 和 dry-run 继续迭代当前 member'
+          ? isScriptBuildLaunchpadEmpty
+            ? 'Start a script draft before Studio opens editing, validation, or run controls.'
+            : '围绕 script source、diagnostics 和 dry-run 继续迭代当前 member'
         : isObserveSurface
           ? '围绕当前 member 的最近运行、回放和基线继续观察'
           : isBindSurface
@@ -10617,6 +10634,8 @@ const StudioPage: React.FC = () => {
               onSelectMember={handleSelectStudioMember}
               pageTitle={pageTitle}
               selectedMemberKey={selectedRailMemberKey}
+              showLifecycle={!isScriptBuildLaunchpadEmpty}
+              showMemberRail={!isScriptBuildLaunchpadEmpty}
               showPageHeader={false}
             >
               {currentPageContent}

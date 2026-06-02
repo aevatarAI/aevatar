@@ -61,6 +61,8 @@ type StudioShellProps = {
   readonly pageTitle: string;
   readonly pageToolbar?: React.ReactNode;
   readonly selectedMemberKey?: string;
+  readonly showLifecycle?: boolean;
+  readonly showMemberRail?: boolean;
   readonly showPageHeader?: boolean;
   readonly children: React.ReactNode;
 };
@@ -414,6 +416,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
   pageTitle,
   pageToolbar,
   selectedMemberKey,
+  showLifecycle = true,
+  showMemberRail = true,
   showPageHeader = true,
   children,
 }) => {
@@ -501,6 +505,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
 
   return (
     <div style={shellRootStyle}>
+      {showMemberRail ? (
       <aside style={railStyle} aria-label="Team members">
         <div style={railHeaderStyle}>
           <div
@@ -760,10 +765,11 @@ const StudioShell: React.FC<StudioShellProps> = ({
         </div>
 
       </aside>
+      ) : null}
 
       <div data-testid="studio-shell-main" style={mainStyle}>
         {contextBar}
-        {lifecycleSteps.length > 0 ? (
+        {showLifecycle && lifecycleSteps.length > 0 ? (
           <div data-testid="studio-lifecycle-section" style={lifecycleSectionStyle}>
             <div style={lifecycleHeaderStyle}>
               <Typography.Text
