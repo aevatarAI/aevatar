@@ -20,7 +20,6 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly IStreamingProxyRoomCommandService _roomCommandService;
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -28,14 +27,12 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     private readonly ILogger<StreamingProxyNyxParticipantCoordinator> _logger;
 
     public StreamingProxyNyxParticipantCoordinator(
-        IStreamingProxyRoomCommandService roomCommandService,
         ILLMProviderFactory llmProviderFactory,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         ILogger<StreamingProxyNyxParticipantCoordinator> logger,
         INyxIdUserLlmPreferencesStore? preferencesStore = null)
     {
-        _roomCommandService = roomCommandService ?? throw new ArgumentNullException(nameof(roomCommandService));
         _llmProviderFactory = llmProviderFactory;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
@@ -43,7 +40,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         _preferencesStore = preferencesStore;
     }
 
-    public async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
+    public Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> ResolveParticipantsAsync(
         string scopeId,
         string roomId,
         string accessToken,
@@ -51,181 +48,90 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string? preferredRoute = null,
         string? defaultModel = null)
     {
-        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
-        // This method resolves Nyx participant definitions and forwards join intent.
-        // It does not publish committed room history or bypass the room command service.
-        // Room actor state remains the only participant fact source.
-        var participants = await ResolveParticipantsAsync(accessToken, preferredRoute, defaultModel, ct);
-        if (participants.Count == 0)
-            return participants;
-
-        foreach (var participant in participants)
-        {
-            // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
-            // Nyx catalog resolution remains outside the actor, but joining is now only a room command request.
-            // The adapter does not construct committed join facts or dispatch raw room envelopes.
-            // StreamingProxyGAgent remains the only committer of participant facts.
-            await _roomCommandService.JoinAsync(
-                new StreamingProxyRoomJoinCommand(
-                    roomId,
-                    participant.ParticipantId,
-                    participant.DisplayName),
-                ct);
-        }
-
-        return participants;
+        _ = scopeId;
+        _ = roomId;
+        return ResolveParticipantsAsync(accessToken, preferredRoute, defaultModel, ct);
     }
 
-    public Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureParticipantsJoinedAsync(
-        string scopeId,
-        string roomId,
-        IReadOnlySet<string> ignoredParticipantIds,
-        string accessToken,
-        CancellationToken ct,
-        string? preferredRoute = null,
-        string? defaultModel = null) =>
-        EnsureParticipantsJoinedAsync(
-            scopeId,
-            roomId,
-            accessToken,
-            ct,
-            preferredRoute,
-            defaultModel);
-
-    public async Task<int> GenerateRepliesAsync(
-        IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants,
-        string roomId,
-        string prompt,
-        string sessionId,
-        string accessToken,
+    public async Task<StreamingProxyParticipantReplyOutcome> GenerateReplyAsync(
+        StreamingProxyChatParticipantReplyRequested request,
         CancellationToken ct)
     {
-        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
-        // This method performs external Nyx streaming I/O and normalizes adapter outcomes.
-        // Successful replies and unavailable participants are forwarded as typed room commands.
-        // Committed message/leave facts are owned exclusively by StreamingProxyGAgent.
-        if (participants.Count == 0)
-            return 0;
-
+        ArgumentNullException.ThrowIfNull(request);
         if (!_llmProviderFactory.GetAvailableProviders().Contains(NyxIdProviderName, StringComparer.OrdinalIgnoreCase))
         {
             _logger.LogWarning("NyxID provider '{ProviderName}' is not registered; skip Streaming Proxy participants.", NyxIdProviderName);
-            return 0;
+            return StreamingProxyParticipantReplyOutcome.Failed(
+                StreamingProxyChatParticipantReplyFailureKind.ProviderUnavailable,
+                $"NyxID provider '{NyxIdProviderName}' is not registered.");
         }
 
         var provider = _llmProviderFactory.GetProvider(NyxIdProviderName);
-        var transcript = new List<(string Speaker, string Content)>();
-        var activeParticipants = participants.ToList();
-        var rounds = activeParticipants.Count > 1 ? StreamingProxyDefaults.MaxDiscussionRounds : 1;
-        var totalSuccessfulReplies = 0;
+        var participant = new StreamingProxyNyxParticipantDefinition(
+            request.ParticipantId,
+            request.RoutePreference,
+            request.DisplayName,
+            request.Model);
+        var activeParticipants = request.ActiveParticipants
+            .Select(candidate => new StreamingProxyNyxParticipantDefinition(
+                candidate.ParticipantId,
+                candidate.RoutePreference,
+                candidate.DisplayName,
+                string.IsNullOrWhiteSpace(candidate.Model) ? null : candidate.Model))
+            .ToList();
+        var transcript = request.Transcript
+            .Select(entry => (entry.Speaker, entry.Content))
+            .ToList();
 
-        for (var round = 1; round <= rounds && activeParticipants.Count > 0; round++)
+        try
         {
-            var successfulReplies = 0;
-            var failedParticipants = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var roundParticipants = activeParticipants.ToList();
-
-            foreach (var participant in roundParticipants)
+            var llmRequest = BuildParticipantRequest(
+                participant,
+                activeParticipants,
+                request.Prompt,
+                request.SessionId,
+                request.AccessToken,
+                transcript,
+                request.Round,
+                request.MaxRounds);
+            var response = await ReadParticipantResponseAsync(provider, llmRequest, ct);
+            if (IsUnavailableResponse(response))
             {
-                ct.ThrowIfCancellationRequested();
-
-                if (failedParticipants.Contains(participant.ParticipantId))
-                    continue;
-
-                var availableParticipants = activeParticipants
-                    .Where(candidate => !failedParticipants.Contains(candidate.ParticipantId))
-                    .ToList();
-
-                if (availableParticipants.Count == 0)
-                    break;
-
-                try
-                {
-                    var request = BuildParticipantRequest(
-                        participant,
-                        availableParticipants,
-                        prompt,
-                        sessionId,
-                        accessToken,
-                        transcript,
-                        round,
-                        rounds);
-                    var response = await ReadParticipantResponseAsync(provider, request, ct);
-                    if (IsUnavailableResponse(response))
-                    {
-                        failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(
-                            roomId,
-                            participant.ParticipantId,
-                            ct);
-                        _logger.LogWarning(
-                            "Streaming Proxy participant '{Participant}' returned an unavailable response for route '{RoutePreference}' in round {Round}.",
-                            participant.DisplayName,
-                            participant.RoutePreference,
-                            round);
-                        continue;
-                    }
-
-                    var content = NormalizeParticipantReply(
-                        participant,
-                        availableParticipants,
-                        response.Content);
-                    if (string.IsNullOrWhiteSpace(content))
-                    {
-                        failedParticipants.Add(participant.ParticipantId);
-                        await MarkParticipantLeftAsync(
-                            roomId,
-                            participant.ParticipantId,
-                            ct);
-                        continue;
-                    }
-
-                    transcript.Add((participant.DisplayName, content));
-                    successfulReplies++;
-                    totalSuccessfulReplies++;
-                    await _roomCommandService.PostMessageAsync(
-                        new StreamingProxyRoomPostMessageCommand(
-                            roomId,
-                            participant.ParticipantId,
-                            participant.DisplayName,
-                            content,
-                            sessionId),
-                        ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    failedParticipants.Add(participant.ParticipantId);
-                    await MarkParticipantLeftAsync(
-                        roomId,
-                        participant.ParticipantId,
-                        ct);
-                    _logger.LogWarning(ex,
-                        "Streaming Proxy participant '{Participant}' failed for route '{RoutePreference}' in round {Round}.",
-                        participant.DisplayName,
-                        participant.RoutePreference,
-                        round);
-                }
+                _logger.LogWarning(
+                    "Streaming Proxy participant '{Participant}' returned an unavailable response for route '{RoutePreference}' in round {Round}.",
+                    participant.DisplayName,
+                    participant.RoutePreference,
+                    request.Round);
+                return StreamingProxyParticipantReplyOutcome.Failed(
+                    StreamingProxyChatParticipantReplyFailureKind.ParticipantUnavailable,
+                    "Nyx participant unavailable.");
             }
 
-            if (failedParticipants.Count > 0)
-            {
-                activeParticipants = activeParticipants
-                    .Where(participant => !failedParticipants.Contains(participant.ParticipantId))
-                    .ToList();
-            }
-
-            if (successfulReplies == 0)
-                break;
-
-            if (activeParticipants.Count < 2)
-                break;
+            var content = NormalizeParticipantReply(
+                participant,
+                activeParticipants,
+                response.Content);
+            return string.IsNullOrWhiteSpace(content)
+                ? StreamingProxyParticipantReplyOutcome.Failed(
+                    StreamingProxyChatParticipantReplyFailureKind.EmptyReply,
+                    "Nyx participant returned an empty reply.")
+                : StreamingProxyParticipantReplyOutcome.Succeeded(content);
         }
-
-        return totalSuccessfulReplies;
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Streaming Proxy participant '{Participant}' failed for route '{RoutePreference}' in round {Round}.",
+                participant.DisplayName,
+                participant.RoutePreference,
+                request.Round);
+            return StreamingProxyParticipantReplyOutcome.Failed(
+                StreamingProxyChatParticipantReplyFailureKind.Error,
+                ex.Message);
+        }
     }
 
     private async Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> ResolveParticipantsAsync(
@@ -957,26 +863,6 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         return string.Join('\n', lines).Trim();
     }
 
-    private async Task MarkParticipantLeftAsync(
-        string roomId,
-        string participantId,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(participantId))
-            return;
-
-        // Refactor (iter56/cluster-894-nyx-coordinator-adapter-only): old=coordinator-owned facts, new=adapter-only + room-actor-owned facts
-        // Participant failure is reported as a typed leave command request.
-        // The adapter does not decide or publish the committed left event.
-        // Room actor state determines whether the request produces a fact.
-        await _roomCommandService.LeaveAsync(
-            new StreamingProxyRoomLeaveCommand(
-                roomId,
-                participantId,
-                "Nyx participant unavailable."),
-            ct);
-    }
-
     private static bool IsUnavailableResponse(LLMResponse response)
     {
         if (string.Equals(response.FinishReason, "error", StringComparison.OrdinalIgnoreCase) ||
@@ -1029,6 +915,21 @@ internal sealed record StreamingProxyNyxParticipantDefinition(
     string RoutePreference,
     string DisplayName,
     string? Model);
+
+internal sealed record StreamingProxyParticipantReplyOutcome(
+    bool IsSuccess,
+    string? Content,
+    StreamingProxyChatParticipantReplyFailureKind FailureKind,
+    string? ErrorMessage)
+{
+    public static StreamingProxyParticipantReplyOutcome Succeeded(string content) =>
+        new(true, content, StreamingProxyChatParticipantReplyFailureKind.Unspecified, null);
+
+    public static StreamingProxyParticipantReplyOutcome Failed(
+        StreamingProxyChatParticipantReplyFailureKind failureKind,
+        string? errorMessage) =>
+        new(false, null, failureKind, errorMessage);
+}
 
 internal sealed record StreamingProxyNyxParticipantCandidate(
     StreamingProxyNyxProviderStatus Provider,
