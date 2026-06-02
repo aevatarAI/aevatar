@@ -892,7 +892,10 @@ describe("ChatPage", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Conversation model settings" })
     );
-    fireEvent.change(await screen.findByLabelText("Conversation route"), {
+    const routeSelect = await screen.findByLabelText("Conversation route");
+    expect(routeSelect).toHaveTextContent("Gateway route option");
+    expect(routeSelect).toHaveTextContent("OpenAI");
+    fireEvent.change(routeSelect, {
       target: { value: "/api/v1/proxy/s/openai" },
     });
     expect(await screen.findByText("via OpenAI")).toBeTruthy();

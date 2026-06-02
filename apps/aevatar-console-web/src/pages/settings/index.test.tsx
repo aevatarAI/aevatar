@@ -250,6 +250,41 @@ describe("SettingsPage", () => {
     expect(screen.queryByRole("combobox", { name: "Default model" })).toBeNull();
   });
 
+  it("excludes stale saved routes and models that are not in the backend catalog", async () => {
+    mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
+      createLlmSettings({
+        defaultModel: "retired-model",
+        effectiveRoute: "/api/v1/proxy/s/retired-team",
+        effectiveRouteLabel: "Retired Team",
+        routeOptions: [
+          {
+            routeValue: "",
+            label: "NyxID Gateway",
+            source: "gateway_provider",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            serviceId: null,
+            serviceSlug: null,
+            description: null,
+          },
+        ],
+        savedRoute: "/api/v1/proxy/s/retired-team",
+        savedRouteLabel: "Retired Team",
+      })
+    );
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Preferred route" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("NyxID Gateway").length).toBeGreaterThan(1);
+    });
+    expect(screen.queryByRole("option", { name: "Retired Team" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "retired-model" })).toBeNull();
+  });
+
   it("saves canonical LLM settings", async () => {
     mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
       createLlmSettings({

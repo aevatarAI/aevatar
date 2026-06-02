@@ -424,13 +424,8 @@ const ChatPage: React.FC = () => {
     userLlmSettingsQuery.data?.effectiveRoute
   );
   const routeOptions = useMemo(
-    () =>
-      buildConversationRouteOptions(
-        userLlmSettingsQuery.data,
-        globalPreferredRoute,
-        conversationRoute
-      ),
-    [conversationRoute, globalPreferredRoute, userLlmSettingsQuery.data]
+    () => buildConversationRouteOptions(userLlmSettingsQuery.data),
+    [userLlmSettingsQuery.data]
   );
   const effectiveRoute =
     conversationRoute !== undefined ? conversationRoute : globalPreferredRoute;
@@ -451,16 +446,10 @@ const ChatPage: React.FC = () => {
   const modelGroups = useMemo(
     () =>
       buildConversationModelGroups({
-        conversationModel,
         effectiveRoute,
-        globalDefaultModel: userLlmSettingsQuery.data?.defaultModel,
         settings: userLlmSettingsQuery.data,
       }),
-    [
-      conversationModel,
-      effectiveRoute,
-      userLlmSettingsQuery.data,
-    ]
+    [effectiveRoute, userLlmSettingsQuery.data]
   );
   const conversationHeaders = useMemo(
     () => buildConversationHeaders(conversationRoute, conversationModel),
