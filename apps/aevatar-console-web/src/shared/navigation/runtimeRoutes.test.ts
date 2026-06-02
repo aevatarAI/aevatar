@@ -1,6 +1,7 @@
 import {
   buildRuntimeExplorerHref,
   buildRuntimeMissionControlHref,
+  buildRuntimeWorkflowRunHref,
   buildRuntimeRunsHref,
 } from './runtimeRoutes';
 
@@ -38,6 +39,17 @@ describe('runtimeRoutes', () => {
     expect(url.searchParams.get('runId')).toBe('run-1');
     expect(url.searchParams.get('returnTo')).toBe(
       '/runtime/explorer/detail?actorId=actor%3A%2F%2Fselected&runId=run-1',
+    );
+  });
+
+  it('preserves workflow catalog context for workflow run handoffs', () => {
+    const href = buildRuntimeWorkflowRunHref('demo_flow');
+    const url = new URL(href, 'https://console.aevatar.test');
+
+    expect(url.pathname).toBe('/runtime/runs');
+    expect(url.searchParams.get('route')).toBe('demo_flow');
+    expect(url.searchParams.get('returnTo')).toBe(
+      '/runtime/workflows?workflow=demo_flow',
     );
   });
 

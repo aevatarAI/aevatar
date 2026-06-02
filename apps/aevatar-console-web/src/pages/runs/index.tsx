@@ -111,6 +111,7 @@ import {
   formatElapsedDuration,
   type HumanInputRecord,
   readInitialRunFormValues,
+  describeRunReturnTarget,
   type RecentRunTableRow,
   type ResumeFormValues,
   type RunFocusRecord,
@@ -1092,6 +1093,10 @@ const RunsPage: React.FC = () => {
       runId: session.runId || undefined,
     });
   }, [requestedReturnTo, resolveRunScopeId, session.runId]);
+  const returnTargetLabel = useMemo(
+    () => describeRunReturnTarget(teamAdvancedHref),
+    [teamAdvancedHref]
+  );
 
   const resolveRunServiceOverrideId = useCallback(() => {
     return (
@@ -2218,7 +2223,7 @@ const RunsPage: React.FC = () => {
                 icon={<ArrowLeftOutlined />}
                 onClick={() => history.push(teamAdvancedHref)}
               >
-                返回团队高级编辑
+                {returnTargetLabel}
               </Button>
             ) : null}
             <Button

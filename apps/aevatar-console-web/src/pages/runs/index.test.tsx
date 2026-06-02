@@ -492,7 +492,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "返回团队高级编辑" })
+      await screen.findByRole("button", { name: "返回 Studio" })
     );
 
     expect(window.location.pathname).toBe("/studio");
@@ -504,6 +504,25 @@ describe("RunsPage", () => {
     );
     expect(new URLSearchParams(window.location.search).get("template")).toBe(
       "hello-chat"
+    );
+  });
+
+  it("returns to the originating workflow inspector when a workflow handoff provides return context", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?route=demo_flow&returnTo=%2Fruntime%2Fworkflows%3Fworkflow%3Ddemo_flow"
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "返回 Workflow Library" })
+    );
+
+    expect(window.location.pathname).toBe("/runtime/workflows");
+    expect(new URLSearchParams(window.location.search).get("workflow")).toBe(
+      "demo_flow"
     );
   });
 
