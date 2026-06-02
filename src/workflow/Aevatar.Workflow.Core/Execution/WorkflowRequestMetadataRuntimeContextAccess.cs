@@ -5,14 +5,15 @@ namespace Aevatar.Workflow.Core.Execution;
 
 internal static class WorkflowRequestMetadataRuntimeContextAccess
 {
-    public static async Task SetRequestMetadataAsync(
+    public static Task SetRequestMetadataAsync(
         IWorkflowExecutionStateHost stateHost,
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        await WorkflowRunExecutionContextStateAccess.ApplyRequestMetadataAsync(stateHost, metadata, ct);
+        ct.ThrowIfCancellationRequested();
         stateHost.RuntimeContext.ApplyRequestMetadata(metadata);
+        return Task.CompletedTask;
     }
 
     public static Task SetToolContextAsync(

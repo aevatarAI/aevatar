@@ -70,9 +70,10 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public async Task SetRequestMetadata_ShouldClearTypedConnectorAndPassthroughWhenMetadataIsNullEmptyOrInvalid()
+    public async Task SetRequestMetadata_ShouldOnlyClearPassthroughWhenMetadataIsNullEmptyOrInvalid()
     {
         var host = new RecordingStateHost();
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer typed");
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
@@ -83,7 +84,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
 
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
@@ -93,8 +94,37 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [" "] = " ",
             });
 
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SetRequestMetadata_ShouldThrowAndNotMutatePassthroughWhenCancellationRequested()
+    {
+        var host = new RecordingStateHost();
+        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
+            host,
+            new Dictionary<string, string>
+            {
+                ["trace-id"] = "abc",
+            });
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await FluentActions.Awaiting(() => WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
+                host,
+                new Dictionary<string, string>
+                {
+                    ["trace-id"] = "changed",
+                    ["request-id"] = "request-1",
+                },
+                cts.Token))
+            .Should()
+            .ThrowAsync<OperationCanceledException>();
+
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainSingle();
+        host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("request-id");
     }
 
     [Fact]

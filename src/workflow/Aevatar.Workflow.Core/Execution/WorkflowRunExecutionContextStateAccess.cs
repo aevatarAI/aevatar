@@ -32,28 +32,6 @@ internal static class WorkflowRunExecutionContextStateAccess
         return stateHost.ClearExecutionContextAsync(ct);
     }
 
-    public static Task ApplyRequestMetadataAsync(
-        IWorkflowExecutionStateHost stateHost,
-        IReadOnlyDictionary<string, string>? metadata,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(stateHost);
-        var delta = BuildRequestMetadataDelta(metadata);
-        return stateHost.UpdateExecutionContextAsync(delta, ct);
-    }
-
-    public static WorkflowRunExecutionContextDelta BuildRequestMetadataDelta(
-        IReadOnlyDictionary<string, string>? metadata)
-    {
-        // Refactor (iter169/cluster-issue1551): Old pattern: Metadata["connector.http.authorization"] was promoted into connector state. New principle: request metadata is passthrough-only; connector auth uses BuildConnectorAuthorizationDelta.
-        var delta = new WorkflowRunExecutionContextDelta
-        {
-            ClearConnector = true,
-        };
-
-        return delta;
-    }
-
     public static WorkflowRunExecutionContextDelta BuildConnectorAuthorizationDelta(string? authorization)
     {
         var delta = new WorkflowRunExecutionContextDelta
