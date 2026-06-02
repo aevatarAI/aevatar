@@ -232,7 +232,7 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
-    public void ProductionSources_ShouldNotUseLegacyCurrentMetadataOrTryGetControlShims()
+    public void ProductionSources_ShouldNotUseLegacyMetadataControlShims()
     {
         var repositoryRoot = FindRepositoryRoot();
         var files = Directory
@@ -251,8 +251,22 @@ public sealed class AgentToolExecutionContextMapperTests
             Environment.NewLine,
             files.Select(path => StripComments(File.ReadAllText(path))));
 
+        source.Should().NotContain("AgentToolRequestContext.LegacyMetadata");
         source.Should().NotContain("AgentToolRequestContext.CurrentMetadata");
         source.Should().NotContain("AgentToolRequestContext.TryGet(");
+        source.Should().NotContain(".ToLegacyMetadata(");
+    }
+
+    [Fact]
+    public void ArchitectureGuard_ShouldBlockLegacyToolMetadataConsumptionOutsideAdapters()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var guardPath = Path.Combine(repositoryRoot, "tools", "ci", "architecture_guards.sh");
+        var source = File.ReadAllText(guardPath);
+
+        source.Should().Contain("AgentToolRequestContext\\\\.(LegacyMetadata|CurrentMetadata|TryGet\\\\()");
+        source.Should().Contain("ToLegacyMetadata\\\\(");
+        source.Should().Contain("legacy adapter shims only");
     }
 
     private static string FindRepositoryRoot()

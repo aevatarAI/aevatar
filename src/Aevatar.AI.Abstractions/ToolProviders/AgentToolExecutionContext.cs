@@ -30,6 +30,11 @@ public sealed record AgentToolExecutionContext(
     public AgentToolExecutionContext WithCallId(string? callId) =>
         this with { Request = Request with { CallId = Normalize(callId) } };
 
+    /// <summary>
+    /// Builds the legacy string metadata bag required by old or third-party tool adapters.
+    /// Application, Domain, and Core production code must consume the typed fields on
+    /// <see cref="AgentToolExecutionContext"/> instead of reading these control semantics back from metadata.
+    /// </summary>
     public IReadOnlyDictionary<string, string> ToLegacyMetadata()
     {
         var metadata = new Dictionary<string, string>(ExternalMetadata, StringComparer.Ordinal);
