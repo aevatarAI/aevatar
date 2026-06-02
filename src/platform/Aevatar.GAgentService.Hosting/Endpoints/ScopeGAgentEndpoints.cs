@@ -7,8 +7,10 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Hosting;
+using Aevatar.Hosting.ExecutionActivity;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -28,6 +30,7 @@ public static class ScopeGAgentEndpoints
         group.MapGet("/{scopeId}/gagent-actors", HandleListActorsAsync);
         group.MapPost("/{scopeId}/gagent-actors", HandleAddActorAsync);
         group.MapDelete("/{scopeId}/gagent-actors/{actorId}", HandleRemoveActorAsync);
+        group.MapGet("/{scopeId}/execution-events", HandleExecutionEventsAsync);
         return app;
     }
 
@@ -468,6 +471,44 @@ public static class ScopeGAgentEndpoints
         }
     }
 
+    // Implement (issue #1703):
+    //   Behavior: expose handler lifecycle events as scope-scoped SSE frames without duplicating run-output streams.
+    //   Why this shape: the host only adapts scoped stream subscription to SSE; scope auth and typed stream payload stay authoritative.
+    private static async Task HandleExecutionEventsAsync(
+        HttpContext http,
+        string scopeId,
+        [FromServices] IStreamProvider streamProvider,
+        CancellationToken ct)
+    {
+        if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            return;
+
+        http.Response.StatusCode = StatusCodes.Status200OK;
+        http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
+        http.Response.Headers.CacheControl = "no-store";
+        http.Response.Headers["X-Accel-Buffering"] = "no";
+
+        var writer = new ExecutionActivityEventJsonSseWriter(http.Response);
+        var streamId = ExecutionActivityStreamTopics.ForScope(scopeId);
+        await using var subscription = await streamProvider
+            .GetStream(streamId)
+            .SubscribeAsync<ExecutionActivityEvent>(
+                evt => WriteExecutionActivityFrameAsync(writer, scopeId, evt, ct),
+                ct);
+        await http.Response.StartAsync(ct);
+
+        try
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(() => completion.TrySetCanceled(ct));
+            await completion.Task;
+        }
+        catch (OperationCanceledException)
+        {
+            // Client disconnected.
+        }
+    }
+
     private static string? ExtractBearerToken(HttpContext http)
     {
         var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
@@ -489,6 +530,64 @@ public static class ScopeGAgentEndpoints
         ex is NyxIdAuthenticationRequiredException
         || ex.InnerException is NyxIdAuthenticationRequiredException
         || (ex is AggregateException agg && agg.InnerExceptions.Any(e => e is NyxIdAuthenticationRequiredException));
+
+    private static Task WriteExecutionActivityFrameAsync(
+        ExecutionActivityEventJsonSseWriter writer,
+        string requestedScopeId,
+        ExecutionActivityEvent evt,
+        CancellationToken ct)
+    {
+        if (!string.Equals(evt.ScopeId, requestedScopeId, StringComparison.Ordinal))
+            return Task.CompletedTask;
+
+        var timestamp = evt.Ts?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return evt.Stage switch
+        {
+            ExecutionActivityLifecycleStage.Started => writer.WriteAsync(
+                "handler.started",
+                new
+                {
+                    scopeId = evt.ScopeId,
+                    actorId = evt.ActorId,
+                    agentType = evt.AgentType,
+                    handlerName = evt.HandlerName,
+                    eventType = evt.EventType,
+                    eventId = evt.EventId,
+                    ts = timestamp,
+                },
+                ct),
+            ExecutionActivityLifecycleStage.Completed => writer.WriteAsync(
+                "handler.completed",
+                new
+                {
+                    scopeId = evt.ScopeId,
+                    actorId = evt.ActorId,
+                    agentType = evt.AgentType,
+                    handlerName = evt.HandlerName,
+                    eventType = evt.EventType,
+                    eventId = evt.EventId,
+                    durationMs = evt.Duration?.ToTimeSpan().TotalMilliseconds,
+                    ts = timestamp,
+                },
+                ct),
+            ExecutionActivityLifecycleStage.Failed => writer.WriteAsync(
+                "handler.failed",
+                new
+                {
+                    scopeId = evt.ScopeId,
+                    actorId = evt.ActorId,
+                    agentType = evt.AgentType,
+                    handlerName = evt.HandlerName,
+                    eventType = evt.EventType,
+                    eventId = evt.EventId,
+                    durationMs = evt.Duration?.ToTimeSpan().TotalMilliseconds,
+                    error = evt.Error,
+                    ts = timestamp,
+                },
+                ct),
+            _ => Task.CompletedTask,
+        };
+    }
 
     private sealed class DraftRunSseSession(HttpResponse response)
     {

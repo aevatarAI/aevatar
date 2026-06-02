@@ -23,6 +23,7 @@ using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.Hosting.ExecutionActivity;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Studio.Projection.ReadModels;
@@ -70,6 +71,8 @@ public static class ServiceCollectionExtensions
         services.AddToolSetRegistry();
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
+        services.TryAddSingleton<IExecutionActivityScopeResolver, ExecutionActivityScopeResolver>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<Aevatar.Foundation.Abstractions.Hooks.IGAgentExecutionHook, ExecutionActivityPublisherHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, WorkflowServiceImplementationAdapter>());
