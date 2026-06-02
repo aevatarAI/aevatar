@@ -114,7 +114,7 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 1. `workspace.default` tool set 可解析。
 2. 五个 Aevatar invocation tools 可发现，且具备 description、parameters schema 与 `IAevatarInvocationTool` 契约。
 3. route policy 使用 `ForwardToModel + tool_choice_hint` 表达 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 目标；旧 GAgent/team wire action 已删除。
-4. `wait=complete` 只对 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 进入 ChatRun completion 协调。
+4. `wait=complete` 只对 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 进入 ChatRun completion 协调。同步返回只承诺 dispatch/accepted receipt 与 stable run identity；若当前调用时刻对应 readmodel/query 已经可见 terminal，则返回该 terminal payload 并把 observed terminal 投递给 ChatRunActor 折叠。若 terminal 尚未物化可见，则返回诚实的 `completion_not_observed` receipt，客户端后续通过 `aevatar_observe_run` 或 readmodel query 观察完成；该路径不得订阅 stream 等 `ChatRunToolResultReady` 当同步 reply，也不得轮询等待 readmodel 变新。
 
 `http_status` 支持的常用参数：
 
