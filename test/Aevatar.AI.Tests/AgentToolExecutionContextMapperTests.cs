@@ -156,8 +156,6 @@ public sealed class AgentToolExecutionContextMapperTests
 
         var context = AgentToolExecutionContextMapper.FromRequest(request);
 
-        // Fix (remote-ci/coverage-quality): typed control fields stay authoritative, but request external
-        // annotations are intentionally merged into ToolContext for downstream tools.
         context.Should().NotBeSameAs(typedContext);
         context.Request.RequestId.Should().Be("typed-request");
         context.Request.CallId.Should().Be("typed-call");

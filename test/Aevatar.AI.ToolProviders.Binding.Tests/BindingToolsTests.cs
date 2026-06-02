@@ -202,7 +202,6 @@ public class BindingToolsTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             doc.RootElement.GetProperty("accepted").GetBoolean().Should().BeTrue();
-            // Fix (remote-ci/coverage-quality): upsert returns an accepted ACK, not a materialized workflow read model.
             doc.RootElement.GetProperty("workflow_id").GetString().Should().Be("summary-digest");
             doc.RootElement.GetProperty("revision_id").GetString().Should().Be("rev-result");
             doc.RootElement.GetProperty("read_model_url").GetString().Should().Be("/api/scopes/scope-workflows/workflows/summary-digest");
