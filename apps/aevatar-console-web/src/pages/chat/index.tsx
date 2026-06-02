@@ -434,9 +434,15 @@ const ChatPage: React.FC = () => {
   );
   const effectiveRoute =
     conversationRoute !== undefined ? conversationRoute : globalPreferredRoute;
+  const backendEffectiveRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.effectiveRouteLabel
+  );
   const effectiveRouteLabel = useMemo(
-    () => describeConversationRoute(effectiveRoute, routeOptions),
-    [effectiveRoute, routeOptions]
+    () =>
+      conversationRoute === undefined && backendEffectiveRouteLabel
+        ? backendEffectiveRouteLabel
+        : describeConversationRoute(effectiveRoute, routeOptions),
+    [backendEffectiveRouteLabel, conversationRoute, effectiveRoute, routeOptions]
   );
   const effectiveModel =
     trimConversationValue(conversationModel) ||
