@@ -826,6 +826,68 @@ describe('StudioMemberBindPanel', () => {
     expect(handleBindPendingCandidate).toHaveBeenCalledTimes(1);
   });
 
+  it('explains that a pending bind is not ready for Invoke until the contract materializes', async () => {
+    (studioApi.getMemberBinding as jest.Mock).mockResolvedValueOnce({
+      available: false,
+      scopeId: 'scope-1',
+      serviceId: '',
+      displayName: '',
+      serviceKey: '',
+      defaultServingRevisionId: '',
+      activeServingRevisionId: '',
+      deploymentId: '',
+      deploymentStatus: '',
+      primaryActorId: '',
+      updatedAt: '',
+      revisions: [],
+      currentBindingRun: {
+        bindingRunId: 'bind-member-1',
+        completedAtUtc: null,
+        createdAtUtc: '2026-06-02T03:30:00Z',
+        failure: null,
+        memberId: 'draft',
+        message: '',
+        scopeId: 'scope-1',
+        stateVersion: null,
+        status: 'platform_binding_pending',
+        targetServiceId: null,
+        updatedAtUtc: '2026-06-02T03:30:05Z',
+      },
+    });
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'draft',
+        scopeId: 'scope-1',
+        pendingBindingCandidate: {
+          kind: 'workflow',
+          displayName: 'draft',
+          description:
+            'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
+          actionLabel: 'Bind current revision',
+        },
+        onBindPendingCandidate: jest.fn(),
+        services: [],
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        /Platform publication is still running; Invoke is not ready/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'Bind accepted the publication request. Stay here until Studio observes the published contract, then continue to Invoke.',
+    );
+  });
+
   it('clears the previous member bind notice when the bind candidate changes', async () => {
     const handleBindPendingCandidate = jest.fn().mockResolvedValue(undefined);
     const CandidateHarness = () => {

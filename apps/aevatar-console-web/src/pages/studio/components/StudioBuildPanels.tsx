@@ -560,6 +560,22 @@ function renderRunSummary(state: DraftRunState): string {
   return getRunDebugLines(state).join('\n');
 }
 
+function getGAgentDraftRunRecoveryText(state: DraftRunState): string {
+  if (state.status === 'running') {
+    return 'Draft run is still waiting for backend events. Keep the Build definition visible while this request completes.';
+  }
+
+  if (state.status === 'error') {
+    return 'This only failed the Build dry-run. Adjust the prompt or tools and retry, or continue to Bind when the member definition is ready to publish.';
+  }
+
+  if (state.status === 'success') {
+    return 'Draft run finished. Continue to Bind when you are ready to publish the callable member contract.';
+  }
+
+  return '';
+}
+
 function extractRunFinishedOutput(result: unknown): string {
   if (typeof result === 'string') {
     return result;
@@ -3739,6 +3755,20 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           <div style={sectionEyebrowStyle}>Output</div>
           <pre style={dryRunOutputStyle}>{renderRunOutput(runState)}</pre>
         </div>
+        {getGAgentDraftRunRecoveryText(runState) ? (
+          <Alert
+            showIcon
+            message={
+              runState.status === 'error'
+                ? 'Build dry-run needs attention'
+                : runState.status === 'success'
+                  ? 'Build dry-run is ready'
+                  : 'Build dry-run is running'
+            }
+            description={getGAgentDraftRunRecoveryText(runState)}
+            type={runState.status === 'error' ? 'warning' : 'info'}
+          />
+        ) : null}
         {renderRunSummary(runState) ? (
           <details style={dryRunDebugDetailsStyle}>
             <summary style={dryRunDebugSummaryStyle}>Debug details</summary>

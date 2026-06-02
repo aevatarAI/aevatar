@@ -348,6 +348,9 @@ describe('StudioMemberInvokePanel', () => {
     });
 
     expect(await screen.findByText(/핵심 단어로 나누면/)).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
+      'This run is ready for Observe. Switch to Observe to inspect backend events, audit frames, and the runtime trail for this member.',
+    );
     expect(Element.prototype.scrollTo).toHaveBeenCalledWith(
       expect.objectContaining({ top: expect.any(Number) }),
     );
@@ -373,6 +376,54 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByTestId('studio-invoke-run-status-summary')).toHaveTextContent(
       'Succeeded',
     );
+  });
+
+  it('shows a recovery path when the latest Invoke run fails', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockRejectedValueOnce(
+      new Error('GAgent draft-run timed out.'),
+    );
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'gagent-1',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'gagent-1',
+            endpoints: [
+              {
+                description: 'Chat with gagent-1.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-gagent',
+            serviceId: 'gagent-1',
+          },
+        ],
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+      target: {
+        value: 'Classify this support ticket.',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+
+    expect(await screen.findByText('Run failed')).toBeTruthy();
+    expect(screen.getByText('GAgent draft-run timed out.')).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-recovery-path')).toHaveTextContent(
+      'This failed only the Invoke run. Retry with a smaller prompt, inspect Events for backend signals, or return to Build/Bind if the member contract needs changes.',
+    );
+    expect(screen.getByRole('button', { name: 'Retry as new run' })).toBeTruthy();
   });
 
   it('lets Run history expand in document flow when many runs are rendered', () => {
@@ -430,6 +481,11 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy output' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy run id' })).toBeTruthy();
+    expect(
+      screen.getByTestId('studio-invoke-history-readonly-guidance'),
+    ).toHaveTextContent(
+      'Historical run is read-only. Retry as new run restores the prompt without changing this record.',
+    );
     expect(
       screen.getByRole('button', { name: 'Retry as new run' }),
     ).toBeTruthy();
@@ -770,6 +826,12 @@ describe('StudioMemberInvokePanel', () => {
     );
     expect(historyScroll).toBeTruthy();
     expect(screen.getByText('Historical run · Read-only')).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-observe-handoff')).toHaveTextContent(
+      'Historical runs are read-only. Retry as a new run when you need a fresh Observe handoff.',
+    );
+    expect(screen.getByTestId('studio-invoke-composer-guidance')).toHaveTextContent(
+      'Historical run is read-only. Sending this prompt creates a new independent Run and fresh Observe handoff.',
+    );
     expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy output' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy run id' })).toBeTruthy();

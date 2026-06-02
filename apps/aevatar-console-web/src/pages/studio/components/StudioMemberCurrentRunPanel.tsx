@@ -8,10 +8,11 @@ import {
 import { Button, Typography } from 'antd';
 import React, { useMemo } from 'react';
 import { RuntimeEventPreviewPanel } from '@/shared/agui/runtimeConversationPresentation';
-import type {
-  CurrentRunRequest,
-  InvokeResultState,
-  StudioInvokeChatMessage,
+import {
+  getStudioInvokeObserveHandoffText,
+  type CurrentRunRequest,
+  type InvokeResultState,
+  type StudioInvokeChatMessage,
 } from './StudioMemberInvokePanel.currentRun';
 import {
   contractValueStyle,
@@ -301,6 +302,17 @@ const errorActionsStyle: React.CSSProperties = {
   marginTop: 10,
 };
 
+const recoveryPathStyle: React.CSSProperties = {
+  background: studioInvokeColors.surfaceActive,
+  border: `1px solid ${studioInvokeColors.borderStrong}`,
+  borderRadius: 8,
+  color: studioInvokeColors.textSoft,
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+  padding: '12px 14px',
+};
+
 const errorCardStyle: React.CSSProperties = {
   alignItems: 'flex-start',
   background: studioInvokeColors.dangerSoft,
@@ -520,6 +532,10 @@ const StudioMemberCurrentRunPanel: React.FC<
   const finishedAtLabel = activeRunCompletedAt
     ? formatHistoryTimestamp(activeRunCompletedAt)
     : '';
+  const observeHandoffText = getStudioInvokeObserveHandoffText({
+    runViewMode,
+    status: invokeResult.status,
+  });
 
   const timelineItems = useMemo(() => {
     if (!currentRunHasData) {
@@ -644,6 +660,14 @@ const StudioMemberCurrentRunPanel: React.FC<
               <p style={bodyTextStyle}>{outputText}</p>
             </div>
           ) : null}
+          <div data-testid="studio-invoke-recovery-path" style={recoveryPathStyle}>
+            <span style={sectionLabelStyle}>Recovery path</span>
+            <Typography.Text style={helperTextStyle}>
+              {isCancelled
+                ? 'This stopped run stays in history. Retry as a new run when you want fresh output, or switch to Observe to inspect the latest backend events.'
+                : 'This failed only the Invoke run. Retry with a smaller prompt, inspect Events for backend signals, or return to Build/Bind if the member contract needs changes.'}
+            </Typography.Text>
+          </div>
           <div style={errorActionsStyle}>
             <Button
               icon={<UnorderedListOutlined />}
@@ -698,6 +722,17 @@ const StudioMemberCurrentRunPanel: React.FC<
             </Typography.Text>
           )}
         </div>
+        {observeHandoffText ? (
+          <div
+            data-testid="studio-invoke-observe-handoff"
+            style={recoveryPathStyle}
+          >
+            <span style={sectionLabelStyle}>Observe handoff</span>
+            <Typography.Text style={helperTextStyle}>
+              {observeHandoffText}
+            </Typography.Text>
+          </div>
+        ) : null}
       </div>
     );
   };

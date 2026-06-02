@@ -2,6 +2,7 @@ import { AGUIEventType } from '@aevatar-react-sdk/types';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
@@ -16,6 +17,7 @@ import {
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
 import {
+  StudioGAgentBuildPanel,
   StudioScriptBuildPanel,
   StudioWorkflowBuildPanel,
 } from './StudioBuildPanels';
@@ -80,6 +82,12 @@ type BuildWorkflowYamlsForTest = (
 
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
+    streamDraftRun: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/api/runtimeGAgentApi', () => ({
+  runtimeGAgentApi: {
     streamDraftRun: jest.fn(),
   },
 }));
@@ -157,6 +165,9 @@ jest.mock('@/modules/studio/scripts/ScriptCodeEditor', () => ({
 }));
 
 const mockedRuntimeRunsApi = runtimeRunsApi as unknown as {
+  streamDraftRun: jest.Mock;
+};
+const mockedRuntimeGAgentApi = runtimeGAgentApi as unknown as {
   streamDraftRun: jest.Mock;
 };
 const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
@@ -1582,6 +1593,43 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(
       await screen.findByText(/provider 还没有连好/i),
     ).toBeInTheDocument();
+  });
+
+  it('keeps a GAgent draft-run failure inside Build with a recovery path', async () => {
+    mockedRuntimeGAgentApi.streamDraftRun.mockRejectedValueOnce(
+      new Error('GAgent draft run timed out before the backend returned any event.'),
+    );
+
+    render(
+      <StudioGAgentBuildPanel
+        scopeId="scope-1"
+        currentMemberLabel="gagent-1"
+        gAgentTypes={[
+          {
+            assemblyName: 'Aevatar.GAgents',
+            fullName: 'Aevatar.GAgents.TestGAgent',
+            typeName: 'TestGAgent',
+          },
+        ]}
+        gAgentTypesError={null}
+        gAgentTypesLoading={false}
+        selectedGAgentTypeName="Aevatar.GAgents.TestGAgent, Aevatar.GAgents"
+        onContinueToBind={jest.fn()}
+        onSelectGAgentTypeName={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(
+      await screen.findByText('Build dry-run needs attention'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This only failed the Build dry-run. Adjust the prompt or tools and retry, or continue to Bind when the member definition is ready to publish.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
   });
 
   it('locks apply changes while the step mutation is pending', async () => {

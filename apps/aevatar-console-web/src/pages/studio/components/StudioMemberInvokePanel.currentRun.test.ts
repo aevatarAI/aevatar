@@ -1,6 +1,7 @@
 import {
   buildStudioInvokeCurrentRunViewModel,
   createIdleInvokeResult,
+  getStudioInvokeObserveHandoffText,
 } from './StudioMemberInvokePanel.currentRun';
 
 describe('StudioMemberInvokePanel current run model', () => {
@@ -89,5 +90,38 @@ describe('StudioMemberInvokePanel current run model', () => {
         status: 'success',
       }),
     );
+  });
+
+  it('describes when Invoke can hand the latest run to Observe', () => {
+    expect(
+      getStudioInvokeObserveHandoffText({
+        runViewMode: 'latest',
+        status: 'success',
+      }),
+    ).toBe(
+      'This run is ready for Observe. Switch to Observe to inspect backend events, audit frames, and the runtime trail for this member.',
+    );
+    expect(
+      getStudioInvokeObserveHandoffText({
+        runViewMode: 'latest',
+        status: 'running',
+      }),
+    ).toBe(
+      'Observe will follow the latest run context after backend events arrive. Keep Invoke open while this stream updates.',
+    );
+    expect(
+      getStudioInvokeObserveHandoffText({
+        runViewMode: 'historical',
+        status: 'success',
+      }),
+    ).toBe(
+      'Historical runs are read-only. Retry as a new run when you need a fresh Observe handoff.',
+    );
+    expect(
+      getStudioInvokeObserveHandoffText({
+        runViewMode: 'latest',
+        status: 'error',
+      }),
+    ).toBe('');
   });
 });

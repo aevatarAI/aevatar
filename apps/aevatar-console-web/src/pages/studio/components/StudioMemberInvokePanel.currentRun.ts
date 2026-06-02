@@ -73,6 +73,8 @@ export type StudioInvokeCurrentRunViewModel = {
   readonly rawOutput: string;
 };
 
+export type StudioInvokeRunViewMode = 'latest' | 'historical';
+
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
@@ -113,6 +115,25 @@ export function cloneInvokeResult(result: InvokeResultState): InvokeResultState 
     steps: [...result.steps],
     toolCalls: [...result.toolCalls],
   };
+}
+
+export function getStudioInvokeObserveHandoffText(input: {
+  readonly runViewMode: StudioInvokeRunViewMode;
+  readonly status: InvokeResultState['status'];
+}): string {
+  if (input.runViewMode === 'historical') {
+    return 'Historical runs are read-only. Retry as a new run when you need a fresh Observe handoff.';
+  }
+
+  if (input.status === 'running') {
+    return 'Observe will follow the latest run context after backend events arrive. Keep Invoke open while this stream updates.';
+  }
+
+  if (input.status === 'success') {
+    return 'This run is ready for Observe. Switch to Observe to inspect backend events, audit frames, and the runtime trail for this member.';
+  }
+
+  return '';
 }
 
 function hasCurrentRunData(input: {
