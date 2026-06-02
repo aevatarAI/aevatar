@@ -296,9 +296,6 @@ internal sealed class AevatarCoreLoopStatusProbeExecutor : IHealthProbeExecutor
             ObserveRunToolSource or
             QueryReadModelToolSource;
 
-    // Refactor (iter290/cluster-001): Old pattern: status health checked ChatRun
-    // coordinator scaffolding for wait=complete. New principle: status checks the live
-    // accepted-dispatch and readmodel-observation tools that replace ChatRun continuation.
     private static HealthProbeOutcome? VerifyCompletionObservationTools(
         IReadOnlyDictionary<string, IAgentTool> discovered)
     {

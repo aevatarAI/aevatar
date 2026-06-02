@@ -998,8 +998,6 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static void ShouldCarryTypedTrustedCallerValues(WorkflowChatRunRequest command)
     {
-        // Refactor (iter1353/cluster-001): Old pattern: workflow dispatch stamped trusted caller/control facts into Metadata.
-        // New principle: Metadata carries only filtered payload headers; ScopeId, ToolContext, and LlmControl carry trusted facts.
         command.ScopeId.Should().Be("scope-1");
         command.ToolContext.Should().NotBeNull();
         command.ToolContext!.Request.RequestId.Should().Be("request-1");
@@ -1026,8 +1024,6 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static void ShouldNotCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)
     {
-        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
-        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         metadata.Should().NotBeNull();
         var values = metadata!.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal);
         values.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);

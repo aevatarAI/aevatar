@@ -37,9 +37,6 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Hosting.DependencyInjection;
 
-// Refactor (iter75/cluster-075-responses-agui-host-completion-state):
-//   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
-//   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddGAgentServiceCapability(

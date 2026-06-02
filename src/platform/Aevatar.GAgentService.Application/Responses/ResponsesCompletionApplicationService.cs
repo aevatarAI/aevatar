@@ -272,9 +272,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         var toolsByName = request.Tools
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-        // Refactor (issue1416-first):
-        //   Old pattern: local Responses tool calls rebuilt typed scope from ToolContextMetadata.
-        //   New principle: completion execution pushes the existing AgentToolExecutionContext directly.
         using (AgentToolContextScope.Push(toolContext))
         {
             foreach (var toolCall in toolCalls)
