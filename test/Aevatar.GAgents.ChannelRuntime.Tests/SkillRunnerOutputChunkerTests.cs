@@ -107,12 +107,12 @@ public sealed class SkillRunnerOutputChunkerTests
     {
         // Build a #423-shaped report: 9 numbered sections separated by blank lines, with
         // each section padded to push the total over the cap. The chunker splits at the
-        // section seams (which is exactly what `\n\n` captures for the daily prompt's
+        // section seams (which is exactly what `\n\n` captures for the summary prompt's
         // output schema), so reassembling the chunks (stripping markers) must produce
         // the original content byte-for-byte minus the consumed `\n\n` separators.
         var sections = new[]
         {
-            "Daily report — alice — last 24h",
+            "Summary report — alice — last 24h",
             "Shipped:\n" + string.Concat(Enumerable.Repeat("- [aevatarAI/aevatar#100] feat\n", 400)),
             "In flight:\n" + string.Concat(Enumerable.Repeat("- [aevatarAI/aevatar#200] open pr\n", 400)),
             "Reviews:\n" + string.Concat(Enumerable.Repeat("- approved 2 / commented 1\n", 400)),

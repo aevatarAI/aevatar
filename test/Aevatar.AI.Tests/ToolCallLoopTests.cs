@@ -264,6 +264,66 @@ public class ToolCallLoopTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenTypedToolContextExists_ShouldExposeRequestExternalMetadataToToolExecution()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-context",
+                        Name = "capture_context",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        string? observedOperatorUserId = null;
+        string? observedExplicitMetadata = null;
+        string? observedAccessToken = null;
+        tools.Register(new DelegateTool("capture_context", _ =>
+        {
+            observedOperatorUserId = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.operator_user_id");
+            observedExplicitMetadata = AgentToolRequestContext.TryGetExternalMetadata("explicit");
+            observedAccessToken = AgentToolRequestContext.NyxIdAccessToken;
+            return "{}";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("approve it") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "session-operator",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.lark.operator_user_id"] = "lark-user-1",
+                ["explicit"] = "from-request",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            },
+            ToolContext = AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials("typed-token", null, null),
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["explicit"] = "from-tool-context",
+                },
+            },
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        observedOperatorUserId.Should().Be("lark-user-1");
+        observedExplicitMetadata.Should().Be("from-tool-context");
+        observedAccessToken.Should().Be("typed-token");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldExposeStableRequestIdAndPerCallIdToLlmMiddlewareMetadata()
     {
         var provider = new QueueLLMProvider(

@@ -11,10 +11,11 @@ internal static class ProtoToolSchema
         MessageDescriptor descriptor,
         IReadOnlySet<string>? requiredFields = null,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? stringEnums = null,
-        IReadOnlyList<IReadOnlyList<string>>? oneOfRequiredGroups = null)
+        IReadOnlyList<IReadOnlyList<string>>? oneOfRequiredGroups = null,
+        bool emitTopLevelOneOf = true)
     {
         var schema = BuildMessageSchema(descriptor, requiredFields, stringEnums, depth: 0);
-        if (oneOfRequiredGroups is { Count: > 0 })
+        if (emitTopLevelOneOf && oneOfRequiredGroups is { Count: > 0 })
         {
             schema["oneOf"] = oneOfRequiredGroups
                 .Select(group => new Dictionary<string, object>

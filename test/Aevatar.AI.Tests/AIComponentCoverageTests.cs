@@ -198,6 +198,50 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
+    public async Task MEAILLMProvider_ChatStreamAsync_ShouldExtractReasoningDeltaFromOpenAIRawPatch()
+    {
+        var handler = new CapturingHttpHandler(_ =>
+        {
+            var responseContent = string.Join("\n\n",
+                """
+                data: {"id":"x","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"thinking from raw patch"},"finish_reason":null}]}
+                """,
+                """
+                data: {"id":"x","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"final"},"finish_reason":"stop"}]}
+                """,
+                "data: [DONE]",
+                string.Empty);
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseContent, System.Text.Encoding.UTF8, "text/event-stream"),
+            });
+        });
+
+        var clientOptions = new OpenAI.OpenAIClientOptions
+        {
+            Endpoint = new Uri("https://test.example.com/v1/"),
+            Transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(new HttpClient(handler)),
+        };
+        var openAiClient = new OpenAI.OpenAIClient(
+            new System.ClientModel.ApiKeyCredential("test-key"), clientOptions);
+        var provider = new MEAILLMProvider("deepseek", openAiClient.GetChatClient("deepseek-v4-pro").AsIChatClient());
+
+        var chunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in provider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
+        }))
+        {
+            chunks.Add(chunk);
+        }
+
+        chunks.Select(chunk => chunk.DeltaReasoningContent)
+            .Should().Contain("thinking from raw patch");
+        chunks.Select(chunk => chunk.DeltaContent).Should().Contain("final");
+    }
+
+    [Fact]
     public void PromptTemplate_Render_ShouldApplyDefaultsAndRuntimeAndExamples()
     {
         var template = new PromptTemplate

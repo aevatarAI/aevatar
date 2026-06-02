@@ -1,6 +1,6 @@
 # Aevatar.Workflow.Application
 
-工作流应用层。负责 workflow 命令目标解析、projection lease 建立、live sink 挂接、accepted receipt 生成、输出泵送与查询门面，不直接持有 workflow 业务事实。
+工作流应用层。负责 workflow realtime interaction owner、命令目标解析、attach-only projection lease 绑定、live sink 挂接、accepted receipt 生成、输出泵送与查询门面，不直接持有 workflow 业务事实。
 
 ## 关键职责
 
@@ -9,7 +9,7 @@
 - 通过 `IWorkflowRunActorPort` 创建 definition actor 或 run actor
 - 为 run actor 建立 projection lifecycle 和 live sink
 - 生成 `WorkflowChatRunAcceptedReceipt`
-- 通过 CQRS Core 通用 event stream 持续输出 `WorkflowRunEventEnvelope`
+- 通过 `IWorkflowChatRunInteractionPort` 启动实时交互，并经 CQRS Core 通用 event stream 持续输出 `WorkflowRunEventEnvelope`
 - 暴露读侧查询门面
 
 ## Run 主链路
@@ -39,11 +39,12 @@
 - 通过 projection lifecycle port 建立 run-isolated projection lease
 - 产出供 interaction service 判定是否继续 dispatch 的 `CommandObservationBindingResult`
 
-### CQRS Interaction / Detached Dispatch
+### Realtime Interaction / Detached Dispatch
 
-- `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走完整交互路径：驱动标准 CQRS interaction service、接收 accepted receipt、消费 sink 并持续输出 `WorkflowRunEventEnvelope`
+- `IWorkflowChatRunInteractionPort` 走完整实时交互路径：生成 command/correlation id、激活本次 run actor observation scope、驱动内部默认 CQRS interaction service、接收 accepted receipt、消费 sink 并持续输出 `WorkflowRunEventEnvelope`
+- 默认 CQRS interaction service 只作为 `IWorkflowChatRunInteractionPort` 内部 non-fallback plumbing，不作为 public/resolvable realtime 入口
 - `DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>` 走 accepted-only 路径：复用 CQRS command skeleton，只返回 accepted receipt；该路径不建立 live sink，也不 drain session event stream
-- `WorkflowDirectFallbackPolicy` 通过 generic fallback decorator 同时包裹 interaction / dispatch 两条命令入口
+- realtime fallback 由 `IWorkflowChatRunInteractionPort` 拥有；accepted-only dispatch 仍保持独立 accepted-only 语义
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
 - 状态快照由 `WorkflowRunFinalizeEmitter` 统一在收尾阶段补发
 - `resume/signal` 入口也收敛为标准 CQRS 命令：Host 只依赖 `ICommandDispatchService<WorkflowResumeCommand/...>` 与 `ICommandDispatchService<WorkflowSignalCommand/...>`

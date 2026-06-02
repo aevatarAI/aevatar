@@ -30,12 +30,12 @@ public sealed class StreamingProxyEndpointsCoverageTests
             new StreamingProxyRoomCreateResult(
                 StreamingProxyRoomCreateStatus.Created,
                 "room-123",
-                "Daily Standup"));
+                "Summary Standup"));
 
         var result = await InvokeHandleCreateRoomAsync(
             CreateScopedHttpContext(),
             "scope-a",
-            new StreamingProxyEndpoints.CreateRoomRequest("  Daily Standup  "),
+            new StreamingProxyEndpoints.CreateRoomRequest("  Summary Standup  "),
             service,
             CancellationToken.None);
 
@@ -43,9 +43,9 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         service.Commands.Should().ContainSingle();
-        service.Commands[0].Should().Be(new StreamingProxyRoomCreateCommand("scope-a", "  Daily Standup  "));
+        service.Commands[0].Should().Be(new StreamingProxyRoomCreateCommand("scope-a", "  Summary Standup  "));
         body.Should().Contain("room-123");
-        body.Should().Contain("Daily Standup");
+        body.Should().Contain("Summary Standup");
     }
 
     [Fact]

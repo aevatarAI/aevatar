@@ -1519,6 +1519,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
+        host.InteractionService.LastRequest.Headers.Should().ContainKey("source").WhoseValue.Should().Be("tests");
         // Service-run registry receives the actual workflow run actor id as the run id, so
         // /runs/{runId} can resolve the same id the SSE RunStarted frame carries.
         host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle();
@@ -2196,6 +2197,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-orders");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
+        host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
     }
 
     [Fact]
@@ -2278,7 +2280,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("member-tests");
+        host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("member-tests");
     }
 
     [Fact]
@@ -2367,7 +2369,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-member-a");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("team-tests");
+        host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("team-tests");
     }
 
     [Fact]
@@ -2495,7 +2497,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
     }
 
     [Fact]
@@ -4766,8 +4768,8 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<ITeamEntryMemberResolver>(teamEntryMemberResolver);
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
-            builder.Services.AddSingleton<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(interactionService);
-            builder.Services.AddSingleton<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>(gagentDraftRunInteractionService);
+            builder.Services.AddSingleton<IWorkflowChatRunInteractionPort>(interactionService);
+            builder.Services.AddSingleton<IGAgentDraftRunInteractionPort>(gagentDraftRunInteractionService);
             builder.Services.AddSingleton<ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>(scriptServiceRunInteractionService);
             builder.Services.AddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>>(staticGAgentStreamInvocationPort);
             builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
@@ -5516,8 +5518,7 @@ public sealed class ScopeServiceEndpointsTests
             Task.FromResult(new WorkflowRunGraphExportSubgraph());
     }
 
-    private sealed class FakeCommandInteractionService
-        : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
+    private sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
         public WorkflowChatRunRequest? LastRequest { get; private set; }
 
@@ -5537,13 +5538,12 @@ public sealed class ScopeServiceEndpointsTests
         }
     }
 
-    private sealed class FakeGAgentDraftRunInteractionService
-        : ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>
+    private sealed class FakeGAgentDraftRunInteractionService : IGAgentDraftRunInteractionPort
     {
-        public GAgentDraftRunCommand? LastRequest { get; private set; }
+        public GAgentDraftRunInteractionRequest? LastRequest { get; private set; }
 
         public Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>> ExecuteAsync(
-            GAgentDraftRunCommand request,
+            GAgentDraftRunInteractionRequest request,
             Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
             Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
@@ -5559,7 +5559,7 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     private sealed class FakeStaticGAgentStreamInvocationPort(
-        ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService)
+        IGAgentDraftRunInteractionPort interactionService)
         : IStaticGAgentStreamInvocationPort<AGUIEvent>
     {
         public List<StaticGAgentStreamInvocationRequest> Requests { get; } = [];
@@ -5578,7 +5578,7 @@ public sealed class ScopeServiceEndpointsTests
 
             var input = request.Input;
             var result = await interactionService.ExecuteAsync(
-                new GAgentDraftRunCommand(
+                new GAgentDraftRunInteractionRequest(
                     ScopeId: request.Identity.TenantId,
                     ActorTypeName: "TestStaticGAgent",
                     Prompt: input.Prompt,

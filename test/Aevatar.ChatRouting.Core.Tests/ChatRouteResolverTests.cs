@@ -77,17 +77,17 @@ public sealed class ChatRouteResolverTests
             [
                 new ChatRouteRule
                 {
-                    RuleId = "invoice",
+                    RuleId = "summary",
                     Priority = 10,
-                    Match = new ChatRouteMatch { CommandName = "/invoice" },
-                    Action = ForwardToModelAction("invoice-model"),
+                    Match = new ChatRouteMatch { CommandName = "/summary" },
+                    Action = ForwardToModelAction("summary-model"),
                 },
             ]);
 
-        var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/invoice" });
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/summary" });
 
-        decision.MatchedRuleId.Should().Be("invoice");
-        decision.Action.ForwardToModel.ModelName.Should().Be("invoice-model");
+        decision.MatchedRuleId.Should().Be("summary");
+        decision.Action.ForwardToModel.ModelName.Should().Be("summary-model");
     }
 
     [Fact]

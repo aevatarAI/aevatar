@@ -414,6 +414,7 @@ public sealed class ChatCompletionsCommandFacade(
             AgentToolSenderBindingContext.Empty,
             new LLMRequestRoutingContext(null, routePreference, null, null),
             AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal));
 
     private static string BuildRouteContentHint(NormalizedChatCompletionsCommand normalized) =>

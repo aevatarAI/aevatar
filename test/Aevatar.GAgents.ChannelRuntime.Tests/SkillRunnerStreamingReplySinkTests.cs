@@ -101,7 +101,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
         var handler = new SequencedHandler(OkSendResponse);
         var sink = CreateSink(handler);
 
-        await sink.FinalizeAsync("Daily report — no measurable activity in the last 24h.", CancellationToken.None);
+        await sink.FinalizeAsync("Summary report — no measurable activity in the last 24h.", CancellationToken.None);
 
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].Method.Should().Be(HttpMethod.Post);
@@ -193,7 +193,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
     {
         // Mid-stream edit (PUT) errors are swallowed (transient: rate-limit, timeout). The
         // FINAL edit is the contract for the run — if it fails the user never sees the complete
-        // daily, so we throw and HandleTriggerAsync persists Failed.
+        // summary, so we throw and HandleTriggerAsync persists Failed.
         var handler = new SequencedHandler(
             OkSendResponse,
             """{"code":230002,"msg":"Bot is not in the chat"}""");

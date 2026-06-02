@@ -100,7 +100,7 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         string scopeId,
         ScopeDraftRunHttpRequest request,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
         try
@@ -130,7 +130,8 @@ public static class ScopeServiceEndpoints
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
                 LlmControl: await BuildScopedLlmControlAsync(http, ct),
-                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http));
+                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                Headers: scopedHeaders);
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
             {
@@ -152,7 +153,7 @@ public static class ScopeServiceEndpoints
                         .ToArray(),
                     SessionId = chatRequest.SessionId,
                     ScopeId = scopeId,
-                    Metadata = scopedHeaders,
+                    Headers = scopedHeaders,
                     LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                 },
                 chatRunService,
@@ -578,7 +579,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -638,7 +639,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -736,7 +737,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -1484,7 +1485,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -1535,7 +1536,7 @@ public static class ScopeServiceEndpoints
                             },
                             SessionId = request.SessionId,
                             ScopeId = scopeId,
-                            Metadata = scopedHeaders,
+                            Headers = scopedHeaders,
                             LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                         },
                         chatRunService,
@@ -1691,6 +1692,31 @@ public static class ScopeServiceEndpoints
             {
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' is not compatible with requested static GAgent service.");
+            }
+
+            if (!result.Succeeded && result.StartError == GAgentDraftRunStartError.ProjectionUnavailable)
+            {
+                if (!responseStarted)
+                {
+                    await WriteJsonErrorResponseAsync(
+                        http,
+                        StatusCodes.Status503ServiceUnavailable,
+                        "GAGENT_PROJECTION_UNAVAILABLE",
+                        "GAgent projection is unavailable.",
+                        ct);
+                    return;
+                }
+
+                await writer.WriteAsync(
+                    new AGUIEvent
+                    {
+                        RunError = new RunErrorEvent
+                        {
+                            Message = "GAgent projection is unavailable.",
+                            Code = "GAGENT_PROJECTION_UNAVAILABLE",
+                        },
+                    },
+                    CancellationToken.None);
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)

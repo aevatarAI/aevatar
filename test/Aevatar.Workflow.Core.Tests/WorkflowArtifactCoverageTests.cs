@@ -212,6 +212,10 @@ public sealed class WorkflowArtifactCoverageTests
                 SystemPrompt = "You are helpful.",
                 Temperature = 0.25,
                 MaxTokens = 256,
+                MaxToolRounds = 4,
+                MaxHistoryMessages = 32,
+                EventModules = "llm_handler,tool_handler",
+                EventRoutes = "event.type == ChatRequestEvent -> llm_handler",
             },
             "workflow-run");
         var withoutTemperature = WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(
@@ -232,6 +236,11 @@ public sealed class WorkflowArtifactCoverageTests
         withTemperaturePayload.SystemPrompt.Should().Be("You are helpful.");
         withTemperaturePayload.HasTemperature.Should().BeTrue();
         withTemperaturePayload.Temperature.Should().BeApproximately(0.25f, 0.0001f);
+        withTemperaturePayload.MaxTokens.Should().Be(256);
+        withTemperaturePayload.MaxToolRounds.Should().Be(4);
+        withTemperaturePayload.MaxHistoryMessages.Should().Be(32);
+        withTemperaturePayload.EventModules.Should().Be("llm_handler,tool_handler");
+        withTemperaturePayload.EventRoutes.Should().Be("event.type == ChatRequestEvent -> llm_handler");
         withTemperature.Route!.PublisherActorId.Should().Be("workflow-run");
         withTemperature.Propagation!.CorrelationId.Should().NotBeNullOrWhiteSpace();
 

@@ -27,7 +27,6 @@ using Aevatar.Workflow.Projection.Workflows;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using FluentAssertions;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -93,21 +92,17 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowCapabilityBundle_ShouldValidateBuilder_AndRegisterCapability()
+    public void AddWorkflowCapabilityServices_ShouldRegisterRealtimeEntryPointWithoutGenericBypass()
     {
-        Action act = () => WorkflowCapabilityHostBuilderExtensions.AddWorkflowCapabilityBundle(null!);
-        act.Should().Throw<ArgumentNullException>();
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
 
-        var builder = WebApplication.CreateBuilder();
-        var returned = builder.AddWorkflowCapabilityBundle();
+        services.AddWorkflowCapability(configuration);
 
-        returned.Should().BeSameAs(builder);
-        builder.Services
-            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
-            .Select(x => x.ImplementationInstance)
-            .OfType<AevatarCapabilityRegistration>()
-            .Should()
-            .Contain(x => x.Name == "workflow-bundle");
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowChatRunInteractionPort));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+        services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
     }
 
     [Fact]
@@ -152,7 +147,8 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         services.AddWorkflowCapability(configuration);
 
-        services.Should().Contain(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowChatRunInteractionPort));
+        services.Should().NotContain(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowExecutionQueryApplicationService));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowActorBindingReader));

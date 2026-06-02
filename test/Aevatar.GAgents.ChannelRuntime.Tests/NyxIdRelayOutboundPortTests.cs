@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -54,6 +55,54 @@ public sealed class NyxIdRelayOutboundPortTests
         handler.Requests[0].Authorization.Should().Be("Bearer relay-token");
         handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-1\"");
         handler.Requests[0].Body.Should().Contain("\"text\":\"rendered:hello relay\"");
+    }
+
+    [Fact]
+    public async Task SendAsync_LarkInteractiveContent_ShouldPostTextFallbackWithCardsAndOptions()
+    {
+        var handler = new RecordingJsonHandler();
+        var port = CreatePort(handler, new StubComposer("lark", text: "composer only kept top text"));
+        var content = new MessageContent { Text = "Choose route" };
+        var card = new CardBlock
+        {
+            Title = "Model settings",
+            Text = "Current: no service selected",
+        };
+        card.Fields.Add(new CardField { Title = "Service", Text = "openai" });
+        content.Cards.Add(card);
+        var select = new ActionElement
+        {
+            Kind = ActionElementKind.Select,
+            ActionId = "service",
+            Label = "Select service",
+        };
+        select.Options.Add(new ActionOption { Label = "OpenAI", Value = "openai" });
+        select.Options.Add(new ActionOption { Label = "Azure OpenAI", Value = "azure-openai" });
+        content.Actions.Add(select);
+
+        var result = await port.SendAsync(
+            "lark",
+            BuildConversation(),
+            content,
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "msg-lark-options-1",
+            },
+            "relay-token",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Body.Should().Contain("\"message_id\":\"msg-lark-options-1\"");
+        using var document = JsonDocument.Parse(handler.Requests[0].Body);
+        var text = document.RootElement.GetProperty("reply").GetProperty("text").GetString();
+        text.Should().Contain("Choose route");
+        text.Should().Contain("Model settings");
+        text.Should().Contain("Service: openai");
+        text.Should().Contain("Select service");
+        text.Should().Contain("OpenAI");
+        text.Should().Contain("Azure OpenAI");
+        handler.Requests[0].Body.Should().NotContain("composer only kept top text");
     }
 
     [Fact]

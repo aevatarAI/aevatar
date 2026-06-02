@@ -86,7 +86,6 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Audit Scorecard
 
 - [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
-- [2026-04-27-daily-pipeline-architecture-review.md](audit-scorecard/2026-04-27-daily-pipeline-architecture-review.md)
 - [2026-05-13-lark-bot-reply-chain-test-coverage-audit.md](audit-scorecard/2026-05-13-lark-bot-reply-chain-test-coverage-audit.md)
 - [2026-05-19-auto-refactor-loop-summary.md](audit-scorecard/2026-05-19-auto-refactor-loop-summary.md)
 - [2026-05-19-meta-audit-loop-depth-diagnosis.md](audit-scorecard/2026-05-19-meta-audit-loop-depth-diagnosis.md)

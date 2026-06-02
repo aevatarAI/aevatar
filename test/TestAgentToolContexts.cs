@@ -34,6 +34,7 @@ internal static class TestAgentToolContexts
                 int.TryParse(maxToolRounds, out var parsedMaxToolRounds) ? parsedMaxToolRounds : null,
                 Get(metadata, LLMRequestMetadataKeys.UserMemoryPrompt)),
             new AgentToolConnectedServicesContext(Get(metadata, LLMRequestMetadataKeys.ConnectedServicesContext)),
+            AgentSkillRecoveryContext.Empty,
             AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata));
     }
 

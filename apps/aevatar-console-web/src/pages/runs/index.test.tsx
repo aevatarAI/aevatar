@@ -8,6 +8,7 @@ import {
   saveObservedRunSessionPayload,
 } from "@/shared/runs/draftRunSession";
 import { saveRecentRun } from "@/shared/runs/recentRuns";
+import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
@@ -297,6 +298,9 @@ describe("RunsPage", () => {
     signal: jest.Mock;
     stop: jest.Mock;
   };
+  const mockedRuntimeActorsApi = runtimeActorsApi as unknown as {
+    getActorSnapshot: jest.Mock;
+  };
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
@@ -315,6 +319,14 @@ describe("RunsPage", () => {
     mockSession.pendingHumanInput = undefined;
     mockSession.runId = "";
     mockSession.error = undefined;
+    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+      xs: false,
+      sm: false,
+      md: true,
+      lg: true,
+      xl: true,
+      xxl: false,
+    });
     mockedRuntimeRunsApi.invokeEndpoint.mockResolvedValue({
       requestId: "cmd-1",
       targetActorId: "actor-1",
@@ -325,6 +337,22 @@ describe("RunsPage", () => {
       body: {},
     });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
+    mockedRuntimeActorsApi.getActorSnapshot.mockResolvedValue({
+      actorId: "actor-1",
+      workflowName: "default",
+      lastCommandId: "cmd-1",
+      completionStatusValue: 0,
+      stateVersion: 1,
+      lastEventId: "evt-1",
+      lastUpdatedAt: "2026-01-01T00:00:00Z",
+      lastSuccess: null,
+      lastOutput: "",
+      lastError: "",
+      totalSteps: 0,
+      requestedSteps: 0,
+      completedSteps: 0,
+      roleReplyCount: 0,
+    });
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
     mockedParseBackendSSEStream.mockImplementation(
       () => (async function* () {})()

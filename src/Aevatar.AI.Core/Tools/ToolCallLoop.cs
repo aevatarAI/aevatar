@@ -4,14 +4,15 @@
 // 在每次 LLM 调用和 Tool 执行前后调用 Hook Pipeline + Middleware
 // ─────────────────────────────────────────────────────────────
 
-using System.Text;
-using System.Text.Json;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 
 namespace Aevatar.AI.Core.Tools;
 
@@ -56,7 +57,7 @@ public sealed class ToolCallLoop
         // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
         //   Old pattern: ToolCallLoop pushed raw request Metadata into AsyncLocal.
         //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
-        var toolContext = baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest);
+        var toolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
         using var _ = AgentToolContextScope.Push(toolContext);
         return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
     }
@@ -295,6 +296,7 @@ public sealed class ToolCallLoop
         // ─── Hook: LLM Request Start ───
         var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
+        var llmStartedAt = Stopwatch.GetTimestamp();
 
         var llmCallContext = new LLMCallContext
         {
@@ -315,6 +317,7 @@ public sealed class ToolCallLoop
             ?? new LLMResponse { Content = null, ToolCalls = null };
         _budgetTracker?.RecordUsage(response.Usage);
         llmCtx.LLMResponse = response;
+        llmCtx.Duration = Stopwatch.GetElapsedTime(llmStartedAt);
 
         // ─── Hook: LLM Request End ───
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);

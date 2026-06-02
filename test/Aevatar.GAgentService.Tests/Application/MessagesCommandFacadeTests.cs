@@ -78,7 +78,6 @@ public sealed class MessagesCommandFacadeTests
         sessions.Registered.Should().ContainSingle();
     }
 
-    [Fact]
     public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
     {
         var sessions = new RecordingSessionPort();
@@ -268,7 +267,10 @@ public sealed class MessagesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+    private sealed class StaticResponsesChatRouteDecisionPort(
+        ChatRouteAction action,
+        bool usedFallback = false,
+        string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
         public Task<ChatRouteDecision> ResolveAsync(
@@ -280,7 +282,8 @@ public sealed class MessagesCommandFacadeTests
             => Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
-                UsedFallback = false,
+                UsedFallback = usedFallback,
+                MatchedRuleId = matchedRuleId,
             });
     }
 

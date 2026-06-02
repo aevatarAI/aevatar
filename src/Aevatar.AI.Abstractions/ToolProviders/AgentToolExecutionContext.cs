@@ -13,6 +13,7 @@ public sealed record AgentToolExecutionContext(
     AgentToolSenderBindingContext SenderBinding,
     LLMRequestRoutingContext Routing,
     AgentToolConnectedServicesContext ConnectedServices,
+    AgentSkillRecoveryContext SkillRecovery,
     IReadOnlyDictionary<string, string> ExternalMetadata)
 {
     public static AgentToolExecutionContext Empty { get; } = new(
@@ -23,6 +24,7 @@ public sealed record AgentToolExecutionContext(
         AgentToolSenderBindingContext.Empty,
         LLMRequestRoutingContext.Empty,
         AgentToolConnectedServicesContext.Empty,
+        AgentSkillRecoveryContext.Empty,
         new Dictionary<string, string>(StringComparer.Ordinal));
 
     public AgentToolExecutionContext WithCallId(string? callId) =>
@@ -68,4 +70,21 @@ public sealed record AgentToolSenderBindingContext(string? BindingId)
 public sealed record AgentToolConnectedServicesContext(string? ContextJson)
 {
     public static AgentToolConnectedServicesContext Empty { get; } = new((string?)null);
+}
+
+public sealed record AgentSkillRecoveryContext(
+    bool RequireInitialOrnnSearch,
+    bool RequireOrnnSearchOnBlocker,
+    string? CommandName,
+    string? OriginalCommand,
+    string? PrimarySkillName,
+    int MaxOrnnSearchAttempts)
+{
+    public static AgentSkillRecoveryContext Empty { get; } = new(
+        RequireInitialOrnnSearch: false,
+        RequireOrnnSearchOnBlocker: false,
+        CommandName: null,
+        OriginalCommand: null,
+        PrimarySkillName: null,
+        MaxOrnnSearchAttempts: 0);
 }

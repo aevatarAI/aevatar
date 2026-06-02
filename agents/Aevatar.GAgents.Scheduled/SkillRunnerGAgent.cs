@@ -348,7 +348,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 content.Append(chunk.DeltaContent);
                 if (streamingState is not null)
                     // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
-                    // turn. Acceptable for daily-sized output (≤30 KB capped, and the
+                    // turn. Acceptable for bounded skill output (≤30 KB capped, and the
                     // actor-owned streaming state dedupes against `_lastEmittedText` so most allocations don't even
                     // make it onto the wire). If a future skill produces materially longer
                     // output, switch the sink contract to `(StringBuilder, Range)` snapshots
@@ -438,7 +438,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// configured. The sink writes the first non-empty delta as a Lark
     /// <c>POST /open-apis/im/v1/messages</c> (capturing the returned <c>message_id</c>) and edits
     /// the same message via <c>PUT /open-apis/im/v1/messages/{id}</c> for every later delta —
-    /// so the user sees the daily report land and grow in place rather than receiving one wall of
+    /// so the user sees the skill output land and grow in place rather than receiving one wall of
     /// text after the LLM finishes. PUT is the correct verb for editing text/post messages;
     /// <c>PATCH</c> on the same path is reserved for editing interactive cards (see
     /// <c>SkillRunnerStreamingReplySink.EditAsync</c> for the verb-split rationale).
@@ -448,7 +448,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // Issue #439: when the run
         // is gated by EnsureToolStatusAllowsCompletion (RequiresNyxidProxySuccess set),
         // streaming each delta would POST/PUT the partial text to Lark live — i.e. a
-        // hallucinated daily report would already be visible in the user's DM by the
+        // hallucinated report would already be visible in the user's DM by the
         // time the guard fires, and each retry would repost it. Disable live streaming
         // for those skills so the message only POSTs through the chunked-dispatch path
         // AFTER the guard has confirmed at least one nyxid_proxy success. Trade-off: the
@@ -591,7 +591,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     ///   <item><description>
     ///     <b>never-called</b> (<paramref name="requiresNyxidProxySuccess"/> == true,
     ///     <paramref name="successCount"/> == 0): the LLM bypassed tools entirely and produced
-    ///     text from prior context. For fetch-and-summarize skills like daily this is
+    ///     text from prior context. For fetch-and-summarize skills this is
     ///     exactly the original #439 symptom (52 commits in 24h reported as "No meaningful
     ///     public GitHub activity"). Skills that don't depend on tool data (e.g. pure LLM
     ///     transformations) leave the flag false and pass through.
@@ -620,7 +620,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             throw new InvalidOperationException(
                 "Skill requires at least one successful nyxid_proxy tool call but completed with zero. " +
-                "The LLM produced output without fetching source data (e.g. hallucinated a daily report from prior context). " +
+                "The LLM produced output without fetching source data (e.g. hallucinated a report from prior context). " +
                 "Refusing to record this run as a successful execution.");
         }
     }
@@ -991,8 +991,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// </summary>
     internal static bool RequiresProxySuccessByTemplate(string? templateName) =>
         // Reserved for future fetch-and-summarize templates that need the runner-layer
-        // safety net (issue #439). Currently empty: the in-tree daily template was
-        // removed in favor of the Ornn-hosted skill, and no other template needs the
+        // safety net (issue #439). Currently empty: no in-tree template needs the
         // legacy proto-field-16-default backfill. Keep the method so tests + the apply
         // path don't need to special-case "no templates" — just add new entries here.
         templateName is not null && false;

@@ -316,9 +316,10 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.SessionId.Should().Be("session-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
-        interactionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("user-api");
-        interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
-        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
+        interactionService.LastRequest.Metadata.Should().BeNullOrEmpty();
+        interactionService.LastRequest.Headers.Should().ContainKey("source").WhoseValue.Should().Be("user-api");
+        interactionService.LastRequest.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        interactionService.LastRequest.Headers.Should().NotContainKey("scope_id");
     }
 
     [Fact]
@@ -414,6 +415,8 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
         interactionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
+        interactionService.LastRequest.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        interactionService.LastRequest.Headers.Should().NotContainKey("scope_id");
     }
 
     [Fact]
@@ -474,8 +477,56 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().NotContain("EXECUTION_FAILED");
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.ScopeId.Should().Be("user-1");
-        interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
-        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
+        interactionService.LastRequest.Metadata.Should().BeNullOrEmpty();
+        interactionService.LastRequest.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        interactionService.LastRequest.Headers.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnServiceUnavailable_WhenProjectionUnavailableBeforeAguiStarts()
+    {
+        var snapshot = new ServiceCatalogSnapshot(
+            "tenant-a:workflow-app:user:token:approval",
+            "tenant-a",
+            "workflow-app",
+            "user:user-1-token",
+            "approval",
+            "Approval",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            "definition-actor-1",
+            "active",
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult = [snapshot],
+        };
+        queryPort.GetServiceResults.Enqueue(snapshot);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.ProjectionUnavailable)),
+        };
+        var http = CreateHttpContext();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
+                "hello",
+                EventFormat: "agui"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain("WORKFLOW_PROJECTION_UNAVAILABLE");
     }
 
     [Fact]
@@ -741,8 +792,7 @@ public sealed class ScopeWorkflowEndpointsTests
         };
     }
 
-    private sealed class FakeCommandInteractionService
-        : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
+    private sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
         public WorkflowChatRunRequest? LastRequest { get; private set; }
 

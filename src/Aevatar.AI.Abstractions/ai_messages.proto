@@ -98,6 +98,16 @@ message AgentToolExecutionContextPayload {
   LLMRequestRoutingContextPayload routing = 6;
   AgentToolConnectedServicesContextPayload connected_services = 7;
   map<string, string> external_metadata = 8;
+  AgentSkillRecoveryContextPayload skill_recovery = 9;
+}
+
+message AgentSkillRecoveryContextPayload {
+  bool require_initial_ornn_search = 1;
+  bool require_ornn_search_on_blocker = 2;
+  string command_name = 3;
+  string original_command = 4;
+  string primary_skill_name = 5;
+  int32 max_ornn_search_attempts = 6;
 }
 
 message AgentToolRequestIdentityPayload {

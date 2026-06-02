@@ -160,7 +160,9 @@ public sealed class OrnnSkillClientTests
             "name: a-main\nsteps: []",
             "name: z-child\nsteps: []");
         skill.AssociatedFiles.Should().NotBeNull();
-        skill.AssociatedFiles!.Keys.Should().Contain("workflows/a-main.yaml");
+        skill.AssociatedFiles.Should().NotContainKey("workflows/a-main.yaml");
+        skill.AssociatedFiles.Should().ContainKey("docs/workflows/ignored.yaml");
+        skill.AssociatedFiles.Should().ContainKey("assets/readme.md");
     }
 
     [Fact]
@@ -207,15 +209,15 @@ public sealed class OrnnSkillClientTests
     [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
     {
-        // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied skill load
-        // hung for 113 s, holding the Orleans grain turn.
+        // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
+        // `/api/v1/skills/project-summary/json` hung for 113 s, holding the Orleans grain turn.
         // OrnnSkillClient must surface a fast null instead of letting one upstream request
         // stall the whole skill workflow.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
         var client = CreateClient(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var skill = await client.GetSkillJsonAsync("token", "example-skill");
+        var skill = await client.GetSkillJsonAsync("token", "project-summary");
         sw.Stop();
 
         skill.Should().BeNull();
@@ -254,7 +256,7 @@ public sealed class OrnnSkillClientTests
 
         using var callerCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
-        var act = async () => await client.GetSkillJsonAsync("token", "example-skill", callerCts.Token);
+        var act = async () => await client.GetSkillJsonAsync("token", "project-summary", callerCts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
     }

@@ -185,8 +185,10 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
             x.ImplementationFactory != null);
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
+            x.ServiceType == typeof(IWorkflowChatRunInteractionPort) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
@@ -206,6 +208,23 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_ShouldNotExposeGenericLiveInteractionServiceBypass()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = false,
+            ValidateScopes = true,
+        });
+
+        provider.GetService<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>()
+            .Should()
+            .BeNull();
     }
 
     [Fact]

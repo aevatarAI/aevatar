@@ -930,6 +930,92 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
+    public async Task HandleGAgentServiceChatStreamAsync_ShouldReturnServiceUnavailableJson_WhenProjectionUnavailableBeforeSseStarts()
+    {
+        var http = CreateHttpContext();
+        var invocationPort = new StubStaticGAgentStreamInvocationPort
+        {
+            ResultFactory = (_, _, _, _) => Task.FromResult(new StaticGAgentStreamInvocationResult(
+                Accepted: null,
+                StartError: GAgentDraftRunStartError.ProjectionUnavailable,
+                CompletionStatus: GAgentDraftRunCompletionStatus.Unknown,
+                CompletionObserved: false)),
+        };
+
+        await InvokeStaticStreamAsync(
+            http,
+            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
+            "hello",
+            "actor-1",
+            null,
+            "scope-a",
+            null,
+            null,
+            invocationPort,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        http.Response.ContentType.Should().StartWith("application/json");
+        var body = await ReadBodyAsync(http);
+        body.Should().Contain("GAGENT_PROJECTION_UNAVAILABLE");
+        body.Should().NotContain("runStarted");
+    }
+
+    [Fact]
+    public async Task HandleGAgentServiceChatStreamAsync_ShouldWriteRunError_WhenProjectionUnavailableAfterSseStarts()
+    {
+        var http = CreateHttpContext();
+        var invocationPort = new StubStaticGAgentStreamInvocationPort
+        {
+            ResultFactory = async (request, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new StaticGAgentStreamAcceptedReceipt(
+                    new ServiceInvocationAcceptedReceipt
+                    {
+                        ServiceKey = "svc-key",
+                        DeploymentId = "dep-1",
+                        TargetActorId = request.Input.PreferredActorId,
+                        EndpointId = request.EndpointId,
+                        CommandId = "cmd-static-1",
+                        CorrelationId = "corr-static-1",
+                    },
+                    new GAgentDraftRunAcceptedReceipt(
+                        request.Input.PreferredActorId ?? "actor-1",
+                        typeof(StreamTestAgent).AssemblyQualifiedName!,
+                        "cmd-static-1",
+                        "corr-static-1"));
+
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                return new StaticGAgentStreamInvocationResult(
+                    receipt,
+                    GAgentDraftRunStartError.ProjectionUnavailable,
+                    GAgentDraftRunCompletionStatus.Unknown,
+                    CompletionObserved: false);
+            },
+        };
+
+        await InvokeStaticStreamAsync(
+            http,
+            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
+            "hello",
+            "actor-1",
+            null,
+            "scope-a",
+            null,
+            null,
+            invocationPort,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        var body = await ReadBodyAsync(http);
+        body.Should().Contain("runStarted");
+        body.Should().Contain("runError");
+        body.Should().Contain("GAGENT_PROJECTION_UNAVAILABLE");
+    }
+
+    [Fact]
     public async Task HandleScriptingServiceChatStreamAsync_ShouldWriteRunError_WhenInteractionThrowsAfterAccepted()
     {
         var http = CreateHttpContext();
