@@ -219,6 +219,7 @@ message ConversationReplyLifecycleChangedEvent {
   optional string finalize_command_id = 41;
   optional LlmReplyTerminalState nyx_relay_terminal_state = 42;
   repeated ConversationHistoryEntry appended_history = 43;
+  optional int32 nyx_relay_retry_attempt = 44;
 }
 
 // Refactor (iter20/cluster-004):

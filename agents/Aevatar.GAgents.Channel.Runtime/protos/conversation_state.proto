@@ -59,6 +59,7 @@ message ConversationReplyLifecycleState {
   int64 nyx_relay_operation_generation = 22;
   LlmReplyTerminalState pending_nyx_relay_terminal_state = 23;
   repeated ConversationHistoryEntry pending_appended_history = 24;
+  int32 nyx_relay_retry_attempt = 25;
 }
 
 // Channel-sink ack tracking for the most recent reply turn. Carries either
