@@ -187,19 +187,15 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Succeeded.Should().BeTrue();
         result.Request!.Source.Should().BeEquivalentTo(
             WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto"));
-        result.Request.LlmControl.Should().Be(new LLMControlContext(
-            "token",
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+        result.Request.LlmControl.Should().Be(new WorkflowLlmControl(
             "model",
-            "route",
             3,
             UserMemoryPrompt: null));
         result.Request.Metadata.Should().BeEmpty();
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldPreserveTypedToolContext()
+    public void ChatRunRequestNormalizer_ShouldKeepToolContextOutOfWorkflowCommand()
     {
         var toolContext = AgentToolExecutionContext.Empty with
         {
@@ -225,8 +221,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.ToolContext.Should().BeSameAs(toolContext);
+        result.Request!.ScopeId.Should().BeNull();
         result.Request.LlmControl.Should().BeNull();
+        result.Request.Metadata.Should().BeEmpty();
     }
 
     [Fact]
@@ -642,12 +639,12 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 [
                     new WorkflowChatInputPart
                     {
-                        Kind = WorkflowChatInputPartKind.Text,
+                        Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Text,
                         Text = "describe this",
                     },
                     new WorkflowChatInputPart
                     {
-                        Kind = WorkflowChatInputPartKind.Image,
+                        Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
                         Uri = "https://example.com/cat.png",
                         MediaType = "image/png",
                         Name = "cat",

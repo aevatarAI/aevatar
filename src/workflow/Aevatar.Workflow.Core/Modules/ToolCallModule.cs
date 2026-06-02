@@ -4,11 +4,8 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
-using Aevatar.AI.Abstractions.Middleware;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Workflow.Core.Execution;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -16,20 +13,15 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
 public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
-    private const string ModuleStateKey = "tool_call";
-
-    private readonly IEnumerable<IAgentToolSource> _toolSources;
-    private readonly IReadOnlyList<IToolCallMiddleware> _middlewares;
+    private readonly IEnumerable<IWorkflowToolSource> _toolSources;
     private readonly ILogger<ToolCallModule> _logger;
-    private volatile Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? _toolIndex;
+    private volatile Lazy<Task<IReadOnlyDictionary<string, IWorkflowTool>>>? _toolIndex;
 
     public ToolCallModule(
-        IEnumerable<IAgentToolSource> toolSources,
-        IEnumerable<IToolCallMiddleware> middlewares,
+        IEnumerable<IWorkflowToolSource> toolSources,
         ILogger<ToolCallModule> logger)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
-        _middlewares = (middlewares ?? throw new ArgumentNullException(nameof(middlewares))).ToList();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -65,11 +57,13 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         ctx.Logger.LogInformation("ToolCall: {StepId} → 工具 {Tool}", request.StepId, toolName);
 
         // 发布 Tool 调用开始事件（供观测/UI）
-        await ctx.PublishAsync(new ToolCallEvent
+        await ctx.PublishAsync(new WorkflowToolCallStartedEvent
         {
             ToolName = toolName,
             ArgumentsJson = argumentsJson,
             CallId = request.StepId,
+            RunId = request.RunId,
+            StepId = request.StepId,
         }, TopologyAudience.Self, ct);
 
         var toolIndex = await GetOrDiscoverAsync(ct);
@@ -82,35 +76,15 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var toolContext = new ToolCallContext
-            {
-                Tool = tool,
-                ToolName = toolName,
-                ToolCallId = request.StepId,
-                ArgumentsJson = argumentsJson,
-                CancellationToken = ct,
-            };
-            await ExecuteWithMiddlewareAsync(toolContext);
+            var result = await tool.ExecuteAsync(argumentsJson, ct);
 
-            if (toolContext.PendingApproval != null)
-            {
-                await PublishPendingApprovalAsync(ctx, request, toolContext.PendingApproval, argumentsJson, ct);
-                return;
-            }
-
-            if (toolContext.Terminate)
-            {
-                await PublishToolFailureAsync(ctx, request, toolName, toolContext.Result ?? "tool execution terminated", ct);
-                return;
-            }
-
-            var result = toolContext.Result ?? string.Empty;
-
-            await ctx.PublishAsync(new ToolResultEvent
+            await ctx.PublishAsync(new WorkflowToolCallCompletedEvent
             {
                 CallId = request.StepId,
                 Success = true,
                 ResultJson = result,
+                RunId = request.RunId,
+                StepId = request.StepId,
             }, TopologyAudience.Self, ct);
 
             await ctx.PublishAsync(new StepCompletedEvent
@@ -128,7 +102,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)
+    private Task<IReadOnlyDictionary<string, IWorkflowTool>> GetOrDiscoverAsync(CancellationToken ct)
     {
         while (true)
         {
@@ -140,7 +114,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             // Old: workflow tool discovery started before CompareExchange, so loser callers could
             // repeat source discovery and external MCP lifecycle work.
             // New: publish Lazy<Task<T>> before evaluation; only the winning Lazy starts discovery.
-            var candidate = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
+            var candidate = new Lazy<Task<IReadOnlyDictionary<string, IWorkflowTool>>>(
                 () => DiscoverAllToolsAsync(_toolSources, _logger, ct),
                 LazyThreadSafetyMode.ExecutionAndPublication);
             var winner = Interlocked.CompareExchange(ref _toolIndex, candidate, current);
@@ -150,8 +124,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
     }
 
     private static bool TryGetReusableTask(
-        Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>? current,
-        out Task<IReadOnlyDictionary<string, IAgentTool>> task)
+        Lazy<Task<IReadOnlyDictionary<string, IWorkflowTool>>>? current,
+        out Task<IReadOnlyDictionary<string, IWorkflowTool>> task)
     {
         task = null!;
         if (current == null)
@@ -170,18 +144,18 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         task = existing;
         return true;
     }
-    private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
-        IEnumerable<IAgentToolSource> toolSources,
+    private static async Task<IReadOnlyDictionary<string, IWorkflowTool>> DiscoverAllToolsAsync(
+        IEnumerable<IWorkflowToolSource> toolSources,
         ILogger logger,
         CancellationToken ct)
     {
-        var index = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        var index = new Dictionary<string, IWorkflowTool>(StringComparer.OrdinalIgnoreCase);
         foreach (var source in toolSources)
         {
-            IReadOnlyList<IAgentTool> tools;
+            IReadOnlyList<IWorkflowTool> tools;
             try
             {
-                tools = await source.DiscoverToolsAsync(ct);
+                tools = await source.GetToolsAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -209,11 +183,13 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
     {
         var errorMessage = $"tool '{toolName}' execution failed: {error}";
 
-        await ctx.PublishAsync(new ToolResultEvent
+        await ctx.PublishAsync(new WorkflowToolCallCompletedEvent
         {
             CallId = request.StepId,
             Success = false,
             Error = errorMessage,
+            RunId = request.RunId,
+            StepId = request.StepId,
         }, TopologyAudience.Self, ct);
 
         await ctx.PublishAsync(new StepCompletedEvent
@@ -224,73 +200,4 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             Error = errorMessage,
         }, TopologyAudience.Self, ct);
     }
-
-    private Task ExecuteWithMiddlewareAsync(ToolCallContext context)
-    {
-        var index = -1;
-
-        Task InvokeNextAsync()
-        {
-            index++;
-            if (index < _middlewares.Count)
-                return _middlewares[index].InvokeAsync(context, InvokeNextAsync);
-
-            return ExecuteToolAsync(context);
-        }
-
-        return InvokeNextAsync();
-    }
-
-    private static async Task ExecuteToolAsync(ToolCallContext context)
-    {
-        if (context.Terminate)
-            return;
-
-        context.Result = await context.Tool.ExecuteAsync(context.ArgumentsJson, context.CancellationToken);
-    }
-
-    private static async Task PublishPendingApprovalAsync(
-        IWorkflowExecutionContext ctx,
-        StepRequestEvent request,
-        ToolApprovalPendingContext pending,
-        string input,
-        CancellationToken ct)
-    {
-        var runId = request.RunId ?? string.Empty;
-        var stepId = request.StepId ?? string.Empty;
-        var state = WorkflowExecutionStateAccess.Load<ToolCallModuleState>(ctx, ModuleStateKey);
-        state.PendingApprovals[BuildPendingApprovalKey(runId, stepId, pending)] = new PendingToolCallApprovalState
-        {
-            RunId = runId,
-            StepId = stepId,
-            ExecutionId = request.ExecutionId ?? string.Empty,
-            ToolName = pending.ToolName,
-            ToolCallId = pending.ToolCallId,
-            ApprovalRequestId = pending.ApprovalRequestId,
-            ArgumentsJson = pending.ArgumentsJson,
-            Input = input,
-        };
-        await WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
-
-        await ctx.PublishAsync(new WorkflowSuspendedEvent
-        {
-            RunId = runId,
-            StepId = stepId,
-            SuspensionType = "tool_approval",
-            ToolApproval = new WorkflowToolApprovalSuspension
-            {
-                ExecutionId = request.ExecutionId ?? string.Empty,
-                ToolName = pending.ToolName,
-                ToolCallId = pending.ToolCallId,
-                ApprovalRequestId = pending.ApprovalRequestId,
-                ArgumentsJson = pending.ArgumentsJson,
-            },
-        }, TopologyAudience.ParentAndChildren, ct);
-    }
-
-    private static string BuildPendingApprovalKey(
-        string runId,
-        string stepId,
-        ToolApprovalPendingContext pending) =>
-        $"{runId}:{stepId}:{pending.ToolCallId}:{pending.ApprovalRequestId}";
 }
