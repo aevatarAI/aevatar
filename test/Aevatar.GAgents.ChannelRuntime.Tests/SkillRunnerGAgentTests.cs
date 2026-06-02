@@ -11,6 +11,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
@@ -894,7 +895,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigFieldsAreEmpty()
+    public async Task BuildExecutionLlmControl_ShouldOmitOverrides_WhenOwnerLlmConfigFieldsAreEmpty()
     {
         // Bot owners who haven't saved any LLM preference get OwnerLlmConfig.Empty (or empty
         // strings via the host adapter). The applier must NOT pin empty values onto metadata,
@@ -914,7 +915,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldFallBackQuietly_WhenOwnerLlmConfigSourceThrows()
+    public async Task BuildExecutionLlmControl_ShouldFallBackQuietly_WhenOwnerLlmConfigSourceThrows()
     {
         // The source can throw on transient projection failures. The agent's execution turn
         // must still proceed with provider defaults — the applier catches and logs the
@@ -954,6 +955,29 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         handler.Requests[1].Method.Method.Should().Be("PUT");
         ExtractLarkText(handler.Bodies[0]!).Should().Be("a");
         ExtractLarkText(handler.Bodies[1]!).Should().Be("abc");
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_ShouldKeepOwnedScopeOutOfMetadata_AndCarryTypedToolContext()
+    {
+        var provider = new StubStreamingProviderFactory("done");
+        var agent = CreateAgent("skill-runner-typed-context", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        await InvokeExecuteSkillAsync(agent);
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().ContainKey(ChannelMetadataKeys.ConversationId);
+        request.Metadata.Should().NotContainKey("scope_id");
+        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        request.ToolContext.Should().NotBeNull();
+        request.ToolContext!.Request.RequestId.Should().NotBeNullOrWhiteSpace();
+        request.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        request.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
+        request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("nyx-api-key");
+        request.ToolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.ConversationId);
+        request.ToolContext.ExternalMetadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]
@@ -1249,11 +1273,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     private sealed class StubStreamingProviderFactory(params string[] deltas) : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "stub";
+        public List<LLMRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            Requests.Add(request);
             foreach (var delta in deltas)
             {
                 ct.ThrowIfCancellationRequested();
