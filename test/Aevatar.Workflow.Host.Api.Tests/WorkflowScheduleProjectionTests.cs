@@ -259,8 +259,8 @@ public sealed class WorkflowScheduleProjectionTests
         };
         var port = new WorkflowScheduleQueryPort(reader);
 
-        var result = await port.ListAsync(0, "cursor", includeTotalCount: true);
-        await port.ListAsync(500);
+        var result = await InvokeScheduleListQueryAsync(port, 0, "cursor", includeTotalCount: true);
+        await InvokeScheduleListQueryAsync(port, 500);
 
         reader.Queries.Should().HaveCount(2);
         reader.Queries[0].Take.Should().Be(1);
@@ -397,6 +397,23 @@ public sealed class WorkflowScheduleProjectionTests
             return Task.FromResult(QueryResult);
         }
     }
+
+    private static async Task<WorkflowScheduleListResult> InvokeScheduleListQueryAsync(
+        WorkflowScheduleQueryPort port,
+        int take = 50,
+        string? cursor = null,
+        bool includeTotalCount = false,
+        CancellationToken ct = default)
+    {
+        ScheduleListQuery query = port.ListAsync;
+        return await query(take, cursor, includeTotalCount, ct);
+    }
+
+    private delegate Task<WorkflowScheduleListResult> ScheduleListQuery(
+        int take,
+        string? cursor,
+        bool includeTotalCount,
+        CancellationToken ct);
 
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
     {
