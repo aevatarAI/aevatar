@@ -24,11 +24,11 @@ public sealed class StreamingProxyRoomCommandServiceTests
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
         var result = await service.CreateRoomAsync(
-            new StreamingProxyRoomCreateCommand("scope-a", "Daily Standup"),
+            new StreamingProxyRoomCreateCommand("scope-a", "Summary Standup"),
             CancellationToken.None);
 
         result.Status.Should().Be(StreamingProxyRoomCreateStatus.Created);
-        result.RoomName.Should().Be("Daily Standup");
+        result.RoomName.Should().Be("Summary Standup");
         result.RoomId.Should().NotBeNullOrWhiteSpace();
         registry.RegisteredActors.Should().ContainSingle();
         registry.RegisteredActors[0].Should().Be(new GAgentActorRegistration(
@@ -46,7 +46,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
             .Unpack<GroupChatRoomInitializedEvent>()
             .RoomName
             .Should()
-            .Be("Daily Standup");
+            .Be("Summary Standup");
         operations.Should().ContainInOrder(
             $"runtime:create:{result.RoomId}",
             $"dispatch:{result.RoomId}",

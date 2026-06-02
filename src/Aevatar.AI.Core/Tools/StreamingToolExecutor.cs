@@ -10,6 +10,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Aevatar.AI.Core.Tools;
@@ -281,6 +282,7 @@ public sealed class StreamingToolExecutor
             };
             try { if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct); }
             catch { /* Hook failures must not crash tool execution */ }
+            var toolStartedAt = Stopwatch.GetTimestamp();
 
             // Re-resolve tool after hooks — hooks may have rewritten the tool name.
             var effectiveToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!;
@@ -330,6 +332,7 @@ public sealed class StreamingToolExecutor
                     : $"Tool '{toolCallContext.ToolName}' returned no result");
 
             toolCtx.ToolResult = toolResult;
+            toolCtx.Duration = Stopwatch.GetElapsedTime(toolStartedAt);
             try { if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct); }
             catch { /* Hook failures must not crash tool execution */ }
 

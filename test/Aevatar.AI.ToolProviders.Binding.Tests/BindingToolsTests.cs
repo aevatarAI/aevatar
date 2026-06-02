@@ -190,10 +190,10 @@ public class BindingToolsTests
             var result = await tool.ExecuteAsync(
                 """
                 {
-                  "workflow_id":"daily-digest",
-                  "workflow_yaml":"name: daily-digest\nsteps: []\n",
+                  "workflow_id":"summary-digest",
+                  "workflow_yaml":"name: summary-digest\nsteps: []\n",
                   "workflow_name":"daily_digest",
-                  "display_name":"Daily Digest",
+                  "display_name":"Summary Digest",
                   "inline_workflow_yamls": { "child": "name: child\nsteps: []\n" },
                   "revision_id":"rev-input"
                 }
@@ -201,15 +201,15 @@ public class BindingToolsTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-            doc.RootElement.GetProperty("workflow").GetProperty("workflow_id").GetString().Should().Be("daily-digest");
+            doc.RootElement.GetProperty("workflow").GetProperty("workflow_id").GetString().Should().Be("summary-digest");
             doc.RootElement.GetProperty("revision_id").GetString().Should().Be("rev-result");
 
             captured.Should().NotBeNull();
             captured!.ScopeId.Should().Be("scope-workflows");
-            captured.WorkflowId.Should().Be("daily-digest");
-            captured.WorkflowYaml.Should().Contain("daily-digest");
+            captured.WorkflowId.Should().Be("summary-digest");
+            captured.WorkflowYaml.Should().Contain("summary-digest");
             captured.WorkflowName.Should().Be("daily_digest");
-            captured.DisplayName.Should().Be("Daily Digest");
+            captured.DisplayName.Should().Be("Summary Digest");
             captured.InlineWorkflowYamls.Should().ContainKey("child");
             captured.RevisionId.Should().Be("rev-input");
         }

@@ -76,10 +76,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
             var generator = RequireStepGenerator();
             var plan = await generator.BuildStepPlanAsync(
-                    replyRequest.Activity!,
+                replyRequest.Activity!,
                 generationContext.Metadata,
                 generationContext.LlmControl,
                 generationContext.ToolContext,
+                replyRequest.PriorHistory.ToArray(),
                 forceDisableTools: false,
                 metadataCts.Token)
                 .ConfigureAwait(false);
@@ -187,8 +188,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
                 AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
                 planToolContext,
-                workItem.StepState.FinalNoToolsStep,
-                ct)
+                priorHistory: null,
+                forceDisableTools: workItem.StepState.FinalNoToolsStep,
+                ct: ct)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
@@ -299,6 +301,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
                 AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
                 AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
+                priorHistory: null,
                 forceDisableTools: false,
                 ct)
             .ConfigureAwait(false);

@@ -52,6 +52,61 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenFallbackRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini"),
+                usedFallback: true));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.4-mini",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.4-mini");
+        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDefaultRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini")));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.4-mini",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.4-mini");
+        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenRoutePinsGAgentTool_ShouldRegisterSessionAndExecuteThroughLlm()
     {
         var sessions = new RecordingSessionPort();
@@ -536,7 +591,10 @@ public sealed class ResponsesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+    private sealed class StaticResponsesChatRouteDecisionPort(
+        ChatRouteAction action,
+        bool usedFallback = false,
+        string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
         public Task<ChatRouteDecision> ResolveAsync(
@@ -548,7 +606,8 @@ public sealed class ResponsesCommandFacadeTests
             => Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
-                UsedFallback = false,
+                UsedFallback = usedFallback,
+                MatchedRuleId = matchedRuleId,
             });
     }
 

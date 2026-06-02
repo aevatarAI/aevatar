@@ -61,6 +61,41 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void FromRequest_WhenTypedContextExists_ShouldMergeExternalMetadataWithoutClobberingExplicitContextMetadata()
+    {
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "request-1",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.lark.operator_user_id"] = "lark-user-from-receive-flow",
+                ["channel.lark.operator_open_id"] = "ou_operator_1",
+                ["explicit"] = "from-request",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            },
+            ToolContext = AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials("typed-token", null, null),
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["explicit"] = "from-tool-context",
+                    ["tool-only"] = "kept",
+                },
+            },
+        };
+
+        var context = AgentToolExecutionContextMapper.FromRequest(request);
+
+        context.Credentials.NyxIdAccessToken.Should().Be("typed-token");
+        context.ExternalMetadata["channel.lark.operator_user_id"].Should().Be("lark-user-from-receive-flow");
+        context.ExternalMetadata["channel.lark.operator_open_id"].Should().Be("ou_operator_1");
+        context.ExternalMetadata["explicit"].Should().Be("from-tool-context");
+        context.ExternalMetadata["tool-only"].Should().Be("kept");
+        context.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+    }
+
+    [Fact]
     public void FromMetadata_WhenChannelCanonicalKeysAreAbsent_ShouldMapLegacyAliases()
     {
         var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
@@ -103,6 +138,13 @@ public sealed class AgentToolExecutionContextMapperTests
             new AgentToolSenderBindingContext(" binding-1 "),
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
+            new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: " goal ",
+                OriginalCommand: " /goal ship ",
+                PrimarySkillName: " goal-skill ",
+                MaxOrnnSearchAttempts: 2),
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external-trace"] = "trace-1",
@@ -133,6 +175,12 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Routing.MaxToolRoundsOverride.Should().Be(7);
         copy.Routing.UserMemoryPrompt.Should().Be("memory-1");
         copy.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
+        copy.SkillRecovery.RequireInitialOrnnSearch.Should().BeTrue();
+        copy.SkillRecovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        copy.SkillRecovery.CommandName.Should().Be("goal");
+        copy.SkillRecovery.OriginalCommand.Should().Be("/goal ship");
+        copy.SkillRecovery.PrimarySkillName.Should().Be("goal-skill");
+        copy.SkillRecovery.MaxOrnnSearchAttempts.Should().Be(2);
         copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
     }
 

@@ -206,6 +206,7 @@ public class WorkflowIntegrationTests
         // Given
         var (sp, runtime, _) = BuildTestEnvironment();
         await using var _ = sp;
+        var eventStore = sp.GetRequiredService<IEventStore>();
         var actorSuffix = Guid.NewGuid().ToString("N")[..8];
         var definitionActorId = $"wf-{actorSuffix}";
         var runActorId = $"wf-{actorSuffix}-run";
@@ -289,7 +290,6 @@ public class WorkflowIntegrationTests
         children.Should().Contain(writerActorId);
 
         // 验证每个 RoleGAgent 的初始化事件已作为 child actor 自身的 committed fact 可见。
-        var eventStore = sp.GetRequiredService<IEventStore>();
         var researcherInitialized = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
             async _ =>
             {

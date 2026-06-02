@@ -223,12 +223,14 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
             RequestId = request.RequestId,
             Metadata = request.Metadata,
             CallerContext = request.CallerContext,
+            ToolContext = request.ToolContext,
+            RoutingContext = request.RoutingContext,
+            LlmControl = request.LlmControl,
             Tools = request.Tools,
             Model = request.Model,
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
             ResponseFormat = request.ResponseFormat,
-            ToolContext = request.ToolContext,
         };
 
     private static IReadOnlyList<ToolCall> SelectForwardedToolCalls(

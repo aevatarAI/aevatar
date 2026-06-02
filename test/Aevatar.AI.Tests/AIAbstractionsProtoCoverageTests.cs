@@ -279,6 +279,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     new AgentToolSenderBindingContext("binding-a"),
                     new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
                     new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
+                    AgentSkillRecoveryContext.Empty,
                     new Dictionary<string, string>(StringComparer.Ordinal)
                     {
                         ["trace-id"] = "trace-from-context",

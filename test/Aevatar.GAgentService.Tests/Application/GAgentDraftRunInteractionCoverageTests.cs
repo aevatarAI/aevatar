@@ -338,7 +338,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldMapMetadataInputPartsAndSessionFallback()
+    public void EnvelopeFactory_ShouldMapHeadersInputPartsAndSessionFallback()
     {
         var factory = new GAgentDraftRunCommandEnvelopeFactory();
 
@@ -381,7 +381,9 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         payload.Prompt.Should().Be("hello");
         payload.ScopeId.Should().Be("scope-a");
         payload.SessionId.Should().Be("corr-1");
-        payload.Metadata["x-trace"].Should().Be("trace-1");
+        payload.Headers["x-trace"].Should().Be("trace-1");
+        payload.Headers.Should().NotContainKey("empty");
+        payload.Metadata.Should().NotContainKey("x-trace");
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
@@ -421,7 +423,8 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             }));
 
         var payload = envelope.Payload.Unpack<ChatRequestEvent>();
-        payload.Metadata.Should().Contain("x-trace", "trace-1");
+        payload.Headers.Should().Contain("x-trace", "trace-1");
+        payload.Metadata.Should().NotContainKey("x-trace");
         AgentToolExecutionContextMapper.FromPayload(payload.ToolContext).Should().BeEquivalentTo(toolContext);
         LLMControlContextMapper.FromPayload(payload.LlmControl).Should().BeEquivalentTo(llmControl);
     }
@@ -547,6 +550,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             new AgentToolSenderBindingContext("binding-1"),
             new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
             new AgentToolConnectedServicesContext("connected"),
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external"] = "value",

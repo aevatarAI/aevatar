@@ -61,6 +61,7 @@ public sealed class WorkflowParser
         {
             Name = raw.Name ?? throw new InvalidOperationException("缺少 name"),
             Description = raw.Description ?? "",
+            WhenToUse = NormalizeText(raw.WhenToUse),
             Roles = (raw.Roles ?? []).Select(MapRole).ToList(),
             Steps = (raw.Steps ?? []).Select(MapStep).ToList(),
             Configuration = new WorkflowRuntimeConfiguration
@@ -377,7 +378,7 @@ public sealed class WorkflowParser
             DefaultOutput = e.DefaultOutput,
         };
 
-    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
+    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public string? WhenToUse { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
     private sealed class RawRole
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):

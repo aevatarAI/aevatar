@@ -37,6 +37,15 @@ public static class ChannelMetadataKeys
     /// </summary>
     public const string LarkChatId = "channel.lark.chat_id";
     /// <summary>
+    /// Lark <c>user_id</c> of the card-action operator. This identifies the user who clicked or
+    /// submitted an interactive card action.
+    /// </summary>
+    public const string LarkOperatorUserId = "channel.lark.operator_user_id";
+    /// <summary>Lark <c>open_id</c> of the card-action operator when available.</summary>
+    public const string LarkOperatorOpenId = "channel.lark.operator_open_id";
+    /// <summary>Lark <c>union_id</c> of the card-action operator when available.</summary>
+    public const string LarkOperatorUnionId = "channel.lark.operator_union_id";
+    /// <summary>
     /// Authoritative outbound Lark <c>receive_id</c> for the current workflow run, captured at
     /// agent-create time. Propagated via <c>WorkflowChatRunRequest.Metadata</c> so workflow
     /// modules can surface their result back into the same chat without having to look up the

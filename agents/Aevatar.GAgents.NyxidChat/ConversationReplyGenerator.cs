@@ -96,6 +96,26 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
+        return await GenerateReplyAsync(
+                activity,
+                metadata,
+                llmControl,
+                toolContext,
+                priorHistory: null,
+                streamingSink,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<ConversationReplyResult> GenerateReplyAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+        IStreamingReplySink? streamingSink,
+        CancellationToken ct)
+    {
         ArgumentNullException.ThrowIfNull(activity);
         ArgumentNullException.ThrowIfNull(metadata);
 
@@ -106,9 +126,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // the placeholder to the final text. Disabled by setting the option to empty/whitespace.
         if (streamingSink is not null)
         {
-            var placeholder = _relayOptions?.StreamingPlaceholderText;
-            if (!string.IsNullOrWhiteSpace(placeholder))
-                await streamingSink.OnDeltaAsync(placeholder, ct);
+            var skillRecoveryStatus = BuildSkillRecoveryStreamingStatus(toolContext);
+            if (!string.IsNullOrWhiteSpace(skillRecoveryStatus))
+            {
+                await streamingSink.OnDeltaAsync(skillRecoveryStatus, ct);
+            }
+            else
+            {
+                var placeholder = _relayOptions?.StreamingPlaceholderText;
+                if (!string.IsNullOrWhiteSpace(placeholder))
+                    await streamingSink.OnDeltaAsync(placeholder, ct);
+            }
         }
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
@@ -121,6 +149,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     replyPlan.Primary,
                     replyPlan.PrimaryControl,
                     replyPlan.PrimaryToolContext,
+                    priorHistory,
                     primaryTools,
                     streamingSink,
                     ct)
@@ -143,6 +172,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     replyPlan.OwnerFallback,
                     replyPlan.OwnerFallbackControl ?? llmControl ?? LLMControlContext.Empty,
                     replyPlan.OwnerFallbackToolContext,
+                    priorHistory,
                     fallbackTools,
                     streamingSink,
                     ct)
@@ -155,6 +185,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyDictionary<string, string> metadata,
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         bool forceDisableTools,
         CancellationToken ct)
     {
@@ -176,9 +207,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         var initialMessages = new List<ChatMessage>
         {
-            ChatMessage.System(BuildSystemPrompt()),
-            ChatMessage.User([ContentPart.TextPart(activity.Content.Text)], activity.Content.Text),
+            ChatMessage.System(BuildSystemPrompt(externalMetadata)),
         };
+        initialMessages.AddRange((priorHistory ?? []).Select(ToChatMessage));
+        initialMessages.Add(ChatMessage.User([ContentPart.TextPart(activity.Content.Text)], activity.Content.Text));
 
         return new AgentRunReplyStepPlan(
             runtime.CreateStepExecutor(),
@@ -252,17 +284,49 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyDictionary<string, string> effectiveMetadata,
         LLMControlContext llmControl,
         AgentToolExecutionContext? baseToolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ToolManager tools,
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
-        var toolContext = llmControl.ToToolContext(baseToolContext ?? AgentToolExecutionContextMapper.FromMetadata(effectiveMetadata));
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(effectiveMetadata);
+        var toolContext = llmControl.ToToolContext(baseToolContext ?? AgentToolExecutionContextMapper.FromMetadata(effectiveMetadata));
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
         //   New principle: ChatRuntime owns the async stream directly; this caller only supplies provider, tools, middleware, and request identity.
-        var runtime = BuildRuntime(activity, llmControl, toolContext, externalMetadata, tools);
+        var history = new global::Aevatar.AI.Core.Chat.ChatHistory
+        {
+            MaxMessages = MaxHistoryMessages + Math.Min(priorHistory?.Count ?? 0, MaxHistoryMessages),
+        };
+        history.AddRange((priorHistory ?? []).Select(ToChatMessage));
+        var importedPriorCount = history.Messages.Count;
+        var runtime = new ChatRuntime(
+            providerFactory: ResolveProvider,
+            history: history,
+            toolLoop: new ToolCallLoop(
+                tools,
+                hooks: null,
+                toolMiddlewares: BuildToolMiddlewaresForTurn(),
+                llmMiddlewares: _llmMiddlewares),
+            hooks: null,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages =
+                [
+                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata)),
+                ],
+                Metadata = externalMetadata,
+                ToolContext = toolContext,
+                LlmControl = llmControl,
+                RoutingContext = llmControl.ToRoutingContext(),
+                Tools = FilterValidTools(tools),
+            },
+            agentMiddlewares: _agentMiddlewares,
+            llmMiddlewares: _llmMiddlewares,
+            agentId: activity.Conversation?.CanonicalKey,
+            agentName: "NyxIdConversationReply",
+            suppressToolCallRoundText: true);
 
         var output = new StringBuilder();
         // ADR-0021 §6 / canon §8 actor-edge closeout: aggregate Usage and track the last
@@ -271,6 +335,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // markers that ChatRuntime currently passes through.
         ReplyTokenUsage? aggregatedUsage = null;
         string? lastFinishReason = null;
+        var suppressInitialSlashCommandStatus = false;
         await foreach (var chunk in runtime.ChatStreamAsync(
                            [ContentPart.TextPart(activity.Content.Text)],
                            MaxToolRounds,
@@ -288,6 +353,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             if (string.IsNullOrEmpty(chunk.DeltaContent))
                 continue;
 
+            if (IsInitialSlashCommandStatusChunk(chunk.DeltaContent))
+            {
+                suppressInitialSlashCommandStatus = true;
+                if (streamingSink is not null && ShouldStreamVisibleReply(chunk.DeltaContent))
+                    await streamingSink.OnDeltaAsync(chunk.DeltaContent, ct);
+                continue;
+            }
+
+            if (suppressInitialSlashCommandStatus && IsSlashCommandStatusSpacerChunk(chunk.DeltaContent))
+                continue;
+
+            suppressInitialSlashCommandStatus = false;
             output.Append(chunk.DeltaContent);
             if (streamingSink is not null && ShouldStreamVisibleReply(output.ToString()))
                 await streamingSink.OnDeltaAsync(output.ToString(), ct);
@@ -296,7 +373,86 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return new ConversationReplyResult(
             Text: output.ToString(),
             Usage: aggregatedUsage,
-            FinishReason: lastFinishReason);
+            FinishReason: lastFinishReason,
+            AppendedHistory: ExportAppendedHistory(history, importedPriorCount));
+    }
+
+    private static bool IsInitialSlashCommandStatusChunk(string content) =>
+        content.StartsWith("⏳ 正在处理 `/", StringComparison.Ordinal);
+
+    private static bool IsSlashCommandStatusSpacerChunk(string content) =>
+        content.All(static ch => ch is '\r' or '\n');
+
+    private static IReadOnlyList<ConversationHistoryEntry> ExportAppendedHistory(
+        global::Aevatar.AI.Core.Chat.ChatHistory history,
+        int priorCount) =>
+        history.Messages
+            .Skip(Math.Clamp(priorCount, 0, history.Messages.Count))
+            .Select(ToConversationHistoryEntry)
+            .ToArray();
+
+    private static ChatMessage ToChatMessage(ConversationHistoryEntry entry) =>
+        new()
+        {
+            Role = string.IsNullOrWhiteSpace(entry.Role) ? "user" : entry.Role,
+            Content = string.IsNullOrEmpty(entry.Content) ? null : entry.Content,
+            ReasoningContent = string.IsNullOrEmpty(entry.ReasoningContent) ? null : entry.ReasoningContent,
+            ContentParts = entry.ContentParts.Select(ContentPartProtoMapper.FromProto).ToArray(),
+            ToolCallId = string.IsNullOrEmpty(entry.ToolCallId) ? null : entry.ToolCallId,
+            ToolCalls = entry.ToolCalls.Select(ToToolCall).ToArray(),
+        };
+
+    private static ConversationHistoryEntry ToConversationHistoryEntry(ChatMessage message)
+    {
+        var entry = new ConversationHistoryEntry
+        {
+            Role = message.Role ?? string.Empty,
+            Content = message.Content ?? string.Empty,
+            ReasoningContent = message.ReasoningContent ?? string.Empty,
+            ToolCallId = message.ToolCallId ?? string.Empty,
+        };
+        entry.ContentParts.AddRange((message.ContentParts ?? []).Select(ContentPartProtoMapper.ToProto));
+        entry.ToolCalls.AddRange((message.ToolCalls ?? []).Select(ToConversationToolCallEntry));
+        return entry;
+    }
+
+    private static ToolCall ToToolCall(ConversationToolCallEntry entry) =>
+        new()
+        {
+            Id = entry.Id ?? string.Empty,
+            Name = entry.Name ?? string.Empty,
+            ArgumentsJson = entry.ArgumentsJson ?? string.Empty,
+        };
+
+    private static ConversationToolCallEntry ToConversationToolCallEntry(ToolCall call) =>
+        new()
+        {
+            Id = call.Id ?? string.Empty,
+            Name = call.Name ?? string.Empty,
+            ArgumentsJson = call.ArgumentsJson ?? string.Empty,
+        };
+
+    private static bool ShouldStreamVisibleReply(string accumulatedText)
+    {
+        if (string.IsNullOrWhiteSpace(accumulatedText))
+            return false;
+
+        return TextToolCallParser.Parse(accumulatedText).ToolCalls.Count == 0;
+    }
+
+    private static string? BuildSkillRecoveryStreamingStatus(AgentToolExecutionContext? toolContext)
+    {
+        var recovery = toolContext?.SkillRecovery;
+        if (recovery is not { RequireInitialOrnnSearch: true } ||
+            string.IsNullOrWhiteSpace(recovery.CommandName))
+        {
+            return null;
+        }
+
+        var commandLabel = recovery.CommandName.Trim().TrimStart('/');
+        return string.IsNullOrWhiteSpace(commandLabel)
+            ? null
+            : $"正在处理 `/{commandLabel}`, 加载技能并扫描数据中...";
     }
 
     // ADR-0021 §6 / canon §8 cross-round usage aggregation — each provider round
@@ -351,7 +507,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt()),
+                    ChatMessage.System(BuildSystemPrompt(externalMetadata)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -364,14 +520,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             agentId: activity.Conversation?.CanonicalKey,
             agentName: "NyxIdConversationReply",
             suppressToolCallRoundText: true);
-    }
-
-    private static bool ShouldStreamVisibleReply(string accumulatedText)
-    {
-        if (string.IsNullOrWhiteSpace(accumulatedText))
-            return false;
-
-        return TextToolCallParser.Parse(accumulatedText).ToolCalls.Count == 0;
     }
 
     private static int ResolveMaxToolRounds(LLMControlContext llmControl) =>
@@ -573,10 +721,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return valid.Length == 0 ? null : valid;
     }
 
-    private string BuildSystemPrompt()
+    private string BuildSystemPrompt(IReadOnlyDictionary<string, string> metadata)
     {
         var prompt = LoadBaseSystemPrompt();
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
+        var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
+        if (!string.IsNullOrWhiteSpace(channelContext))
+            prompt += "\n\n" + channelContext;
 
         if (_localSkillCatalog is not null && _localSkillCatalog.Count > 0)
         {

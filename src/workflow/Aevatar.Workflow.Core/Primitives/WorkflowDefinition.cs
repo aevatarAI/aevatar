@@ -21,6 +21,11 @@ public sealed class WorkflowDefinition
     public string Description { get; init; } = "";
 
     /// <summary>
+    /// 何时使用此工作流。用于由 skill 包封装时给 LLM 的触发指引；运行时不消费。
+    /// </summary>
+    public string? WhenToUse { get; init; }
+
+    /// <summary>
     /// 参与该工作流的角色定义列表。
     /// </summary>
     public required List<RoleDefinition> Roles { get; init; }

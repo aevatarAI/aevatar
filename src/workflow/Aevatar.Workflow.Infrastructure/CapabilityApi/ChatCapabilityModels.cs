@@ -55,6 +55,11 @@ public sealed record ChatInput
     /// </summary>
     public IDictionary<string, string>? Metadata { get; init; }
 
+    /// <summary>
+    /// Optional command transport headers for downstream runtime adapters.
+    /// </summary>
+    public IDictionary<string, string>? Headers { get; init; }
+
     public ChatLlmControlInput? LlmControl { get; init; }
 
     // Refactor (issue1332): Old pattern: workflow chat control used metadata or LlmControl only. New principle: reuse AgentToolExecutionContext as typed ToolContext without adding a workflow-specific abstraction.

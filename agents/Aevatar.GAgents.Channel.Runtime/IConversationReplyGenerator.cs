@@ -38,7 +38,8 @@ public interface IConversationReplyGenerator
 public sealed record ConversationReplyResult(
     string? Text,
     ReplyTokenUsage? Usage,
-    string? FinishReason);
+    string? FinishReason,
+    IReadOnlyList<ConversationHistoryEntry>? AppendedHistory = null);
 
 /// <summary>
 /// Channel-runtime-side token usage projection. Mirrors <c>Aevatar.AI.Abstractions.LLMProviders.TokenUsage</c>

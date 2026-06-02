@@ -110,19 +110,19 @@ public sealed class LocalSkillCatalogTests
             [
                 new SkillWorkflowDescriptor
                 {
-                    WorkflowId = "daily-report",
-                    WorkflowYamls = ["name: daily-report\nsteps: []"],
+                    WorkflowId = "summary-report",
+                    WorkflowYamls = ["name: summary-report\nsteps: []"],
                 }
             ],
             associatedFiles: new Dictionary<string, string>
             {
-                ["workflows/daily-report.yaml"] = "name: daily-report\nsteps: []",
+                ["workflows/summary-report.yaml"] = "name: summary-report\nsteps: []",
             }));
 
         var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
 
         result.Should().Contain("## aevatar_start_workflow Handoff");
-        result.Should().Contain("\"workflow_id\": \"daily-report\"");
+        result.Should().Contain("\"workflow_id\": \"summary-report\"");
         result.Should().Contain("\"workflow_yamls\"");
         result.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
             .Should().BeLessThan(result.IndexOf("## Associated Files", StringComparison.Ordinal));

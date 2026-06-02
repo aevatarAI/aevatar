@@ -27,7 +27,7 @@ public sealed class AgentBuilderCardFlowTests
               "agents": [
                 {
                   "agent_id": "skill-runner-card-click-1",
-                  "template": "daily",
+                  "template": "summary",
                   "status": "running",
                   "next_scheduled_run": "2026-04-23T09:00:00Z"
                 }
@@ -169,7 +169,7 @@ public sealed class AgentBuilderCardFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily",
+              "template": "summary",
               "status": "running",
               "schedule_cron": "0 9 * * *",
               "schedule_timezone": "UTC",
@@ -189,7 +189,7 @@ public sealed class AgentBuilderCardFlowTests
         var deleteButton = result.Actions.Should().Contain(a => a.ActionId == "confirm_delete_agent").Subject;
         deleteButton.IsDanger.Should().BeTrue();
         deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("agent_id", "skill-runner-1"));
-        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("template", "daily"));
+        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("template", "summary"));
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public sealed class AgentBuilderCardFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily",
+              "template": "summary",
               "status": "running",
               "note": "Manual run dispatched."
             }
@@ -289,9 +289,9 @@ public sealed class AgentBuilderCardFlowTests
     [Theory]
     [InlineData("/foobar")]
     [InlineData("/goal draft Q2 launch")]
-    [InlineData("/daily")]
-    [InlineData("/daily alice")]
-    [InlineData("/DAILY alice schedule_time=09:00")]
+    [InlineData("/summary")]
+    [InlineData("/summary alice")]
+    [InlineData("/SUMMARY alice schedule_time=09:00")]
     public async Task TryResolveAsync_UnknownAndOrnnSlashCommands_FallThrough(string text)
     {
         var inbound = new ChannelInboundEvent
@@ -352,7 +352,7 @@ public sealed class AgentBuilderCardFlowTests
         };
         inbound.Extra["agent_builder_action"] = "confirm_delete_agent";
         inbound.Extra["agent_id"] = "skill-runner-1";
-        inbound.Extra["template"] = "daily";
+        inbound.Extra["template"] = "summary";
 
         var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
 
@@ -362,7 +362,7 @@ public sealed class AgentBuilderCardFlowTests
         decision.ReplyContent!.Text.Should().BeNullOrEmpty();
         decision.ReplyContent.Cards.Should().ContainSingle(card =>
             card.BlockId == "delete_confirm:skill-runner-1");
-        decision.ReplyContent.Cards.Single().Text.Should().Contain("daily");
+        decision.ReplyContent.Cards.Single().Text.Should().Contain("summary");
         var confirmButton = decision.ReplyContent.Actions.Should()
             .Contain(a => a.ActionId == "delete_agent").Subject;
         confirmButton.IsDanger.Should().BeTrue();

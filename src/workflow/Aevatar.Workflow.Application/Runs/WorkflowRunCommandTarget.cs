@@ -17,6 +17,7 @@ internal sealed class WorkflowRunCommandTarget
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly WorkflowRunDurableCompletionResolver _durableCompletionResolver;
+    private readonly bool _destroyCreatedActorsOnDispatchFailure;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunCommandTarget(
@@ -25,7 +26,8 @@ internal sealed class WorkflowRunCommandTarget
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowRunProvisioningPort runProvisioningPort,
-        WorkflowRunDurableCompletionResolver durableCompletionResolver)
+        WorkflowRunDurableCompletionResolver durableCompletionResolver,
+        bool destroyCreatedActorsOnDispatchFailure = true)
     {
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
@@ -40,6 +42,7 @@ internal sealed class WorkflowRunCommandTarget
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
         _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
+        _destroyCreatedActorsOnDispatchFailure = destroyCreatedActorsOnDispatchFailure;
     }
 
     public string ActorId { get; }
@@ -71,7 +74,7 @@ internal sealed class WorkflowRunCommandTarget
     public async Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default)
     {
         DispatchFailureCleanupCompleted = false;
-        await ReleaseAsync(destroyCreatedActors: true, ct: ct);
+        await ReleaseAsync(destroyCreatedActors: _destroyCreatedActorsOnDispatchFailure, ct: ct);
         DispatchFailureCleanupCompleted = true;
     }
 

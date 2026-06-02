@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -17,19 +16,19 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
     private readonly ServiceInvocationResolutionService _resolutionService;
     private readonly IInvokeAdmissionAuthorizer _admissionAuthorizer;
     private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
-    private readonly ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> _interactionService;
+    private readonly IGAgentDraftRunInteractionPort _interactionPort;
 
     public StaticGAgentStreamInvocationApplicationService(
         ServiceInvocationResolutionService resolutionService,
         IInvokeAdmissionAuthorizer admissionAuthorizer,
         IServiceRunRegistrationPort serviceRunRegistrationPort,
-        ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService)
+        IGAgentDraftRunInteractionPort interactionPort)
     {
         _resolutionService = resolutionService ?? throw new ArgumentNullException(nameof(resolutionService));
         _admissionAuthorizer = admissionAuthorizer ?? throw new ArgumentNullException(nameof(admissionAuthorizer));
         _serviceRunRegistrationPort = serviceRunRegistrationPort
             ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
-        _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
+        _interactionPort = interactionPort ?? throw new ArgumentNullException(nameof(interactionPort));
     }
 
     public async Task<StaticGAgentStreamInvocationResult> InvokeAsync(
@@ -82,8 +81,8 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
 
         // Refactor (iter1353/cluster-001): Old pattern: static invocation lowered trusted facts into headers before draft-run dispatch.
         // New principle: headers stay payload-only; typed ToolContext and LlmControl cross the command boundary unchanged.
-        var interaction = await _interactionService.ExecuteAsync(
-            new GAgentDraftRunCommand(
+        var interaction = await _interactionPort.ExecuteAsync(
+            new GAgentDraftRunInteractionRequest(
                 ScopeId: identity.TenantId,
                 ActorTypeName: actorTypeName,
                 Prompt: prompt,

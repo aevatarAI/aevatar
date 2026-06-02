@@ -36,7 +36,7 @@ public static class WorkflowCapabilityEndpoints
     public static async Task HandleChat(
         HttpContext http,
         ChatInput input,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null)
     {
@@ -502,7 +502,7 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task HandleChatWebSocket(
         HttpContext http,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {

@@ -39,11 +39,13 @@ public sealed record GAgentDraftRunCommand(
     bool UseCorrelationIdAsFallbackSessionId = true,
     string? AgentKind = null,
     AgentToolExecutionContext? ToolContext = null,
-    LLMControlContext? LlmControl = null) : ICommandContextSeed
+    LLMControlContext? LlmControl = null,
+    string? CommandIdSeed = null,
+    string? CorrelationIdSeed = null) : ICommandContextSeed
 {
-    public string? CommandId => null;
+    public string? CommandId => CommandIdSeed;
 
-    public string? CorrelationId => null;
+    public string? CorrelationId => CorrelationIdSeed;
 }
 
 public enum GAgentDraftRunStartError

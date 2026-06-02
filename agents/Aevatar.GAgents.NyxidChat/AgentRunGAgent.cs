@@ -528,7 +528,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.OutboundIntent?.Clone(),
             hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
             hasReplyText ? string.Empty : "empty_reply",
-            hasReplyText ? string.Empty : "Reply generator returned an empty response.");
+            hasReplyText ? string.Empty : "Reply generator returned an empty response.",
+            stepState.AppendedHistory.ToArray());
     }
 
     private static bool ShouldCompleteAfterLlmStep(AgentRunReplyStepState stepState, bool isCompletedLlmStep)
@@ -713,6 +714,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             };
             message.ToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
             next.Messages.Add(message);
+            next.AppendedHistory.Add(AgentRunReplyStepMappers.ToConversationHistoryEntry(message));
         }
 
         return next;
@@ -730,6 +732,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.NextStepIndex = completedStepIndex;
         next.PendingToolCalls.Clear();
         next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
+        next.AppendedHistory.AddRange(
+            result.ResultMessages.Select(AgentRunReplyStepMappers.ToConversationHistoryEntry));
         if (result.AdvanceRound)
             next.Round++;
         return next;
@@ -764,7 +768,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
         string errorCode,
-        string errorSummary)
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory = null)
     {
         await PersistReplyProducedAsync(
             request,
@@ -773,9 +778,18 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             outboundIntent,
             terminalState,
             errorCode,
-            errorSummary);
+            errorSummary,
+            appendedHistory);
 
-        await DispatchReadyEventAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        await DispatchReadyEventAsync(
+            request,
+            runId,
+            replyText,
+            outboundIntent,
+            terminalState,
+            errorCode,
+            errorSummary,
+            appendedHistory);
 
         // Past the point of user-visible delivery. State persistence failures and cleanup
         // scheduling failures MUST NOT propagate out — otherwise HandleStartAsync's outer
@@ -803,7 +817,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             outbound,
             State.ProducedTerminalState,
             State.ErrorCode ?? string.Empty,
-            State.ErrorSummary ?? string.Empty);
+            State.ErrorSummary ?? string.Empty,
+            State.ProducedAppendedHistory.ToArray());
 
         // Past the point of user-visible delivery — swallow persistence/cleanup errors so
         // they don't escalate to a duplicate fallback dispatch. See ProduceAndDispatchAsync
@@ -888,7 +903,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         MessageContent? outbound,
         LlmReplyTerminalState terminalState,
         string errorCode,
-        string errorSummary)
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory)
     {
         var evt = new AgentRunReplyProducedEvent
         {
@@ -903,6 +919,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         };
         if (outbound is not null)
             evt.Outbound = outbound.Clone();
+        evt.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         await PersistDomainEventAsync(evt);
     }
 
@@ -1010,7 +1027,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
         string errorCode,
-        string errorSummary)
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory = null)
     {
         if (string.IsNullOrWhiteSpace(request.TargetActorId))
             return;
@@ -1033,6 +1051,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
             RunId = runId,
         };
+        ready.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         try
         {
             await SendToAsync(request.TargetActorId, ready, CancellationToken.None);
@@ -1575,6 +1594,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.ProducedReplyText = evt.ReplyText ?? string.Empty;
         next.ProducedOutbound = evt.Outbound?.Clone();
         next.ProducedTerminalState = evt.TerminalState;
+        next.ProducedAppendedHistory.Clear();
+        next.ProducedAppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
         // Backward-compat: AgentRunReplyProducedEvents persisted by the pre-refactor
         // codepath have no reply_text / outbound / terminal_state fields (proto3 defaults
         // on deserialize). Historically, Status=ReplyProduced was only written *after* the

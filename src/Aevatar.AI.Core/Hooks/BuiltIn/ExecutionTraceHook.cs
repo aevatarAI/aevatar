@@ -36,13 +36,13 @@ public sealed class ExecutionTraceHook : IAIGAgentExecutionHook
     { _logger.LogInformation("[Trace] LLM Request Start: Agent={Agent}", ctx.AgentId); return Task.CompletedTask; }
 
     public Task OnLLMRequestEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
-    { _logger.LogInformation("[Trace] LLM Request End: Agent={Agent}", ctx.AgentId); return Task.CompletedTask; }
+    { _logger.LogInformation("[Trace] LLM Request End: Agent={Agent}, DurationMs={DurationMs}", ctx.AgentId, ctx.Duration?.TotalMilliseconds); return Task.CompletedTask; }
 
     public Task OnToolExecuteStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
     { _logger.LogInformation("[Trace] Tool Start: {Tool}", ctx.ToolName); return Task.CompletedTask; }
 
     public Task OnToolExecuteEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
-    { _logger.LogInformation("[Trace] Tool End: {Tool}", ctx.ToolName); return Task.CompletedTask; }
+    { _logger.LogInformation("[Trace] Tool End: {Tool}, DurationMs={DurationMs}", ctx.ToolName, ctx.Duration?.TotalMilliseconds); return Task.CompletedTask; }
 
     // ─── 上下文压缩 hook ───
 
