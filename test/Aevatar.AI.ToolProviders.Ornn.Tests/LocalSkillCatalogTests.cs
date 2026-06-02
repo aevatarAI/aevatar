@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
@@ -66,13 +67,15 @@ public sealed class LocalSkillCatalogTests
         using (BeginTokenScope("token-a"))
         {
             var result = await tool.ExecuteAsync("""{"skill":"nyxid"}""");
-            result.Should().Contain("remote-token-a-1");
+            ExtractText(result).Should().Contain("remote-token-a-1");
+            ExtractLoaded(result).Should().BeTrue();
         }
 
         using (BeginTokenScope("token-b"))
         {
             var result = await tool.ExecuteAsync("""{"skill":"nyxid"}""");
-            result.Should().Contain("remote-token-b-2");
+            ExtractText(result).Should().Contain("remote-token-b-2");
+            ExtractLoaded(result).Should().BeTrue();
         }
 
         fetcher.Requests.Should().Equal(
@@ -91,10 +94,12 @@ public sealed class LocalSkillCatalogTests
 
         using var _ = BeginTokenScope("token-a");
         var result = await tool.ExecuteAsync("""{"skill":"local"}""");
+        var text = ExtractText(result);
 
-        result.Should().Contain("local-body");
-        result.Should().Contain("Skill Continuation");
-        result.Should().Contain("ornn_search_skills");
+        text.Should().Contain("local-body");
+        text.Should().Contain("Skill Continuation");
+        text.Should().Contain("ornn_search_skills");
+        ExtractLoaded(result).Should().BeTrue();
         fetcher.Requests.Should().BeEmpty();
     }
 
@@ -120,12 +125,13 @@ public sealed class LocalSkillCatalogTests
             }));
 
         var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
+        var text = ExtractText(result);
 
-        result.Should().Contain("## aevatar_start_workflow Handoff");
-        result.Should().Contain("\"workflow_id\": \"summary-report\"");
-        result.Should().Contain("\"workflow_yamls\"");
-        result.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
-            .Should().BeLessThan(result.IndexOf("## Associated Files", StringComparison.Ordinal));
+        text.Should().Contain("## aevatar_start_workflow Handoff");
+        text.Should().Contain("\"workflow_id\": \"summary-report\"");
+        text.Should().Contain("\"workflow_yamls\"");
+        text.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
+            .Should().BeLessThan(text.IndexOf("## Associated Files", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -251,5 +257,17 @@ public sealed class LocalSkillCatalogTests
     private sealed class RestoreContextScope(IReadOnlyDictionary<string, string>? previous) : IDisposable
     {
         public void Dispose() => AgentToolRequestContext.CurrentMetadata = previous;
+    }
+
+    private static string ExtractText(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("text").GetString() ?? string.Empty;
+    }
+
+    private static bool ExtractLoaded(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("loaded").GetBoolean();
     }
 }

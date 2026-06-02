@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
+using System.Text.Json;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -93,13 +94,14 @@ public sealed class SkillWorkflowsWiringTests
 
         var tool = new UseSkillTool(catalog);
         var output = await tool.ExecuteAsync("""{"skill":"translator"}""");
+        var text = ExtractText(output);
 
-        output.Should().Contain("## aevatar_start_workflow Handoff");
-        output.Should().Contain("aevatar_start_workflow");
-        output.Should().Contain("workflow_yamls");
-        output.Should().Contain("translate_flow");
-        output.Should().Contain("```json");
-        output.Should().Contain("type: llm_call");
+        text.Should().Contain("## aevatar_start_workflow Handoff");
+        text.Should().Contain("aevatar_start_workflow");
+        text.Should().Contain("workflow_yamls");
+        text.Should().Contain("translate_flow");
+        text.Should().Contain("```json");
+        text.Should().Contain("type: llm_call");
     }
 
     [Fact]
@@ -116,9 +118,10 @@ public sealed class SkillWorkflowsWiringTests
 
         var tool = new UseSkillTool(catalog);
         var output = await tool.ExecuteAsync("""{"skill":"plain"}""");
+        var text = ExtractText(output);
 
-        output.Should().NotContain("## aevatar_start_workflow Handoff");
-        output.Should().NotContain("aevatar_start_workflow");
+        text.Should().NotContain("## aevatar_start_workflow Handoff");
+        text.Should().NotContain("aevatar_start_workflow");
     }
 
     [Fact]
@@ -185,5 +188,11 @@ public sealed class SkillWorkflowsWiringTests
                 // best effort
             }
         }
+    }
+
+    private static string ExtractText(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("text").GetString() ?? string.Empty;
     }
 }
