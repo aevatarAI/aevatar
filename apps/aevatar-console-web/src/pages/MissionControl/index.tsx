@@ -39,6 +39,10 @@ import type {
   MissionInterventionState,
 } from './models';
 import {
+  buildMissionOperatorHandoff,
+  type MissionOperatorHandoff,
+} from './operatorHandoff';
+import {
   formatInterventionLabel,
   formatConnectionLabel,
   formatMissionLabel,
@@ -244,6 +248,10 @@ function MissionHeaderBar({
 }) {
   const ui = useMissionControlUi();
   const { token } = theme.useToken();
+  const handoff = useMemo(
+    () => buildMissionOperatorHandoff(snapshot, connectionStatus),
+    [connectionStatus, snapshot],
+  );
 
   return (
     <div
@@ -297,6 +305,47 @@ function MissionHeaderBar({
             {connectionMessage}
           </Typography.Text>
         ) : null}
+        <div
+          aria-label="Mission Control operator handoff"
+          style={{
+            background: handoff.isActionable
+              ? token.colorWarningBg
+              : token.colorFillQuaternary,
+            border: `1px solid ${
+              handoff.isActionable
+                ? token.colorWarningBorder
+                : token.colorBorderSecondary
+            }`,
+            borderRadius: 4,
+            display: 'grid',
+            gap: 8,
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            marginTop: 4,
+            maxWidth: 760,
+            padding: '10px 12px',
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <Typography.Text
+              style={{
+                color: token.colorTextHeading,
+                display: 'block',
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              {handoff.actionLabel}
+            </Typography.Text>
+            <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
+              {handoff.actionDetail}
+            </Typography.Text>
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <Typography.Text style={{ color: token.colorTextSecondary, fontSize: 12 }}>
+              {handoff.connectionDetail}
+            </Typography.Text>
+          </div>
+        </div>
       </div>
       <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
         <Segmented<MissionStageView>
@@ -582,10 +631,12 @@ function MissionStage({
 
 function MissionDock({
   activeTab,
+  handoff,
   onTabChange,
   snapshot,
 }: {
   activeTab: MissionDockTab;
+  handoff: MissionOperatorHandoff;
   onTabChange: (key: MissionDockTab) => void;
   snapshot: MissionControlSnapshot;
 }) {
@@ -701,6 +752,9 @@ function MissionDock({
         </Space>
         <Space wrap size={[8, 8]}>
           <Tag color="processing">{snapshot.events.length} events</Tag>
+          <Tag color={handoff.isActionable ? 'gold' : 'default'}>
+            {handoff.isActionable ? 'Evidence before action' : 'Read-only evidence'}
+          </Tag>
           <Button onClick={() => ui.setDockCollapsed(!ui.isDockCollapsed)}>
             {ui.isDockCollapsed ? 'Expand Dock' : 'Collapse Dock'}
           </Button>
@@ -708,6 +762,28 @@ function MissionDock({
       </div>
       {!ui.isDockCollapsed ? (
         <div style={{ ...scrollerStyle, flex: 1, padding: '12px 14px 14px' }}>
+          <Card
+            size="small"
+            styles={{ body: { padding: 12 } }}
+            style={{
+              background: token.colorFillQuaternary,
+              borderColor: token.colorBorderSecondary,
+              borderRadius: 4,
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <Typography.Text strong style={{ color: token.colorTextHeading }}>
+                Evidence handoff
+              </Typography.Text>
+              <Typography.Text style={{ color: token.colorTextSecondary }}>
+                {handoff.evidenceDetail}
+              </Typography.Text>
+              <Typography.Text style={{ color: token.colorTextTertiary }}>
+                {handoff.expectedResult}
+              </Typography.Text>
+            </div>
+          </Card>
           {activeTab === 'timeline' ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {snapshot.events.map((event) => (
@@ -786,6 +862,10 @@ function MissionControlCanvas({
     () => snapshot.nodes.find((node) => node.id === ui.activeNodeId),
     [snapshot.nodes, ui.activeNodeId],
   );
+  const handoff = useMemo(
+    () => buildMissionOperatorHandoff(snapshot, runtime.connectionStatus),
+    [runtime.connectionStatus, snapshot],
+  );
 
   const shouldPushInspector =
     ui.isInspectorOpen && ui.inspectorPresentation === 'push';
@@ -849,6 +929,7 @@ function MissionControlCanvas({
             <InspectorPanel
               actionFeedback={runtime.actionFeedback}
               connectionStatus={runtime.connectionStatus}
+              operatorHandoff={handoff}
               mode={ui.inspectorMode}
               onSubmitAction={(action) => {
                 if (!snapshot.intervention) {
@@ -865,7 +946,12 @@ function MissionControlCanvas({
           </Card>
         ) : null}
       </div>
-      <MissionDock activeTab={dockTab} onTabChange={setDockTab} snapshot={snapshot} />
+      <MissionDock
+        activeTab={dockTab}
+        handoff={handoff}
+        onTabChange={setDockTab}
+        snapshot={snapshot}
+      />
       {!shouldPushInspector ? (
         <Drawer
           closable
@@ -887,6 +973,7 @@ function MissionControlCanvas({
           <InspectorPanel
             actionFeedback={runtime.actionFeedback}
             connectionStatus={runtime.connectionStatus}
+            operatorHandoff={handoff}
             mode={ui.inspectorMode}
             onSubmitAction={(action) => {
               if (!snapshot.intervention) {
