@@ -10,6 +10,7 @@ internal static class ServiceProjectionKinds
     public const string Traffic = "service-traffic";
     public const string DraftRunSession = "service-draft-run-session";
     public const string ScriptServiceAguiSession = "script-service-agui-session";
+    public const string LlmSessionObservation = "llm-session-observation";
     public const string Runs = "service-runs";
     public const string GAgentRunTerminalDraftRun = "gagent-run-terminal-draft-run";
     public const string GAgentRunTerminalApproval = "gagent-run-terminal-approval";

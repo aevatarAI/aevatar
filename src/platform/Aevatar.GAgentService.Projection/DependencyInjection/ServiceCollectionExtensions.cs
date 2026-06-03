@@ -128,13 +128,29 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new ScriptServiceAguiRuntimeLease(context));
+        services.AddEventSinkProjectionRuntimeCore<
+            LlmSessionObservationProjectionContext,
+            LlmSessionObservationRuntimeLease,
+            EventEnvelope,
+            ProjectionSessionScopeGAgent<LlmSessionObservationProjectionContext>>(
+            static scopeKey => new LlmSessionObservationProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new LlmSessionObservationRuntimeLease(context));
 
         services.TryAddSingleton<IGAgentRunTerminalProjectionPort, GAgentRunTerminalProjectionPort>();
         services.TryAddSingleton<IGAgentDraftRunObservationScopeLeasePreparationPort, GAgentDraftRunObservationScopeLeasePreparationPort>();
+        services.TryAddSingleton<ILlmSessionObservationScopeLeasePreparationPort, LlmSessionObservationScopeLeasePreparationPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
+        services.TryAddSingleton<LlmSessionObservationSessionEventCodec>();
+        services.TryAddSingleton<LlmSessionObservationSessionEventHub>();
         services.TryAddSingleton<IGAgentDraftRunProjectionPort, GAgentDraftRunProjectionPort>();
         services.TryAddSingleton<IScriptServiceAguiProjectionPort, ScriptServiceAguiProjectionPort>();
+        services.TryAddSingleton<ILlmSessionObservationProjectionPort, LlmSessionObservationProjectionPort>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
@@ -203,6 +219,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptServiceAguiProjectionContext>,
             ScriptServiceAguiSessionEventProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<LlmSessionObservationProjectionContext>,
+            LlmSessionObservationSessionEventProjector>());
 
         return services;
     }

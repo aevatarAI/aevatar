@@ -378,17 +378,26 @@ public sealed record MessagesCreateAcceptedCommandResult(
 public sealed record ChatCompletionsCreateCommandResult(
     ResponsesCommandError? Error,
     ChatCompletionsCreateCommandPlan? StreamPlan,
+    ChatCompletionsCreateCompletedCommandResult? Completed,
     ChatCompletionsCreateAcceptedCommandResult? Accepted)
 {
     public static ChatCompletionsCreateCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null, null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null, null);
 
     public static ChatCompletionsCreateCommandResult FromStreamPlan(ChatCompletionsCreateCommandPlan plan) =>
-        new(null, plan, null);
+        new(null, plan, null, null);
+
+    public static ChatCompletionsCreateCommandResult FromCompleted(ChatCompletionsCreateCompletedCommandResult completed) =>
+        new(null, null, completed, null);
 
     public static ChatCompletionsCreateCommandResult FromAccepted(ChatCompletionsCreateAcceptedCommandResult accepted) =>
-        new(null, null, accepted);
+        new(null, null, null, accepted);
 }
+
+public sealed record ChatCompletionsCreateCompletedCommandResult(
+    NormalizedChatCompletionsCommand Normalized,
+    long CreatedAt,
+    LlmSessionCompletionSnapshot Completion);
 
 // Refactor (iter344/cluster-001):
 //   Old pattern: The synchronous Chat Completions response implied request-local completion from direct provider execution.
@@ -398,6 +407,11 @@ public sealed record ChatCompletionsCreateAcceptedCommandResult(
     long CreatedAt,
     LlmSessionRegistrationResult Session,
     DispatchAdmission Admission);
+
+public sealed record ChatCompletionsObservedDelta(
+    string? TextDelta,
+    ToolCall? ToolCallDelta,
+    TokenUsage? Usage);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: /v1/responses endpoints owned command orchestration and called many lower-level collaborators directly.
@@ -448,5 +462,6 @@ public interface IChatCompletionsCommandFacade
 
     Task<ResponsesStreamCommandResult> StreamAsync(
         ChatCompletionsCreateCommandPlan plan,
+        Func<ChatCompletionsObservedDelta, CancellationToken, ValueTask> onObservedDelta,
         CancellationToken ct = default);
 }
