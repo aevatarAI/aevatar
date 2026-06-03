@@ -12,8 +12,10 @@ using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
+using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Hosting;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -74,6 +76,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ImplementationType == typeof(StaticServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();
