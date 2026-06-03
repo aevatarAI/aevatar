@@ -6,7 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using System.Runtime.CompilerServices;
 
@@ -265,7 +265,7 @@ public sealed class GAgentApprovalInteractionTests
     {
         var policy = new GAgentApprovalCompletionPolicy();
 
-        policy.TryResolve(new AGUIEvent { TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent() }, out var textCompletion)
+        policy.TryResolve(new AGUIEvent { TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent() }, out var textCompletion)
             .Should().BeTrue();
         textCompletion.Should().Be(GAgentApprovalCompletionStatus.TextMessageCompleted);
 
