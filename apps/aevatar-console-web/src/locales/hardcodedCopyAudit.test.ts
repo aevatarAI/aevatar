@@ -550,7 +550,7 @@ describe('console-wide i18n migration guard', () => {
 
   it('keeps production UI copy out of hardcoded English JSX text and UI properties', () => {
     const violations = collectProductionSourceFiles(sourceRoot).flatMap(
-      collectHardcodedEnglishUiTextWithoutExpressions,
+      collectHardcodedEnglishUiText,
     );
 
     expect(violations).toEqual([]);
