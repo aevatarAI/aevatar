@@ -1,6 +1,6 @@
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Aevatar.Foundation.Core.Compatibility;
+using Aevatar.Foundation.Abstractions.Compatibility;
 
 namespace Aevatar.Foundation.Core.EventSourcing;
 
