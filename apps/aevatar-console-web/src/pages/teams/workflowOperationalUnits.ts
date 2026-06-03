@@ -1,6 +1,13 @@
 import type { ScopeWorkflowSummary } from "@/shared/models/scopes";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
+import {
+  compareTeamRuns,
+  isFailedTeamRun,
+  isSuccessfulTeamRun,
+  isWaitingTeamRun,
+  selectLatestTeamRun,
+} from "./runtime/runtimeRunSemantics";
 
 export const WORKFLOW_RUNTIME_GUARDRAIL = 12;
 
@@ -66,30 +73,9 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
-function normalizeStatus(value: string | null | undefined): string {
-  return trimOptional(value).toLowerCase();
-}
-
 function parseTimestamp(value: string | null | undefined): number {
   const parsed = Date.parse(value || "");
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function compareRuns(
-  left: ScopeServiceRunSummary,
-  right: ScopeServiceRunSummary,
-): number {
-  const rightTime = parseTimestamp(right.lastUpdatedAt);
-  const leftTime = parseTimestamp(left.lastUpdatedAt);
-  if (rightTime !== leftTime) {
-    return rightTime - leftTime;
-  }
-
-  if (right.stateVersion !== left.stateVersion) {
-    return right.stateVersion - left.stateVersion;
-  }
-
-  return right.runId.localeCompare(left.runId);
 }
 
 function compareServices(
@@ -103,54 +89,6 @@ function compareServices(
   }
 
   return right.serviceId.localeCompare(left.serviceId);
-}
-
-function isSuccessfulRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  if (run.lastSuccess === true) {
-    return true;
-  }
-
-  return ["completed", "finished", "success", "succeeded"].includes(
-    normalizeStatus(run.completionStatus),
-  );
-}
-
-function isWaitingRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  return [
-    "waiting",
-    "waiting_approval",
-    "waiting_signal",
-    "blocked",
-    "human_approval",
-    "human_input",
-    "suspended",
-  ].includes(normalizeStatus(run.completionStatus));
-}
-
-function isFailedRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  if (isWaitingRun(run)) {
-    return false;
-  }
-
-  if (run.lastSuccess === false) {
-    return true;
-  }
-
-  return ["failed", "error", "stopped", "timed_out", "timedout"].includes(
-    normalizeStatus(run.completionStatus),
-  );
 }
 
 function workflowMatchesService(
@@ -235,16 +173,19 @@ function selectWorkflowOperationalRuns(input: {
   const preferredRunId = trimOptional(input.preferredRunId);
   const matchingRuns = input.runs
     .filter((run) => matchesWorkflowRun(input.workflow, run))
-    .sort(compareRuns);
+    .sort(compareTeamRuns);
+  const latestRun = selectLatestTeamRun(matchingRuns, {
+    preferredRunId,
+  });
   const preferredRun =
-    preferredRunId.length > 0
-      ? matchingRuns.find((run) => trimOptional(run.runId) === preferredRunId) ??
-        null
+    latestRun &&
+    preferredRunId.length > 0 &&
+    trimOptional(latestRun.runId) === preferredRunId
+      ? latestRun
       : null;
-  const latestRun = preferredRun ?? matchingRuns[0] ?? null;
   const baselineRun =
     matchingRuns.find(
-      (run) => run.runId !== latestRun?.runId && isSuccessfulRun(run),
+      (run) => run.runId !== latestRun?.runId && isSuccessfulTeamRun(run),
     ) ||
     matchingRuns.find((run) => run.runId !== latestRun?.runId) ||
     null;
@@ -282,7 +223,7 @@ function deriveAttention(input: {
     };
   }
 
-  if (latestRun && isFailedRun(latestRun)) {
+  if (latestRun && isFailedTeamRun(latestRun)) {
     return {
       attention: "failed",
       attentionDetail:
@@ -293,7 +234,7 @@ function deriveAttention(input: {
     };
   }
 
-  if (latestRun && isWaitingRun(latestRun)) {
+  if (latestRun && isWaitingTeamRun(latestRun)) {
     return {
       attention: "waiting",
       attentionDetail:
@@ -304,7 +245,7 @@ function deriveAttention(input: {
     };
   }
 
-  if (latestRun && isSuccessfulRun(latestRun)) {
+  if (latestRun && isSuccessfulTeamRun(latestRun)) {
     return {
       attention: "healthy",
       attentionDetail: "Recent runtime proof looks healthy for this team.",

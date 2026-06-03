@@ -37,6 +37,14 @@ import {
   buildScopeHref,
   readScopeQueryDraft,
 } from "../scopes/components/scopeQuery";
+import {
+  compareTeamRuns,
+  formatTeamRunStatusLabel,
+  isFailedTeamRun,
+  isSuccessfulTeamRun,
+  isWaitingTeamRun,
+  selectLatestTeamRun,
+} from "./runtime/runtimeRunSemantics";
 import type { WorkflowOperationalAttention } from "./workflowOperationalUnits";
 import {
   clearSyncedPendingTeamRosterSummaries,
@@ -103,32 +111,13 @@ function pickMeaningfulLabel(
   return "";
 }
 
-// Refactor (v1/issue1444-first):
-//   Old: workflow run status labels leaked raw runtime terms directly into the teams UI.
-//   New: run status mapping keeps UI display labels stable while preserving the underlying status semantics.
-function formatRunStatusLabel(status: string | null | undefined): string {
-  switch (trimOptional(status).toLowerCase()) {
-    case "waiting":
-    case "waiting_approval":
-    case "waiting_signal":
-      return "待关注";
-    case "failed":
-    case "error":
-      return "异常";
-    case "completed":
-      return "已完成";
-    default:
-      return trimOptional(status) || "未知";
-  }
-}
-
 function formatOperationalStatusLabel(
   status: string | null | undefined,
   attention: TeamOperationalAttention,
 ): string {
   const normalizedStatus = trimOptional(status);
   if (normalizedStatus) {
-    return formatRunStatusLabel(normalizedStatus);
+    return formatTeamRunStatusLabel(normalizedStatus);
   }
 
   switch (attention) {
@@ -210,75 +199,6 @@ function formatShortTime(value: string | null | undefined): string {
 function parseTimestamp(value: string | null | undefined): number {
   const parsed = Date.parse(value || "");
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function normalizeStatus(value: string | null | undefined): string {
-  return trimOptional(value).toLowerCase();
-}
-
-function compareRuns(
-  left: ScopeServiceRunSummary,
-  right: ScopeServiceRunSummary,
-): number {
-  const rightTime = parseTimestamp(right.lastUpdatedAt);
-  const leftTime = parseTimestamp(left.lastUpdatedAt);
-  if (rightTime !== leftTime) {
-    return rightTime - leftTime;
-  }
-
-  if (right.stateVersion !== left.stateVersion) {
-    return right.stateVersion - left.stateVersion;
-  }
-
-  return right.runId.localeCompare(left.runId);
-}
-
-function isSuccessfulRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  if (run.lastSuccess === true) {
-    return true;
-  }
-
-  return ["completed", "finished", "success", "succeeded"].includes(
-    normalizeStatus(run.completionStatus),
-  );
-}
-
-function isWaitingRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  return [
-    "waiting",
-    "waiting_approval",
-    "waiting_signal",
-    "blocked",
-    "human_approval",
-    "human_input",
-    "suspended",
-  ].includes(normalizeStatus(run.completionStatus));
-}
-
-function isFailedRun(run: ScopeServiceRunSummary | null | undefined): boolean {
-  if (!run) {
-    return false;
-  }
-
-  if (isWaitingRun(run)) {
-    return false;
-  }
-
-  if (run.lastSuccess === false) {
-    return true;
-  }
-
-  return ["failed", "error", "stopped", "timed_out", "timedout"].includes(
-    normalizeStatus(run.completionStatus),
-  );
 }
 
 const SummaryStatCard: React.FC<{
@@ -476,7 +396,7 @@ function buildMemberRosterPreview(input: {
     trimOptional(input.member.publishedServiceId) ||
     trimOptional(matchedService?.serviceId);
   const runs = memberId ? input.runsByMemberId[memberId] ?? [] : [];
-  const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
+  const latestRun = selectLatestTeamRun(runs);
   const serviceLabel =
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
     (trimOptional(input.member.lastBoundRevisionId) ? "已绑定待确认" : "未绑定");
@@ -485,15 +405,15 @@ function buildMemberRosterPreview(input: {
   let attention: TeamOperationalAttention = "draft";
   let attentionDetail = `当前成员还处于 ${formatStudioMemberLifecycleStage(input.member.lifecycleStage)} 阶段。`;
 
-  if (latestRun && isFailedRun(latestRun)) {
+  if (latestRun && isFailedTeamRun(latestRun)) {
     attention = "failed";
     attentionDetail =
       trimOptional(latestRun.lastError) || "最近一次成员运行处于异常状态。";
-  } else if (latestRun && isWaitingRun(latestRun)) {
+  } else if (latestRun && isWaitingTeamRun(latestRun)) {
     attention = "waiting";
     attentionDetail =
       trimOptional(latestRun.lastError) || "最近一次成员运行正在等待人工或外部信号。";
-  } else if (latestRun && isSuccessfulRun(latestRun)) {
+  } else if (latestRun && isSuccessfulTeamRun(latestRun)) {
     attention = "healthy";
     attentionDetail = "最近一次成员运行正常，可继续进入详情查看。";
   } else if (serviceId || matchedService) {
@@ -544,7 +464,7 @@ function buildTeamRosterPreview(input: {
     memberPreviews
       .map((preview) => preview.latestRun)
       .filter((run): run is ScopeServiceRunSummary => Boolean(run))
-      .sort(compareRuns)[0] ?? null;
+      .sort(compareTeamRuns)[0] ?? null;
   const statusRank: Record<TeamOperationalAttention, number> = {
     failed: 0,
     waiting: 1,

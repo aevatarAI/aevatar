@@ -237,4 +237,39 @@ describe("workflowOperationalUnits", () => {
       "wf-draft",
     ]);
   });
+
+  it("selects workflow runs with shared Team runtime ordering and status semantics", () => {
+    const unit = resolveWorkflowOperationalUnit({
+      runs: [
+        {
+          ...runs[0],
+          runId: "run-lower-version",
+          completionStatus: "completed",
+          stateVersion: 2,
+          lastUpdatedAt: "2026-04-13T09:10:00Z",
+          lastSuccess: true,
+        },
+        {
+          ...runs[0],
+          runId: "run-higher-version",
+          completionStatus: "blocked",
+          stateVersion: 3,
+          lastUpdatedAt: "2026-04-13T09:10:00Z",
+          lastSuccess: false,
+          lastError: "Waiting for approval",
+        },
+      ],
+      services,
+      signals: {
+        runtimeAvailableByServiceId: new Set(["service-alpha"]),
+        servicesAvailable: true,
+      },
+      workflow: workflows[0],
+    });
+
+    expect(unit.latestRun?.runId).toBe("run-higher-version");
+    expect(unit.attention).toBe("waiting");
+    expect(unit.attentionLabel).toBe("Waiting");
+    expect(unit.baselineRun?.runId).toBe("run-lower-version");
+  });
 });
