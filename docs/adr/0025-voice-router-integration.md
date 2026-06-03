@@ -53,6 +53,9 @@ and provider state machines.
 - Raw audio frames, WebSocket connection identifiers, session IDs, and client
   connection metadata remain transient. They must not be written to actor state,
   event store, projection documents, or read models.
+- Voice control and transcript protobuf frames are not raw audio. They use the
+  shared `IRealtimeSession` lifecycle and projection-backed realtime stream as
+  `VoiceRealtimeFrame`; that frame must not carry PCM/audio bytes.
 - Rejections that can be known before upgrade use HTTP status codes
   (`403`, `404`, `501`, `503`). WebSocket close `1008` is reserved for failures
   discovered after upgrade.
