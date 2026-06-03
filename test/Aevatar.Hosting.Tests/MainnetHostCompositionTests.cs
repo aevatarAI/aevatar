@@ -241,6 +241,24 @@ public sealed class MainnetHostCompositionTests
         hostOptions.ServicesStopConcurrently.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(null, true, "http://+:8080")]
+    [InlineData("", true, "http://+:8080")]
+    [InlineData("http://127.0.0.1:5080", true, "http://127.0.0.1:5080;http://+:8080")]
+    [InlineData("http://+:8080", true, "http://+:8080")]
+    [InlineData("http://127.0.0.1:5080; http://+:8080", true, "http://127.0.0.1:5080; http://+:8080")]
+    [InlineData(null, false, "http://127.0.0.1:5080")]
+    [InlineData("http://127.0.0.1:5099", false, "http://127.0.0.1:5099")]
+    public void ResolveMainnetListenUrls_ShouldKeepContainerProbePortReachable(
+        string? configuredUrls,
+        bool runningInContainer,
+        string expected)
+    {
+        MainnetHostBuilderExtensions.ResolveMainnetListenUrls(configuredUrls, runningInContainer)
+            .Should()
+            .Be(expected);
+    }
+
     [Fact]
     public void AddAevatarMainnetHost_ShouldRegisterRetiredActorCleanupHostedService()
     {

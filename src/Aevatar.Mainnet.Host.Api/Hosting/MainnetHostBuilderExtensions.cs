@@ -59,6 +59,10 @@ namespace Aevatar.Mainnet.Host.Api.Hosting;
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 public static class MainnetHostBuilderExtensions
 {
+    internal const int ContainerHttpPort = 8080;
+    internal const string ContainerListenUrl = "http://+:8080";
+    internal const string LocalDevelopmentListenUrl = "http://127.0.0.1:5080";
+
     public static WebApplicationBuilder AddAevatarMainnetHost(
         this WebApplicationBuilder builder,
         Action<AevatarDefaultHostOptions>? configureHost = null)
@@ -81,9 +85,6 @@ public static class MainnetHostBuilderExtensions
             options.ServicesStopConcurrently = true;
         });
 
-        if (string.IsNullOrWhiteSpace(builder.Configuration[WebHostDefaults.ServerUrlsKey]))
-            builder.WebHost.UseUrls("http://127.0.0.1:5080");
-
         builder.AddAevatarDefaultHost(options =>
         {
             options.ServiceName = "Aevatar.Mainnet.Host.Api";
@@ -96,6 +97,7 @@ public static class MainnetHostBuilderExtensions
             options.AllowLocalFileSecretsStore = false;
         });
         builder.AddMainnetDistributedOrleansHost();
+        ConfigureMainnetListenUrls(builder);
         builder.AddAevatarPlatform(options =>
         {
             options.EnableMakerExtensions = true;
@@ -313,5 +315,57 @@ public static class MainnetHostBuilderExtensions
             .RequireAuthorization("voice-dev");
 
         return app;
+    }
+
+    private static void ConfigureMainnetListenUrls(WebApplicationBuilder builder)
+    {
+        var configuredUrls = builder.Configuration[WebHostDefaults.ServerUrlsKey];
+        var resolvedUrls = ResolveMainnetListenUrls(
+            configuredUrls,
+            IsRunningInContainer());
+        if (!string.Equals(configuredUrls, resolvedUrls, StringComparison.Ordinal))
+            builder.WebHost.UseUrls(resolvedUrls);
+    }
+
+    internal static string ResolveMainnetListenUrls(string? configuredUrls, bool runningInContainer)
+    {
+        if (runningInContainer)
+        {
+            if (string.IsNullOrWhiteSpace(configuredUrls))
+                return ContainerListenUrl;
+
+            var trimmed = configuredUrls.Trim();
+            return ListenUrlsIncludePort(trimmed, ContainerHttpPort)
+                ? trimmed
+                : $"{trimmed};{ContainerListenUrl}";
+        }
+
+        return string.IsNullOrWhiteSpace(configuredUrls)
+            ? LocalDevelopmentListenUrl
+            : configuredUrls.Trim();
+    }
+
+    private static bool ListenUrlsIncludePort(string listenUrls, int port) =>
+        listenUrls
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(candidate => ListenUrlIncludesPort(candidate, port));
+
+    private static bool ListenUrlIncludesPort(string candidate, int port)
+    {
+        if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri) &&
+            uri.Port == port)
+        {
+            return true;
+        }
+
+        return candidate.EndsWith($":{port}", StringComparison.Ordinal) ||
+               candidate.Contains($":{port}/", StringComparison.Ordinal);
+    }
+
+    private static bool IsRunningInContainer()
+    {
+        var value = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER");
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "1", StringComparison.Ordinal);
     }
 }
