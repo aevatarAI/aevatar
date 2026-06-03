@@ -2931,8 +2931,6 @@ const response = await fetch("{{invokePath}}", {
 
         return new ChatLlmControlInput
         {
-            NyxIdAccessToken = control.NyxIdAccessToken,
-            NyxIdOrgToken = control.NyxIdOrgToken,
             ModelOverride = control.ModelOverride,
             NyxIdRoutePreference = control.NyxIdRoutePreference,
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
@@ -2966,10 +2964,9 @@ const response = await fetch("{{invokePath}}", {
         if (http == null)
             return null;
 
-        var bearerToken = ExtractBearerToken(http);
         var control = new LLMControlContext(
-            NyxIdAccessToken: bearerToken,
-            NyxIdOrgToken: bearerToken,
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
@@ -3005,16 +3002,6 @@ const response = await fetch("{{invokePath}}", {
         }
 
         return control == LLMControlContext.Empty ? null : control;
-    }
-
-    private static string? ExtractBearerToken(HttpContext http)
-    {
-        var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var bearerToken = auth["Bearer ".Length..].Trim();
-        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
     }
 
     private static void CopyHeaders(

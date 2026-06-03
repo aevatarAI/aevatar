@@ -133,6 +133,7 @@ public class WorkflowRoleGAgent(
             Prompt = intent.Prompt ?? string.Empty,
             SessionId = intent.SessionId ?? string.Empty,
             TimeoutMs = intent.TimeoutMs,
+            ConnectorHttpAuthorization = intent.ConnectorHttpAuthorization ?? string.Empty,
             LlmControl = new LLMControlContextPayload
             {
                 ModelOverride = intent.Model ?? string.Empty,
@@ -155,7 +156,8 @@ public class WorkflowRoleGAgent(
     {
         var inputParts = ResolveWorkflowRequestInputParts(request);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContext.Empty);
+        var toolContext = llmControl.ToToolContext(
+            WorkflowConnectorAuthorizationToolContextMapper.FromAuthorization(request.ConnectorHttpAuthorization));
         var metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))

@@ -573,8 +573,6 @@ public static class ScopeWorkflowEndpoints
 
         return new ChatLlmControlInput
         {
-            NyxIdAccessToken = control.NyxIdAccessToken,
-            NyxIdOrgToken = control.NyxIdOrgToken,
             ModelOverride = control.ModelOverride,
             NyxIdRoutePreference = control.NyxIdRoutePreference,
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
@@ -608,10 +606,9 @@ public static class ScopeWorkflowEndpoints
         if (http == null)
             return null;
 
-        var bearerToken = ExtractBearerToken(http);
         var control = new LLMControlContext(
-            NyxIdAccessToken: bearerToken,
-            NyxIdOrgToken: bearerToken,
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
@@ -651,16 +648,6 @@ public static class ScopeWorkflowEndpoints
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string? ExtractBearerToken(HttpContext http)
-    {
-        var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var bearerToken = auth["Bearer ".Length..].Trim();
-        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
-    }
 
     internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
     {

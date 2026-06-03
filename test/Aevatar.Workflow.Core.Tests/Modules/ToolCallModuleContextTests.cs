@@ -111,6 +111,56 @@ public sealed class ToolCallModuleContextTests
         completed.Output.Should().Be("""{"raw":true}""");
     }
 
+    [Fact]
+    public async Task ToolCallModule_ShouldPassActorOwnedConnectorAuthorizationToContextualTool()
+    {
+        var tool = new CapturingContextualTool("nyxid_tool");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+        {
+            HttpAuthorization = " Bearer typed-token ",
+        };
+        ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["connector.http.authorization"] = "Bearer metadata-token",
+        });
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            input: """{"operation":"read"}""",
+            executionId: "exec-1");
+
+        tool.LastRequest.Should().NotBeNull();
+        tool.LastRequest!.ArgumentsJson.Should().Be("""{"operation":"read"}""");
+        tool.LastRequest.RunId.Should().Be("run-1");
+        tool.LastRequest.StepId.Should().Be("call_proxy");
+        tool.LastRequest.ExecutionId.Should().Be("exec-1");
+        tool.LastRequest.CallId.Should().Be("workflow:run-1:call_proxy:exec-1");
+        tool.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer typed-token");
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldIgnoreMetadataOnlyConnectorAuthorizationForContextualTool()
+    {
+        var tool = new CapturingContextualTool("nyxid_tool");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+        ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["connector.http.authorization"] = "Bearer metadata-token",
+        });
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name);
+
+        tool.LastRequest.Should().NotBeNull();
+        tool.LastRequest!.ConnectorHttpAuthorization.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
     private static ToolCallModule CreateModule(IWorkflowTool tool) =>
         new(
             [new SingleToolSource(tool)],
@@ -174,6 +224,23 @@ public sealed class ToolCallModuleContextTests
             ct.ThrowIfCancellationRequested();
             ExecuteCalls++;
             return Task.FromResult(execute(argumentsJson));
+        }
+    }
+
+    private sealed class CapturingContextualTool(string name) : IWorkflowContextualTool
+    {
+        public string Name { get; } = name;
+
+        public WorkflowToolExecutionRequest? LastRequest { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            throw new InvalidOperationException("Contextual execution is required.");
+
+        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastRequest = request;
+            return Task.FromResult("""{"contextual":true}""");
         }
     }
 
