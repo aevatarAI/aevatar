@@ -2676,6 +2676,7 @@ const response = await fetch("{{invokePath}}", {
                                !string.IsNullOrWhiteSpace(snapshot.TargetActorId)
             ? await workflowExecutionQueryService.GetWorkflowActorCurrentStateAsync(snapshot.TargetActorId, ct)
             : null;
+        var registryBackedSummary = snapshot.ImplementationKind != ServiceImplementationKind.Workflow;
 
         return new ScopeServiceRunSummaryHttpResponse(
             scopeId,
@@ -2688,18 +2689,19 @@ const response = await fetch("{{invokePath}}", {
             snapshot.RevisionId,
             snapshot.DeploymentId,
             workflowSnapshot?.WorkflowName ?? string.Empty,
-            workflowSnapshot?.CompletionStatus ?? WorkflowRunCompletionStatus.Unknown,
+            workflowSnapshot?.CompletionStatus ??
+            (registryBackedSummary ? MapServiceRunCompletionStatus(snapshot.Status) : WorkflowRunCompletionStatus.Unknown),
             workflowSnapshot?.StateVersion ?? snapshot.StateVersion,
             workflowSnapshot?.LastEventId ?? snapshot.LastEventId,
             workflowSnapshot?.LastUpdatedAt ?? snapshot.UpdatedAt,
             snapshot.CreatedAt,
             snapshot.UpdatedAt,
-            workflowSnapshot?.LastSuccess,
+            workflowSnapshot?.LastSuccess ?? (registryBackedSummary ? MapServiceRunLastSuccess(snapshot.Status) : null),
             workflowSnapshot?.TotalSteps ?? 0,
             workflowSnapshot?.CompletedSteps ?? 0,
             workflowSnapshot?.RoleReplyCount ?? 0,
-            workflowSnapshot?.LastOutput ?? string.Empty,
-            workflowSnapshot?.LastError ?? string.Empty,
+            workflowSnapshot?.LastOutput ?? (registryBackedSummary ? snapshot.LastOutput : string.Empty),
+            workflowSnapshot?.LastError ?? (registryBackedSummary ? snapshot.LastError : string.Empty),
             snapshot.ImplementationKind.ToString(),
             snapshot.Status.ToString(),
             snapshot.CommandId,
@@ -2708,6 +2710,25 @@ const response = await fetch("{{invokePath}}", {
             snapshot.TargetActorId,
             snapshot.CreatedAt);
     }
+
+    private static WorkflowRunCompletionStatus MapServiceRunCompletionStatus(ServiceRunStatus status) =>
+        status switch
+        {
+            ServiceRunStatus.Accepted => WorkflowRunCompletionStatus.Running,
+            ServiceRunStatus.Completed => WorkflowRunCompletionStatus.Completed,
+            ServiceRunStatus.Failed => WorkflowRunCompletionStatus.Failed,
+            ServiceRunStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
+            _ => WorkflowRunCompletionStatus.Unknown,
+        };
+
+    private static bool? MapServiceRunLastSuccess(ServiceRunStatus status) =>
+        status switch
+        {
+            ServiceRunStatus.Completed => true,
+            ServiceRunStatus.Failed => false,
+            ServiceRunStatus.Stopped => false,
+            _ => null,
+        };
 
     private static MemberScopeServiceRunSummaryHttpResponse BuildMemberRunSummaryResponse(
         MemberPublishedServiceResolution memberResolution,

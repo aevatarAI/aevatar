@@ -107,6 +107,8 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         record.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         record.Status.Should().Be(ServiceRunStatus.Accepted);
         record.Identity.Should().BeEquivalentTo(identity);
+        registration.StatusUpdates.Should().ContainSingle()
+            .Which.Should().Be(("service-run-actor", receipt.CommandId, ServiceRunStatus.Completed, string.Empty, string.Empty));
 
         accepted.Should().NotBeNull();
         accepted!.ServiceReceipt.CommandId.Should().Be(receipt.CommandId);
@@ -165,6 +167,76 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         result.Succeeded.Should().BeTrue();
         emitted.Should().ContainSingle()
             .Which.TextMessageContent.Delta.Should().Be("hello");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldPersistTerminalOutput_WhenRunFinishedCarriesResult()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService
+        {
+            Frames =
+            [
+                new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent
+                    {
+                        Result = Any.Pack(new GAgentDraftRunResultPayload
+                        {
+                            Output = "static result",
+                        }),
+                    },
+                },
+            ],
+        };
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(identity, ServiceImplementationKind.Static),
+            interaction,
+            registration);
+
+        var result = await service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        registration.StatusUpdates.Should().ContainSingle()
+            .Which.Should().Be(("service-run-actor", "cmd-default", ServiceRunStatus.Completed, "static result", string.Empty));
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldPersistTerminalError_WhenRunErrorObserved()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService
+        {
+            Completion = GAgentDraftRunCompletionStatus.Failed,
+            Frames =
+            [
+                new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = "static failed",
+                    },
+                },
+            ],
+        };
+        var registration = new RecordingServiceRunRegistrationPort();
+        var service = await CreateServiceAsync(
+            identity,
+            CreateArtifact(identity, ServiceImplementationKind.Static),
+            interaction,
+            registration);
+
+        var result = await service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        registration.StatusUpdates.Should().ContainSingle()
+            .Which.Should().Be(("service-run-actor", "cmd-default", ServiceRunStatus.Failed, string.Empty, "static failed"));
     }
 
     [Fact]
@@ -435,6 +507,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
     private sealed class RecordingServiceRunRegistrationPort : IServiceRunRegistrationPort
     {
         public List<ServiceRunRecord> Records { get; } = [];
+        public List<(string RunActorId, string RunId, ServiceRunStatus Status, string LastOutput, string LastError)> StatusUpdates { get; } = [];
 
         public Task<ServiceRunRegistrationResult> RegisterAsync(
             ServiceRunRecord record,
@@ -449,7 +522,19 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             string runId,
             ServiceRunStatus status,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
+            UpdateStatusAsync(runActorId, runId, status, null, null, ct);
+
+        public Task UpdateStatusAsync(
+            string runActorId,
+            string runId,
+            ServiceRunStatus status,
+            string? lastOutput,
+            string? lastError,
+            CancellationToken ct = default)
+        {
+            StatusUpdates.Add((runActorId, runId, status, lastOutput ?? string.Empty, lastError ?? string.Empty));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingGAgentDraftRunInteractionService
@@ -466,6 +551,8 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             "corr-default");
 
         public GAgentDraftRunStartError? Failure { get; init; }
+
+        public GAgentDraftRunCompletionStatus Completion { get; init; } = GAgentDraftRunCompletionStatus.RunFinished;
 
         public async Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>> ExecuteAsync(
             GAgentDraftRunInteractionRequest request,
@@ -488,7 +575,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
                 .Success(
                     Receipt,
                     new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(
-                        GAgentDraftRunCompletionStatus.RunFinished,
+                        Completion,
                         true));
         }
     }

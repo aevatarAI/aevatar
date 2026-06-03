@@ -179,5 +179,7 @@ public sealed class ServiceRunQueryReader : IServiceRunQueryPort
             readModel.StateVersion,
             readModel.LastEventId,
             readModel.CreatedAt,
-            readModel.UpdatedAt);
+            readModel.UpdatedAt,
+            readModel.LastOutput,
+            readModel.LastError);
 }
