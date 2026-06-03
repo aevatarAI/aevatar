@@ -241,6 +241,25 @@ public sealed class MainnetHostCompositionTests
         hostOptions.ServicesStopConcurrently.Should().BeTrue();
     }
 
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldAssertChannelIdentityElasticsearchAcl()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var aclOptions = app.Services.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value;
+
+        aclOptions.GrantMatchesGrainEventStoreInternal.Should().BeTrue();
+        aclOptions.GrantDescription.Should().Contain("aevatar-oauth-clients");
+    }
+
     [Theory]
     [InlineData(null, true, "http://+:8080")]
     [InlineData("", true, "http://+:8080")]

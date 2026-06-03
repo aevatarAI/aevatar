@@ -22,6 +22,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -119,6 +120,15 @@ public static class MainnetHostBuilderExtensions
         // wires the document store. Tests / demos can mix and match.
         builder.Services.AddChannelIdentity(builder.Configuration);
         builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
+        builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
+        {
+            // Mainnet stores the cluster-singleton OAuth client readmodel in Elasticsearch.
+            // Its read grant is intentionally scoped to the same internal services that can
+            // read actor events, so the module-level fail-closed ES ACL guard may pass.
+            options.GrantMatchesGrainEventStoreInternal = true;
+            options.GrantDescription =
+                "Mainnet aevatar-oauth-clients read grant matches grain/event-store internal services.";
+        });
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
         builder.Services.AddStatusDashboard(builder.Configuration);
