@@ -30,6 +30,7 @@ message WorkflowRunInsightReportDocument {
   repeated WorkflowExecutionRoleReply role_reply_entries = 22;
   repeated WorkflowExecutionTimelineEvent timeline_entries = 23;
   WorkflowExecutionSummary summary_value = 24;
+  WorkflowUsageMetricsReadModel usage_value = 25;
 }
 
 message WorkflowExecutionCurrentStateDocument {
@@ -77,6 +78,16 @@ message WorkflowExecutionStepTrace {
   string suspension_prompt = 17;
   int32 suspension_timeout_seconds_value = 18;
   string requested_variable_name = 19;
+  WorkflowUsageMetricsReadModel usage_value = 20;
+}
+
+message WorkflowUsageMetricsReadModel {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+  string model = 4;
+  double cost = 5;
+  int64 latency_ms = 6;
 }
 
 message WorkflowExecutionRoleReply {

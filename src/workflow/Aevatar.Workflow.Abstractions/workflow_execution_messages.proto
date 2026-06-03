@@ -115,6 +115,14 @@ message StepRequestEvent
   string execution_id = 7;
   WorkflowStepParameters step_parameters = 8;
 }
+message WorkflowUsageMetrics {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+  string model = 4;
+  double cost = 5;
+  int64 latency_ms = 6;
+}
 message StepCompletedEvent {
   string step_id = 1;
   bool success = 2;
@@ -128,6 +136,7 @@ message StepCompletedEvent {
   string assigned_variable = 10;
   string assigned_value = 11;
   string execution_id = 12;
+  WorkflowUsageMetrics usage = 13;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -364,6 +373,7 @@ message WorkflowLlmInvocationCompletedEvent
   string content = 6;
   string reasoning_content = 7;
   string error = 8;
+  WorkflowUsageMetrics usage = 9;
 }
 
 message WorkflowToolCallStartedEvent

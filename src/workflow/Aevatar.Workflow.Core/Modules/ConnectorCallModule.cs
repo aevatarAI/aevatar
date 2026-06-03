@@ -333,8 +333,11 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             isSecureStep,
             ctx,
             ct);
+        var requestMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, requestMetadata);
         var connectorRequest = new ConnectorRequest
         {
+            Metadata = requestMetadata,
             HttpAuthorization = ExtractConnectorHttpAuthorization(ctx),
             RunId = runId,
             StepId = request.StepId,

@@ -217,6 +217,17 @@ message WorkflowExecutionKernelState
   bool current_step_dispatch_pending = 9;
   string current_step_timeout_callback_id = 10;
   map<string, string> execution_ids_by_step_id = 11;
+  WorkflowUsageMetricsState usage = 12;
+}
+
+message WorkflowUsageMetricsState
+{
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+  string model = 4;
+  double cost = 5;
+  int64 latency_ms = 6;
 }
 
 message PendingDelayState

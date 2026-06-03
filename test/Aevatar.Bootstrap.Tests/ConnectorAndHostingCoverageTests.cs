@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json.Nodes;
 using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
@@ -654,10 +655,54 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task HostCallbackConnector_ShouldReturnStructuredResult_AndEnforceAllowlist()
+    {
+        var connector = new HostCallbackConnector(
+            "host-github",
+            "github",
+            new RecordingHostCallbackHandler("github"),
+            allowedOperations: ["classify_pr"],
+            allowedInputKeys: ["issue", "repo"]);
+
+        var operationRejected = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "close_pr",
+            Payload = """{"issue":"1738"}""",
+        });
+        operationRejected.Success.Should().BeFalse();
+        operationRejected.Error.Should().Contain("not allowed");
+
+        var schemaRejected = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "classify_pr",
+            Payload = """{"issue":"1738","owner":"blocked"}""",
+        });
+        schemaRejected.Success.Should().BeFalse();
+        schemaRejected.Error.Should().Contain("schema violation");
+
+        var success = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            RunId = "run-1738",
+            StepId = "classify",
+            Operation = "classify_pr",
+            Payload = """{"issue":"1738","repo":"aevatar"}""",
+        });
+
+        success.Success.Should().BeTrue();
+        success.Output.Should().Be("""{"route":"phase9-router","approved":true,"budget":{"remainingTokens":128}}""");
+        success.Metadata["host_callback.handler"].Should().Be("github");
+        success.Metadata["host_callback.operation"].Should().Be("classify_pr");
+        success.Metadata["host_callback.result.route"].Should().Be("phase9-router");
+        success.Metadata["host_callback.result.approved"].Should().Be("true");
+        success.Metadata["host_callback.result.budget.remainingTokens"].Should().Be("128");
+    }
+
+    [Fact]
     public void ConnectorBuilders_ShouldValidateAndBuild()
     {
         var cliBuilder = new CliConnectorBuilder();
         var httpBuilder = new HttpConnectorBuilder();
+        var hostCallbackBuilder = new HostCallbackConnectorBuilder([new RecordingHostCallbackHandler("host-router")]);
         var telegramUserBuilder = new TelegramUserConnectorBuilder();
 
         var missingCli = new ConnectorConfigEntry
@@ -709,6 +754,34 @@ public class ConnectorAndHostingCoverageTests
         httpConnector.Should().NotBeNull();
         httpConnector!.Type.Should().Be("http");
         httpConnector.Name.Should().Be("http-valid");
+
+        var missingHostHandler = new ConnectorConfigEntry
+        {
+            Name = "host-missing",
+            Type = "host_callback",
+            HostCallback = new HostCallbackConnectorConfig
+            {
+                Handler = "unknown",
+            },
+        };
+        hostCallbackBuilder.TryBuild(missingHostHandler, NullLogger.Instance, out var missingHostCallbackConnector).Should().BeFalse();
+        missingHostCallbackConnector.Should().BeNull();
+
+        var validHostHandler = new ConnectorConfigEntry
+        {
+            Name = "host-valid",
+            Type = "host_callback",
+            HostCallback = new HostCallbackConnectorConfig
+            {
+                Handler = "host-router",
+                AllowedOperations = ["classify"],
+                AllowedInputKeys = ["issue"],
+            },
+        };
+        hostCallbackBuilder.TryBuild(validHostHandler, NullLogger.Instance, out var hostConnector).Should().BeTrue();
+        hostConnector.Should().NotBeNull();
+        hostConnector!.Type.Should().Be("host_callback");
+        hostConnector.Name.Should().Be("host-valid");
 
         var missingTelegramUser = new ConnectorConfigEntry
         {
@@ -1023,6 +1096,35 @@ public class ConnectorAndHostingCoverageTests
         {
             DisposeCount++;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingHostCallbackHandler(string name) : IHostCallbackConnectorHandler
+    {
+        public string Name { get; } = name;
+
+        public Task<HostCallbackConnectorResponse> HandleAsync(
+            HostCallbackConnectorRequest request,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            request.Operation.Should().Be("classify_pr");
+            request.RunId.Should().Be("run-1738");
+            request.StepId.Should().Be("classify");
+
+            return Task.FromResult(new HostCallbackConnectorResponse
+            {
+                Success = true,
+                Result = new JsonObject
+                {
+                    ["route"] = "phase9-router",
+                    ["approved"] = true,
+                    ["budget"] = new JsonObject
+                    {
+                        ["remainingTokens"] = 128,
+                    },
+                },
+            });
         }
     }
 

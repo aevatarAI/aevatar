@@ -85,6 +85,7 @@ public class WorkflowRoleGAgent(
                 Success = true,
                 Content = replayRecord.Content,
                 ReasoningContent = replayRecord.ReasoningContent,
+                Usage = ToWorkflowUsageMetrics(replayRecord.Usage, replayRecord.Model),
             }, TopologyAudience.Parent);
             await PersistRoleChatSessionCompletionAsync(
                 chatRequest,
@@ -165,9 +166,13 @@ public class WorkflowRoleGAgent(
         var fullReasoning = new StringBuilder();
         var toolCalls = new WorkflowToolCallAccumulator();
         var contentParts = new List<ContentPart>();
+        TokenUsage? usage = null;
 
         await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
         {
+            if (chunk.Usage != null)
+                usage = chunk.Usage;
+
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
                 fullContent.Append(chunk.DeltaContent);
@@ -206,6 +211,8 @@ public class WorkflowRoleGAgent(
             fullReasoning.ToString(),
             toolCalls.BuildToolCalls(),
             contentParts,
+            Usage: usage,
+            Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0);
     }
 
@@ -231,7 +238,20 @@ public class WorkflowRoleGAgent(
         string ReasoningContent,
         IReadOnlyList<ToolCall> ToolCalls,
         IReadOnlyList<ContentPart> ContentParts,
+        TokenUsage? Usage,
+        string? Model,
         bool ContentEmitted);
+
+    private static WorkflowUsageMetrics? ToWorkflowUsageMetrics(TokenUsage? usage, string? model) =>
+        usage == null
+            ? null
+            : new WorkflowUsageMetrics
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+                Model = model ?? string.Empty,
+            };
 
     private sealed class WorkflowToolCallAccumulator
     {

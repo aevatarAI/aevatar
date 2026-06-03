@@ -109,6 +109,12 @@ public sealed partial class WorkflowRunInsightReportDocument
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(TimelineEntries, value);
     }
 
+    public WorkflowUsageMetricsReadModel Usage
+    {
+        get => UsageValue ??= new WorkflowUsageMetricsReadModel();
+        set => UsageValue = value ?? new WorkflowUsageMetricsReadModel();
+    }
+
     public WorkflowExecutionSummary Summary
     {
         get => SummaryValue ??= new WorkflowExecutionSummary();
@@ -210,6 +216,12 @@ public sealed partial class WorkflowExecutionStepTrace
     {
         get => CompletionAnnotationsMap;
         set => WorkflowExecutionReadModelCollections.ReplaceMap(CompletionAnnotationsMap, value);
+    }
+
+    public WorkflowUsageMetricsReadModel Usage
+    {
+        get => UsageValue ??= new WorkflowUsageMetricsReadModel();
+        set => UsageValue = value ?? new WorkflowUsageMetricsReadModel();
     }
 
     public int? SuspensionTimeoutSeconds

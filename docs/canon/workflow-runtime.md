@@ -152,7 +152,7 @@ roles:
 | **引擎** | N/A | `WorkflowExecutionKernel` | 按步骤顺序派发，收到完成事件后推进下一步或结束 |
 | **执行** | `llm_call` | `LLMCallModule` | 向目标 RoleGAgent 发 `ChatRequestEvent`，等回复转 `StepCompletedEvent` |
 | | `tool_call` | `ToolCallModule` | 调用已注册的 Agent 工具（MCP/Skills） |
-| | `connector_call` | `ConnectorCallModule` | 按名称调用配置好的 HTTP/CLI/MCP connector |
+| | `connector_call` | `ConnectorCallModule` | 按名称调用配置好的 HTTP/CLI/MCP/host_callback connector |
 | **并行** | `parallel` | `ParallelFanOutModule` | 拆 N 个子步骤并行发给不同 role，收齐后合并，可选触发投票 |
 | **共识** | `vote` | `VoteConsensusModule` | 对多个候选结果做共识选择 |
 | **迭代** | `foreach` | `ForEachModule` | 按分隔符拆分输入，逐项执行子步骤 |
@@ -235,6 +235,32 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
 ```
 
 关键点：**流程控制由模块完成，不写死在单个 Agent 的方法里。**
+
+## Host Boundary For GitHub / Router / Closure
+
+和 issue #1738 相关的几个职责边界在 runtime 层明确如下：
+
+- GitHub inbound、label、merge、close 是 host 职责。
+- 跨条目的 `phase9-router` 是 host 职责。
+- `vibe-map` closure 是 host 职责。
+
+Workflow engine 只接收这些 host 能力已经发布出来的表面契约，例如：
+
+- `connector_call -> host_callback`
+- 已镜像到 `workflow.usage.*` / `steps.<id>.usage.*` 的 usage facts
+
+Workflow engine 不新增：
+
+- 专用 GitHub controller primitive
+- phase9-router built-in capability
+- vibe-map closure built-in capability
+- 为上述职责新增的 Aevatar endpoint
+
+这条边界对应三个原则：
+
+- `host-not-controller`
+- `published-surfaces-only`
+- `no-new-aevatar-endpoints`
 
 ### `/api/chat` 入参矩阵（推荐）
 

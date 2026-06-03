@@ -266,6 +266,15 @@ public sealed class WorkflowProjectionMaterializationTests
                     AssignedVariable = "answer",
                     AssignedValue = "42",
                     Annotations = { ["token_usage"] = "99" },
+                    Usage = new WorkflowUsageMetrics
+                    {
+                        PromptTokens = 11,
+                        CompletionTokens = 13,
+                        TotalTokens = 24,
+                        Model = "gpt-5.4",
+                        Cost = 0.31,
+                        LatencyMs = 180,
+                    },
                 },
                 BuildState("running")));
         await projector.ProjectAsync(
@@ -313,6 +322,10 @@ public sealed class WorkflowProjectionMaterializationTests
         report.Steps[0].Success.Should().BeFalse();
         report.Steps[0].OutputPreview.Should().Be("partial");
         report.Steps[0].CompletionAnnotations.Should().ContainKey("token_usage");
+        report.Steps[0].Usage.TotalTokens.Should().Be(24);
+        report.Steps[0].Usage.Model.Should().Be("gpt-5.4");
+        report.Usage.TotalTokens.Should().Be(24);
+        report.Usage.PromptTokens.Should().Be(11);
         report.RoleReplies.Should().ContainSingle();
         report.RoleReplies[0].RoleId.Should().Be("role-1");
         report.Timeline.Select(x => x.Stage).Should().Contain([

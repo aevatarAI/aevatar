@@ -1011,6 +1011,15 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 CompletedSteps = 1,
                 RoleReplyCount = 4,
             },
+            Usage = new WorkflowUsageMetricsReadModel
+            {
+                PromptTokens = 25,
+                CompletionTokens = 30,
+                TotalTokens = 55,
+                Model = "gpt-5.4",
+                Cost = 0.66,
+                LatencyMs = 432,
+            },
         };
 
         var snapshot = mapper.ToActorSnapshot(currentState);
@@ -1090,6 +1099,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         mappedReport.Steps[1].RequestedAt.Should().BeNull();
         mappedReport.Steps[1].CompletedAt.Should().BeNull();
         mappedReport.Steps[1].SuspensionTimeoutSeconds.Should().BeNull();
+        mappedReport.Usage.TotalTokens.Should().Be(55);
+        mappedReport.Usage.Model.Should().Be("gpt-5.4");
         mappedReport.RoleReplies[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero));
         mappedReport.RoleReplies[1].Timestamp.Should().Be(default);
         mappedReport.Timeline[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero));

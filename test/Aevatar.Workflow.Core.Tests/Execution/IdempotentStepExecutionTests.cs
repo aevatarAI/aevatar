@@ -300,6 +300,69 @@ public sealed class IdempotentStepExecutionTests
         secondRequest.ExecutionId.Should().NotBe(firstExecutionId, "retry must generate a new execution_id");
     }
 
+    [Fact]
+    public async Task StepCompleted_WithUsage_ShouldMirrorRunAndStepUsageVariables()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowDefinition
+        {
+            Name = "usage-workflow",
+            Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
+            Steps =
+            [
+                new StepDefinition { Id = "step-1", Type = "llm_call", TargetRole = "worker" },
+                new StepDefinition { Id = "step-2", Type = "transform" },
+            ],
+        };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent { RunId = "run-usage", Input = "hello" }),
+            ctx,
+            CancellationToken.None);
+
+        var executionId = ctx.Published
+            .Select(p => p.Event)
+            .Where(e => e.Is(StepRequestEvent.Descriptor))
+            .Select(e => e.Unpack<StepRequestEvent>())
+            .First(r => r.StepId == "step-1")
+            .ExecutionId;
+
+        ctx.Published.Clear();
+
+        await kernel.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-usage",
+                Success = true,
+                Output = "done",
+                ExecutionId = executionId,
+                Usage = new WorkflowUsageMetrics
+                {
+                    PromptTokens = 10,
+                    CompletionTokens = 15,
+                    TotalTokens = 25,
+                    Model = "gpt-5.4",
+                    Cost = 0.42,
+                    LatencyMs = 123,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var state = host.GetExecutionState("workflow_execution_kernel")!.Unpack<WorkflowExecutionKernelState>();
+        state.Variables["workflow.usage.prompt_tokens"].Should().Be("10");
+        state.Variables["workflow.usage.completion_tokens"].Should().Be("15");
+        state.Variables["workflow.usage.total_tokens"].Should().Be("25");
+        state.Variables["workflow.usage.model"].Should().Be("gpt-5.4");
+        state.Variables["workflow.usage.cost"].Should().Be("0.41999999999999998");
+        state.Variables["workflow.usage.latency_ms"].Should().Be("123");
+        state.Variables["steps.step-1.usage.total_tokens"].Should().Be("25");
+        state.Variables["steps.step-1.usage.model"].Should().Be("gpt-5.4");
+    }
+
     // ──── Test infrastructure ────
 
     private sealed class RecordingEventHandlerContext : IEventHandlerContext

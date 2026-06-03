@@ -5,6 +5,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Aevatar.Workflow.Core.Execution;
@@ -117,9 +118,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.RetryAttemptsByStepId.Clear();
         state.TimeoutsByStepId.Clear();
         state.RetryBackoffsByStepId.Clear();
+        state.ExecutionIdsByStepId.Clear();
+        state.Usage = new WorkflowUsageMetricsState();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
         state.Variables["input"] = evt.Input ?? string.Empty;
+        MirrorRunUsageVariables(state);
         MergeStartParametersIntoVariables(state.Variables, evt.Parameters);
         await SaveStateAsync(state, ctx, ct);
 
@@ -311,6 +315,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (!string.IsNullOrWhiteSpace(evt.StepId))
             state.Variables[evt.StepId] = evt.Output ?? string.Empty;
         state.Variables["input"] = evt.Output ?? string.Empty;
+        ApplyStepUsage(evt, state);
+        MirrorStepCompletionVariables(state, evt);
 
         if (!evt.Success)
         {
@@ -877,6 +883,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.RetryAttemptsByStepId.Clear();
         state.TimeoutsByStepId.Clear();
         state.RetryBackoffsByStepId.Clear();
+        state.ExecutionIdsByStepId.Clear();
+        state.Usage = new WorkflowUsageMetricsState();
         await SaveStateAsync(state, ctx, ct);
 
         foreach (var lease in timeoutLeases)
@@ -902,7 +910,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.Variables.Count == 0 &&
             state.RetryAttemptsByStepId.Count == 0 &&
             state.TimeoutsByStepId.Count == 0 &&
-            state.RetryBackoffsByStepId.Count == 0)
+            state.RetryBackoffsByStepId.Count == 0 &&
+            state.ExecutionIdsByStepId.Count == 0 &&
+            IsEmptyUsage(state.Usage))
         {
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
         }
@@ -936,6 +946,105 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return state.Variables.TryGetValue(WorkflowCallInvocationIdParameterKey, out var activeInvocationId) &&
                string.Equals(activeInvocationId, requestedInvocationId.Trim(), StringComparison.Ordinal);
     }
+
+    private static void ApplyStepUsage(
+        StepCompletedEvent evt,
+        WorkflowExecutionKernelState state)
+    {
+        if (!HasUsage(evt.Usage))
+        {
+            MirrorRunUsageVariables(state);
+            return;
+        }
+
+        state.Usage ??= new WorkflowUsageMetricsState();
+        state.Usage.PromptTokens += Math.Max(0, evt.Usage.PromptTokens);
+        state.Usage.CompletionTokens += Math.Max(0, evt.Usage.CompletionTokens);
+        state.Usage.TotalTokens += Math.Max(0, evt.Usage.TotalTokens);
+        if (!string.IsNullOrWhiteSpace(evt.Usage.Model))
+            state.Usage.Model = evt.Usage.Model.Trim();
+        if (evt.Usage.Cost > 0)
+            state.Usage.Cost += evt.Usage.Cost;
+        if (evt.Usage.LatencyMs > 0)
+            state.Usage.LatencyMs += evt.Usage.LatencyMs;
+
+        MirrorRunUsageVariables(state);
+        MirrorStepUsageVariables(state, evt.StepId, evt.Usage);
+    }
+
+    private static void MirrorRunUsageVariables(WorkflowExecutionKernelState state)
+    {
+        state.Usage ??= new WorkflowUsageMetricsState();
+        state.Variables["workflow.usage.prompt_tokens"] = state.Usage.PromptTokens.ToString(CultureInfo.InvariantCulture);
+        state.Variables["workflow.usage.completion_tokens"] = state.Usage.CompletionTokens.ToString(CultureInfo.InvariantCulture);
+        state.Variables["workflow.usage.total_tokens"] = state.Usage.TotalTokens.ToString(CultureInfo.InvariantCulture);
+        state.Variables["workflow.usage.model"] = state.Usage.Model ?? string.Empty;
+        state.Variables["workflow.usage.cost"] = state.Usage.Cost.ToString("G17", CultureInfo.InvariantCulture);
+        state.Variables["workflow.usage.latency_ms"] = state.Usage.LatencyMs.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static void MirrorStepCompletionVariables(
+        WorkflowExecutionKernelState state,
+        StepCompletedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.StepId))
+            return;
+
+        var prefix = $"steps.{evt.StepId}";
+        state.Variables[$"{prefix}.output"] = evt.Output ?? string.Empty;
+        state.Variables[$"{prefix}.success"] = evt.Success ? "true" : "false";
+        state.Variables[$"{prefix}.error"] = evt.Error ?? string.Empty;
+        state.Variables[$"{prefix}.branch_key"] = evt.BranchKey ?? string.Empty;
+        state.Variables[$"{prefix}.next_step_id"] = evt.NextStepId ?? string.Empty;
+        state.Variables[$"{prefix}.assigned_variable"] = evt.AssignedVariable ?? string.Empty;
+        state.Variables[$"{prefix}.assigned_value"] = evt.AssignedValue ?? string.Empty;
+
+        foreach (var (key, value) in evt.Annotations)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            state.Variables[$"{prefix}.annotations.{key.Trim()}"] = value ?? string.Empty;
+        }
+
+        if (HasUsage(evt.Usage))
+            MirrorStepUsageVariables(state, evt.StepId, evt.Usage);
+    }
+
+    private static void MirrorStepUsageVariables(
+        WorkflowExecutionKernelState state,
+        string stepId,
+        WorkflowUsageMetrics usage)
+    {
+        if (string.IsNullOrWhiteSpace(stepId))
+            return;
+
+        var prefix = $"steps.{stepId}.usage";
+        state.Variables[$"{prefix}.prompt_tokens"] = Math.Max(0, usage.PromptTokens).ToString(CultureInfo.InvariantCulture);
+        state.Variables[$"{prefix}.completion_tokens"] = Math.Max(0, usage.CompletionTokens).ToString(CultureInfo.InvariantCulture);
+        state.Variables[$"{prefix}.total_tokens"] = Math.Max(0, usage.TotalTokens).ToString(CultureInfo.InvariantCulture);
+        state.Variables[$"{prefix}.model"] = usage.Model ?? string.Empty;
+        state.Variables[$"{prefix}.cost"] = Math.Max(0, usage.Cost).ToString("G17", CultureInfo.InvariantCulture);
+        state.Variables[$"{prefix}.latency_ms"] = Math.Max(0, usage.LatencyMs).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static bool HasUsage(WorkflowUsageMetrics? usage) =>
+        usage != null &&
+        (usage.PromptTokens > 0 ||
+         usage.CompletionTokens > 0 ||
+         usage.TotalTokens > 0 ||
+         !string.IsNullOrWhiteSpace(usage.Model) ||
+         usage.Cost > 0 ||
+         usage.LatencyMs > 0);
+
+    private static bool IsEmptyUsage(WorkflowUsageMetricsState? usage) =>
+        usage == null ||
+        (usage.PromptTokens == 0 &&
+         usage.CompletionTokens == 0 &&
+         usage.TotalTokens == 0 &&
+         string.IsNullOrWhiteSpace(usage.Model) &&
+         Math.Abs(usage.Cost) < double.Epsilon &&
+         usage.LatencyMs == 0);
 
     private static string ResolveRunIdOrCurrent(string? runId, IWorkflowExecutionContext ctx)
     {
