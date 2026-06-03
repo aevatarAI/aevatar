@@ -50,6 +50,7 @@ duplicate_allowlist="${TMP_DIR}/duplicate.tsv"
 expired_allowlist="${TMP_DIR}/expired.tsv"
 forbidden_allowlist="${TMP_DIR}/forbidden.tsv"
 warning_output="${TMP_DIR}/warning.out"
+report_output="${TMP_DIR}/report.out"
 
 write_allowlist "${empty_allowlist}"
 write_allowlist "${valid_allowlist}" \
@@ -71,6 +72,18 @@ python3 "${GUARD}" --root "${FIXTURES}/compliant" --allowlist "${empty_allowlist
 assert_fails_with \
   "abstractions-contracts-purity" \
   python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${empty_allowlist}"
+
+python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${empty_allowlist}" --mode report > "${report_output}" 2>&1
+if ! rg -q "WARNING report-only" "${report_output}"; then
+  echo "Expected report-mode run to print report-only warnings."
+  cat "${report_output}"
+  exit 1
+fi
+if ! rg -q "Feature\\.Abstractions -> Feature\\.Core" "${report_output}"; then
+  echo "Expected report-mode output to include the fixture violation edge."
+  cat "${report_output}"
+  exit 1
+fi
 
 assert_fails_with \
   "expected 6 tab-separated fields" \
