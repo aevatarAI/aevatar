@@ -5,7 +5,6 @@ API/**
 actor/**
 projection/**
 workflow/**
-runtime/**
 database/**
 **/backend/**
 **/proto/**
@@ -13,9 +12,18 @@ database/**
 **/actor/**
 **/projection/**
 **/workflow/**
-**/runtime/**
 **/database/**
 **/backend-tests/**
 **/backend-config/**
 docs/architecture/**
 docs/canon/**
+
+# Runtime protection is scoped to backend/infrastructure runtime surfaces.
+# Frontend page runtime helpers, for example apps/aevatar-console-web/src/pages/**/runtime/**,
+# are allowed for frontend/product tasks.
+agents/**/Runtime/**
+agents/**/*Runtime*/**
+src/**/Runtime/**
+src/**/*Runtime*/**
+test/**/Runtime/**
+test/**/*Runtime*/**
