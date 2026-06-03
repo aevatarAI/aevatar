@@ -35,16 +35,13 @@ public sealed class AgentToolExecutionPort : IAgentToolExecutionPort
                 CancellationToken = ct,
             };
 
-            using (AgentToolContextScope.Push(request.ExecutionContext))
+            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, context, async () =>
             {
-                await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, context, async () =>
-                {
-                    if (context.Terminate)
-                        return;
+                if (context.Terminate)
+                    return;
 
-                    context.Result = await context.Tool.ExecuteAsync(context.ArgumentsJson, ct);
-                });
-            }
+                context.Result = await context.Tool.ExecuteAsync(context.ArgumentsJson, ct);
+            });
 
             if (context.Terminate)
             {

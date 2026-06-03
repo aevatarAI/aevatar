@@ -1,7 +1,5 @@
 using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
-using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
@@ -333,74 +331,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    private static void ApplyWorkflowToolContext(
-        IWorkflowExecutionContext ctx,
-        ChatRequestEvent chatRequest)
-    {
-        var toolContext = WorkflowToolExecutionRuntimeContextAccess.GetToolContext(ctx);
-        if (toolContext == null)
-            return;
-
-        var control = BuildLlmControlFromToolContext(toolContext);
-        if (HasNarrowLlmControl(control))
-            chatRequest.LlmControl = control.ToPayload();
-
-        if (HasNonControlToolContext(toolContext))
-            chatRequest.ToolContext = toolContext.ToPayload();
-    }
-
-    private static LLMControlContext BuildLlmControlFromToolContext(AgentToolExecutionContext toolContext) =>
-        new(
-            NyxIdAccessToken: Normalize(toolContext.Credentials.NyxIdAccessToken),
-            NyxIdOrgToken: Normalize(toolContext.Credentials.NyxIdOrgToken),
-            SenderNyxIdAccessToken: Normalize(toolContext.Credentials.SenderNyxIdAccessToken),
-            ModelOverride: Normalize(toolContext.Routing.ModelOverride),
-            NyxIdRoutePreference: Normalize(toolContext.Routing.NyxIdRoutePreference),
-            MaxToolRoundsOverride: toolContext.Routing.MaxToolRoundsOverride,
-            UserMemoryPrompt: Normalize(toolContext.Routing.UserMemoryPrompt));
-
-    private static bool HasNarrowLlmControl(LLMControlContext control) =>
-        !string.IsNullOrWhiteSpace(control.NyxIdAccessToken) ||
-        !string.IsNullOrWhiteSpace(control.NyxIdOrgToken) ||
-        !string.IsNullOrWhiteSpace(control.SenderNyxIdAccessToken) ||
-        !string.IsNullOrWhiteSpace(control.ModelOverride) ||
-        !string.IsNullOrWhiteSpace(control.NyxIdRoutePreference) ||
-        control.MaxToolRoundsOverride.HasValue ||
-        !string.IsNullOrWhiteSpace(control.UserMemoryPrompt);
-
-    private static bool HasNonControlToolContext(AgentToolExecutionContext toolContext) =>
-        HasRequestIdentity(toolContext.Request) ||
-        HasCallerContext(toolContext.Caller) ||
-        HasChannelContext(toolContext.Channel) ||
-        !string.IsNullOrWhiteSpace(toolContext.SenderBinding.BindingId) ||
-        !string.IsNullOrWhiteSpace(toolContext.ConnectedServices.ContextJson) ||
-        toolContext.ExternalMetadata.Count > 0 ||
-        HasSkillRecoveryContext(toolContext.SkillRecovery);
-
-    private static bool HasRequestIdentity(AgentToolRequestIdentity request) =>
-        !string.IsNullOrWhiteSpace(request.RequestId) ||
-        !string.IsNullOrWhiteSpace(request.CallId);
-
-    private static bool HasCallerContext(AgentToolCallerContext caller) =>
-        !string.IsNullOrWhiteSpace(caller.ScopeId) ||
-        !string.IsNullOrWhiteSpace(caller.OwnerSubject) ||
-        !string.IsNullOrWhiteSpace(caller.ResponseId);
-
-    private static bool HasChannelContext(AgentToolChannelContext channel) =>
-        !string.IsNullOrWhiteSpace(channel.Platform) ||
-        !string.IsNullOrWhiteSpace(channel.SenderId) ||
-        !string.IsNullOrWhiteSpace(channel.RegistrationScopeId) ||
-        !string.IsNullOrWhiteSpace(channel.MessageId) ||
-        !string.IsNullOrWhiteSpace(channel.PlatformMessageId);
-
-    private static bool HasSkillRecoveryContext(AgentSkillRecoveryContext skillRecovery) =>
-        skillRecovery.RequireInitialOrnnSearch ||
-        skillRecovery.RequireOrnnSearchOnBlocker ||
-        !string.IsNullOrWhiteSpace(skillRecovery.CommandName) ||
-        !string.IsNullOrWhiteSpace(skillRecovery.OriginalCommand) ||
-        !string.IsNullOrWhiteSpace(skillRecovery.PrimarySkillName) ||
-        skillRecovery.MaxOrnnSearchAttempts != 0;
-
     private static void CopyParametersToChatRequest(
         StepRequestEvent request,
         ChatRequestEvent chatRequest,
@@ -652,7 +582,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             TimeoutMs = timeoutMs,
             Telegram = new TelegramBridgeRequest(),
         };
-        ApplyWorkflowToolContext(ctx, chatRequest);
         CopyParametersToChatRequest(request, chatRequest, timeoutMs);
         chatRequest.Telegram.RunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         chatRequest.Telegram.StepId = stepId;

@@ -92,14 +92,12 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var toolContext = BuildToolContext(ctx, callId);
             var result = await _executionPort.ExecuteAsync(
                 new AgentToolExecutionRequest(
                     Tool: tool,
                     ToolName: toolName,
                     ToolCallId: callId,
-                    ArgumentsJson: argumentsJson,
-                    ExecutionContext: toolContext),
+                    ArgumentsJson: argumentsJson),
                 ct);
 
             if (result.Status != AgentToolExecutionStatus.Succeeded)
@@ -136,22 +134,6 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             await PublishToolFailureAsync(ctx, request, toolName, ex.Message, ct);
             ctx.Logger.LogWarning(ex, "ToolCall: step={StepId} tool={Tool} execution failed", request.StepId, toolName);
         }
-    }
-
-    private static AgentToolExecutionContext BuildToolContext(
-        IWorkflowExecutionContext ctx,
-        string callId)
-    {
-        var existing = WorkflowToolExecutionRuntimeContextAccess.GetToolContext(ctx)
-                       ?? AgentToolExecutionContext.Empty;
-
-        return existing with
-        {
-            Request = existing.Request with
-            {
-                CallId = callId
-            }
-        };
     }
 
     private static string BuildExecutionFailure(AgentToolExecutionResult result)

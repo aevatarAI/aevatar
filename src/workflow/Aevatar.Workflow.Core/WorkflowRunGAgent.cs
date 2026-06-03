@@ -5,7 +5,6 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
@@ -230,9 +229,6 @@ public sealed class WorkflowRunGAgent
         }
 
         WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(this, request.Metadata);
-        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(this, toolContext);
 
         await EnsureAgentTreeAsync();
 

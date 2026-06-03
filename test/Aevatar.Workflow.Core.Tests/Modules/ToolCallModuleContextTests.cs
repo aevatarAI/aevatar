@@ -17,107 +17,6 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class ToolCallModuleContextTests
 {
     [Fact]
-    public async Task ToolCallModule_ShouldPushWorkflowToolContext()
-    {
-        var tool = new FakeAgentTool(
-            "context_reader",
-            _ => AgentToolRequestContext.NyxIdAccessToken ?? string.Empty);
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdAccessToken = "token-123",
-                },
-            });
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name);
-
-        LastCompleted(ctx).Output.Should().Be("token-123");
-    }
-
-    [Fact]
-    public async Task ToolCallModule_ShouldForwardOrgToken()
-    {
-        var tool = new FakeAgentTool(
-            "org_context_reader",
-            _ => AgentToolRequestContext.NyxIdOrgToken ?? string.Empty);
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdOrgToken = "org-token-123",
-                },
-            });
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name);
-
-        LastCompleted(ctx).Output.Should().Be("org-token-123");
-    }
-
-    [Fact]
-    public async Task ToolCallModule_ShouldSetCallIdFromWorkflowExecutionIdentity()
-    {
-        var tool = new FakeAgentTool(
-            "identity_reader",
-            _ => $"{AgentToolRequestContext.RequestId}|{AgentToolRequestContext.CallId}");
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(ctx, AgentToolExecutionContext.Empty);
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "call_proxy", executionId: "exec-1");
-
-        LastCompleted(ctx).Output.Should().Be("|workflow:run-1:call_proxy:exec-1");
-    }
-
-    [Fact]
-    public async Task ToolCallModule_ShouldOverrideExistingCallIdWithWorkflowExecutionIdentity()
-    {
-        var tool = new FakeAgentTool(
-            "call_id_reader",
-            _ => AgentToolRequestContext.CallId ?? string.Empty);
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Request = new AgentToolRequestIdentity("request-123", "upstream-call"),
-            });
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "call_proxy", executionId: "exec-1");
-
-        LastCompleted(ctx).Output.Should().Be("workflow:run-1:call_proxy:exec-1");
-    }
-
-    [Fact]
-    public async Task ToolCallModule_ShouldUseRunAndStepWhenExecutionIdIsMissing()
-    {
-        var tool = new FakeAgentTool(
-            "call_id_reader",
-            _ => AgentToolRequestContext.CallId ?? string.Empty);
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Request = new AgentToolRequestIdentity("request-123", "upstream-call"),
-            });
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "call_proxy");
-
-        LastCompleted(ctx).Output.Should().Be("workflow:run-1:call_proxy");
-    }
-
-    [Fact]
     public async Task ToolCallModule_ShouldPublishToolEventsWithWorkflowExecutionCallId()
     {
         var tool = new FakeAgentTool("call_id_reader", _ => "{}");
@@ -184,82 +83,7 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
-    public async Task ToolCallModule_ShouldRestorePreviousAgentToolContext()
-    {
-        var tool = new FakeAgentTool(
-            "restore_reader",
-            _ => AgentToolRequestContext.NyxIdAccessToken ?? string.Empty);
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdAccessToken = "inner-token",
-                },
-            });
-        var outer = AgentToolExecutionContext.Empty with
-        {
-            Request = new AgentToolRequestIdentity("outer-request", "outer-call"),
-            Credentials = AgentToolCredentials.Empty with
-            {
-                NyxIdAccessToken = "outer-token",
-            },
-        };
-
-        using (AgentToolContextScope.Push(outer))
-        {
-            await ExecuteToolCallAsync(module, ctx, tool.Name);
-
-            AgentToolRequestContext.Current.Should().BeSameAs(outer);
-        }
-
-        AgentToolRequestContext.Current.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ToolCallModule_ShouldRestoreAgentToolContextBeforePublishingWorkflowEvents()
-    {
-        var tool = new FakeAgentTool(
-            "publish_context_reader",
-            _ =>
-            {
-                AgentToolRequestContext.NyxIdAccessToken.Should().Be("inner-token");
-                return "ok";
-            });
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdAccessToken = "inner-token",
-                },
-            });
-        var outer = AgentToolExecutionContext.Empty with
-        {
-            Request = new AgentToolRequestIdentity("outer-request", "outer-call"),
-            Credentials = AgentToolCredentials.Empty with
-            {
-                NyxIdAccessToken = "outer-token",
-            },
-        };
-
-        using (AgentToolContextScope.Push(outer))
-        {
-            await ExecuteToolCallAsync(module, ctx, tool.Name);
-        }
-
-        ctx.PublishedToolContexts.Should().NotBeEmpty();
-        ctx.PublishedToolContexts.Should().AllSatisfy(context => context.Should().BeSameAs(outer));
-    }
-
-    [Fact]
-    public async Task ToolCallModule_WithoutToolContext_ShouldStillExecuteTools()
+    public async Task ToolCallModule_ShouldExecuteToolsThroughExecutionPort()
     {
         var tool = new FakeAgentTool("echo", argumentsJson => argumentsJson);
         var module = CreateModule(tool);
@@ -270,71 +94,6 @@ public sealed class ToolCallModuleContextTests
         var completed = LastCompleted(ctx);
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("""{"msg":"ok"}""");
-    }
-
-    [Fact]
-    public async Task ToolCallModule_ShouldNotReusePreviousRequestTokenWhenNextRequestHasNoToolContext()
-    {
-        var tool = new FakeAgentTool(
-            "token_reader",
-            _ => AgentToolRequestContext.NyxIdAccessToken ?? string.Empty);
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdAccessToken = "token-123",
-                },
-            });
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "first_call");
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(ctx, null);
-        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "second_call");
-
-        var completions = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().ToList();
-        completions[0].Output.Should().Be("token-123");
-        completions[1].Output.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ToolCallModule_NyxIdLikeToolWithoutToken_ShouldReturnAuthenticationError()
-    {
-        var tool = new NyxIdLikeTool();
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name);
-
-        LastCompleted(ctx).Output.Should()
-            .Be("""{"error":"No NyxID access token available. User must be authenticated."}""");
-        tool.CapturedToken.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ToolCallModule_NyxIdLikeToolWithTypedToken_ShouldEnterProxyPath()
-    {
-        var tool = new NyxIdLikeTool();
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdAccessToken = "token-123",
-                    NyxIdOrgToken = "org-token-123",
-                },
-            });
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name);
-
-        tool.CapturedToken.Should().Be("token-123");
-        tool.CapturedOrgToken.Should().Be("org-token-123");
-        LastCompleted(ctx).Output.Should().Be("""{"proxied":true}""");
     }
 
     [Fact]
@@ -365,15 +124,6 @@ public sealed class ToolCallModuleContextTests
         var port = new FakeExecutionPort(AgentToolExecutionResult.Succeeded("""{"ported":true}"""));
         var module = CreateModule(tool, port);
         var ctx = new RecordingWorkflowContext();
-        WorkflowToolExecutionRuntimeContextAccess.SetToolContext(
-            ctx,
-            AgentToolExecutionContext.Empty with
-            {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdAccessToken = "token-123",
-                },
-            });
 
         await ExecuteToolCallAsync(
             module,
@@ -390,8 +140,6 @@ public sealed class ToolCallModuleContextTests
         request.ToolName.Should().Be("ported_tool");
         request.ToolCallId.Should().Be("workflow:run-1:ported_step:exec-ported");
         request.ArgumentsJson.Should().Be("""{"x":1}""");
-        request.ExecutionContext.Credentials.NyxIdAccessToken.Should().Be("token-123");
-        request.ExecutionContext.Request.CallId.Should().Be("workflow:run-1:ported_step:exec-ported");
         LastCompleted(ctx).Success.Should().BeTrue();
         LastCompleted(ctx).Output.Should().Be("""{"ported":true}""");
     }
@@ -498,31 +246,6 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
-    private sealed class NyxIdLikeTool : IAgentTool
-    {
-        public string Name => "nyxid_like_proxy";
-
-        public string Description => "fake NyxID-like tool";
-
-        public string ParametersSchema => "{}";
-
-        public string? CapturedToken { get; private set; }
-
-        public string? CapturedOrgToken { get; private set; }
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _ = argumentsJson;
-            CapturedToken = AgentToolRequestContext.NyxIdAccessToken;
-            CapturedOrgToken = AgentToolRequestContext.NyxIdOrgToken;
-            if (string.IsNullOrWhiteSpace(CapturedToken))
-                return Task.FromResult("""{"error":"No NyxID access token available. User must be authenticated."}""");
-
-            return Task.FromResult("""{"proxied":true}""");
-        }
-    }
-
     private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
@@ -539,7 +262,6 @@ public sealed class ToolCallModuleContextTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            using var _ = AgentToolContextScope.Push(request.ExecutionContext);
             var result = await request.Tool.ExecuteAsync(request.ArgumentsJson, ct);
             return AgentToolExecutionResult.Succeeded(result);
         }
@@ -581,8 +303,6 @@ public sealed class ToolCallModuleContextTests
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
-
-        public List<AgentToolExecutionContext?> PublishedToolContexts { get; } = [];
 
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new()
@@ -642,7 +362,6 @@ public sealed class ToolCallModuleContextTests
             ct.ThrowIfCancellationRequested();
             _ = options;
             Published.Add((evt, direction));
-            PublishedToolContexts.Add(AgentToolRequestContext.Current);
             return Task.CompletedTask;
         }
 

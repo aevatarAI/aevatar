@@ -46,28 +46,6 @@ public sealed class AgentToolExecutionPortTests
     }
 
     [Fact]
-    public async Task Approved_ShouldExecuteToolInsideAgentToolContextScope()
-    {
-        var tool = new ContextReadingTool("context_reader");
-        var approval = new ScriptedApprovalHandler(ToolApprovalResult.Approved());
-        var port = new AgentToolExecutionPort(
-            ToolCallMiddlewareChainFactory.ForPort([], approval, hooks: null));
-        var context = AgentToolExecutionContext.Empty with
-        {
-            Credentials = AgentToolCredentials.Empty with
-            {
-                NyxIdAccessToken = "token-123",
-            },
-        };
-
-        var result = await port.ExecuteAsync(Request(tool, context), CancellationToken.None);
-
-        result.Status.Should().Be(AgentToolExecutionStatus.Succeeded);
-        result.ResultJson.Should().Be("token-123");
-        tool.ExecuteCalls.Should().Be(1);
-    }
-
-    [Fact]
     public async Task MissingApprovalHandler_ShouldDenyApprovalRequiredTool()
     {
         var tool = new CountingAgentTool("danger", ToolApprovalMode.AlwaysRequire);
@@ -142,14 +120,12 @@ public sealed class AgentToolExecutionPortTests
 
     private static AgentToolExecutionRequest Request(
         IAgentTool tool,
-        AgentToolExecutionContext? context = null,
         string argumentsJson = "{}") =>
         new(
             Tool: tool,
             ToolName: tool.Name,
             ToolCallId: "tc-1",
-            ArgumentsJson: argumentsJson,
-            ExecutionContext: context ?? AgentToolExecutionContext.Empty);
+            ArgumentsJson: argumentsJson);
 
     private sealed class CountingAgentTool(string name, ToolApprovalMode approvalMode) : IAgentTool
     {
@@ -166,21 +142,6 @@ public sealed class AgentToolExecutionPortTests
         {
             ExecuteCalls++;
             return Task.FromResult("""{"ok":true}""");
-        }
-    }
-
-    private sealed class ContextReadingTool(string name) : IAgentTool
-    {
-        public string Name { get; } = name;
-        public string Description => "context reader";
-        public string ParametersSchema => "{}";
-        public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
-        public int ExecuteCalls { get; private set; }
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            ExecuteCalls++;
-            return Task.FromResult(AgentToolRequestContext.NyxIdAccessToken ?? string.Empty);
         }
     }
 

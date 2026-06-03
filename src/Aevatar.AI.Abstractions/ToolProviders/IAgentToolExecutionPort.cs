@@ -12,8 +12,7 @@ public sealed record AgentToolExecutionRequest(
     IAgentTool Tool,
     string ToolName,
     string ToolCallId,
-    string ArgumentsJson,
-    AgentToolExecutionContext ExecutionContext);
+    string ArgumentsJson);
 
 public sealed record AgentToolExecutionResult(
     AgentToolExecutionStatus Status,
