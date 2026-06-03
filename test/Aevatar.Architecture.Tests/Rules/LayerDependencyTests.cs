@@ -177,6 +177,19 @@ public class LayerDependencyTests
     }
 
     [Fact]
+    public void ProjectionCoreAbstractionsProject_ShouldNot_Reference_FoundationCore()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "src", "Aevatar.CQRS.Projection.Core.Abstractions", "Aevatar.CQRS.Projection.Core.Abstractions.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.DoesNotContain(
+            "Aevatar.Foundation.Core.csproj",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ProjectionProviders_ShouldNot_DependOn_GAgentServiceBusiness()
     {
         IArchRule rule = Types().That()
