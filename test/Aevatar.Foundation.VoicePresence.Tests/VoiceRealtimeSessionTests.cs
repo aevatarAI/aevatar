@@ -179,6 +179,39 @@ public class VoiceRealtimeSessionTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_should_treat_live_active_lease_as_attached_before_transport_materializes()
+    {
+        var capability = CreateCapability(
+            "agent-1",
+            "voice_presence",
+            initialized: true,
+            activeSessionId: "session-1",
+            activeTransportLeaseId: "transport-1",
+            transportAttached: false,
+            remoteAudioSupport: VoiceRemoteAudioSupport.Supported);
+        var leasePort = new RecordingLeasePort();
+        var session = CreateSession(new FakeCapabilityQueryPort(capability), leasePort);
+
+        var attachResult = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest("agent-1"),
+            static (_, _) => ValueTask.CompletedTask);
+        var detachResult = await session.ExecuteAsync(
+            new VoiceRealtimeSessionRequest(
+                "agent-1",
+                "voice_presence",
+                VoiceRealtimeSessionPurpose.Detach),
+            static (_, _) => ValueTask.CompletedTask);
+
+        attachResult.Succeeded.ShouldBeFalse();
+        attachResult.Error.ShouldBe(VoiceRealtimeSessionStartError.TransportAlreadyAttached);
+        detachResult.Succeeded.ShouldBeTrue();
+        detachResult.Receipt.ShouldNotBeNull();
+        detachResult.Receipt.SessionId.ShouldBe("session-1");
+        detachResult.Receipt.LeaseHandle.ActiveTransportLeaseId.ShouldBe("transport-1");
+        leasePort.AcquireRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task FailClosedVoiceVolatileMediaStreamPort_should_throw_public_reason_on_attach_and_release_on_detach()
     {
         var leasePort = new RecordingLeasePort();
@@ -210,6 +243,42 @@ public class VoiceRealtimeSessionTests
         completion.Handle.ShouldBe(handle);
         completion.TransportLeaseId.ShouldBe("transport-1");
         completion.Reason.ShouldBe("host_transport_completed");
+    }
+
+    [Fact]
+    public async Task FailClosedVoiceVolatileMediaStreamPort_should_prefer_completed_transport_lease_id()
+    {
+        var leasePort = new RecordingLeasePort();
+        var port = new FailClosedVoiceVolatileMediaStreamPort(new RecordingAttachmentPort(), leasePort);
+        var handle = CreateLeaseHandle(activeTransportLeaseId: "handle-transport");
+
+        await port.CompleteTransportLifetimeAsync(
+            handle,
+            new VoiceTransportLifetimeCompleted
+            {
+                TransportLeaseId = "completed-transport",
+            },
+            "host_transport_completed");
+
+        var completion = leasePort.LifetimeCompletions.ShouldHaveSingleItem();
+        completion.Handle.ShouldBe(handle);
+        completion.TransportLeaseId.ShouldBe("completed-transport");
+        completion.Reason.ShouldBe("host_transport_completed");
+    }
+
+    [Fact]
+    public async Task FailClosedVoiceVolatileMediaStreamPort_should_ignore_lifetime_completion_without_transport_lease_id()
+    {
+        var leasePort = new RecordingLeasePort();
+        var port = new FailClosedVoiceVolatileMediaStreamPort(new RecordingAttachmentPort(), leasePort);
+        var handle = CreateLeaseHandle();
+
+        await port.CompleteTransportLifetimeAsync(
+            handle,
+            new VoiceTransportLifetimeCompleted(),
+            "host_transport_completed");
+
+        leasePort.LifetimeCompletions.ShouldBeEmpty();
     }
 
     [Fact]
