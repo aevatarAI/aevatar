@@ -37,8 +37,8 @@ export function renderWithQueryClient(
     activeQueryClients.add(queryClient);
   }
   const view = render(
-    <ConfigProvider locale={resolveAntdLocale('zh-CN')}>
-      <ProConfigProvider intl={resolveProIntl('zh-CN')}>
+    <ConfigProvider locale={resolveAntdLocale('en-US')}>
+      <ProConfigProvider intl={resolveProIntl('en-US')}>
         <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
       </ProConfigProvider>
     </ConfigProvider>,

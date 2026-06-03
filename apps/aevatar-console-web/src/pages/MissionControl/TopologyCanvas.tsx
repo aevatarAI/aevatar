@@ -530,10 +530,12 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
         >
           <Typography.Text strong style={{ color: token.colorTextLightSolid }}>
             {connectionStatus === 'idle'
-              ? 'Attach a live run first'
+              ? t("pages.missioncontrol.topologycanvas.attach.live.run.first", "Attach a live run first")
               : snapshot.nodes.length === 0
-                ? 'Waiting for runtime topology...'
-                : `Runtime: ${formatConnectionLabel(connectionStatus)}`}
+                ? t("pages.missioncontrol.topologycanvas.waiting.runtime.topology", "Waiting for runtime topology...")
+                : t("pages.missioncontrol.topologycanvas.runtime.connection", "Runtime: {connection}", {
+                    connection: formatConnectionLabel(connectionStatus),
+                  })}
           </Typography.Text>
           <Typography.Text
             style={{
@@ -542,7 +544,8 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
               opacity: 0.86,
             }}
           >
-            {connectionMessage || 'Synchronizing runtime state, topology, and key events.'}
+            {connectionMessage ||
+              t("pages.missioncontrol.topologycanvas.synchronizing.runtime.state", "Synchronizing runtime state, topology, and key events.")}
           </Typography.Text>
           <Typography.Text
             style={{
@@ -559,9 +562,9 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
             }}
           >
             {connectionStatus === 'idle'
-              ? 'Live Run Context Required'
+              ? t("pages.missioncontrol.topologycanvas.live.run.context.required", "Live Run Context Required")
               : snapshot.nodes.length === 0
-                ? 'Topology Pending'
+                ? t("pages.missioncontrol.topologycanvas.topology.pending", "Topology Pending")
                 : formatConnectionLabel(connectionStatus)}
           </Typography.Text>
         </div>

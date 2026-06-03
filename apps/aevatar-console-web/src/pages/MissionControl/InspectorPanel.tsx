@@ -261,7 +261,8 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       loading={submittingActionKind === 'reject'}
                       onClick={() => handleSubmit('reject')}
                     >
-                      {showIntervention.secondaryActionLabel || 'Reject'}
+                      {showIntervention.secondaryActionLabel ||
+                        t("pages.missioncontrol.inspectorpanel.reject", "Reject")}
                     </Button>
                   </>
                 ) : null}

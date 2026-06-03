@@ -35,6 +35,7 @@ declare module '@umijs/max' {
     ) => string;
   };
 
+  export function getIntl(): ConsoleIntlShape;
   export function getLocale(): string;
   export function setLocale(locale: string, realReload?: boolean): void;
   export function useIntl(): ConsoleIntlShape;

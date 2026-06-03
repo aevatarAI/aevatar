@@ -1277,7 +1277,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
       setChatNotice({
         type: 'error',
         message:
-          error instanceof Error ? error.message : 'Failed to delete conversation.',
+          error instanceof Error
+            ? error.message
+            : t("pages.studio.studiofilesdetailpane.failed.to.delete.conversation", "Failed to delete conversation."),
       });
     }
   };
@@ -1301,7 +1303,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               opacity: !settingsDirty || settingsPending ? 0.3 : 1,
             }}
           >
-            {settingsPending ? 'Saving...' : 'Save'}
+            {settingsPending
+              ? t("pages.studio.studiofilesdetailpane.saving", "Saving...")
+              : t("pages.studio.studiofilesdetailpane.save", "Save")}
           </button>
         </div>
 
@@ -1370,9 +1374,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               style={{
                 ...primaryActionStyle,
                 opacity: !roleCatalogDirty || rolePending ? 0.3 : 1,
-              }}
-            >
-              {rolePending ? 'Saving...' : 'Save'}
+            }}
+          >
+              {rolePending
+                ? t("pages.studio.studiofilesdetailpane.saving", "Saving...")
+                : t("pages.studio.studiofilesdetailpane.save", "Save")}
             </button>
           </div>
         </div>
@@ -1403,7 +1409,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 <TeamOutlined style={{ color: '#8b5cf6', fontSize: 18 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ color: '#1f2937', fontSize: 14, fontWeight: 600 }}>
-                    {role.name || role.id || 'Role'}
+                    {role.name || role.id || t("pages.studio.studiofilesdetailpane.role", "Role")}
                   </div>
                   <div style={catalogMetaStyle}>
                     <span
@@ -1416,7 +1422,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     </span>
                     {role.model ? ` / ${role.model}` : ''}
                     {role.connectorsText
-                      ? ` / ${splitCatalogLines(role.connectorsText).length} connector(s)`
+                      ? t("pages.studio.studiofilesdetailpane.connector.count.suffix", " / {count} connector(s)", {
+                          count: splitCatalogLines(role.connectorsText).length,
+                        })
                       : ''}
                   </div>
                 </div>
@@ -1447,8 +1455,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         open={Boolean(editingRole)}
         title={
           editingRole
-            ? `Edit Role: ${editingRole.name || editingRole.id || 'Role'}`
-            : 'Edit Role'
+            ? t("pages.studio.studiofilesdetailpane.edit.role.named", "Edit Role: {name}", {
+                name:
+                  editingRole.name ||
+                  editingRole.id ||
+                  t("pages.studio.studiofilesdetailpane.role", "Role"),
+              })
+            : t("pages.studio.studiofilesdetailpane.edit.role", "Edit Role")
         }
         onClose={() => setEditingRoleKey(null)}
       >
@@ -1473,7 +1486,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 }
               />
               <FieldInput
-                label="Name"
+                label={t("pages.studio.studiofilesdetailpane.name", "Name")}
                 value={editingRole.name}
                 onChange={(value) =>
                   setRoleCatalogDraft((current) =>
@@ -1492,9 +1505,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
 
             <div style={twoColumnGridStyle}>
               <FieldInput
-                label="Provider"
+                label={t("pages.studio.studiofilesdetailpane.provider", "Provider")}
                 value={editingRole.provider}
-                placeholder="Default"
+                placeholder={t("pages.studio.studiofilesdetailpane.default", "Default")}
                 onChange={(value) =>
                   setRoleCatalogDraft((current) =>
                     current.map((item) =>
@@ -1509,9 +1522,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                 }
               />
               <FieldInput
-                label="Model"
+                label={t("pages.studio.studiofilesdetailpane.model", "Model")}
                 value={editingRole.model}
-                placeholder="Default"
+                placeholder={t("pages.studio.studiofilesdetailpane.default", "Default")}
                 onChange={(value) =>
                   setRoleCatalogDraft((current) =>
                     current.map((item) =>
@@ -1691,9 +1704,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               style={{
                 ...primaryActionStyle,
                 opacity: !connectorCatalogDirty || connectorPending ? 0.3 : 1,
-              }}
-            >
-              {connectorPending ? 'Saving...' : 'Save'}
+            }}
+          >
+              {connectorPending
+                ? t("pages.studio.studiofilesdetailpane.saving", "Saving...")
+                : t("pages.studio.studiofilesdetailpane.save", "Save")}
             </button>
           </div>
         </div>
@@ -1753,14 +1768,17 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {connector.name || 'Connector'}
+                        {connector.name || t("pages.studio.studiofilesdetailpane.connector", "Connector")}
                       </div>
                       <Tag color="processing" style={{ marginInlineEnd: 0 }}>
                         {connector.type}
                       </Tag>
                       {!connector.enabled ? <Tag>{t("pages.studio.studiofilesdetailpane.disabled", "disabled")}</Tag> : null}
                     </div>
-                    <div style={catalogMetaStyle}>{preview || 'No target configured'}</div>
+                    <div style={catalogMetaStyle}>
+                      {preview ||
+                        t("pages.studio.studiofilesdetailpane.no.target.configured", "No target configured")}
+                    </div>
                   </div>
                   <button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1790,8 +1808,12 @@ const StudioFilesDetailPane: React.FC<Props> = ({
         open={Boolean(editingConnector)}
         title={
           editingConnector
-            ? `Edit Connector: ${editingConnector.name || 'Connector'}`
-            : 'Edit Connector'
+            ? t("pages.studio.studiofilesdetailpane.edit.connector.named", "Edit Connector: {name}", {
+                name:
+                  editingConnector.name ||
+                  t("pages.studio.studiofilesdetailpane.connector", "Connector"),
+              })
+            : t("pages.studio.studiofilesdetailpane.edit.connector", "Edit Connector")
         }
         onClose={() => setEditingConnectorKey(null)}
       >
@@ -1799,7 +1821,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <>
             <div style={twoColumnGridStyle}>
               <FieldInput
-                label="Name"
+                label={t("pages.studio.studiofilesdetailpane.name", "Name")}
                 value={editingConnector.name}
                 mono
                 onChange={(value) =>
@@ -1898,7 +1920,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Retry"
+                  label={t("pages.studio.studiofilesdetailpane.retry", "Retry")}
                   mono
                   value={editingConnector.retry}
                   onChange={(value) =>
@@ -2031,7 +2053,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             {editingConnector.type === 'cli' ? (
               <>
                 <FieldInput
-                  label="Command"
+                  label={t("pages.studio.studiofilesdetailpane.command", "Command")}
                   mono
                   value={editingConnector.cli.command}
                   onChange={(value) =>
@@ -2137,7 +2159,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldTextArea
-                  label="Environment"
+                  label={t("pages.studio.studiofilesdetailpane.environment", "Environment")}
                   value={formatMapText(editingConnector.cli.environment)}
                   placeholder={t("pages.studio.studiofilesdetailpane.key.value.one.per.line.2", "KEY: value (one per line)")}
                   onChange={(value) =>
@@ -2182,7 +2204,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Command"
+                  label={t("pages.studio.studiofilesdetailpane.command", "Command")}
                   mono
                   value={editingConnector.mcp.command}
                   onChange={(value) =>
@@ -2202,7 +2224,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldInput
-                  label="Arguments"
+                  label={t("pages.studio.studiofilesdetailpane.arguments", "Arguments")}
                   value={editingConnector.mcp.arguments.join(', ')}
                   onChange={(value) =>
                     setConnectorCatalogDraft((current) =>
@@ -2288,7 +2310,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                   }
                 />
                 <FieldTextArea
-                  label="Environment"
+                  label={t("pages.studio.studiofilesdetailpane.environment", "Environment")}
                   value={formatMapText(editingConnector.mcp.environment)}
                   placeholder={t("pages.studio.studiofilesdetailpane.key.value.one.per.line.3", "KEY: value (one per line)")}
                   onChange={(value) =>
@@ -2372,7 +2394,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           ) : (
             <section aria-label={t("pages.studio.studiofilesdetailpane.workflow.yaml.preview", "Workflow YAML preview")}>
               <pre style={codePreviewStyle}>
-                {workflowFile.data?.yaml || '# Workflow YAML is empty.'}
+                {workflowFile.data?.yaml ||
+                  t("pages.studio.studiofilesdetailpane.workflow.yaml.empty.comment", "# Workflow YAML is empty.")}
               </pre>
             </section>
           )}
@@ -2513,7 +2536,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                       <span style={{ color: '#9ca3af' }}>
                         {message.timestamp
                           ? formatDateTime(new Date(message.timestamp).toISOString())
-                          : 'unknown'}
+                          : t("pages.studio.studiofilesdetailpane.unknown", "unknown")}
                       </span>
                     </div>
 
@@ -2542,7 +2565,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                         wordBreak: 'break-word',
                       }}
                     >
-                      {message.content || '(empty message)'}
+                      {message.content ||
+                        t("pages.studio.studiofilesdetailpane.empty.message", "(empty message)")}
                     </div>
 
                     {message.error ? (
@@ -2636,10 +2660,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <div>
               <div style={editorHeaderTitleStyle}>{scriptId}.cs</div>
               <div style={catalogMetaStyle}>
-                Revision: {selectedScriptDetail.script.activeRevision} {t("pages.studio.studiofilesdetailpane.updated", "· Updated:")}{' '}
+                {t("pages.studio.studiofilesdetailpane.revision.label", "Revision:")}{' '}
+                {selectedScriptDetail.script.activeRevision} {t("pages.studio.studiofilesdetailpane.updated", "· Updated:")}{' '}
                 {selectedScriptDetail.script.updatedAt
                   ? formatDateTime(selectedScriptDetail.script.updatedAt)
-                  : 'unknown'}
+                  : t("pages.studio.studiofilesdetailpane.unknown", "unknown")}
               </div>
             </div>
             <button
@@ -2656,7 +2681,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           <section aria-label={t("pages.studio.studiofilesdetailpane.script.source.preview", "Script source preview")}>
             <pre style={codePreviewStyle}>
               {selectedScriptDetail.source?.sourceText ||
-                '// Source code not available. The script may need to be promoted first.'}
+                t("pages.studio.studiofilesdetailpane.script.source.unavailable.comment", "// Source code not available. The script may need to be promoted first.")}
             </pre>
           </section>
         </div>

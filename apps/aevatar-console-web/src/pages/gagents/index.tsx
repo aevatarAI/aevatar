@@ -1374,8 +1374,10 @@ const GAgentsPage: React.FC = () => {
         />
         <Typography.Text type="secondary">
           {resolvedScope?.scopeId
-            ? `NyxID resolved workspace: ${resolvedScope.scopeId}`
-            : 'No workspace was resolved from the current session.'}
+            ? t("pages.gagents.index.nyxid.resolved.workspace", "NyxID resolved workspace: {scopeId}", {
+                scopeId: resolvedScope.scopeId,
+              })
+            : t("pages.gagents.index.no.workspace.resolved", "No workspace was resolved from the current session.")}
         </Typography.Text>
         {bindingQuery.data?.available ? (
           <div
@@ -1598,7 +1600,7 @@ const GAgentsPage: React.FC = () => {
                 ? describeRuntimeGAgentBindingRevisionTarget(
                     currentBindingRevision,
                   )
-                : 'Not serving this type yet'}
+                : t("pages.gagents.index.not.serving.this.type.yet", "Not serving this type yet")}
             </Typography.Paragraph>
           </div>
         </div>
@@ -1611,8 +1613,12 @@ const GAgentsPage: React.FC = () => {
   const selectedRevisionPanel = (
     <WorkbenchCard
       description={t("pages.gagents.index.inspect.the.selected.published.revision", "Inspect the selected published revision.")}
-      eyebrow="Selected Revision"
-      title={selectedRevision ? selectedRevision.revisionId : 'No revision selected'}
+      eyebrow={t("pages.gagents.index.selected.revision", "Selected Revision")}
+      title={
+        selectedRevision
+          ? selectedRevision.revisionId
+          : t("pages.gagents.index.no.revision.selected", "No revision selected")
+      }
     >
       {selectedRevision ? (
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
@@ -2304,8 +2310,8 @@ const GAgentsPage: React.FC = () => {
                                   {t("pages.gagents.index.remove.endpoint", "Remove endpoint")}</Button>
                                 <Typography.Text type="secondary">
                                   {endpoint.kind === 'chat'
-                                    ? 'Chat endpoints can open Runs with a prompt.'
-                                    : 'Command endpoints can open Runs with a typed payload contract.'}
+                                    ? t("pages.gagents.index.chat.endpoints.open.runs", "Chat endpoints can open Runs with a prompt.")
+                                    : t("pages.gagents.index.command.endpoints.open.runs", "Command endpoints can open Runs with a typed payload contract.")}
                                 </Typography.Text>
                               </Space>
                             </div>
@@ -2511,7 +2517,9 @@ const GAgentsPage: React.FC = () => {
                       }}
                       type={canActivate ? 'primary' : 'default'}
                     >
-                      {revision.isDefaultServing ? 'Serving' : 'Activate'}
+                      {revision.isDefaultServing
+                        ? t("pages.gagents.index.serving", "Serving")
+                        : t("pages.gagents.index.activate", "Activate")}
                     </Button>
                     <Button
                       danger
@@ -2682,7 +2690,7 @@ const GAgentsPage: React.FC = () => {
     },
     {
       key: 'publish',
-      label: 'Publish',
+      label: t("pages.gagents.index.publish", "Publish"),
       children: (
         <div style={workbenchColumnStyle}>
           {publishBindingPanel}
@@ -2691,7 +2699,7 @@ const GAgentsPage: React.FC = () => {
     },
     {
       key: 'serving',
-      label: 'Serving',
+      label: t("pages.gagents.index.serving", "Serving"),
       children: (
         <div style={workbenchColumnStyle}>
           {currentBindingPanel}
@@ -2735,7 +2743,9 @@ const GAgentsPage: React.FC = () => {
         <Space size={[8, 8]} wrap>
           <Typography.Text type="secondary">{t("pages.gagents.index.workspace.id.3", "Workspace ID")}</Typography.Text>
           <Typography.Text style={{ maxWidth: 320 }} strong>
-            {normalizedScopeId || resolvedScope?.scopeId || 'Not resolved'}
+            {normalizedScopeId ||
+              resolvedScope?.scopeId ||
+              t("pages.gagents.index.not.resolved", "Not resolved")}
           </Typography.Text>
         </Space>
       }

@@ -43,7 +43,11 @@ const ScriptsPackagePanel: React.FC<ScriptsPackagePanelProps> = ({
           <div className="console-scripts-field">
             <div className="console-scripts-field-label">{t("modules.studio.scripts.scriptspackagepanel.saved.revision", "Saved Revision")}</div>
             <div className="console-scripts-copy-value">
-              {selectedDraft.revision || 'Generated on save'}
+              {selectedDraft.revision ||
+                t(
+                  "modules.studio.scripts.scriptspackagepanel.generated.on.save",
+                  "Generated on save",
+                )}
             </div>
           </div>
           <label className="console-scripts-field">

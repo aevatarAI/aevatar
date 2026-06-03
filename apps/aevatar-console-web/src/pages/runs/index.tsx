@@ -107,6 +107,7 @@ import {
   type ConsoleViewKey,
   defaultRunRouteName,
   formatElapsedDuration,
+  getRunStatusLabel,
   type HumanInputRecord,
   readInitialRunFormValues,
   type RecentRunTableRow,
@@ -114,7 +115,6 @@ import {
   type RunFocusRecord,
   type RunFormValues,
   type RunStatusValue,
-  runStatusValueEnum,
   runsWorkbenchMonitorStyle,
   runsWorkbenchShellStyle,
   type RunSummaryRecord,
@@ -1582,14 +1582,19 @@ const RunsPage: React.FC = () => {
           ? ("human_approval" as const)
           : ("human_input" as const),
         label: approval
-          ? `Awaiting approval on ${humanInputRecord.stepId || "current step"}`
-          : `Awaiting human input on ${
-              humanInputRecord.stepId || "current step"
-            }`,
+          ? t("pages.runs.index.awaiting.approval.on.step", "Awaiting approval on {step}", {
+              step: humanInputRecord.stepId || t("pages.runs.index.current.step", "current step"),
+            })
+          : t("pages.runs.index.awaiting.human.input.on.step", "Awaiting human input on {step}", {
+              step: humanInputRecord.stepId || t("pages.runs.index.current.step", "current step"),
+            }),
         alertType: "warning" as const,
-        title: approval ? "Approval required" : "Human input required",
+        title: approval
+          ? t("pages.runs.index.approval.required", "Approval required")
+          : t("pages.runs.index.human.input.required", "Human input required"),
         description:
-          humanInputRecord.prompt || "Operator action is required to continue.",
+          humanInputRecord.prompt ||
+          t("pages.runs.index.operator.action.is.required", "Operator action is required to continue."),
       };
     }
 
@@ -1603,7 +1608,7 @@ const RunsPage: React.FC = () => {
         title: t("pages.runs.index.waiting.for.external.signal", "Waiting for external signal"),
         description:
           waitingSignalRecord.prompt ||
-          "The run is paused until the expected signal arrives.",
+          t("pages.runs.index.the.run.is.paused.until.signal", "The run is paused until the expected signal arrives."),
       };
     }
 
@@ -1644,7 +1649,7 @@ const RunsPage: React.FC = () => {
       status: "idle" as const,
       label: t("pages.runs.index.ready.to.start.run", "Ready to start a run"),
       alertType: "info" as const,
-      title: "Idle",
+      title: t("pages.runs.index.idle", "Idle"),
       description:
         t("pages.runs.index.compose.prompt.or.payload.and", "Compose a prompt or payload and start a scoped endpoint run."),
     };
@@ -1703,8 +1708,7 @@ const RunsPage: React.FC = () => {
       selectedRouteName,
     ]
   );
-  const runStatusText =
-    runStatusValueEnum[session.status]?.text ?? session.status;
+  const runStatusText = getRunStatusLabel(session.status);
   const isRunLive =
     streaming ||
     session.status === "running" ||
@@ -1991,7 +1995,7 @@ const RunsPage: React.FC = () => {
   const handleSubmitComposer = useCallback(async () => {
     const prompt = composerPrompt.trim();
     if (!prompt) {
-      messageApi.warning("Prompt is required.");
+      messageApi.warning(t("pages.runs.index.prompt.is.required", "Prompt is required."));
       return;
     }
 
@@ -2375,8 +2379,8 @@ const RunsPage: React.FC = () => {
             styles={{ body: drawerBodyStyle }}
             title={
               hasPendingInteraction
-                ? "Details · action pending"
-                : "Details"
+                ? t("pages.runs.index.details.action.pending", "Details · action pending")
+                : t("pages.runs.index.details", "Details")
             }
             size={520}
             onClose={() => setIsInspectorDrawerOpen(false)}

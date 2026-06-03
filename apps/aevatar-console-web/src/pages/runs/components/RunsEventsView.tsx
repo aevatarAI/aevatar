@@ -2,8 +2,8 @@ import { Badge, Empty, Space, Tag, Typography } from "antd";
 import React from "react";
 import { cardListStyle, codeBlockStyle } from "@/shared/ui/proComponents";
 import {
-  eventCategoryValueEnum,
-  eventStatusValueEnum,
+  getEventCategoryLabel,
+  getEventStatusLabel,
   type RunEventCategory,
   type RunEventRow,
   type RunEventStatus,
@@ -242,10 +242,10 @@ const RunsEventsView: React.FC<RunsEventsViewProps> = ({
                     </div>
                     <Space size={[6, 6]} wrap>
                       <Tag color={categoryTagToneMap[item.eventCategory]}>
-                        {eventCategoryValueEnum[item.eventCategory].text}
+                        {getEventCategoryLabel(item.eventCategory)}
                       </Tag>
                       <Tag color={statusTagToneMap[item.eventStatus]}>
-                        {eventStatusValueEnum[item.eventStatus].text}
+                        {getEventStatusLabel(item.eventStatus)}
                       </Tag>
                       {selected ? <Tag color="processing">{t("pages.runs.runseventsview.selected", "Selected")}</Tag> : null}
                     </Space>

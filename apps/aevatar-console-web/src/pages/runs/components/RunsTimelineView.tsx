@@ -7,8 +7,8 @@ import {
   workbenchConsoleSurfaceStyle,
 } from "../runWorkbenchConfig";
 import {
-  eventCategoryValueEnum,
-  eventStatusValueEnum,
+  getEventCategoryLabel,
+  getEventStatusLabel,
   type RunEventCategory,
   type RunEventRow,
   type RunTimelineGroup,
@@ -199,8 +199,8 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                 const stepTypes = getGroupStepTypes(group);
                 const latestItem = group.items[0];
                 const categoryLabel = latestItem
-                  ? eventCategoryValueEnum[latestItem.eventCategory].text
-                  : "Observed";
+                  ? getEventCategoryLabel(latestItem.eventCategory)
+                  : getEventStatusLabel("default");
                 const progressionLabel = buildProgressionLabel(group);
 
                 return (
@@ -214,7 +214,7 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                   <Badge status={statusBadgeMap[group.status]} />
                   <Typography.Text strong>{group.label}</Typography.Text>
                   <Tag color={statusTagToneMap[group.status]}>
-                    {eventStatusValueEnum[group.status].text}
+                    {getEventStatusLabel(group.status)}
                   </Tag>
                 </Space>
                 <Typography.Text type="secondary">
@@ -294,14 +294,14 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                         </Space>
                         <Typography.Text style={timelineSecondaryMetaStyle}>
                           {index === 0
-                            ? "Latest"
-                            : eventStatusValueEnum[item.eventStatus].text}
+                            ? t("pages.runs.runstimelineview.latest", "Latest")
+                            : getEventStatusLabel(item.eventStatus)}
                         </Typography.Text>
                       </div>
                       <div style={timelineRowBodyStyle}>
                         <div style={timelineRowHeadlineStyle}>
                           <Tag color={statusTagToneMap[item.eventStatus]}>
-                            {eventCategoryValueEnum[item.eventCategory].text}
+                            {getEventCategoryLabel(item.eventCategory)}
                           </Tag>
                           <Typography.Text strong>{item.eventType}</Typography.Text>
                         </div>

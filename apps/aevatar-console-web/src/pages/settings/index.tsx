@@ -947,7 +947,7 @@ const SettingsPage: React.FC = () => {
                         </div>
                         <Typography.Text type="secondary">
                           {t("pages.settings.index.current.route.resolves.through", "Current route resolves through")}{" "}
-                          {routeSummaryLabel || "NyxID Gateway"}.
+                          {`${routeSummaryLabel || t("pages.settings.index.nyxid.gateway", "NyxID Gateway")}.`}
                         </Typography.Text>
                         {providerDisplayList.length > 0 ? (
                           <div style={providerRailStyle}>

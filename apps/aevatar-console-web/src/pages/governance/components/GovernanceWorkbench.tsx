@@ -247,29 +247,56 @@ function buildPolicySummary(record: ServicePolicySnapshot): string {
 
   if (record.activationRequiredBindingIds.length > 0) {
     segments.push(
-      `Requires ${record.activationRequiredBindingIds.length} activation binding${record.activationRequiredBindingIds.length === 1 ? "" : "s"}`,
+      t(
+        "pages.governance.governanceworkbench.requires.activation.bindings.count",
+        "Requires {count} activation binding(s)",
+        { count: record.activationRequiredBindingIds.length },
+      ),
     );
   }
 
   if (record.invokeAllowedCallerServiceKeys.length > 0) {
     segments.push(
-      `${record.invokeAllowedCallerServiceKeys.length} caller allowlist entr${record.invokeAllowedCallerServiceKeys.length === 1 ? "y" : "ies"}`,
+      t(
+        "pages.governance.governanceworkbench.caller.allowlist.entries.count",
+        "{count} caller allowlist entry/entries",
+        { count: record.invokeAllowedCallerServiceKeys.length },
+      ),
     );
   }
 
   if (record.invokeRequiresActiveDeployment) {
-    segments.push("Blocks invokes without active deployment");
+    segments.push(
+      t(
+        "pages.governance.governanceworkbench.blocks.invokes.without.active.deployment",
+        "Blocks invokes without active deployment",
+      ),
+    );
   }
 
-  return segments.join(" · ") || "No activation or caller restrictions configured.";
+  return (
+    segments.join(" · ") ||
+    t(
+      "pages.governance.governanceworkbench.no.activation.or.caller.restrictions",
+      "No activation or caller restrictions configured.",
+    )
+  );
 }
 
 function buildEndpointSummary(record: ServiceEndpointExposureSnapshot): string {
   const segments = [
-    record.requestTypeUrl || "No request contract",
+    record.requestTypeUrl ||
+      t("pages.governance.governanceworkbench.no.request.contract", "No request contract"),
     record.policyIds.length > 0
-      ? `${record.policyIds.length} attached polic${record.policyIds.length === 1 ? "y" : "ies"}`
-      : "No policy attachments",
+      ? t(
+          "pages.governance.governanceworkbench.attached.policies.count",
+          "{count} attached policy/policies",
+          { count: record.policyIds.length },
+        )
+      : t(
+          "pages.governance.governanceworkbench.no.policy.attachments",
+          "No policy attachments",
+        ),
   ];
 
   return segments.join(" · ");
@@ -311,12 +338,19 @@ function buildAuditEvents(input: {
 
   if (selectedService) {
     events.push({
-      action: "Governance scope attached",
-      actor: "Service Registry",
+      action: t(
+        "pages.governance.governanceworkbench.governance.scope.attached",
+        "Governance scope attached",
+      ),
+      actor: t("pages.governance.governanceworkbench.service.registry", "Service Registry"),
       at: selectedService.updatedAt,
       id: `service-${selectedService.serviceId}-${selectedService.updatedAt}`,
       status: selectedService.deploymentStatus || "active",
-      summary: `Governance is now anchored to ${selectedService.displayName || selectedService.serviceId}.`,
+      summary: t(
+        "pages.governance.governanceworkbench.governance.anchored.to.service",
+        "Governance is now anchored to {service}.",
+        { service: selectedService.displayName || selectedService.serviceId },
+      ),
       targetId: selectedService.serviceId,
       targetKind: "service",
       targetLabel: selectedService.displayName || selectedService.serviceId,
@@ -326,24 +360,38 @@ function buildAuditEvents(input: {
   for (const revision of revisions) {
     if (revision.publishedAt) {
       events.push({
-        action: "Revision published",
-        actor: "Release Manager",
+        action: t(
+          "pages.governance.governanceworkbench.revision.published",
+          "Revision published",
+        ),
+        actor: t("pages.governance.governanceworkbench.release.manager", "Release Manager"),
         at: revision.publishedAt,
         id: `revision-published-${revision.revisionId}`,
         status: "published",
-        summary: `Revision ${revision.revisionId} was published for governance evaluation.`,
+        summary: t(
+          "pages.governance.governanceworkbench.revision.published.evaluation",
+          "Revision {revisionId} was published for governance evaluation.",
+          { revisionId: revision.revisionId },
+        ),
         targetId: revision.revisionId,
         targetKind: "activation",
         targetLabel: revision.revisionId,
       });
     } else if (revision.preparedAt) {
       events.push({
-        action: "Revision prepared",
-        actor: "Release Manager",
+        action: t(
+          "pages.governance.governanceworkbench.revision.prepared",
+          "Revision prepared",
+        ),
+        actor: t("pages.governance.governanceworkbench.release.manager", "Release Manager"),
         at: revision.preparedAt,
         id: `revision-prepared-${revision.revisionId}`,
         status: revision.status || "pending",
-        summary: `Revision ${revision.revisionId} is prepared and waiting for promotion decisions.`,
+        summary: t(
+          "pages.governance.governanceworkbench.revision.prepared.waiting",
+          "Revision {revisionId} is prepared and waiting for promotion decisions.",
+          { revisionId: revision.revisionId },
+        ),
         targetId: revision.revisionId,
         targetKind: "activation",
         targetLabel: revision.revisionId,
@@ -353,12 +401,19 @@ function buildAuditEvents(input: {
 
   if (bindingsUpdatedAt) {
     events.push({
-      action: "Binding catalog synchronized",
-      actor: "Binding Registry",
+      action: t(
+        "pages.governance.governanceworkbench.binding.catalog.synchronized",
+        "Binding catalog synchronized",
+      ),
+      actor: t("pages.governance.governanceworkbench.binding.registry", "Binding Registry"),
       at: bindingsUpdatedAt,
       id: `binding-catalog-${bindingsUpdatedAt}`,
       status: bindings.some((binding) => binding.retired) ? "retired" : "active",
-      summary: `${bindings.length} binding${bindings.length === 1 ? "" : "s"} are currently tracked for this service.`,
+      summary: t(
+        "pages.governance.governanceworkbench.bindings.tracked.for.service",
+        "{count} binding(s) are currently tracked for this service.",
+        { count: bindings.length },
+      ),
       targetId: "binding-catalog",
       targetKind: "binding",
       targetLabel: `${bindings.length} bindings`,
@@ -367,12 +422,16 @@ function buildAuditEvents(input: {
 
   for (const binding of bindings.filter((item) => item.retired)) {
     events.push({
-      action: "Binding retired",
-      actor: "Binding Registry",
+      action: t("pages.governance.governanceworkbench.binding.retired", "Binding retired"),
+      actor: t("pages.governance.governanceworkbench.binding.registry", "Binding Registry"),
       at: bindingsUpdatedAt || selectedService?.updatedAt || "",
       id: `binding-retired-${binding.bindingId}`,
       status: "retired",
-      summary: `${binding.displayName || binding.bindingId} was removed from the active dependency surface.`,
+      summary: t(
+        "pages.governance.governanceworkbench.binding.removed.active.surface",
+        "{binding} was removed from the active dependency surface.",
+        { binding: binding.displayName || binding.bindingId },
+      ),
       targetId: binding.bindingId,
       targetKind: "binding",
       targetLabel: binding.displayName || binding.bindingId,
@@ -381,12 +440,19 @@ function buildAuditEvents(input: {
 
   if (policiesUpdatedAt) {
     events.push({
-      action: "Policy catalog synchronized",
-      actor: "Policy Engine",
+      action: t(
+        "pages.governance.governanceworkbench.policy.catalog.synchronized",
+        "Policy catalog synchronized",
+      ),
+      actor: t("pages.governance.governanceworkbench.policy.engine", "Policy Engine"),
       at: policiesUpdatedAt,
       id: `policy-catalog-${policiesUpdatedAt}`,
       status: policies.some((policy) => policy.retired) ? "retired" : "active",
-      summary: `${policies.length} governance polic${policies.length === 1 ? "y" : "ies"} are materialized for this service.`,
+      summary: t(
+        "pages.governance.governanceworkbench.policies.materialized.for.service",
+        "{count} governance policy/policies are materialized for this service.",
+        { count: policies.length },
+      ),
       targetId: "policy-catalog",
       targetKind: "policy",
       targetLabel: `${policies.length} policies`,
@@ -400,8 +466,13 @@ function buildAuditEvents(input: {
       item.activationRequiredBindingIds.length > 0,
   )) {
     events.push({
-      action: policy.retired ? "Policy retired" : "Policy gate enforced",
-      actor: "Policy Engine",
+      action: policy.retired
+        ? t("pages.governance.governanceworkbench.policy.retired", "Policy retired")
+        : t(
+            "pages.governance.governanceworkbench.policy.gate.enforced",
+            "Policy gate enforced",
+          ),
+      actor: t("pages.governance.governanceworkbench.policy.engine", "Policy Engine"),
       at: policiesUpdatedAt || selectedService?.updatedAt || "",
       id: `policy-${policy.policyId}-${policy.retired ? "retired" : "enforced"}`,
       status: policy.retired ? "retired" : "active",
@@ -414,14 +485,24 @@ function buildAuditEvents(input: {
 
   if (endpointsUpdatedAt) {
     events.push({
-      action: "Endpoint catalog synchronized",
-      actor: "Exposure Controller",
+      action: t(
+        "pages.governance.governanceworkbench.endpoint.catalog.synchronized",
+        "Endpoint catalog synchronized",
+      ),
+      actor: t(
+        "pages.governance.governanceworkbench.exposure.controller",
+        "Exposure Controller",
+      ),
       at: endpointsUpdatedAt,
       id: `endpoint-catalog-${endpointsUpdatedAt}`,
       status: endpoints.some((endpoint) => endpoint.exposureKind === "disabled")
         ? "disabled"
         : "active",
-      summary: `${endpoints.length} endpoint${endpoints.length === 1 ? "" : "s"} are under governance exposure control.`,
+      summary: t(
+        "pages.governance.governanceworkbench.endpoints.under.exposure.control",
+        "{count} endpoint(s) are under governance exposure control.",
+        { count: endpoints.length },
+      ),
       targetId: "endpoint-catalog",
       targetKind: "endpoint",
       targetLabel: `${endpoints.length} endpoints`,
@@ -435,9 +516,15 @@ function buildAuditEvents(input: {
     events.push({
       action:
         endpoint.exposureKind === "public"
-          ? "Endpoint opened"
-          : "Endpoint disabled",
-      actor: "Exposure Controller",
+          ? t("pages.governance.governanceworkbench.endpoint.opened", "Endpoint opened")
+          : t(
+              "pages.governance.governanceworkbench.endpoint.disabled",
+              "Endpoint disabled",
+            ),
+      actor: t(
+        "pages.governance.governanceworkbench.exposure.controller",
+        "Exposure Controller",
+      ),
       at: endpointsUpdatedAt || selectedService?.updatedAt || "",
       id: `endpoint-${endpoint.endpointId}-${endpoint.exposureKind}`,
       status: endpoint.exposureKind,
@@ -452,17 +539,34 @@ function buildAuditEvents(input: {
     events.push({
       action:
         activationView.missingPolicyIds.length > 0
-          ? "Activation blocked"
-          : "Activation verified",
-      actor: "Activation Guard",
+          ? t(
+              "pages.governance.governanceworkbench.activation.blocked",
+              "Activation blocked",
+            )
+          : t(
+              "pages.governance.governanceworkbench.activation.verified",
+              "Activation verified",
+            ),
+      actor: t("pages.governance.governanceworkbench.activation.guard", "Activation Guard"),
       at: selectedService?.updatedAt || policiesUpdatedAt || endpointsUpdatedAt || "",
       id: `activation-${activationView.revisionId || "unresolved"}`,
       status:
         activationView.missingPolicyIds.length > 0 ? "blocked" : "ready",
       summary:
         activationView.missingPolicyIds.length > 0
-          ? `Revision ${activationView.revisionId || "unresolved"} is missing policies: ${activationView.missingPolicyIds.join(", ")}.`
-          : `Revision ${activationView.revisionId || "unresolved"} has a complete governance envelope.`,
+          ? t(
+              "pages.governance.governanceworkbench.revision.missing.policies",
+              "Revision {revisionId} is missing policies: {policyIds}.",
+              {
+                revisionId: activationView.revisionId || "unresolved",
+                policyIds: activationView.missingPolicyIds.join(", "),
+              },
+            )
+          : t(
+              "pages.governance.governanceworkbench.revision.complete.envelope",
+              "Revision {revisionId} has a complete governance envelope.",
+              { revisionId: activationView.revisionId || "unresolved" },
+            ),
       targetId: activationView.revisionId || "activation",
       targetKind: "activation",
       targetLabel: activationView.revisionId || "Activation view",

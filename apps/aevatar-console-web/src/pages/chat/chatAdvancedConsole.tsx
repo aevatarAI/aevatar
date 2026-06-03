@@ -377,7 +377,7 @@ function renderAuditPreviewCard(
     >
       <Typography.Text strong>{title}</Typography.Text>
       <Typography.Text type="secondary">
-        {description || "No detail"}
+        {description || t("pages.chat.chatadvancedconsole.no.detail", "No detail")}
       </Typography.Text>
       {stamp ? (
         <Typography.Text type="secondary">
@@ -1639,7 +1639,7 @@ export function ChatAdvancedConsole({
                       )}
                       type="button"
                     >
-                      {executeStatus === "running" ? "Running..." : "Run"}
+                      {executeStatus === "running" ? t("pages.chat.chatadvancedconsole.running", "Running...") : t("pages.chat.chatadvancedconsole.run", "Run")}
                     </button>
                     <button
                       className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1693,10 +1693,10 @@ export function ChatAdvancedConsole({
                       type="button"
                     >
                       {executeAuditLoading
-                        ? "Loading Audit..."
+                        ? t("pages.chat.chatadvancedconsole.loading.audit", "Loading Audit...")
                         : executeAuditSnapshot
-                          ? "Refresh Audit"
-                          : "Load Audit"}
+                          ? t("pages.chat.chatadvancedconsole.refresh.audit", "Refresh Audit")
+                          : t("pages.chat.chatadvancedconsole.load.audit", "Load Audit")}
                     </button>
                   </Space>
                   <div
@@ -1710,19 +1710,19 @@ export function ChatAdvancedConsole({
                     <div>
                       <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.actor", "Actor")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
-                        {executeActorId || "Unavailable"}
+                        {executeActorId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </div>
                     </div>
                     <div>
                       <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.command", "Command")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
-                        {executeCommandId || "Unavailable"}
+                        {executeCommandId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </div>
                     </div>
                     <div>
                       <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.run", "Run")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
-                        {executeRunId || "Unavailable"}
+                        {executeRunId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </div>
                     </div>
                   </div>
@@ -1772,7 +1772,7 @@ export function ChatAdvancedConsole({
 
                   {executeAuditSnapshot.audit.input ? (
                     createResultPanel(
-                      "Audit Input",
+                      t("pages.chat.chatadvancedconsole.audit.input", "Audit Input"),
                       executeAuditSnapshot.audit.input,
                       () => handleCopy(executeAuditSnapshot.audit.input)
                     )
@@ -1818,7 +1818,7 @@ export function ChatAdvancedConsole({
                             .map((event, index) =>
                               renderAuditPreviewCard(
                                 event.stage || event.eventType || "event",
-                                event.message || "No message",
+                                event.message || t("pages.chat.chatadvancedconsole.no.message", "No message"),
                                 event.timestamp,
                                 String(index)
                               )
@@ -1875,7 +1875,7 @@ export function ChatAdvancedConsole({
                         {executeAuditReplies.slice(0, 4).map((reply, index) =>
                           renderAuditPreviewCard(
                             reply.roleId || `reply-${index + 1}`,
-                            reply.content || "No content",
+                            reply.content || t("pages.chat.chatadvancedconsole.no.content", "No content"),
                             reply.timestamp,
                             String(index)
                           )
@@ -1892,13 +1892,13 @@ export function ChatAdvancedConsole({
               ) : null}
 
               {executeAssistantText
-                ? createResultPanel("Streaming Output", executeAssistantText, () =>
+                ? createResultPanel(t("pages.chat.chatadvancedconsole.streaming.output", "Streaming Output"), executeAssistantText, () =>
                     handleCopy(executeAssistantText)
                   )
                 : null}
 
               {executeResponseText
-                ? createResultPanel("Invoke Response", executeResponseText, () =>
+                ? createResultPanel(t("pages.chat.chatadvancedconsole.invoke.response", "Invoke Response"), executeResponseText, () =>
                     handleCopy(executeResponseText)
                   )
                 : null}
@@ -1942,7 +1942,7 @@ export function ChatAdvancedConsole({
                     )}
                     type="button"
                   >
-                    {timelineLoading ? "Refreshing..." : "Refresh Timeline"}
+                    {timelineLoading ? t("pages.chat.chatadvancedconsole.refreshing", "Refreshing...") : t("pages.chat.chatadvancedconsole.refresh.timeline", "Refresh Timeline")}
                   </button>
                   <button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -1955,10 +1955,10 @@ export function ChatAdvancedConsole({
                     type="button"
                   >
                     {executeAuditLoading
-                      ? "Loading Audit..."
+                      ? t("pages.chat.chatadvancedconsole.loading.audit", "Loading Audit...")
                       : executeAuditSnapshot
-                        ? "Refresh Audit"
-                        : "Load Audit for Timeline"}
+                        ? t("pages.chat.chatadvancedconsole.refresh.audit", "Refresh Audit")
+                        : t("pages.chat.chatadvancedconsole.load.audit.for.timeline", "Load Audit for Timeline")}
                   </button>
                   <button
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -2009,7 +2009,7 @@ export function ChatAdvancedConsole({
                     <div>
                       <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.run.2", "Run")}</div>
                       <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
-                        {executeRunId || "Unavailable"}
+                        {executeRunId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </div>
                     </div>
                   </div>
@@ -2098,7 +2098,7 @@ export function ChatAdvancedConsole({
                     <div style={drawerSectionStyle}>
                       <Typography.Text type="secondary">{t("pages.chat.chatadvancedconsole.root.node", "Root node")}</Typography.Text>
                       <Typography.Text strong>
-                        {timelineGraph.subgraph.rootNodeId || "Unavailable"}
+                        {timelineGraph.subgraph.rootNodeId || t("pages.chat.chatadvancedconsole.unavailable", "Unavailable")}
                       </Typography.Text>
                     </div>
                   </div>
@@ -2166,10 +2166,10 @@ export function ChatAdvancedConsole({
                           }}
                         >
                           {timelineBlockingSummary.kind === "wait_signal"
-                            ? "Waiting on signal"
+                            ? t("pages.chat.chatadvancedconsole.waiting.on.signal", "Waiting on signal")
                             : timelineBlockingSummary.kind === "human_approval"
-                              ? "Approval required"
-                              : "Input required"}
+                              ? t("pages.chat.chatadvancedconsole.approval.required", "Approval required")
+                              : t("pages.chat.chatadvancedconsole.input.required", "Input required")}
                         </span>
                         <Typography.Text strong style={{ fontSize: 16 }}>
                           {timelineBlockingSummary.title}
@@ -2258,10 +2258,10 @@ export function ChatAdvancedConsole({
                         <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.recommended.next.step", "Recommended next step")}</div>
                         <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
                           {timelineBlockingSummary.kind === "wait_signal"
-                            ? "Send the signal payload that the runtime is waiting for."
+                            ? t("pages.chat.chatadvancedconsole.send.the.signal.payload.that.the.runtime.is.waiting.for", "Send the signal payload that the runtime is waiting for.")
                             : timelineBlockingSummary.kind === "human_approval"
-                              ? "Review the gate and approve or reject it."
-                              : "Provide the missing value, then resume the run."}
+                              ? t("pages.chat.chatadvancedconsole.review.the.gate.and.approve.or.reject.it", "Review the gate and approve or reject it.")
+                              : t("pages.chat.chatadvancedconsole.provide.the.missing.value.then.resume.the.run", "Provide the missing value, then resume the run.")}
                         </div>
                       </div>
                       <div
@@ -2275,10 +2275,10 @@ export function ChatAdvancedConsole({
                         <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.action.context", "Action context")}</div>
                         <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
                           {timelineBlockingSummary.kind === "wait_signal"
-                            ? "Signal payload is optional unless your workflow expects a value."
+                            ? t("pages.chat.chatadvancedconsole.signal.payload.is.optional.unless.your.workflow.expects.a.value", "Signal payload is optional unless your workflow expects a value.")
                             : timelineBlockingSummary.kind === "human_approval"
-                              ? "Approval notes are optional and will be sent with the decision."
-                              : "Input is required before the workflow can continue."}
+                              ? t("pages.chat.chatadvancedconsole.approval.notes.are.optional.and.will.be.sent.with.the.decision", "Approval notes are optional and will be sent with the decision.")
+                              : t("pages.chat.chatadvancedconsole.input.is.required.before.the.workflow.can.continue", "Input is required before the workflow can continue.")}
                         </div>
                       </div>
                     </div>
@@ -2288,10 +2288,10 @@ export function ChatAdvancedConsole({
                   >
                     <span style={fieldLabelStyle}>
                       {timelineBlockingSummary.kind === "wait_signal"
-                        ? "Signal payload"
+                        ? t("pages.chat.chatadvancedconsole.signal.payload", "Signal payload")
                         : timelineBlockingSummary.kind === "human_approval"
-                          ? "Approval note"
-                          : "Operator input"}
+                          ? t("pages.chat.chatadvancedconsole.approval.note", "Approval note")
+                          : t("pages.chat.chatadvancedconsole.operator.input", "Operator input")}
                     </span>
                     <textarea
                       aria-label={t("pages.chat.chatadvancedconsole.advanced.timeline.action.input", "Advanced timeline action input")}
@@ -2301,10 +2301,10 @@ export function ChatAdvancedConsole({
                       }
                       placeholder={
                         timelineBlockingSummary.kind === "wait_signal"
-                          ? "Optional signal payload"
+                          ? t("pages.chat.chatadvancedconsole.optional.signal.payload", "Optional signal payload")
                           : timelineBlockingSummary.kind === "human_approval"
-                            ? "Optional approval note"
-                            : "Provide the requested input"
+                            ? t("pages.chat.chatadvancedconsole.optional.approval.note", "Optional approval note")
+                            : t("pages.chat.chatadvancedconsole.provide.the.requested.input", "Provide the requested input")
                       }
                       style={textareaStyle}
                       value={timelineActionInput}
@@ -2329,7 +2329,7 @@ export function ChatAdvancedConsole({
                         )}
                         type="button"
                       >
-                        {timelineActionLoading ? "Sending..." : "Send Signal"}
+                        {timelineActionLoading ? t("pages.chat.chatadvancedconsole.sending", "Sending...") : t("pages.chat.chatadvancedconsole.send.signal", "Send Signal")}
                       </button>
                     ) : (
                       <>
@@ -2360,10 +2360,10 @@ export function ChatAdvancedConsole({
                           type="button"
                         >
                           {timelineActionLoading
-                            ? "Applying..."
+                            ? t("pages.chat.chatadvancedconsole.applying", "Applying...")
                             : timelineBlockingSummary.kind === "human_approval"
-                              ? "Approve"
-                              : "Resume"}
+                              ? t("pages.chat.chatadvancedconsole.approve", "Approve")
+                              : t("pages.chat.chatadvancedconsole.resume", "Resume")}
                         </button>
                         {timelineBlockingSummary.kind === "human_approval" ? (
                           <button
@@ -2575,7 +2575,7 @@ export function ChatAdvancedConsole({
                                 marginBottom: 6,
                               }}
                             >
-                              {row.message || "No message"}
+                              {row.message || t("pages.chat.chatadvancedconsole.no.message", "No message")}
                             </div>
                             <div
                               style={{
@@ -2584,7 +2584,7 @@ export function ChatAdvancedConsole({
                                 lineHeight: 1.6,
                               }}
                             >
-                              {row.dataSummary || "No structured data"}
+                              {row.dataSummary || t("pages.chat.chatadvancedconsole.no.structured.data", "No structured data")}
                             </div>
                             <div
                               style={{
@@ -2628,7 +2628,7 @@ export function ChatAdvancedConsole({
                         </div>
                         <div>
                           <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.message", "Message")}</div>
-                          <div>{selectedTimelineRow.message || "No message"}</div>
+                          <div>{selectedTimelineRow.message || t("pages.chat.chatadvancedconsole.no.message", "No message")}</div>
                         </div>
                         <div>
                           <div style={fieldLabelStyle}>{t("pages.chat.chatadvancedconsole.timestamp", "Timestamp")}</div>
@@ -2763,7 +2763,7 @@ export function ChatAdvancedConsole({
                     )}
                     type="button"
                   >
-                    {rawLoading ? "Sending..." : "Send Request"}
+                    {rawLoading ? t("pages.chat.chatadvancedconsole.sending", "Sending...") : t("pages.chat.chatadvancedconsole.send.request", "Send Request")}
                   </button>
                 </div>
               </div>

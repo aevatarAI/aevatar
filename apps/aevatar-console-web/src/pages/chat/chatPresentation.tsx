@@ -355,7 +355,8 @@ function StepIndicator({ step }: { step: StepInfo }): React.ReactElement {
           fontWeight: 500,
         }}
       >
-        {step.name || "Processing"}
+        {step.name ||
+          t("pages.chat.chatpresentation.processing", "Processing")}
       </span>
       {step.stepType ? (
         <span
@@ -731,7 +732,8 @@ function ApprovalCard({
             <div style={{ color: "#9a3412", fontSize: 11, fontWeight: 700 }}>
               {t("pages.chat.chatpresentation.tool", "Tool")}</div>
             <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 4 }}>
-              {approval.toolName || "Tool call"}
+              {approval.toolName ||
+                t("pages.chat.chatpresentation.tool.call", "Tool call")}
             </div>
           </div>
           <div
@@ -746,8 +748,14 @@ function ApprovalCard({
               {t("pages.chat.chatpresentation.impact", "Impact")}</div>
             <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 4 }}>
               {approval.isDestructive
-                ? "This tool may change runtime state."
-                : "This tool only needs operator confirmation."}
+                ? t(
+                    "pages.chat.chatpresentation.tool.may.change.runtime.state",
+                    "This tool may change runtime state."
+                  )
+                : t(
+                    "pages.chat.chatpresentation.tool.needs.operator.confirmation",
+                    "This tool only needs operator confirmation."
+                  )}
             </div>
           </div>
         </div>
@@ -818,13 +826,17 @@ function ApprovalCard({
           >
             <ApprovalActionButton
               busy={busy}
-              label={busy ? "Applying..." : "Approve"}
+              label={
+                busy
+                  ? t("pages.chat.chatpresentation.applying", "Applying...")
+                  : t("pages.chat.chatpresentation.approve", "Approve")
+              }
               onClick={() => onDecision?.(approval.requestId, true)}
               tone="approve"
             />
             <ApprovalActionButton
               busy={busy}
-              label="Reject"
+              label={t("pages.chat.chatpresentation.reject", "Reject")}
               onClick={() => onDecision?.(approval.requestId, false)}
               tone="reject"
             />
@@ -860,10 +872,10 @@ function RunInterventionCard({
   const isSignal = intervention.kind === "wait_signal";
   const requiresInput = intervention.kind === "human_input";
   const primaryLabel = isSignal
-    ? "Send Signal"
+    ? t("pages.chat.chatpresentation.send.signal", "Send Signal")
     : isApproval
-      ? "Approve"
-      : "Resume";
+      ? t("pages.chat.chatpresentation.approve", "Approve")
+      : t("pages.chat.chatpresentation.resume", "Resume");
   const cardTone = isSignal
     ? {
         background: "#eff6ff",
@@ -878,25 +890,49 @@ function RunInterventionCard({
         badge: "#ffedd5",
       };
   const helperText = isSignal
-    ? "Add an optional payload before sending the signal."
+    ? t(
+        "pages.chat.chatpresentation.add.optional.payload.before.signal",
+        "Add an optional payload before sending the signal."
+      )
     : isApproval
-      ? "Add an optional note before approving or rejecting this gate."
+      ? t(
+          "pages.chat.chatpresentation.add.optional.note.before.gate",
+          "Add an optional note before approving or rejecting this gate."
+        )
       : intervention.variableName
-        ? `This value will be available as ${intervention.variableName}.`
-        : "Provide the requested value to resume the run.";
+        ? t(
+            "pages.chat.chatpresentation.value.available.as",
+            "This value will be available as {variableName}.",
+            { variableName: intervention.variableName }
+          )
+        : t(
+            "pages.chat.chatpresentation.provide.requested.value.resume",
+            "Provide the requested value to resume the run."
+          );
   const placeholder = isSignal
-    ? "Optional signal payload"
+    ? t("pages.chat.chatpresentation.optional.signal.payload", "Optional signal payload")
     : isApproval
-      ? "Optional approval note"
+      ? t("pages.chat.chatpresentation.optional.approval.note", "Optional approval note")
       : intervention.variableName
-        ? `Provide ${intervention.variableName}`
-        : "Provide the missing input";
+        ? t("pages.chat.chatpresentation.provide.variable", "Provide {variableName}", {
+            variableName: intervention.variableName,
+          })
+        : t("pages.chat.chatpresentation.provide.missing.input", "Provide the missing input");
   const trimmedValue = value.trim();
   const statusLabel = isSignal
-    ? "Waiting on an external signal"
+    ? t(
+        "pages.chat.chatpresentation.waiting.external.signal",
+        "Waiting on an external signal"
+      )
     : isApproval
-      ? "Operator approval is blocking progress"
-      : "Operator input is required to continue";
+      ? t(
+          "pages.chat.chatpresentation.operator.approval.blocking",
+          "Operator approval is blocking progress"
+        )
+      : t(
+          "pages.chat.chatpresentation.operator.input.required.continue",
+          "Operator input is required to continue"
+        );
 
   return (
     <div
@@ -932,10 +968,10 @@ function RunInterventionCard({
             }}
           >
             {isSignal
-              ? "WAIT SIGNAL"
+              ? t("pages.chat.chatpresentation.wait.signal", "WAIT SIGNAL")
               : isApproval
-                ? "HUMAN APPROVAL"
-                : "INPUT REQUIRED"}
+                ? t("pages.chat.chatpresentation.human.approval", "HUMAN APPROVAL")
+                : t("pages.chat.chatpresentation.input.required", "INPUT REQUIRED")}
           </span>
           <div
             style={{
@@ -970,7 +1006,9 @@ function RunInterventionCard({
                 padding: "3px 8px",
               }}
             >
-              Signal: {intervention.signalName}
+              {t("pages.chat.chatpresentation.signal.value", "Signal: {signalName}", {
+                signalName: intervention.signalName,
+              })}
             </span>
           ) : null}
           {intervention.variableName ? (
@@ -982,7 +1020,11 @@ function RunInterventionCard({
                 padding: "3px 8px",
               }}
             >
-              Variable: {intervention.variableName}
+              {t(
+                "pages.chat.chatpresentation.variable.value",
+                "Variable: {variableName}",
+                { variableName: intervention.variableName }
+              )}
             </span>
           ) : null}
           {intervention.timeoutSeconds ? (
@@ -1026,10 +1068,19 @@ function RunInterventionCard({
               {t("pages.chat.chatpresentation.next.action", "Next action")}</div>
             <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
               {isSignal
-                ? "Send the signal to unblock the run."
+                ? t(
+                    "pages.chat.chatpresentation.send.signal.unblock.run",
+                    "Send the signal to unblock the run."
+                  )
                 : isApproval
-                  ? "Approve or reject this gate."
-                  : "Provide the missing value and resume."}
+                  ? t(
+                      "pages.chat.chatpresentation.approve.reject.gate",
+                      "Approve or reject this gate."
+                    )
+                  : t(
+                      "pages.chat.chatpresentation.provide.missing.value.resume",
+                      "Provide the missing value and resume."
+                    )}
             </div>
           </div>
           <div
@@ -1061,12 +1112,16 @@ function RunInterventionCard({
           }}
         >
           {isSignal
-            ? "Signal payload"
+            ? t("pages.chat.chatpresentation.signal.payload", "Signal payload")
             : isApproval
-              ? "Operator note"
-              : "Required input"}
+              ? t("pages.chat.chatpresentation.operator.note", "Operator note")
+              : t("pages.chat.chatpresentation.required.input", "Required input")}
           <textarea
-            aria-label={`Run intervention input ${intervention.key}`}
+            aria-label={t(
+              "pages.chat.chatpresentation.run.intervention.input",
+              "Run intervention input {key}",
+              { key: intervention.key }
+            )}
             disabled={busy}
             placeholder={placeholder}
             style={{
@@ -1101,12 +1156,24 @@ function RunInterventionCard({
         >
           <span style={{ color: "#6b7280", fontSize: 12 }}>
             {requiresInput && !trimmedValue
-              ? "A value is required before the run can continue."
+              ? t(
+                  "pages.chat.chatpresentation.value.required.before.continue",
+                  "A value is required before the run can continue."
+                )
               : isSignal
-                ? "Sending the signal will unblock this wait state."
+                ? t(
+                    "pages.chat.chatpresentation.sending.signal.unblocks.wait",
+                    "Sending the signal will unblock this wait state."
+                  )
                 : isApproval
-                  ? "Reject only when the run should stop at this gate."
-                  : "Resume will continue the run with the value above."}
+                  ? t(
+                      "pages.chat.chatpresentation.reject.only.stop.gate",
+                      "Reject only when the run should stop at this gate."
+                    )
+                  : t(
+                      "pages.chat.chatpresentation.resume.continue.value",
+                      "Resume will continue the run with the value above."
+                    )}
           </span>
           <div
             style={{
@@ -1118,7 +1185,11 @@ function RunInterventionCard({
           >
             <ApprovalActionButton
               busy={busy || (requiresInput && !trimmedValue)}
-              label={busy ? "Applying..." : primaryLabel}
+              label={
+                busy
+                  ? t("pages.chat.chatpresentation.applying", "Applying...")
+                  : primaryLabel
+              }
               onClick={() =>
                 onSubmit?.({
                   kind: isSignal ? "signal" : isApproval ? "approve" : "resume",
@@ -1130,7 +1201,7 @@ function RunInterventionCard({
             {isApproval ? (
               <ApprovalActionButton
                 busy={busy}
-                label="Reject"
+                label={t("pages.chat.chatpresentation.reject", "Reject")}
                 onClick={() =>
                   onSubmit?.({
                     kind: "reject",
@@ -2023,7 +2094,8 @@ export function ConversationLlmConfigBar({
         type="button"
       >
         <span className="scope-chat-llm-trigger-label">
-          {selectedModel || "Provider default"}
+          {selectedModel ||
+            t("pages.chat.chatpresentation.provider.default", "Provider default")}
         </span>
         <DownOutlined
           className="scope-chat-llm-chevron"
@@ -2036,7 +2108,9 @@ export function ConversationLlmConfigBar({
       <span className="scope-chat-llm-inline-route">
         {effectiveRoute === USER_LLM_ROUTE_GATEWAY
           ? effectiveRouteLabel
-          : `via ${effectiveRouteLabel}`}
+          : t("pages.chat.chatpresentation.via.route", "via {route}", {
+              route: effectiveRouteLabel,
+            })}
       </span>
       {renderPanel()}
     </div>
@@ -2428,7 +2502,8 @@ export function ConversationSidebar({
                   whiteSpace: "nowrap",
                 }}
               >
-                {conversation.title || "Untitled"}
+                {conversation.title ||
+                  t("pages.chat.chatpresentation.untitled", "Untitled")}
               </div>
               <div
                 style={{
@@ -2449,11 +2524,28 @@ export function ConversationSidebar({
                   </span>
                 ) : null}
                 {conversation.serviceId ? " · " : ""}
-                {conversation.messageCount} {t("pages.chat.chatpresentation.msg", "msg")}{conversation.messageCount !== 1 ? "s" : ""} ·{" "}
+                {t(
+                  conversation.messageCount === 1
+                    ? "pages.chat.chatpresentation.message.count.one"
+                    : "pages.chat.chatpresentation.message.count.many",
+                  conversation.messageCount === 1 ? "{count} msg" : "{count} msgs",
+                  { count: conversation.messageCount }
+                )} ·{" "}
                 {formatRelativeTime(conversation.updatedAt)}
               </div>
               <button
-                aria-label={`Delete ${conversation.title || "conversation"}`}
+                aria-label={t(
+                  "pages.chat.chatpresentation.delete.conversation",
+                  "Delete {title}",
+                  {
+                    title:
+                      conversation.title ||
+                      t(
+                        "pages.chat.chatpresentation.conversation",
+                        "conversation"
+                      ),
+                  }
+                )}
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -2514,15 +2606,15 @@ export function ChatMetaStrip({
 }): React.ReactElement {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const primaryItems = [
-    serviceId ? { label: "Service", value: serviceId } : null,
-    routeLabel ? { label: "Route", value: routeLabel } : null,
-    modelLabel ? { label: "Model", value: modelLabel } : null,
+    serviceId ? { label: t("pages.chat.chatpresentation.service", "Service"), value: serviceId } : null,
+    routeLabel ? { label: t("pages.chat.chatpresentation.route", "Route"), value: routeLabel } : null,
+    modelLabel ? { label: t("pages.chat.chatpresentation.model", "Model"), value: modelLabel } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
   const detailItems = [
     scopeId ? { label: t("pages.chat.chatpresentation.workspace.id", "Workspace ID"), value: scopeId } : null,
-    runId ? { label: "Run", value: runId } : null,
-    actorId ? { label: "Actor", value: actorId } : null,
-    commandId ? { label: "Command", value: commandId } : null,
+    runId ? { label: t("pages.chat.chatpresentation.run", "Run"), value: runId } : null,
+    actorId ? { label: t("pages.chat.chatpresentation.actor", "Actor"), value: actorId } : null,
+    commandId ? { label: t("pages.chat.chatpresentation.command", "Command"), value: commandId } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
 
   const renderChip = (
@@ -2587,7 +2679,15 @@ export function ChatMetaStrip({
             }}
             type="button"
           >
-            {detailsOpen ? "Hide runtime details" : "Runtime details"}
+            {detailsOpen
+              ? t(
+                  "pages.chat.chatpresentation.hide.runtime.details",
+                  "Hide runtime details"
+                )
+              : t(
+                  "pages.chat.chatpresentation.runtime.details",
+                  "Runtime details"
+                )}
           </button>
         ) : null}
       </div>

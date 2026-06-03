@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { setLocale } from "@umijs/max";
 import { message } from "antd";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
@@ -15,7 +16,7 @@ import TeamDetailPage from "./detail";
 
 async function openTeamTestDialog() {
   fireEvent.click(await screen.findByRole("button", { name: "测试团队" }));
-  await screen.findByLabelText("测试问题");
+  await screen.findByLabelText("测试 Prompt");
   return screen.getByTestId("team-test-modal-body");
 }
 
@@ -767,6 +768,7 @@ function createStudioApiStatusError(message: string, status: number): Error & { 
 
 describe("TeamDetailPage", () => {
   beforeEach(() => {
+    setLocale("zh-CN", false);
     window.history.replaceState({}, "", "/teams/scope-1/t-alpha");
     (scopesApi.listWorkflows as jest.Mock).mockClear();
     (scopesApi.listScripts as jest.Mock).mockClear();
@@ -830,6 +832,10 @@ describe("TeamDetailPage", () => {
       async () => mockCreateTeamMembersCatalog(),
     );
     (runtimeRunsApi.streamTeamChat as jest.Mock).mockClear();
+  });
+
+  afterEach(() => {
+    setLocale("en-US", false);
   });
 
   it("renders no-team-selected state without detail data flows for scope-only links", async () => {
@@ -1125,7 +1131,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("配置明细")).toBeTruthy();
-    expect(screen.getAllByText("团队流程").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("团队 Workflow").length).toBeGreaterThan(0);
     expect(screen.getAllByText("绑定方式").length).toBeGreaterThan(0);
     expect(screen.getAllByText("主服务入口").length).toBeGreaterThan(0);
     expect(screen.getAllByText("版本标识").length).toBeGreaterThan(0);
@@ -1144,7 +1150,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
     expect(screen.getByText("入口成员")).toBeTruthy();
     expect(screen.getByText("可调用")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "在工作室编辑" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "在 Studio 中编辑" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "构建" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Test member" })).toBeNull();
     expect(screen.queryByRole("link", { name: "View runs" })).toBeNull();
@@ -1302,7 +1308,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
-    fireEvent.change(within(dialog).getByLabelText("测试问题"), {
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Can this Team handle refunds?" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
@@ -1331,7 +1337,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByTestId("team-test-modal-body")).toBeTruthy();
-    expect(screen.getByLabelText("测试问题")).toBeTruthy();
+    expect(screen.getByLabelText("测试 Prompt")).toBeTruthy();
   });
 
   it("does not treat bind-ready members without a published service as Team entry candidates", async () => {
@@ -1379,7 +1385,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
-    fireEvent.change(within(dialog).getByLabelText("测试问题"), {
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Route this customer question" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "设为入口并测试" }));
@@ -1427,7 +1433,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
-    fireEvent.change(within(dialog).getByLabelText("测试问题"), {
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Route after projection catches up" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "设为入口并测试" }));
@@ -1455,7 +1461,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
-    fireEvent.change(within(dialog).getByLabelText("测试问题"), {
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Route before projection catches up" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "设为入口并测试" }));
@@ -1479,7 +1485,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
-    fireEvent.change(within(dialog).getByLabelText("测试问题"), {
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Try unsupported backend" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
@@ -1500,7 +1506,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
-    fireEvent.change(within(dialog).getByLabelText("测试问题"), {
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Try missing entry" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));
@@ -1526,7 +1532,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
-    fireEvent.change(within(dialog).getByLabelText("测试问题"), {
+    fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Try missing team" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "开始测试" }));

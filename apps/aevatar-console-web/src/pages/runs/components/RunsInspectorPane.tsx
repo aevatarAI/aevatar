@@ -214,10 +214,10 @@ function renderInteractionSummary(
           <Tag>{humanInputRecord.suspensionType || "n/a"}</Tag>
         </Space>
         <div style={summaryFieldGridStyle}>
-          <SummaryField label="Step" value={humanInputRecord.stepId || "n/a"} />
-          <SummaryField label="Run" value={humanInputRecord.runId || "n/a"} />
+          <SummaryField label={t("pages.runs.runsinspectorpane.step", "Step")} value={humanInputRecord.stepId || "n/a"} />
+          <SummaryField label={t("pages.runs.runsinspectorpane.run", "Run")} value={humanInputRecord.runId || "n/a"} />
           <SummaryField
-            label="Timeout"
+            label={t("pages.runs.runsinspectorpane.timeout", "Timeout")}
             value={`${humanInputRecord.timeoutSeconds || 0}s`}
           />
         </div>
@@ -227,7 +227,8 @@ function renderInteractionSummary(
             ellipsis={{ rows: 3, expandable: true, symbol: "more" }}
             style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
           >
-            {humanInputRecord.prompt || "No prompt provided."}
+            {humanInputRecord.prompt ||
+              t("pages.runs.runsinspectorpane.no.prompt.provided", "No prompt provided.")}
           </Typography.Paragraph>
         </div>
       </Space>
@@ -243,14 +244,14 @@ function renderInteractionSummary(
         </Space>
         <div style={summaryFieldGridStyle}>
           <SummaryField
-            label="Signal"
+            label={t("pages.runs.runsinspectorpane.signal", "Signal")}
             value={waitingSignalRecord.signalName || "n/a"}
           />
           <SummaryField
-            label="Step"
+            label={t("pages.runs.runsinspectorpane.step.2", "Step")}
             value={waitingSignalRecord.stepId || "n/a"}
           />
-          <SummaryField label="Run" value={waitingSignalRecord.runId || "n/a"} />
+          <SummaryField label={t("pages.runs.runsinspectorpane.run.2", "Run")} value={waitingSignalRecord.runId || "n/a"} />
         </div>
         <div>
           <Typography.Text style={summaryFieldLabelStyle}>{t("pages.runs.runsinspectorpane.prompt.2", "Prompt")}</Typography.Text>
@@ -258,7 +259,8 @@ function renderInteractionSummary(
             ellipsis={{ rows: 3, expandable: true, symbol: "more" }}
             style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
           >
-            {waitingSignalRecord.prompt || "No prompt provided."}
+            {waitingSignalRecord.prompt ||
+              t("pages.runs.runsinspectorpane.no.prompt.provided.2", "No prompt provided.")}
           </Typography.Paragraph>
         </div>
       </Space>
@@ -289,7 +291,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       <div style={embeddedPanelStyle}>
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
-            help="A compact summary of the current run state, identifiers, and latest visible output."
+            help={t("pages.runs.runsinspectorpane.compact.summary.help", "A compact summary of the current run state, identifiers, and latest visible output.")}
             title={t("pages.runs.runsinspectorpane.run.summary", "Run summary")}
           />
           <div
@@ -310,7 +312,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
           </div>
           <div style={summaryMetricGridStyle}>
             <SummaryMetric
-              label="Route"
+              label={t("pages.runs.runsinspectorpane.route", "Route")}
               value={formatRunRouteLabel(
                 runSummaryRecord.routeName,
                 runSummaryRecord.endpointId,
@@ -318,16 +320,16 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
               )}
             />
             <SummaryMetric
-              label="Transport"
+              label={t("pages.runs.runsinspectorpane.transport", "Transport")}
               value={runSummaryRecord.transport.toUpperCase()}
             />
             <SummaryMetric
-              label="Messages"
+              label={t("pages.runs.runsinspectorpane.messages", "Messages")}
               tone={runSummaryRecord.messageCount > 0 ? "info" : "default"}
               value={String(runSummaryRecord.messageCount)}
             />
             <SummaryMetric
-              label="Events"
+              label={t("pages.runs.runsinspectorpane.events", "Events")}
               tone={runSummaryRecord.eventCount > 0 ? "info" : "default"}
               value={String(runSummaryRecord.eventCount)}
             />
@@ -393,7 +395,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       <div style={embeddedPanelStyle}>
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
-            help="The currently selected timeline item and its raw event payload."
+            help={t("pages.runs.runsinspectorpane.selected.event.help", "The currently selected timeline item and its raw event payload.")}
             title={t("pages.runs.runsinspectorpane.selected.event", "Selected event")}
             action={
               selectedTraceItem ? (
@@ -408,7 +410,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
             <>
               <div style={summaryFieldGridStyle}>
                 <SummaryField
-                  label="Timestamp"
+                  label={t("pages.runs.runsinspectorpane.timestamp", "Timestamp")}
                   value={selectedTraceItem.timestamp || "n/a"}
                 />
                 <SummaryField
@@ -416,11 +418,11 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                   value={selectedTraceItem.eventType || "n/a"}
                 />
                 <SummaryField
-                  label="Agent"
+                  label={t("pages.runs.runsinspectorpane.agent", "Agent")}
                   value={selectedTraceItem.agentId || "n/a"}
                 />
                 <SummaryField
-                  label="Step"
+                  label={t("pages.runs.runsinspectorpane.step.3", "Step")}
                   value={selectedTraceItem.stepId || "n/a"}
                 />
                 <SummaryField
@@ -465,8 +467,8 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       <div style={embeddedPanelStyle}>
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
-            help="Operator interactions, route profile, and the latest actor-owned state."
-            title="Context"
+            help={t("pages.runs.runsinspectorpane.context.help", "Operator interactions, route profile, and the latest actor-owned state.")}
+            title={t("pages.runs.runsinspectorpane.context", "Context")}
           />
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
@@ -476,7 +478,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                     <Button onClick={onOpenInspector}>{t("pages.runs.runsinspectorpane.open.details", "Open details")}</Button>
                   ) : undefined
                 }
-                title="Interaction"
+                title={t("pages.runs.runsinspectorpane.interaction", "Interaction")}
               />
               <div style={{ marginTop: 12 }}>
                 {renderInteractionSummary(humanInputRecord, waitingSignalRecord)}
@@ -484,7 +486,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
             </div>
 
             <div style={sectionDividerStyle}>
-              <SectionHeader title="Route" />
+              <SectionHeader title={t("pages.runs.runsinspectorpane.route.2", "Route")} />
               {selectedRouteRecord ? (
                 <>
                   <Space wrap size={[6, 6]}>
@@ -499,8 +501,8 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                       }
                     >
                       {selectedRouteRecord.llmStatus === "processing"
-                        ? "LLM required"
-                        : "LLM optional"}
+                        ? t("pages.runs.runsinspectorpane.llm.required", "LLM required")
+                        : t("pages.runs.runsinspectorpane.llm.optional", "LLM optional")}
                     </Tag>
                   </Space>
                   <Typography.Paragraph
@@ -508,7 +510,8 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                     style={{ marginBottom: 0 }}
                     type="secondary"
                   >
-                    {selectedRouteRecord.description || "No description provided."}
+                    {selectedRouteRecord.description ||
+                      t("pages.runs.runsinspectorpane.no.description.provided", "No description provided.")}
                   </Typography.Paragraph>
                   <div>{renderPrimitiveTags(selectedRoutePrimitives)}</div>
                 </>
@@ -548,7 +551,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                   </div>
                   <div style={summaryFieldGridStyle}>
                     <SummaryField
-                      label="Updated"
+                      label={t("pages.runs.runsinspectorpane.updated", "Updated")}
                       value={actorSnapshot.lastUpdatedAt || "n/a"}
                     />
                     <SummaryField
@@ -566,7 +569,8 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                       ellipsis={{ rows: 3, expandable: true, symbol: "more" }}
                       style={{ margin: "8px 0 0" }}
                     >
-                      {actorSnapshot.lastOutput || "No output captured yet."}
+                      {actorSnapshot.lastOutput ||
+                        t("pages.runs.runsinspectorpane.no.output.captured.yet", "No output captured yet.")}
                     </Typography.Paragraph>
                   </div>
                 </>
@@ -587,7 +591,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
 
   return (
     <ProCard
-      title="Details"
+      title={t("pages.runs.runsinspectorpane.details", "Details")}
       hoverable
       {...moduleCardProps}
       style={workbenchCardStyle}

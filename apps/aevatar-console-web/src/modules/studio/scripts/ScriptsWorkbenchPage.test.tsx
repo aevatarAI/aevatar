@@ -536,7 +536,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
   it('adds and removes package files through in-app dialogs', async () => {
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: '添加 C# 文件' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add C# files' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'File path' }), {
       target: {
         value: 'Handlers/EmailValidator.cs',
@@ -548,7 +548,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(screen.getAllByText('Handlers/EmailValidator.cs').length).toBeGreaterThan(0);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '删除 Handlers/EmailValidator.cs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Handlers/EmailValidator.cs' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
 
     await waitFor(() => {
@@ -581,7 +581,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: '添加 Proto 文件' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add proto file' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
 
     await waitFor(() => {
@@ -600,7 +600,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       ).toBe('Behavior.cs');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Problems 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Problems1' }));
     fireEvent.click(screen.getByRole('button', { name: /Message name is required/ }));
 
     await waitFor(() => {
@@ -624,7 +624,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     const headerScope = within(header as HTMLElement);
     expect(headerScope.getByText('not saved')).toBeTruthy();
-    expect(headerScope.getByText('嵌入式 Host')).toBeTruthy();
+    expect(headerScope.getByText('Embedded Host')).toBeTruthy();
     expect(headerScope.getByText('Workspace 1626c177…b0d6')).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'New draft' })).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'Save' })).toBeTruthy();

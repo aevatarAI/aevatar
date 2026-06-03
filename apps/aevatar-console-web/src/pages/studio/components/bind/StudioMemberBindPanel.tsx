@@ -984,7 +984,11 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <div data-testid="studio-bind-surface" style={rootStyle}>
           <Alert
             showIcon
-            message={`No published contract exists for ${pendingBindingCandidate.displayName} yet.`}
+            message={t(
+              "pages.studio.bind.studiomemberbindpanel.no.published.contract.exists.for.member",
+              "No published contract exists for {memberName} yet.",
+              { memberName: pendingBindingCandidate.displayName }
+            )}
             description={pendingBindingCandidate.description}
             type="info"
           />
@@ -998,10 +1002,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   <Typography.Text type="secondary">{t("pages.studio.bind.studiomemberbindpanel.implementation.kind", "Implementation kind")}</Typography.Text>
                   <Typography.Text strong>
                     {pendingBindingCandidate.kind === 'workflow'
-                      ? 'Workflow'
+                      ? t("pages.studio.bind.studiomemberbindpanel.workflow", "Workflow")
                       : pendingBindingCandidate.kind === 'script'
-                        ? 'Script'
-                        : 'GAgent'}
+                        ? t("pages.studio.bind.studiomemberbindpanel.script", "Script")
+                        : t("pages.studio.bind.studiomemberbindpanel.gagent", "GAgent")}
                   </Typography.Text>
                 </div>
                 <div style={valueCardStyle}>
@@ -1031,7 +1035,11 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Alert
                   showIcon
                   message={currentBindingRunNotice.message}
-                  description={`Run ${currentBindingRun?.bindingRunId}`}
+                  description={t(
+                    "pages.studio.bind.studiomemberbindpanel.run.id",
+                    "Run {runId}",
+                    { runId: currentBindingRun?.bindingRunId || "-" }
+                  )}
                   type={currentBindingRunNotice.type}
                 />
               ) : null}
@@ -1041,8 +1049,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   type="success"
                   message={
                     postBindEntryActions.isEntryMember
-                      ? 'This member is the Team entry.'
-                      : 'This member can be the Team entry.'
+                      ? t(
+                          "pages.studio.bind.studiomemberbindpanel.member.is.team.entry",
+                          "This member is the Team entry."
+                        )
+                      : t(
+                          "pages.studio.bind.studiomemberbindpanel.member.can.be.team.entry",
+                          "This member can be the Team entry."
+                        )
                   }
                   description={renderPostBindEntryAction(postBindEntryActions)}
                 />
@@ -1085,7 +1099,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           extra={
             <Space wrap size={[6, 6]}>
               <Tag color={bindContract ? 'green' : 'default'}>
-                {bindContract ? 'member contract selected' : 'needs endpoint'}
+                {bindContract
+                  ? t(
+                      "pages.studio.bind.studiomemberbindpanel.member.contract.selected",
+                      "member contract selected"
+                    )
+                  : t(
+                      "pages.studio.bind.studiomemberbindpanel.needs.endpoint",
+                      "needs endpoint"
+                    )}
               </Tag>
               {revisionList.length > 0 ? (
                 <Tag>{t("pages.studio.bind.studiomemberbindpanel.revisions", "revisions ·")}{revisionList.length}</Tag>
@@ -1099,8 +1121,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               type="success"
               message={
                 postBindEntryActions.isEntryMember
-                  ? 'This member is the Team entry.'
-                  : 'This member can be the Team entry.'
+                  ? t(
+                      "pages.studio.bind.studiomemberbindpanel.member.is.team.entry",
+                      "This member is the Team entry."
+                    )
+                  : t(
+                      "pages.studio.bind.studiomemberbindpanel.member.can.be.team.entry",
+                      "This member can be the Team entry."
+                    )
               }
               description={renderPostBindEntryAction(postBindEntryActions)}
             />
@@ -1112,7 +1140,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Typography.Text strong>
                   {selectedService?.displayName ||
                     selectedService?.serviceId ||
-                    'No published service'}
+                    t(
+                      "pages.studio.bind.studiomemberbindpanel.no.published.service",
+                      "No published service"
+                    )}
                 </Typography.Text>
                 {selectedEndpoint ? (
                   <Typography.Text type="secondary">
@@ -1135,12 +1166,22 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                     {selectedService?.displayName ||
                       selectedService?.serviceId ||
-                      'No published contract'}
+                      t(
+                        "pages.studio.bind.studiomemberbindpanel.no.published.contract",
+                        "No published contract"
+                      )}
                   </Typography.Text>
                   <Typography.Text type="secondary">
                     {normalizedMemberId
-                      ? `member:${normalizedMemberId}`
-                      : 'No member selected'}
+                      ? t(
+                          "pages.studio.bind.studiomemberbindpanel.member.id",
+                          "member:{memberId}",
+                          { memberId: normalizedMemberId }
+                        )
+                      : t(
+                          "pages.studio.bind.studiomemberbindpanel.no.member.selected",
+                          "No member selected"
+                        )}
                   </Typography.Text>
                 </div>
               </div>
@@ -1251,8 +1292,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             >
               <Typography.Text type="secondary">
                 {runsCurrentWorkflowDraft
-                  ? 'Keep the current draft in focus here; the smoke test and snippets below are the two fastest follow-up actions.'
-                  : 'Keep the active invoke contract in focus here; the smoke test and snippets below are the two fastest follow-up actions.'}
+                  ? t(
+                      "pages.studio.bind.studiomemberbindpanel.keep.current.draft.in.focus",
+                      "Keep the current draft in focus here; the smoke test and snippets below are the two fastest follow-up actions."
+                    )
+                  : t(
+                      "pages.studio.bind.studiomemberbindpanel.keep.active.invoke.contract.in.focus",
+                      "Keep the active invoke contract in focus here; the smoke test and snippets below are the two fastest follow-up actions."
+                    )}
               </Typography.Text>
               {bindContract ? (
                 <>
@@ -1286,8 +1333,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   message={t("pages.studio.bind.studiomemberbindpanel.select.an.endpoint.to.reveal", "Select an endpoint to reveal the invoke contract.")}
                   description={
                     normalizedMemberId
-                      ? 'The contract URL, revision badge, snippets, and smoke test are generated from the selected member endpoint.'
-                      : 'Invoke is member-scoped. Select or create a backend member before Studio reveals the invoke contract.'
+                      ? t(
+                          "pages.studio.bind.studiomemberbindpanel.contract.generated.from.member.endpoint",
+                          "The contract URL, revision badge, snippets, and smoke test are generated from the selected member endpoint."
+                        )
+                      : t(
+                          "pages.studio.bind.studiomemberbindpanel.invoke.member.scoped",
+                          "Invoke is member-scoped. Select or create a backend member before Studio reveals the invoke contract."
+                        )
                   }
                   type="info"
                 />
@@ -1302,8 +1355,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             title={t("pages.studio.bind.studiomemberbindpanel.quick.smoke.test", "Quick smoke test")}
             titleHelp={
               runsCurrentWorkflowDraft
-                ? 'Quick smoke test runs the current Studio workflow draft before publish. Continue to Invoke when you want to verify the published contract and endpoint.'
-                : 'Use a light contract check here, then move into Invoke for the full transcript and event stream.'
+                ? t(
+                    "pages.studio.bind.studiomemberbindpanel.quick.smoke.test.workflow.draft.help",
+                    "Quick smoke test runs the current Studio workflow draft before publish. Continue to Invoke when you want to verify the published contract and endpoint."
+                  )
+                : t(
+                    "pages.studio.bind.studiomemberbindpanel.quick.smoke.test.invoke.help",
+                    "Use a light contract check here, then move into Invoke for the full transcript and event stream."
+                  )
             }
           >
             <div
@@ -1314,12 +1373,27 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Typography.Text strong>{t("pages.studio.bind.studiomemberbindpanel.authorization", "Authorization")}</Typography.Text>
                 <Typography.Text type="secondary">
                   {runsCurrentWorkflowDraft
-                    ? 'Current draft smoke tests use Studio draft execution. Published endpoint authorization is checked after you continue to Invoke.'
+                    ? t(
+                        "pages.studio.bind.studiomemberbindpanel.current.draft.smoke.tests.use.studio",
+                        "Current draft smoke tests use Studio draft execution. Published endpoint authorization is checked after you continue to Invoke."
+                      )
                     : bindContract?.authAuthenticated
-                      ? `${bindContract.authHint} In-browser Studio requests attach the active bearer session automatically.`
+                      ? t(
+                          "pages.studio.bind.studiomemberbindpanel.authenticated.requests.attach.session",
+                          "{authHint} In-browser Studio requests attach the active bearer session automatically.",
+                          { authHint: bindContract.authHint }
+                        )
                       : bindContract?.authEnabled
-                        ? `${bindContract?.authHint} Sign in before running a smoke test.`
-                        : bindContract?.authHint || 'Studio auth is not enabled for this environment.'}
+                        ? t(
+                            "pages.studio.bind.studiomemberbindpanel.sign.in.before.smoke.test",
+                            "{authHint} Sign in before running a smoke test.",
+                            { authHint: bindContract?.authHint || "" }
+                          )
+                        : bindContract?.authHint ||
+                          t(
+                            "pages.studio.bind.studiomemberbindpanel.studio.auth.not.enabled",
+                            "Studio auth is not enabled for this environment."
+                          )}
                 </Typography.Text>
                 {runsCurrentWorkflowDraft ? (
                   <Space wrap size={[6, 6]}>
@@ -1333,18 +1407,30 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Typography.Text strong>
                   {runsCurrentWorkflowDraft ||
                   (selectedEndpoint && isChatServiceEndpoint(selectedEndpoint))
-                    ? 'Prompt'
-                    : 'Prompt / command input'}
+                    ? t("pages.studio.bind.studiomemberbindpanel.prompt", "Prompt")
+                    : t(
+                        "pages.studio.bind.studiomemberbindpanel.prompt.command.input",
+                        "Prompt / command input"
+                      )}
                 </Typography.Text>
                 <Input.TextArea
                   aria-label={t("pages.studio.bind.studiomemberbindpanel.bind.smoke.test.input", "Bind smoke test input")}
                   autoSize={{ minRows: 4, maxRows: 8 }}
                   placeholder={
                     runsCurrentWorkflowDraft
-                      ? 'Ask the current workflow draft to do a quick task...'
+                      ? t(
+                          "pages.studio.bind.studiomemberbindpanel.ask.current.workflow.draft",
+                          "Ask the current workflow draft to do a quick task..."
+                        )
                       : selectedEndpoint && isChatServiceEndpoint(selectedEndpoint)
-                      ? 'Ask the selected member to do a quick task...'
-                      : 'Enter a quick smoke test input. Use Invoke for typed payload debugging.'
+                      ? t(
+                          "pages.studio.bind.studiomemberbindpanel.ask.selected.member",
+                          "Ask the selected member to do a quick task..."
+                        )
+                      : t(
+                          "pages.studio.bind.studiomemberbindpanel.enter.quick.smoke.test.input",
+                          "Enter a quick smoke test input. Use Invoke for typed payload debugging."
+                        )
                   }
                   style={smokeInputStyle}
                   value={smokeInput}
@@ -1537,8 +1623,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                       </Typography.Text>
                       <Typography.Text type="secondary">
                         {bindContract.scopeSource
-                          ? `Resolved from ${bindContract.scopeSource}.`
-                          : 'Bound to the current Studio workspace.'}
+                          ? t(
+                              "pages.studio.bind.studiomemberbindpanel.resolved.from.source",
+                              "Resolved from {source}.",
+                              { source: bindContract.scopeSource }
+                            )
+                          : t(
+                              "pages.studio.bind.studiomemberbindpanel.bound.current.studio.workspace",
+                              "Bound to the current Studio workspace."
+                            )}
                       </Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
@@ -1556,8 +1649,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                       <Typography.Text strong>{bindContract.method}</Typography.Text>
                       <Typography.Text type="secondary">
                         {bindContract.streaming.sse
-                          ? 'Streams through text/event-stream.'
-                          : 'Returns a single JSON response.'}
+                          ? t(
+                              "pages.studio.bind.studiomemberbindpanel.streams.through.text.event.stream",
+                              "Streams through text/event-stream."
+                            )
+                          : t(
+                              "pages.studio.bind.studiomemberbindpanel.returns.single.json.response",
+                              "Returns a single JSON response."
+                            )}
                       </Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
@@ -1617,7 +1716,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                           {t("pages.studio.bind.studiomemberbindpanel.target", "Target")}{describeScopeServiceBindingTarget(binding)}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          {t("pages.studio.bind.studiomemberbindpanel.policies", "Policies")}{binding.policyIds.length > 0 ? binding.policyIds.join(', ') : 'none'}
+                          {t("pages.studio.bind.studiomemberbindpanel.policies", "Policies")}{binding.policyIds.length > 0 ? binding.policyIds.join(', ') : t("pages.studio.bind.studiomemberbindpanel.none", "none")}
                         </Typography.Text>
                       </div>
                     ))}
@@ -1682,7 +1781,11 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                           </Space>
                           <Typography.Text type="secondary">
                             {describeStudioMemberBindingRevisionTarget(revision)} ·{' '}
-                            {describeStudioMemberBindingRevisionContext(revision) || 'No detail'}
+                            {describeStudioMemberBindingRevisionContext(revision) ||
+                              t(
+                                "pages.studio.bind.studiomemberbindpanel.no.detail",
+                                "No detail"
+                              )}
                           </Typography.Text>
                           <Typography.Text type="secondary">
                             {t("pages.studio.bind.studiomemberbindpanel.serving", "Serving")}{revision.servingState || revision.status || 'unknown'} {t("pages.studio.bind.studiomemberbindpanel.published", "· Published")}{' '}

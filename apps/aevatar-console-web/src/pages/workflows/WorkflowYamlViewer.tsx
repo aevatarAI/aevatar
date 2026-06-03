@@ -269,7 +269,9 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
       messageApi.success('YAML copied to clipboard.');
     } catch (error) {
       messageApi.error(
-        error instanceof Error ? error.message : 'Failed to copy YAML.',
+        error instanceof Error
+          ? error.message
+          : t("pages.workflows.workflowyamlviewer.failed.to.copy.yaml", "Failed to copy YAML."),
       );
     }
   }, [messageApi, yaml]);
@@ -286,7 +288,9 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             {renderChromeDot('#f59e0b')}
             {renderChromeDot('#10b981')}
             <Typography.Text strong>
-              {fullscreenMode ? 'Fullscreen YAML inspector' : 'Workflow YAML'}
+              {fullscreenMode
+                ? t("pages.workflows.workflowyamlviewer.fullscreen.yaml.inspector", "Fullscreen YAML inspector")
+                : t("pages.workflows.workflowyamlviewer.workflow.yaml", "Workflow YAML")}
             </Typography.Text>
           </div>
           <Typography.Paragraph
@@ -308,11 +312,15 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             type={wrapLines ? 'primary' : 'default'}
             onClick={() => setWrapLines((current) => !current)}
           >
-            {wrapLines ? 'Wrapped' : 'No wrap'}
+            {wrapLines
+              ? t("pages.workflows.workflowyamlviewer.wrapped", "Wrapped")
+              : t("pages.workflows.workflowyamlviewer.no.wrap", "No wrap")}
           </Button>
           <Button
             aria-label={
-              fullscreenMode ? 'Close YAML fullscreen' : 'Open YAML fullscreen'
+              fullscreenMode
+                ? t("pages.workflows.workflowyamlviewer.close.yaml.fullscreen", "Close YAML fullscreen")
+                : t("pages.workflows.workflowyamlviewer.open.yaml.fullscreen", "Open YAML fullscreen")
             }
             icon={
               fullscreenMode ? (
@@ -327,7 +335,9 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
                 : setIsFullscreenOpen(true)
             }
           >
-            {fullscreenMode ? 'Exit fullscreen' : 'Open fullscreen'}
+            {fullscreenMode
+              ? t("pages.workflows.workflowyamlviewer.exit.fullscreen", "Exit fullscreen")
+              : t("pages.workflows.workflowyamlviewer.open.fullscreen", "Open fullscreen")}
           </Button>
           <Button
             aria-label={t("pages.workflows.workflowyamlviewer.copy.workflow.yaml", "Copy workflow YAML")}

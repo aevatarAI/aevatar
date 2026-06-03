@@ -411,10 +411,10 @@ function MissionMetricStrip({ snapshot }: { snapshot: MissionControlSnapshot }) 
               }
             >
               {metric.trend === 'down'
-                ? 'Down'
+                ? t("pages.missioncontrol.index.down", "Down")
                 : metric.trend === 'up'
-                  ? 'Up'
-                  : 'Steady'}
+                  ? t("pages.missioncontrol.index.up", "Up")
+                  : t("pages.missioncontrol.index.steady", "Steady")}
             </Tag>
           </div>
         </Card>
@@ -472,18 +472,26 @@ function MissionStage({
       >
         <div style={{ minWidth: 0 }}>
           <Typography.Title level={5} style={{ color: token.colorTextHeading, margin: 0 }}>
-            {stageView === 'topology' ? 'Decision Path' : 'Execution Flow'}
+            {stageView === 'topology'
+              ? t("pages.missioncontrol.index.decision.path", "Decision Path")
+              : t("pages.missioncontrol.index.execution.flow", "Execution Flow")}
           </Typography.Title>
           <Typography.Text style={{ color: token.colorTextTertiary }}>
             {stageView === 'topology'
-              ? 'Trace the evidence chain from market signal to execution decision, with data flow and freshness intact.'
-              : 'Compress multi-agent execution into an operator-readable event narrative.'}
+              ? t("pages.missioncontrol.index.trace.evidence.chain", "Trace the evidence chain from market signal to execution decision, with data flow and freshness intact.")
+              : t("pages.missioncontrol.index.compress.multi.agent.execution", "Compress multi-agent execution into an operator-readable event narrative.")}
           </Typography.Text>
         </div>
         <Space wrap size={[8, 8]}>
-          <Tag color="processing">Stage: {snapshot.summary.activeStageLabel}</Tag>
+          <Tag color="processing">
+            {t("pages.missioncontrol.index.stage.label", "Stage: {stage}", {
+              stage: snapshot.summary.activeStageLabel,
+            })}
+          </Tag>
           <Tag color={resolveConnectionTagColor(connectionStatus)}>
-            Connection: {formatConnectionLabel(connectionStatus)}
+            {t("pages.missioncontrol.index.connection.label", "Connection: {connection}", {
+              connection: formatConnectionLabel(connectionStatus),
+            })}
           </Tag>
           <Tag color="blue">{snapshot.nodes.length} {t("pages.missioncontrol.index.nodes", "nodes")}</Tag>
         </Space>
@@ -694,7 +702,9 @@ function MissionDock({
         <Space wrap size={[8, 8]}>
           <Tag color="processing">{snapshot.events.length} {t("pages.missioncontrol.index.events", "events")}</Tag>
           <Button onClick={() => ui.setDockCollapsed(!ui.isDockCollapsed)}>
-            {ui.isDockCollapsed ? 'Expand Dock' : 'Collapse Dock'}
+            {ui.isDockCollapsed
+              ? t("pages.missioncontrol.index.expand.dock", "Expand Dock")
+              : t("pages.missioncontrol.index.collapse.dock", "Collapse Dock")}
           </Button>
         </Space>
       </div>
