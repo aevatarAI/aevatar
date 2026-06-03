@@ -1,29 +1,14 @@
-# Aevatar frontend-loop protected paths. FKST may inspect but must not modify these paths.
-backend/**
-proto/**
-API/**
-actor/**
-projection/**
-workflow/**
-database/**
-**/backend/**
-**/proto/**
-**/API/**
-**/actor/**
-**/projection/**
-**/workflow/**
-**/database/**
-**/backend-tests/**
-**/backend-config/**
-docs/architecture/**
-docs/canon/**
-
-# Runtime protection is scoped to backend/infrastructure runtime surfaces.
-# Frontend page runtime helpers, for example apps/aevatar-console-web/src/pages/**/runtime/**,
-# are allowed for frontend/product tasks.
-agents/**/Runtime/**
-agents/**/*Runtime*/**
-src/**/Runtime/**
-src/**/*Runtime*/**
-test/**/Runtime/**
-test/**/*Runtime*/**
+prefix: agents/
+prefix: src/
+prefix: test/
+prefix: workflows/
+prefix: tools/ci/
+prefix: tools/docs/
+prefix: docs/adr/
+prefix: docs/architecture/
+prefix: docs/canon/
+prefix: docs/operations/
+prefix: .github/
+prefix: .agents/
+prefix: .claude/
+exact: AGENTS.md
