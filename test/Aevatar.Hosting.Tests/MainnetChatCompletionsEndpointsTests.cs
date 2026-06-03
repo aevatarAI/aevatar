@@ -7,6 +7,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Authentication.Hosting;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
@@ -18,6 +19,7 @@ using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -33,20 +35,12 @@ public sealed class MainnetChatCompletionsEndpointsTests
     [Fact]
     public async Task PostChatCompletions_NonStreaming_ShouldReturnOpenAIEnvelope()
     {
-        var provider = new ChatCompletionsRecordingLLMProvider
-        {
-            StreamChunks =
-            [
-                new LLMStreamChunk
-                {
-                    DeltaContent = "Hi there",
-                    IsLast = true,
-                    Usage = new TokenUsage(5, 3, 8),
-                },
-            ],
-        };
+        var provider = new ChatCompletionsRecordingLLMProvider();
         var sessions = new ChatCompletionsRecordingSessionStore();
-        await using var app = await CreateAppAsync(provider, sessions);
+        var observation = ChatCompletionsObservationScenarioBuilder.ForText("Hi there")
+            .WithUsage(5, 3, 8)
+            .Build();
+        await using var app = await CreateAppAsync(provider, sessions, observationRuntime: observation);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -78,9 +72,11 @@ public sealed class MainnetChatCompletionsEndpointsTests
         root.GetProperty("model").GetString().Should().Be("gpt-4o-mini");
         var choice = root.GetProperty("choices")[0];
         choice.GetProperty("message").GetProperty("role").GetString().Should().Be("assistant");
-        choice.GetProperty("message").GetProperty("content").ValueKind.Should().Be(JsonValueKind.Null);
-        choice.GetProperty("finish_reason").ValueKind.Should().Be(JsonValueKind.Null);
-        root.GetProperty("usage").ValueKind.Should().Be(JsonValueKind.Null);
+        choice.GetProperty("message").GetProperty("content").GetString().Should().Be("Hi there");
+        choice.GetProperty("finish_reason").GetString().Should().Be("stop");
+        root.GetProperty("usage").GetProperty("prompt_tokens").GetInt32().Should().Be(5);
+        root.GetProperty("usage").GetProperty("completion_tokens").GetInt32().Should().Be(3);
+        root.GetProperty("usage").GetProperty("total_tokens").GetInt32().Should().Be(8);
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
@@ -108,21 +104,14 @@ public sealed class MainnetChatCompletionsEndpointsTests
     [Fact]
     public async Task PostChatCompletions_Streaming_ShouldEmitOpenAIChunksAndDone()
     {
-        var provider = new ChatCompletionsRecordingLLMProvider
-        {
-            StreamChunks =
-            [
-                new LLMStreamChunk { DeltaContent = "Hel" },
-                new LLMStreamChunk
-                {
-                    DeltaContent = "lo",
-                    IsLast = true,
-                    Usage = new TokenUsage(4, 2, 6),
-                },
-            ],
-        };
+        var provider = new ChatCompletionsRecordingLLMProvider();
         var sessions = new ChatCompletionsRecordingSessionStore();
-        await using var app = await CreateAppAsync(provider, sessions);
+        var observation = ChatCompletionsObservationScenarioBuilder.ForText("Hello")
+            .WithChunkText("Hel")
+            .WithChunkText("lo")
+            .WithUsage(4, 2, 6)
+            .Build();
+        await using var app = await CreateAppAsync(provider, sessions, observationRuntime: observation);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -144,8 +133,12 @@ public sealed class MainnetChatCompletionsEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
         body.Should().Contain("\"object\":\"chat.completion.chunk\"");
+        body.Should().Contain("\"content\":\"Hel\"");
+        body.Should().Contain("\"content\":\"lo\"");
         body.Should().Contain("\"finish_reason\":null");
-        body.Should().Contain("\"usage\":null");
+        body.Should().Contain("\"finish_reason\":\"stop\"");
+        body.Should().Contain("\"prompt_tokens\":4");
+        body.Should().Contain("\"completion_tokens\":2");
         body.Should().Contain("data: [DONE]");
         body.Should().NotContain("stream-bearer");
         sessions.StatusUpdates.Should().BeEmpty();
@@ -155,25 +148,14 @@ public sealed class MainnetChatCompletionsEndpointsTests
     }
 
     [Fact]
-    public async Task PostChatCompletions_WithToolCall_ShouldDispatchForwardedToolSelection()
+    public async Task PostChatCompletions_WithToolCall_ShouldDispatchForwardedToolSelection_AndReturnToolCalls()
     {
-        var provider = new ChatCompletionsRecordingLLMProvider
-        {
-            StreamChunks =
-            [
-                new LLMStreamChunk
-                {
-                    DeltaToolCall = new ToolCall
-                    {
-                        Id = "call_abc",
-                        Name = "get_weather",
-                        ArgumentsJson = """{"city":"SF"}""",
-                    },
-                    IsLast = true,
-                },
-            ],
-        };
-        await using var app = await CreateAppAsync(provider);
+        var provider = new ChatCompletionsRecordingLLMProvider();
+        var observation = ChatCompletionsObservationScenarioBuilder.ForText(string.Empty)
+            .WithToolCallDelta("call_abc", "get_weather", """{"city":"SF"}""")
+            .WithCompletedToolCall("call_abc", "get_weather", """{"city":"SF"}""")
+            .Build();
+        await using var app = await CreateAppAsync(provider, observationRuntime: observation);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -203,7 +185,11 @@ public sealed class MainnetChatCompletionsEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
         var choice = doc.RootElement.GetProperty("choices")[0];
-        choice.GetProperty("finish_reason").ValueKind.Should().Be(JsonValueKind.Null);
+        choice.GetProperty("finish_reason").GetString().Should().Be("tool_calls");
+        choice.GetProperty("message").GetProperty("tool_calls")[0].GetProperty("id").GetString().Should().Be("call_abc");
+        choice.GetProperty("message").GetProperty("tool_calls")[0].GetProperty("function").GetProperty("name").GetString()
+            .Should()
+            .Be("get_weather");
 
         provider.LastRequest.Should().BeNull();
         var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
@@ -219,15 +205,15 @@ public sealed class MainnetChatCompletionsEndpointsTests
     [Fact]
     public async Task PostChatCompletions_WithModelSlug_ShouldResolveNyxRoutePreference()
     {
-        var provider = new ChatCompletionsRecordingLLMProvider
-        {
-            StreamChunks = [new LLMStreamChunk { DeltaContent = "routed", IsLast = true }],
-        };
+        var provider = new ChatCompletionsRecordingLLMProvider();
         var routeResolver = new ChatCompletionsRecordingRouteResolver(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["chrono-llm"] = "/api/v1/proxy/s/chrono-llm",
         });
-        await using var app = await CreateAppAsync(provider, routeResolver: routeResolver);
+        await using var app = await CreateAppAsync(
+            provider,
+            routeResolver: routeResolver,
+            observationRuntime: ChatCompletionsObservationScenarioBuilder.ForText("routed").Build());
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -256,15 +242,15 @@ public sealed class MainnetChatCompletionsEndpointsTests
     [Fact]
     public async Task PostChatCompletions_WhenRoutePinsTeamTool_ShouldDispatchTeamToolSelection()
     {
-        var provider = new ChatCompletionsRecordingLLMProvider
-        {
-            StreamChunks = [new LLMStreamChunk { DeltaContent = "tool-driven", IsLast = true }],
-        };
+        var provider = new ChatCompletionsRecordingLLMProvider();
         var queryPort = ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(
                 TeamToolHintAction("team-1", "chat"),
                 []));
-        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        await using var app = await CreateAppAsync(
+            provider,
+            chatRoutePolicyQueryPort: queryPort,
+            observationRuntime: ChatCompletionsObservationScenarioBuilder.ForText("tool-driven").Build());
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -290,9 +276,9 @@ public sealed class MainnetChatCompletionsEndpointsTests
         doc.RootElement.GetProperty("choices")[0]
             .GetProperty("message")
             .GetProperty("content")
-            .ValueKind
+            .GetString()
             .Should()
-            .Be(JsonValueKind.Null);
+            .Be("tool-driven");
     }
 
     [Fact]
@@ -319,6 +305,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
     {
         var provider = new ChatCompletionsRecordingLLMProvider();
         var sessions = new ChatCompletionsRecordingSessionStore();
+        var observation = ChatCompletionsObservationScenarioBuilder.ForText("ignored").Build();
 
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -329,11 +316,14 @@ public sealed class MainnetChatCompletionsEndpointsTests
         builder.AddAevatarAuthentication();
 
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);
+        builder.Services.AddSingleton(observation);
         builder.Services.AddSingleton<ChatCompletionsRecordingActorDispatchPort>();
         builder.Services.AddSingleton<IActorDispatchPort>(static sp => sp.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>());
         builder.Services.AddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
+        builder.Services.AddSingleton<ILlmSessionObservationScopeLeasePreparationPort>(static sp => sp.GetRequiredService<ChatCompletionsObservationRuntime>().ScopePreparationPort);
+        builder.Services.AddSingleton<ILlmSessionObservationProjectionPort>(static sp => sp.GetRequiredService<ChatCompletionsObservationRuntime>().ProjectionPort);
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new ChatCompletionsStubCallerScopeResolver());
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
@@ -372,18 +362,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
     [Fact]
     public async Task PostChatCompletions_WhenResponsesToolProviderRegistered_ShouldInjectSharedAevatarTools()
     {
-        var provider = new ChatCompletionsRecordingLLMProvider
-        {
-            StreamChunks =
-            [
-                new LLMStreamChunk
-                {
-                    DeltaContent = "Hi",
-                    IsLast = true,
-                    Usage = new TokenUsage(1, 1, 2),
-                },
-            ],
-        };
+        var provider = new ChatCompletionsRecordingLLMProvider();
         var toolProvider = new ChatCompletionsRecordingResponsesToolProvider(
             substituteTools: [new ChatCompletionsStubAgentTool("WebSearch", "would substitute client WebSearch")],
             additiveTools:
@@ -391,7 +370,10 @@ public sealed class MainnetChatCompletionsEndpointsTests
                 new ChatCompletionsStubAgentTool("use_skill", "load a skill"),
                 new ChatCompletionsStubAgentTool("ornn_search_skills", "search Ornn skills"),
             ]);
-        await using var app = await CreateAppAsync(provider, responsesToolProvider: toolProvider);
+        await using var app = await CreateAppAsync(
+            provider,
+            responsesToolProvider: toolProvider,
+            observationRuntime: ChatCompletionsObservationScenarioBuilder.ForText("Hi").WithUsage(1, 1, 2).Build());
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -445,7 +427,8 @@ public sealed class MainnetChatCompletionsEndpointsTests
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
         IResponsesRouteResolver? routeResolver = null,
-        IResponsesToolProvider? responsesToolProvider = null)
+        IResponsesToolProvider? responsesToolProvider = null,
+        ChatCompletionsObservationRuntime? observationRuntime = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -453,12 +436,16 @@ public sealed class MainnetChatCompletionsEndpointsTests
         });
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);
+        observationRuntime ??= ChatCompletionsObservationScenarioBuilder.ForText("ok").Build();
+        builder.Services.AddSingleton(observationRuntime);
         builder.Services.AddSingleton<ChatCompletionsRecordingActorDispatchPort>();
         builder.Services.AddSingleton<IActorDispatchPort>(static sp => sp.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>());
         builder.Services.AddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
         sessions ??= new ChatCompletionsRecordingSessionStore();
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
+        builder.Services.AddSingleton<ILlmSessionObservationScopeLeasePreparationPort>(static sp => sp.GetRequiredService<ChatCompletionsObservationRuntime>().ScopePreparationPort);
+        builder.Services.AddSingleton<ILlmSessionObservationProjectionPort>(static sp => sp.GetRequiredService<ChatCompletionsObservationRuntime>().ProjectionPort);
         builder.Services.AddSingleton(callerScopeResolver ?? new ChatCompletionsStubCallerScopeResolver());
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
@@ -541,11 +528,19 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
     private sealed class ChatCompletionsRecordingActorDispatchPort : IActorDispatchPort
     {
+        private readonly ChatCompletionsObservationRuntime _observationRuntime;
+
+        public ChatCompletionsRecordingActorDispatchPort(ChatCompletionsObservationRuntime observationRuntime)
+        {
+            _observationRuntime = observationRuntime;
+        }
+
         public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
+            _observationRuntime.PublishAll();
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
@@ -729,5 +724,248 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
+    }
+
+    private sealed class ChatCompletionsObservationRuntime
+    {
+        private readonly IReadOnlyList<EventEnvelope> _events;
+
+        public ChatCompletionsObservationRuntime(IReadOnlyList<EventEnvelope> events)
+        {
+            _events = events;
+            ScopePreparationPort = new ChatCompletionsObservationScopeLeasePreparationPort();
+            ProjectionPort = new ChatCompletionsObservationProjectionPort();
+        }
+
+        public ChatCompletionsObservationScopeLeasePreparationPort ScopePreparationPort { get; }
+
+        public ChatCompletionsObservationProjectionPort ProjectionPort { get; }
+
+        public void PublishAll()
+        {
+            foreach (var envelope in _events)
+                ProjectionPort.Sink?.Push(envelope);
+        }
+    }
+
+    private sealed class ChatCompletionsObservationScenarioBuilder
+    {
+        private enum ObservationTerminalState
+        {
+            Completed,
+            Failed,
+            Cancelled,
+            None,
+        }
+
+        private readonly List<EventEnvelope> _events = [];
+        private readonly List<LlmSessionRuntimeToolCall> _completedToolCalls = [];
+        private readonly string _text;
+        private TokenUsage? _usage;
+        private ObservationTerminalState _terminalState = ObservationTerminalState.Completed;
+        private string? _failureMessage;
+
+        private ChatCompletionsObservationScenarioBuilder(string text)
+        {
+            _text = text;
+        }
+
+        public static ChatCompletionsObservationScenarioBuilder ForText(string text) => new(text);
+
+        public ChatCompletionsObservationScenarioBuilder WithChunkText(string deltaText)
+        {
+            _events.Add(new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new LlmStreamChunkObserved
+                {
+                    DeltaText = deltaText,
+                    ResponseId = "placeholder",
+                    RunId = "placeholder:llm-run",
+                }),
+            });
+            return this;
+        }
+
+        public ChatCompletionsObservationScenarioBuilder WithToolCallDelta(string callId, string toolName, string argumentsJson)
+        {
+            _events.Add(new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new LlmStreamChunkObserved
+                {
+                    ResponseId = "placeholder",
+                    RunId = "placeholder:llm-run",
+                    ToolCallDelta = new LlmSessionRuntimeToolCall
+                    {
+                        CallId = callId,
+                        ToolName = toolName,
+                        ArgumentsJson = argumentsJson,
+                    },
+                }),
+            });
+            return this;
+        }
+
+        public ChatCompletionsObservationScenarioBuilder WithCompletedToolCall(string callId, string toolName, string resultJson)
+        {
+            _completedToolCalls.Add(new LlmSessionRuntimeToolCall
+            {
+                CallId = callId,
+                ToolName = toolName,
+                ArgumentsJson = resultJson,
+            });
+            return this;
+        }
+
+        public ChatCompletionsObservationScenarioBuilder WithFailed(string failureMessage)
+        {
+            _terminalState = ObservationTerminalState.Failed;
+            _failureMessage = failureMessage;
+            return this;
+        }
+
+        public ChatCompletionsObservationScenarioBuilder WithCancelled()
+        {
+            _terminalState = ObservationTerminalState.Cancelled;
+            _failureMessage = null;
+            return this;
+        }
+
+        public ChatCompletionsObservationScenarioBuilder WithoutTerminal()
+        {
+            _terminalState = ObservationTerminalState.None;
+            _failureMessage = null;
+            return this;
+        }
+
+        public ChatCompletionsObservationScenarioBuilder WithUsage(int promptTokens, int completionTokens, int totalTokens)
+        {
+            _usage = new TokenUsage(promptTokens, completionTokens, totalTokens);
+            return this;
+        }
+
+        public ChatCompletionsObservationRuntime Build()
+        {
+            switch (_terminalState)
+            {
+                case ObservationTerminalState.Completed:
+                    var completed = new LlmRunCompleted
+                    {
+                        ResponseId = "placeholder",
+                        RunId = "placeholder:llm-run",
+                        OutputText = _text,
+                        CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    };
+                    completed.ForwardedToolCalls.AddRange(_completedToolCalls.Select(static call => call.Clone()));
+                    if (_usage is not null)
+                    {
+                        completed.Usage = new LlmSessionTokenUsage
+                        {
+                            PromptTokens = _usage.PromptTokens,
+                            CompletionTokens = _usage.CompletionTokens,
+                            TotalTokens = _usage.TotalTokens,
+                        };
+                    }
+
+                    _events.Add(new EventEnvelope
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        Payload = Any.Pack(completed),
+                    });
+                    break;
+                case ObservationTerminalState.Failed:
+                    _events.Add(new EventEnvelope
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        Payload = Any.Pack(new LlmRunFailed
+                        {
+                            ResponseId = "placeholder",
+                            RunId = "placeholder:llm-run",
+                            FailureMessage = _failureMessage ?? "LLM run failed.",
+                            FailedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                        }),
+                    });
+                    break;
+                case ObservationTerminalState.Cancelled:
+                    _events.Add(new EventEnvelope
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        Payload = Any.Pack(new LlmRunCancelled
+                        {
+                            ResponseId = "placeholder",
+                            RunId = "placeholder:llm-run",
+                            CancelledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                        }),
+                    });
+                    break;
+                case ObservationTerminalState.None:
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unsupported terminal state '{_terminalState}'.");
+            }
+            return new ChatCompletionsObservationRuntime(_events.ToArray());
+        }
+    }
+
+    private sealed class ChatCompletionsObservationScopeLeasePreparationPort
+        : ILlmSessionObservationScopeLeasePreparationPort
+    {
+        public Task<LlmSessionObservationScopeLeasePreparation?> PrepareAsync(
+            string actorId,
+            string responseId,
+            CancellationToken ct = default) =>
+            Task.FromResult<LlmSessionObservationScopeLeasePreparation?>(
+                new LlmSessionObservationScopeLeasePreparation(actorId, responseId));
+
+        public Task ReleaseAsync(
+            LlmSessionObservationScopeLeasePreparation preparation,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class ChatCompletionsObservationProjectionPort : ILlmSessionObservationProjectionPort
+    {
+        public IEventSink<EventEnvelope>? Sink { get; private set; }
+
+        public bool ProjectionEnabled => true;
+
+        public Task<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?> AttachExistingResponseProjectionAsync(
+            string actorId,
+            string responseId,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            Sink = sink;
+            return Task.FromResult<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?>(
+                new EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>(
+                    new ChatCompletionsObservationLease(actorId, responseId),
+                    new NoOpAsyncDisposable()));
+        }
+
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+            ILlmSessionObservationProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<IAsyncDisposable?>(new NoOpAsyncDisposable());
+
+        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
+        {
+            Sink = null;
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            ILlmSessionObservationProjectionLease lease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed record ChatCompletionsObservationLease(string ActorId, string ResponseId)
+        : ILlmSessionObservationProjectionLease;
+
+    private sealed class NoOpAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

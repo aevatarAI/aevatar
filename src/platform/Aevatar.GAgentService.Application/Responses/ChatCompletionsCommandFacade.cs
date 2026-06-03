@@ -1,11 +1,13 @@
 using System.Security.Cryptography;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -20,12 +22,17 @@ public sealed class ChatCompletionsCommandFacade(
     IResponsesChatRouteDecisionPort chatRouteDecisionPort,
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort sessionRegistrationPort,
+    ILlmSessionObservationScopeLeasePreparationPort observationScopeLeasePreparationPort,
+    ILlmSessionObservationProjectionPort observationProjectionPort,
     IActorDispatchPort dispatchPort,
     IResponsesToolClassificationService toolClassificationService,
     IResponsesDirectToolPlanService directToolPlanService,
-    ILogger<ChatCompletionsCommandFacade> logger) : IChatCompletionsCommandFacade
+    ILogger<ChatCompletionsCommandFacade> logger,
+    TimeSpan? observationTimeout = null) : IChatCompletionsCommandFacade
 {
+    private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
     private const string RegistrationScopeMetadataKey = "scope_id";
+    private readonly TimeSpan _observationTimeout = observationTimeout ?? DefaultObservationTimeout;
 
     public async Task<ChatCompletionsCreateCommandResult> CreateAsync(
         ChatCompletionsCommandRequest request,
@@ -89,14 +96,16 @@ public sealed class ChatCompletionsCommandFacade(
 
     public async Task<ResponsesStreamCommandResult> StreamAsync(
         ChatCompletionsCreateCommandPlan plan,
+        Func<ChatCompletionsObservedDelta, CancellationToken, ValueTask> onObservedDelta,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(onObservedDelta);
 
         try
         {
-            var admission = await DispatchRunAsync(plan, ct);
-            return ResponsesStreamCommandResult.FromAccepted(new ResponsesStreamAcceptedCommandResult(admission));
+            return ResponsesStreamCommandResult.FromCompleted(
+                await ObserveCompletionAsync(plan, onObservedDelta, ct).ConfigureAwait(false));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -107,6 +116,22 @@ public sealed class ChatCompletionsCommandFacade(
         {
             await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Failed, CancellationToken.None);
             return ResponsesStreamCommandResult.FromError(ResolveUpstreamStatusCode(ex), ex.Kind.ToString().ToLowerInvariant(), ex.Message);
+        }
+        catch (ObservedLlmRunCancelledException ex)
+        {
+            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
+            return ResponsesStreamCommandResult.FromError(409, "run_cancelled", ex.Message);
+        }
+        catch (ObservedLlmRunFailedException ex)
+        {
+            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Failed, CancellationToken.None);
+            return ResponsesStreamCommandResult.FromError(500, "llm_run_failed", ex.Message);
+        }
+        catch (TimeoutException ex)
+        {
+            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Failed, CancellationToken.None);
+            logger.LogWarning(ex, "Streaming /v1/chat/completions {CompletionId} timed out waiting for a terminal observation event", plan.Normalized.CompletionId);
+            return ResponsesStreamCommandResult.FromError(504, "response_timeout", ex.Message);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -290,12 +315,11 @@ public sealed class ChatCompletionsCommandFacade(
     {
         try
         {
-            var admission = await DispatchRunAsync(plan, ct);
-            return ChatCompletionsCreateCommandResult.FromAccepted(new ChatCompletionsCreateAcceptedCommandResult(
+            var completion = await ObserveCompletionAsync(plan, null, ct).ConfigureAwait(false);
+            return ChatCompletionsCreateCommandResult.FromCompleted(new ChatCompletionsCreateCompletedCommandResult(
                 plan.Normalized,
                 plan.CreatedAt.ToUnixTimeSeconds(),
-                plan.Session,
-                admission));
+                completion));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -307,6 +331,22 @@ public sealed class ChatCompletionsCommandFacade(
             await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Failed, CancellationToken.None);
             return ChatCompletionsCreateCommandResult.FromError(ResolveUpstreamStatusCode(ex), ex.Kind.ToString().ToLowerInvariant(), ex.Message);
         }
+        catch (ObservedLlmRunCancelledException ex)
+        {
+            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
+            return ChatCompletionsCreateCommandResult.FromError(409, "run_cancelled", ex.Message);
+        }
+        catch (ObservedLlmRunFailedException ex)
+        {
+            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Failed, CancellationToken.None);
+            return ChatCompletionsCreateCommandResult.FromError(500, "llm_run_failed", ex.Message);
+        }
+        catch (TimeoutException ex)
+        {
+            await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Failed, CancellationToken.None);
+            logger.LogWarning(ex, "Non-streaming /v1/chat/completions {CompletionId} timed out waiting for a terminal observation event", plan.Normalized.CompletionId);
+            return ChatCompletionsCreateCommandResult.FromError(504, "response_timeout", ex.Message);
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Cancelled, CancellationToken.None);
@@ -317,6 +357,113 @@ public sealed class ChatCompletionsCommandFacade(
             await TryUpdateSessionStatusAsync(plan.Session, LlmSessionStatus.Failed, CancellationToken.None);
             logger.LogError(ex, "Unexpected error processing /v1/chat/completions {CompletionId}", plan.Normalized.CompletionId);
             return ChatCompletionsCreateCommandResult.FromError(500, "api_error", "Internal server error.");
+        }
+    }
+
+    private async Task<LlmSessionCompletionSnapshot> ObserveCompletionAsync(
+        ChatCompletionsCreateCommandPlan plan,
+        Func<ChatCompletionsObservedDelta, CancellationToken, ValueTask>? onObservedDelta,
+        CancellationToken ct)
+    {
+        using var observationTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        observationTimeoutCts.CancelAfter(_observationTimeout);
+        var observeCt = observationTimeoutCts.Token;
+
+        var preparation = await observationScopeLeasePreparationPort
+            .PrepareAsync(plan.Session.ActorId, plan.Session.ResponseId, observeCt)
+            .ConfigureAwait(false);
+        if (preparation == null)
+            throw new InvalidOperationException("LlmSession observation scope is unavailable.");
+
+        await using var sink = new EventChannel<EventEnvelope>(capacity: 64);
+        EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>? attachment = null;
+        try
+        {
+            try
+            {
+                attachment = await observationProjectionPort
+                    .AttachExistingResponseProjectionAsync(plan.Session.ActorId, plan.Session.ResponseId, sink, observeCt)
+                    .ConfigureAwait(false);
+                if (attachment == null)
+                    throw new InvalidOperationException("LlmSession observation attachment is unavailable.");
+
+                await DispatchRunAsync(plan, observeCt).ConfigureAwait(false);
+
+                var accumulator = new ChatCompletionsObservationAccumulator(plan.Session.ResponseId);
+                var terminalObserved = false;
+                await foreach (var envelope in sink.ReadAllAsync(observeCt).ConfigureAwait(false))
+                {
+                    var payload = envelope.Payload;
+                    if (payload == null)
+                    {
+                        continue;
+                    }
+
+                    if (payload.Is(LlmStreamChunkObserved.Descriptor))
+                    {
+                        var observed = payload.Unpack<LlmStreamChunkObserved>();
+                        accumulator.ObserveChunk(observed);
+                        if (onObservedDelta != null)
+                        {
+                            await onObservedDelta(
+                                new ChatCompletionsObservedDelta(
+                                    string.IsNullOrWhiteSpace(observed.DeltaText) ? null : observed.DeltaText,
+                                    observed.ToolCallDelta == null ? null : ToBoundaryToolCall(observed.ToolCallDelta),
+                                    observed.Usage == null ? null : ToBoundaryUsage(observed.Usage)),
+                                ct).ConfigureAwait(false);
+                        }
+
+                        continue;
+                    }
+
+                    if (payload.Is(LlmRunCompleted.Descriptor))
+                    {
+                        accumulator.ObserveCompleted(payload.Unpack<LlmRunCompleted>());
+                        terminalObserved = true;
+                        sink.Complete();
+                        break;
+                    }
+
+                    if (payload.Is(LlmRunFailed.Descriptor))
+                    {
+                        var failed = payload.Unpack<LlmRunFailed>();
+                        sink.Complete();
+                        throw new ObservedLlmRunFailedException(
+                            string.IsNullOrWhiteSpace(failed.FailureMessage)
+                                ? "LLM run failed."
+                                : failed.FailureMessage);
+                    }
+
+                    if (payload.Is(LlmRunCancelled.Descriptor))
+                    {
+                        sink.Complete();
+                        throw new ObservedLlmRunCancelledException("LLM run was cancelled.");
+                    }
+                }
+
+                if (!terminalObserved)
+                    throw new InvalidOperationException("LLM run observation ended without a terminal event.");
+
+                return accumulator.BuildCompletion();
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested && observationTimeoutCts.IsCancellationRequested)
+            {
+                sink.Complete();
+                throw new TimeoutException($"Timed out waiting {FormatObservationTimeout(_observationTimeout)} for the LLM run to emit a terminal event.");
+            }
+        }
+        finally
+        {
+            if (attachment != null)
+            {
+                await observationProjectionPort.DetachLiveSinkAsync(attachment.LiveSinkLease, CancellationToken.None)
+                    .ConfigureAwait(false);
+                await observationProjectionPort.ReleaseActorProjectionAsync(attachment.ProjectionLease, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+
+            await observationScopeLeasePreparationPort.ReleaseAsync(preparation, CancellationToken.None)
+                .ConfigureAwait(false);
         }
     }
 
@@ -576,6 +723,11 @@ public sealed class ChatCompletionsCommandFacade(
             _ => 502,
         };
 
+    private static string FormatObservationTimeout(TimeSpan timeout) =>
+        timeout >= TimeSpan.FromSeconds(1)
+            ? $"{timeout.TotalSeconds:0.#} seconds"
+            : $"{timeout.TotalMilliseconds:0} ms";
+
     private static string NewOpaqueId()
     {
         Span<byte> bytes = stackalloc byte[16];
@@ -585,6 +737,24 @@ public sealed class ChatCompletionsCommandFacade(
             .Replace('+', '-')
             .Replace('/', '_');
     }
+
+    private static ToolCall ToBoundaryToolCall(LlmSessionRuntimeToolCall call) =>
+        new()
+        {
+            Id = call.CallId,
+            Name = call.ToolName,
+            ArgumentsJson = RuntimeToolArgumentsJson(call),
+        };
+
+    private static string RuntimeToolArgumentsJson(LlmSessionRuntimeToolCall call)
+    {
+        if (call.Arguments is { Fields.Count: > 0 })
+            return ResponsesJsonValues.ToBoundaryJson(Value.ForStruct(call.Arguments.Clone())) ?? "{}";
+        return string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson;
+    }
+
+    private static TokenUsage ToBoundaryUsage(LlmSessionTokenUsage usage) =>
+        new(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens);
 
     private sealed record CallerScopeResult(
         ResponsesCallerScope? Scope,
@@ -612,5 +782,50 @@ public sealed class ChatCompletionsCommandFacade(
         public static ExecutionPlanResult FromPlan(ChatCompletionsCreateCommandPlan plan) => new(plan, null);
 
         public static ExecutionPlanResult FromError(ResponsesCommandError error) => new(null, error);
+    }
+
+    private sealed class ObservedLlmRunFailedException(string message) : Exception(message);
+
+    private sealed class ObservedLlmRunCancelledException(string message) : OperationCanceledException(message);
+
+    private sealed class ChatCompletionsObservationAccumulator(string responseId)
+    {
+        private readonly string _responseId = responseId;
+        private string _outputText = string.Empty;
+        private readonly List<LlmSessionRuntimeToolCall> _toolCalls = [];
+        private TokenUsage? _usage;
+        private DateTimeOffset? _completedAt;
+
+        public void ObserveChunk(LlmStreamChunkObserved observed)
+        {
+            if (!string.IsNullOrWhiteSpace(observed.DeltaText))
+                _outputText += observed.DeltaText;
+
+            if (observed.Usage != null)
+                _usage = ToBoundaryUsage(observed.Usage);
+        }
+
+        public void ObserveCompleted(LlmRunCompleted completed)
+        {
+            _outputText = completed.OutputText ?? _outputText;
+            _usage = completed.Usage == null ? _usage : ToBoundaryUsage(completed.Usage);
+            _completedAt = completed.CompletedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+            _toolCalls.Clear();
+            _toolCalls.AddRange(completed.ForwardedToolCalls.Select(static call => call.Clone()));
+        }
+
+        public LlmSessionCompletionSnapshot BuildCompletion() =>
+            new(
+                _outputText,
+                _toolCalls
+                    .Select(static call => new LlmSessionCompletedToolCallSnapshot(
+                        call.CallId,
+                        call.ToolName,
+                        RuntimeToolArgumentsJson(call)))
+                    .ToArray(),
+                _completedAt ?? DateTimeOffset.UtcNow,
+                null,
+                null,
+                _usage);
     }
 }
