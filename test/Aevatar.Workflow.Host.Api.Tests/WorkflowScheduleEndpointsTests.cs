@@ -334,7 +334,7 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
-    public async Task ScheduledDispatchActorPort_ShouldRejectDuplicateCreateAndMissingUpdateFromActorState()
+    public async Task ScheduledDispatchActorPort_ShouldDispatchMutationsWithoutReadingActorState()
     {
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
@@ -342,23 +342,25 @@ public sealed class WorkflowScheduleEndpointsTests
         var actorId = "scheduled-dispatch:schedule-1";
         runtime.Existing[actorId] = new RecordingStatefulActor(actorId, CreateConfiguredState());
 
-        var duplicateCreate = () => port.DispatchCreateAsync(
+        await port.DispatchCreateAsync(
             actorId,
             CreateScheduledDispatchConfiguration("schedule-1"),
             CreatePreparedScheduledDispatchTarget());
-
-        await duplicateCreate.Should().ThrowAsync<ScheduledDispatchConflictException>();
 
         runtime.Existing[actorId] = new RecordingStatefulActor(actorId, new ScheduledDispatchState());
-        var missingUpdate = () => port.DispatchUpdateAsync(
+        await port.DispatchUpdateAsync(
             actorId,
             CreateScheduledDispatchConfiguration("schedule-1"),
             CreatePreparedScheduledDispatchTarget());
-        var missingEnable = () => port.DispatchEnableAsync(actorId, "resume");
+        await port.DispatchEnableAsync(actorId, "resume");
 
-        await missingUpdate.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        await missingEnable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        dispatch.Envelopes.Should().BeEmpty();
+        dispatch.Envelopes.Should().HaveCount(3);
+        dispatch.Envelopes[0].Envelope.Payload.Unpack<ScheduledDispatchCreateCommand>()
+            .ScheduleId.Should().Be("schedule-1");
+        dispatch.Envelopes[1].Envelope.Payload.Unpack<ScheduledDispatchUpdateCommand>()
+            .ScheduleId.Should().Be("schedule-1");
+        dispatch.Envelopes[2].Envelope.Payload.Unpack<ScheduledDispatchEnableCommand>()
+            .Reason.Should().Be("resume");
     }
 
     [Fact]
