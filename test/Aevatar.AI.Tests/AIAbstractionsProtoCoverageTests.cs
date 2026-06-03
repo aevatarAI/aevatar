@@ -178,6 +178,29 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, ToolResultEvent.Parser);
         toolResult.Success.Should().BeTrue();
 
+        var tokenUsage = RoundTrip(new TokenUsagePayload
+        {
+            PromptTokens = 2,
+            CompletionTokens = 3,
+            TotalTokens = 5,
+        }, TokenUsagePayload.Parser);
+        tokenUsage.TotalTokens.Should().Be(5);
+
+        var tokenUsageEvent = RoundTrip(new ChatTokenUsageEvent
+        {
+            SessionId = "session-1",
+            Usage = new TokenUsagePayload
+            {
+                PromptTokens = 11,
+                CompletionTokens = 13,
+                TotalTokens = 24,
+            },
+            Model = "nyxid-model",
+        }, ChatTokenUsageEvent.Parser);
+        tokenUsageEvent.SessionId.Should().Be("session-1");
+        tokenUsageEvent.Usage.TotalTokens.Should().Be(24);
+        tokenUsageEvent.Model.Should().Be("nyxid-model");
+
         var sessionStarted = RoundTrip(new RoleChatSessionStartedEvent
         {
             SessionId = "session-1",
@@ -201,6 +224,13 @@ public sealed class AIAbstractionsProtoCoverageTests
             ReasoningContent = "thinking",
             Prompt = "hello",
             ContentEmitted = true,
+            Usage = new TokenUsagePayload
+            {
+                PromptTokens = 17,
+                CompletionTokens = 19,
+                TotalTokens = 36,
+            },
+            Model = "nyxid-model",
             ToolCalls =
             {
                 new ToolCallEvent
@@ -223,6 +253,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         sessionCompleted.Content.Should().Be("done");
         sessionCompleted.ReasoningContent.Should().Be("thinking");
         sessionCompleted.ContentEmitted.Should().BeTrue();
+        sessionCompleted.Usage.TotalTokens.Should().Be(36);
+        sessionCompleted.Model.Should().Be("nyxid-model");
         sessionCompleted.ToolCalls.Should().ContainSingle();
         sessionCompleted.OutputParts.Should().ContainSingle();
 

@@ -170,18 +170,39 @@ public sealed class NyxIdChatProjectionSessionTests
             context,
             new EventEnvelope
             {
+                Payload = Any.Pack(new ChatTokenUsageEvent
+                {
+                    SessionId = "session-1",
+                    Usage = new TokenUsagePayload
+                    {
+                        PromptTokens = 2,
+                        CompletionTokens = 4,
+                        TotalTokens = 6,
+                    },
+                    Model = "nyxid-model",
+                }),
+            },
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
                 Payload = Any.Pack(new AiTextMessageEndEvent { Content = "done" }),
             },
             CancellationToken.None);
 
-        hub.Published.Should().HaveCount(4);
+        hub.Published.Should().HaveCount(5);
         hub.Published.Should().OnlyContain(p => p.RootActorId == "chat-actor-1" && p.SessionId == "session-1");
         hub.Published[0].Event.TextMessageStart.MessageId.Should().Be("session-1");
         hub.Published[1].Event.TextMessageContent.MessageId.Should().Be("session-1");
         hub.Published[1].Event.TextMessageContent.Delta.Should().Be("delta");
-        hub.Published[2].Event.TextMessageEnd.MessageId.Should().Be("session-1");
-        hub.Published[3].Event.RunFinished.ThreadId.Should().Be("chat-actor-1");
-        hub.Published[3].Event.RunFinished.RunId.Should().Be("session-1");
+        hub.Published[2].Event.Usage.Should().NotBeNull();
+        hub.Published[2].Event.Usage.Available.Should().BeTrue();
+        hub.Published[2].Event.Usage.TotalTokens.Should().Be(6);
+        hub.Published[2].Event.Usage.Model.Should().Be("nyxid-model");
+        hub.Published[3].Event.TextMessageEnd.MessageId.Should().Be("session-1");
+        hub.Published[4].Event.RunFinished.ThreadId.Should().Be("chat-actor-1");
+        hub.Published[4].Event.RunFinished.RunId.Should().Be("session-1");
     }
 
     [Fact]

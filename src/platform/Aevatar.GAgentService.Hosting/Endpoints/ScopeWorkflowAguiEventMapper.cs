@@ -137,6 +137,18 @@ internal static class ScopeWorkflowAguiEventMapper
                     Result = frame.ToolCallEnd.Result,
                 };
                 return true;
+            case WorkflowRunEventEnvelope.EventOneofCase.Usage:
+                aguiEvent.Usage = new UsageEvent
+                {
+                    Available = frame.Usage.Available,
+                    PromptTokens = frame.Usage.PromptTokens,
+                    CompletionTokens = frame.Usage.CompletionTokens,
+                    TotalTokens = frame.Usage.TotalTokens,
+                    Model = frame.Usage.Model,
+                    Cost = frame.Usage.Cost,
+                    LatencyMs = frame.Usage.LatencyMs,
+                };
+                return true;
             case WorkflowRunEventEnvelope.EventOneofCase.Custom:
                 return TryMapCustom(frame.Custom, aguiEvent);
             default:

@@ -161,6 +161,34 @@ public class NyxIdChatAguiSseEventWriterTests
         frame.GetProperty("type").GetString().Should().Be("RUN_FINISHED");
     }
 
+    [Fact]
+    public async Task WriteAsync_ShouldMapUsageFrame()
+    {
+        var sink = new SseFrameSink();
+
+        var status = await sink.WriteAsync(new AGUIEvent
+        {
+            Usage = new UsageEvent
+            {
+                Available = true,
+                PromptTokens = 3,
+                CompletionTokens = 5,
+                TotalTokens = 8,
+                Model = "nyxid-model",
+            },
+        }, "message-1");
+
+        status.Should().BeNull();
+        var frame = sink.ReadFrames().Should().ContainSingle().Subject;
+        frame.GetProperty("type").GetString().Should().Be("USAGE");
+        var usage = frame.GetProperty("usage");
+        usage.GetProperty("available").GetBoolean().Should().BeTrue();
+        usage.GetProperty("promptTokens").GetInt32().Should().Be(3);
+        usage.GetProperty("completionTokens").GetInt32().Should().Be(5);
+        usage.GetProperty("totalTokens").GetInt32().Should().Be(8);
+        usage.GetProperty("model").GetString().Should().Be("nyxid-model");
+    }
+
     private sealed class SseFrameSink
     {
         private readonly MemoryStream _body = new();
