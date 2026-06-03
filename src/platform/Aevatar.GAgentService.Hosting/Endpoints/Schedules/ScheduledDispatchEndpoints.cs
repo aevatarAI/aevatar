@@ -57,7 +57,7 @@ public static class ScheduledDispatchEndpoints
 
     internal static async Task<IResult> Create(
         ScheduledDispatchConfigurationHttpRequest input,
-        IScheduledDispatchApplicationService schedules,
+        [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
@@ -74,7 +74,7 @@ public static class ScheduledDispatchEndpoints
     internal static async Task<IResult> Update(
         string scheduleId,
         ScheduledDispatchConfigurationHttpRequest input,
-        IScheduledDispatchApplicationService schedules,
+        [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
@@ -91,7 +91,7 @@ public static class ScheduledDispatchEndpoints
     internal static async Task<IResult> Enable(
         string scheduleId,
         ScheduledDispatchStateChangeHttpRequest? input,
-        IScheduledDispatchApplicationService schedules,
+        [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
@@ -108,7 +108,7 @@ public static class ScheduledDispatchEndpoints
     internal static async Task<IResult> Disable(
         string scheduleId,
         ScheduledDispatchStateChangeHttpRequest? input,
-        IScheduledDispatchApplicationService schedules,
+        [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
@@ -123,7 +123,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> List(
-        IScheduledDispatchApplicationService schedules,
+        [FromServices] IScheduledDispatchApplicationService schedules,
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
@@ -134,7 +134,7 @@ public static class ScheduledDispatchEndpoints
 
     internal static async Task<IResult> Get(
         string scheduleId,
-        IScheduledDispatchApplicationService schedules,
+        [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
@@ -150,7 +150,7 @@ public static class ScheduledDispatchEndpoints
 
     internal static async Task<IResult> Preview(
         ScheduledDispatchPreviewHttpRequest input,
-        IScheduledDispatchApplicationService schedules,
+        [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
@@ -170,7 +170,7 @@ public static class ScheduledDispatchEndpoints
 
     internal static async Task<IResult> RunNow(
         string scheduleId,
-        IScheduledDispatchApplicationService schedules,
+        [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
