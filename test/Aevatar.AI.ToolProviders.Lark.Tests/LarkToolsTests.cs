@@ -21,10 +21,10 @@ public class LarkToolsTests
             SendResponse = """{"code":0,"data":{"message_id":"om_123","chat_id":"oc_456","create_time":"1730000000"}}""",
         };
         var tool = new LarkMessagesSendTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        });
 
         try
         {
@@ -41,7 +41,7 @@ public class LarkToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -695,10 +695,10 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkChatsLookupTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        });
 
         try
         {
@@ -712,7 +712,7 @@ public class LarkToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -789,10 +789,10 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkSheetsAppendRowsTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        });
 
         try
         {
@@ -808,7 +808,7 @@ public class LarkToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -894,10 +894,10 @@ public class LarkToolsTests
                 """,
         };
         var tool = new LarkApprovalsListTool(client);
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
-        };
+        });
 
         try
         {
@@ -914,7 +914,7 @@ public class LarkToolsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -1654,16 +1654,16 @@ public class LarkToolsTests
 
     private sealed class AgentToolRequestMetadataScope : IDisposable
     {
-        private readonly IReadOnlyDictionary<string, string>? _previous;
+        private readonly AgentToolExecutionContext? _previous;
 
         public AgentToolRequestMetadataScope(
             string? accessToken = null,
             IReadOnlyDictionary<string, string>? extraMetadata = null)
         {
-            _previous = AgentToolRequestContext.CurrentMetadata;
+            _previous = AgentToolRequestContext.Current;
             if (string.IsNullOrWhiteSpace(accessToken) && (extraMetadata == null || extraMetadata.Count == 0))
             {
-                AgentToolRequestContext.CurrentMetadata = null;
+                AgentToolRequestContext.Current = null;
                 return;
             }
 
@@ -1676,12 +1676,12 @@ public class LarkToolsTests
                     metadata[entry.Key] = entry.Value;
             }
 
-            AgentToolRequestContext.CurrentMetadata = metadata;
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
         }
 
         public void Dispose()
         {
-            AgentToolRequestContext.CurrentMetadata = _previous;
+            AgentToolRequestContext.Current = _previous;
         }
     }
 }

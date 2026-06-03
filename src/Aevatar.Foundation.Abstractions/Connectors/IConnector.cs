@@ -27,9 +27,6 @@ public interface IConnector
 /// </summary>
 public sealed class ConnectorRequest
 {
-    /// <summary>Legacy host adapter metadata key used only before workflow runtime typed state.</summary>
-    public const string HttpAuthorizationMetadataKey = "connector.http.authorization";
-
     /// <summary>Execution metadata propagated from workflow/runtime context, excluding connector authorization.</summary>
     public IReadOnlyDictionary<string, string> Metadata { get; init; } = new Dictionary<string, string>();
 

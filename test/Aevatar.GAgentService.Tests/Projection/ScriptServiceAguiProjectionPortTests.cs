@@ -6,7 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Orchestration;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Projection;

@@ -2,74 +2,48 @@
 
 ## Scope
 
-- Added repository-wide .NET version properties to `Directory.Build.props`.
-- Added a fail-fast static guard in `tools/ci/architecture_guards.sh` to require:
-  - `<Version>0.1.0-beta</Version>`
-  - `<VersionPrefix>0.1.0</VersionPrefix>`
-  - `<VersionSuffix>beta</VersionSuffix>`
-- Phase 9 #1395 first slice: honest boundary contract for `StudioTeamEntryMemberResolver`.
+- Phase 9 issue #1535: typed NyxID channel-relay update failure classification.
+- Changed only Channel/NyxID relay contracts, runtime propagation, adapter parsing, and matching tests.
+- Scope extension: updated this report because PR 1608 reviewers identified the previous report as stale and mismatched to the actual diff.
 
 ## Changes
 
-- Updated `Directory.Build.props` with repository-wide .NET version properties.
-- Updated `tools/ci/architecture_guards.sh` with a fail-fast static guard for required version properties.
-- Added XML contract documentation to `ITeamEntryMemberResolver` and `TeamEntryMemberResolution` clarifying that the resolver is command target resolution only.
-- Added XML documentation to `StudioTeamEntryMemberResolver` clarifying it reads team/member read models only for command admission and dispatch target selection.
-- Added resolver tests that assert:
-  - team and member read models are read only through direct `GetAsync` calls for command target admission;
-  - the resolution DTO remains limited to `ScopeId`, `TeamId`, `EntryMemberId`, and `PublishedServiceId`;
-  - no composite team status/readiness or invented freshness/version field is returned.
+- Moved `FailureKind` into `channel_contracts.proto` so channel abstractions own the retry/terminal failure contract.
+- Extended `EmitResult`, `ConversationStreamChunkResult`, `ConversationTurnResult`, and Nyx relay continuation payloads with typed failure kind, retry-after, HTTP status, and sanitized upstream error key/code fields.
+- Normalized NyxID relay update failures at the external HTTP adapter boundary in `NyxIdApiClient`, including edit-unsupported, rate-limit, transient, permanent, and platform-unavailable classifications.
+- Propagated typed diagnostics through `NyxIdRelayOutboundPort`, `ChannelConversationTurnRunner`, and `ConversationGAgent` so actor continuation policy no longer infers retry behavior from raw error summaries.
+- Added refactor self-documentation comments on the changed contract/helper surfaces.
 
 ## Boundary Notes
 
-- No `ScopeWorkflowSummary` changes.
-- No actor type, envelope kind, projection phase, aggregate actor, read model, or proto field was added.
-- Existing `UpdatedAt` fields on team/member responses were not copied into `TeamEntryMemberResolution`; there was no existing team/member `StateVersion` in this resolver path to pass through.
-- No `docs/canon/*` files were modified.
+- No external sibling repository changes are required; the implementation uses NyxID's existing error envelope surface.
+- JSON parsing remains inside the NyxID HTTP adapter boundary only; internal propagation uses generated Protobuf contracts and typed C# records.
+- No new actor, read model, projection pipeline, or query-time replay path was added.
+- ACK semantics are unchanged; the added fields only classify already observed adapter failures.
 
 ## Verification
 
 ```bash
-dotnet build aevatar.slnx --nologo 2>&1 | tail -3
+dotnet build aevatar.slnx --nologo 2>&1 | tail -20
 ```
 
-Result:
+Result: passed with existing warnings only.
 
 ```text
+    138 个警告
     0 个错误
 
-已用时间 00:00:26.03
+已用时间 00:00:38.01
 ```
 
 ```bash
-dotnet test aevatar.slnx --nologo --no-build 2>&1 | tail -20
+dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-build 2>&1 | tail -10
 ```
 
-Result: passed. The output tail reported successful test assemblies, including:
+Result: passed.
 
 ```text
-已通过! - 失败:     0，通过:   916，已跳过:     0，总计:   916，持续时间: 8 s - Aevatar.GAgents.ChannelRuntime.Tests.dll (net10.0)
-已通过! - 失败:     0，通过:   404，已跳过:     0，总计:   404，持续时间: 5 s - Aevatar.Workflow.Host.Api.Tests.dll (net10.0)
-已通过! - 失败:     0，通过:   696，已跳过:     0，总计:   696，持续时间: 35 s - Aevatar.AI.Tests.dll (net10.0)
-```
-
-```bash
-bash tools/ci/architecture_guards.sh 2>&1 | tail -10
-```
-
-Result:
-
-```text
-Scripting runtime snapshot guard passed.
-Running runtime callback guards...
-Runtime callback guards passed.
-Running channel card literal guard...
-channel_card_literal_guard: ok
-Running Nyx relay replay authority guard...
-Running docs lint guard...
-
-docs lint: PASSED — 50 file(s) checked, 0 errors
-Architecture guards passed.
+已通过! - 失败:     0，通过:   708，已跳过:     0，总计:   708，持续时间: 38 s - Aevatar.AI.Tests.dll (net10.0)
 ```
 
 ```bash
@@ -78,9 +52,8 @@ bash tools/ci/test_stability_guards.sh
 
 Result: passed.
 
-```bash
-dotnet test aevatar.slnx --nologo --no-build 2>&1 | tail -30
+```text
+Test stability guard passed (polling waits constrained by allowlist).
+========================= 6 passed in 66.21s (0:01:06) =========================
 ```
-
-Result: passed; the command exited with code 0 and the tailed output showed only passing test assemblies.
 ⟦AI:AUTO-LOOP⟧

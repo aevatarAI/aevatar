@@ -21,5 +21,10 @@ describe("app navigation groups", () => {
       "Platform",
       "Settings",
     ]);
+    expect(groups.map((group) => group.labelMessageId)).toEqual([
+      "nav.groups.teams",
+      "nav.groups.platform",
+      "nav.groups.settings",
+    ]);
   });
 });

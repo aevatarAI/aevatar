@@ -1,6 +1,3 @@
-using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -8,6 +5,8 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
@@ -309,11 +308,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
+                ["connector.http.authorization"] = "Bearer metadata-secret",
             },
-            ScopeId: "u-1001");
+            ScopeId: "u-1001",
+            ConnectorHttpAuthorization: " Bearer typed-secret ");
 
         var envelope = factory.CreateEnvelope(command, context);
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
         envelope.Id.Should().Be("cmd-1");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
@@ -323,16 +324,18 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
         request.ScopeId.Should().Be("u-1001");
+        request.ConnectorHttpAuthorization.Should().Be("Bearer typed-secret");
         request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Metadata.Should().NotContainKey("connector.http.authorization");
         request.Headers.Should().NotContainKey("workflow.command_id");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldScrubBearerFromDurableLlmControl_AndKeepRouting()
+    public void EnvelopeFactory_ShouldCarryWorkflowLlmControl()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -341,12 +344,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var command = new WorkflowChatRunRequest(
             "hello",
             WorkflowChatSource.DefinitionActor("actor-1", "direct"),
-            LlmControl: new LLMControlContext(
-                NyxIdAccessToken: " access-token ",
-                NyxIdOrgToken: " org-token ",
-                SenderNyxIdAccessToken: " sender-token ",
+            LlmControl: new WorkflowLlmControl(
                 ModelOverride: " model-a ",
-                NyxIdRoutePreference: " route-a ",
                 MaxToolRoundsOverride: 3,
                 UserMemoryPrompt: " memory "));
 
@@ -355,69 +354,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             "cmd-1",
             "corr-1",
             new Dictionary<string, string>()));
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
-        request.LlmControl.NyxIdAccessToken.Should().BeEmpty();
-        request.LlmControl.NyxIdOrgToken.Should().BeEmpty();
-        request.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         request.LlmControl.ModelOverride.Should().Be(" model-a ");
-        request.LlmControl.NyxIdRoutePreference.Should().Be(" route-a ");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
         request.LlmControl.UserMemoryPrompt.Should().Be(" memory ");
-    }
-
-    [Fact]
-    public void EnvelopeFactory_ShouldCarryTypedToolContext_AndScrubCredentials()
-    {
-        var services = new ServiceCollection();
-        services.AddWorkflowApplication();
-        using var provider = services.BuildServiceProvider();
-        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
-        var command = new WorkflowChatRunRequest(
-            "hello",
-            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
-            ToolContext: AgentToolExecutionContext.Empty with
-            {
-                Request = new AgentToolRequestIdentity(" req-1 ", " call-1 "),
-                Credentials = new AgentToolCredentials(" access-token ", " org-token ", " sender-token "),
-                Caller = new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
-                Channel = new AgentToolChannelContext("lark", "sender-1", "reg-scope-1", "msg-1", "platform-msg-1"),
-                SenderBinding = new AgentToolSenderBindingContext("binding-1"),
-                Routing = LLMRequestRoutingContext.Empty with
-                {
-                    ModelOverride = " model-a ",
-                    NyxIdRoutePreference = " route-a ",
-                    MaxToolRoundsOverride = 4,
-                    UserMemoryPrompt = " memory ",
-                },
-                ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
-                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["trace-id"] = "trace-1",
-                },
-            });
-
-        var envelope = factory.CreateEnvelope(command, new CommandContext(
-            "actor-1",
-            "cmd-1",
-            "corr-1",
-            new Dictionary<string, string>()));
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
-        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
-
-        toolContext.Request.RequestId.Should().Be("req-1");
-        toolContext.Request.CallId.Should().Be("call-1");
-        toolContext.Credentials.Should().Be(AgentToolCredentials.Empty);
-        toolContext.Caller.ScopeId.Should().Be("scope-1");
-        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        toolContext.Channel.MessageId.Should().Be("msg-1");
-        toolContext.SenderBinding.BindingId.Should().Be("binding-1");
-        toolContext.Routing.ModelOverride.Should().Be("model-a");
-        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
-        toolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
-        toolContext.Routing.UserMemoryPrompt.Should().Be("memory");
-        toolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
-        toolContext.ExternalMetadata["trace-id"].Should().Be("trace-1");
     }
 
     [Fact]
@@ -437,40 +378,22 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                 ["client-note"] = "open-extension",
             },
             ScopeId: "scope-typed",
-            LlmControl: new LLMControlContext(
-                NyxIdAccessToken: "access-token",
-                NyxIdOrgToken: "org-token",
-                SenderNyxIdAccessToken: "sender-token",
+            LlmControl: new WorkflowLlmControl(
                 ModelOverride: "model-a",
-                NyxIdRoutePreference: "route-a",
                 MaxToolRoundsOverride: 5,
-                UserMemoryPrompt: "memory"),
-            ToolContext: AgentToolExecutionContext.Empty with
-            {
-                Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
-                Routing = LLMRequestRoutingContext.Empty with
-                {
-                    ModelOverride = "model-a",
-                    NyxIdRoutePreference = "route-a",
-                    MaxToolRoundsOverride = 5,
-                    UserMemoryPrompt = "memory",
-                },
-            });
+                UserMemoryPrompt: "memory"));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
             "cmd-1",
             "corr-1",
             new Dictionary<string, string>()));
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
         request.ScopeId.Should().Be("scope-typed");
-        request.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
-        request.ToolContext.Caller.OwnerSubject.Should().Be("owner-typed");
-        request.ToolContext.Routing.ModelOverride.Should().Be("model-a");
         request.LlmControl.ModelOverride.Should().Be("model-a");
-        request.LlmControl.NyxIdRoutePreference.Should().Be("route-a");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
+        request.LlmControl.UserMemoryPrompt.Should().Be("memory");
         request.Metadata.Should().Contain("client-note", "open-extension");
         request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Metadata.Should().NotContainKey("scope_id");
@@ -490,12 +413,12 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             [
                 new WorkflowChatInputPart
                 {
-                    Kind = WorkflowChatInputPartKind.Text,
+                    Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Text,
                     Text = "describe this",
                 },
                 new WorkflowChatInputPart
                 {
-                    Kind = WorkflowChatInputPartKind.Image,
+                    Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
                     Uri = "https://example.com/cat.png",
                     MediaType = "image/png",
                     Name = "cat",
@@ -508,13 +431,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             "cmd-1",
             "corr-1",
             new Dictionary<string, string>()));
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
 
         request.ScopeId.Should().Be("scope-7");
         request.InputParts.Should().HaveCount(2);
-        request.InputParts[0].Kind.Should().Be(ChatContentPartKind.Text);
+        request.InputParts[0].Kind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text);
         request.InputParts[0].Text.Should().Be("describe this");
-        request.InputParts[1].Kind.Should().Be(ChatContentPartKind.Image);
+        request.InputParts[1].Kind.Should().Be(Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image);
         request.InputParts[1].Uri.Should().Be("https://example.com/cat.png");
         request.InputParts[1].MediaType.Should().Be("image/png");
         request.InputParts[1].Name.Should().Be("cat");
@@ -534,13 +457,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             "cmd-2",
             "corr-2",
             new Dictionary<string, string>()));
-        noMetadata.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-2");
+        noMetadata.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-2");
 
         var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", WorkflowChatSource.Direct(), SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",
             new Dictionary<string, string>()));
-        whiteSpaceSession.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-3");
+        whiteSpaceSession.Payload.Unpack<WorkflowChatRequestEvent>().SessionId.Should().Be("corr-3");
     }
 }

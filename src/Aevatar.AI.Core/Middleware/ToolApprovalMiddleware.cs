@@ -134,6 +134,14 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                 // 非阻塞 yield：返回 pending result，不增加 denial counter。
                 // Actor 层检测此 result 后持久化 pending state 并走事件化续传。
                 context.Terminate = true;
+                context.PendingApproval = new ToolApprovalPendingContext(
+                    request.RequestId,
+                    request.ToolName,
+                    request.ToolCallId,
+                    request.ArgumentsJson,
+                    request.ApprovalMode,
+                    request.IsReadOnly,
+                    request.IsDestructive);
                 context.Result = BuildApprovalPendingResult(request);
                 return;
         }

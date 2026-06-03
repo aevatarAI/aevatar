@@ -959,6 +959,52 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteDailySlashCommandThroughGenericSkillDiscovery()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-unexpected"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/daily alice",
+                "msg-generic-daily-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-missing-token-1",
+                    CorrelationId = "corr-missing-token-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            RelayRuntimeContext(
+                "corr-missing-token-1",
+                "relay-token-daily-1",
+                "relay-msg-missing-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-daily-1");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ornn_search_skills");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("daily");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("alice");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/daily alice");
+        result.LlmReplyRequest.Activity.Content.Text.Should().NotContain("chrono-ai-daily");
+        adapter.Replies.Should().BeEmpty();
+        relayHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldCarryRelayReplyToken_WhenNormalRelayTextFallsBackToLlm()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -1091,13 +1137,14 @@ public sealed class ChannelConversationTurnRunnerTests
         relayHandler.Requests.Should().ContainSingle();
         relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-runtime-1");
         callerScopeResolver.CapturedMetadata.Should().NotBeNull();
+        callerScopeResolver.CapturedMetadata!.Should().NotContainKey("scope_id");
         callerScopeResolver.CapturedMetadata![LLMRequestMetadataKeys.NyxIdAccessToken]
             .Should().Be("runtime-user-token-1");
         callerScopeResolver.CapturedMetadata[LLMRequestMetadataKeys.NyxIdOrgToken]
             .Should().Be("runtime-user-token-1");
         callerScopeResolver.CapturedMetadata[ChannelMetadataKeys.MessageId]
             .Should().Be("msg-runtime-token-agent-builder-1");
-        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]
@@ -1205,8 +1252,13 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey("scope_id");
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
         var llmControl = LLMControlContextMapper.FromPayload(result.LlmReplyRequest.LlmControl);
+        toolContext.Caller.ScopeId.Should().BeNull();
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
         adapter.Replies.Should().BeEmpty();
@@ -1253,6 +1305,33 @@ public sealed class ChannelConversationTurnRunnerTests
 
         var result = await runner.RunInboundAsync(
             BuildInboundActivity("/foobar", "msg-unknown", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.Outbound.Text.Should().Contain("/oauth/authorize");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("/oauth/authorize");
+    }
+
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    [Fact]
+    public async Task RunInboundAsync_ShouldGateInvoiceSlashCommandToInit_WhenSenderUnbound()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("/invoice alice", "msg-unbound-invoice", ConversationScope.DirectMessage, "oc_p2p_chat_1"),
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -2483,7 +2562,60 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("relay_reply_edit_unsupported");
         result.EditUnsupported.Should().BeTrue();
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.HttpStatus.Should().Be(501);
         result.ErrorSummary.Should().Contain("edit_unsupported");
+        relayHandler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RunStreamChunkAsync_ShouldPropagateRelayUpdateFailureDiagnostics()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler(
+            """{"error":true,"status":429,"body":"{\"error\":\"rate_limited\",\"error_code\":1005,\"retry_after_seconds\":4}"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunStreamChunkAsync(
+            new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = "corr-stream-rate-limited-1",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-stream-rate-limited-1",
+                    ConversationScope.Group,
+                    "oc_group_chat_1",
+                    new OutboundDeliveryContext
+                    {
+                        ReplyMessageId = "relay-msg-stream-rate-limited-1",
+                        CorrelationId = "corr-stream-rate-limited-1",
+                    },
+                    new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                    }),
+                AccumulatedText = "updated stream",
+                ChunkAtUnixMs = 42,
+            },
+            currentPlatformMessageId: "om_stream_1",
+            RelayRuntimeContext(
+                "corr-stream-rate-limited-1",
+                replyToken: "relay-token-stream-rate-limited-1",
+                replyMessageId: "relay-msg-stream-rate-limited-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_reply_update_rejected");
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.RetryAfter.Should().Be(TimeSpan.FromSeconds(4));
+        result.HttpStatus.Should().Be(429);
+        result.RawErrorKey.Should().Be("rate_limited");
+        result.RawErrorCode.Should().Be(1005);
         relayHandler.Requests.Should().ContainSingle();
     }
 
@@ -2876,9 +3008,15 @@ public sealed class ChannelConversationTurnRunnerTests
 
         public Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
         {
-            CapturedMetadata = AgentToolRequestContext.CurrentMetadata is null
+            var current = AgentToolRequestContext.Current;
+            CapturedMetadata = current is null
                 ? null
-                : new Dictionary<string, string>(AgentToolRequestContext.CurrentMetadata, StringComparer.Ordinal);
+                : new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [LLMRequestMetadataKeys.NyxIdAccessToken] = current.Credentials.NyxIdAccessToken ?? string.Empty,
+                    [LLMRequestMetadataKeys.NyxIdOrgToken] = current.Credentials.NyxIdOrgToken ?? string.Empty,
+                    [ChannelMetadataKeys.MessageId] = current.Channel.MessageId ?? string.Empty,
+                };
             return Task.FromResult<OwnerScope?>(OwnerScope.ForChannel(
                 "nyx-user-1",
                 "lark",

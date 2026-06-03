@@ -15,7 +15,6 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IServiceGovernanceCommandPort _serviceGovernanceCommandPort;
     private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
-    private readonly IScopeWorkflowQueryPort _scopeWorkflowQueryPort;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeWorkflowCommandApplicationService(
@@ -23,14 +22,12 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceGovernanceCommandPort serviceGovernanceCommandPort,
         IServiceGovernanceQueryPort serviceGovernanceQueryPort,
-        IScopeWorkflowQueryPort scopeWorkflowQueryPort,
         IOptions<ScopeWorkflowCapabilityOptions> options)
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
         _serviceGovernanceCommandPort = serviceGovernanceCommandPort ?? throw new ArgumentNullException(nameof(serviceGovernanceCommandPort));
         _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
-        _scopeWorkflowQueryPort = scopeWorkflowQueryPort ?? throw new ArgumentNullException(nameof(scopeWorkflowQueryPort));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("User workflow capability options are required.");
     }
@@ -51,10 +48,11 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
             normalizedWorkflowId);
         var desiredDisplayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(request.DisplayName, normalizedWorkflowId);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
+        var commandHandles = new List<ScopeWorkflowCommandAcceptedHandle>();
 
         if (existingService == null)
         {
-            await _serviceCommandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
+            var receipt = await _serviceCommandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
             {
                 Spec = new ServiceDefinitionSpec
                 {
@@ -63,10 +61,11 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                     Endpoints = { BuildChatEndpointSpec() },
                 },
             }, ct);
+            commandHandles.Add(ScopeWorkflowCommandAcceptedHandle.FromReceipt("create_service", receipt));
         }
         else if (!string.Equals(existingService.DisplayName, desiredDisplayName, StringComparison.Ordinal))
         {
-            await _serviceCommandPort.UpdateServiceAsync(new UpdateServiceDefinitionCommand
+            var receipt = await _serviceCommandPort.UpdateServiceAsync(new UpdateServiceDefinitionCommand
             {
                 Spec = new ServiceDefinitionSpec
                 {
@@ -76,6 +75,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                     PolicyIds = { existingService.PolicyIds },
                 },
             }, ct);
+            commandHandles.Add(ScopeWorkflowCommandAcceptedHandle.FromReceipt("update_service", receipt));
         }
 
         var endpointCatalogDefinition = new ServiceDefinitionSpec
@@ -105,50 +105,58 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
         };
         ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(revisionSpec.WorkflowSpec.InlineWorkflowYamls, request.InlineWorkflowYamls);
 
-        await _serviceCommandPort.CreateRevisionAsync(new CreateServiceRevisionCommand { Spec = revisionSpec }, ct);
-        await _serviceCommandPort.PrepareRevisionAsync(new PrepareServiceRevisionCommand
+        commandHandles.Add(ScopeWorkflowCommandAcceptedHandle.FromReceipt(
+            "create_revision",
+            await _serviceCommandPort.CreateRevisionAsync(new CreateServiceRevisionCommand { Spec = revisionSpec }, ct)));
+        commandHandles.Add(ScopeWorkflowCommandAcceptedHandle.FromReceipt(
+            "prepare_revision",
+            await _serviceCommandPort.PrepareRevisionAsync(new PrepareServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
-        }, ct);
-        await _serviceCommandPort.PublishRevisionAsync(new PublishServiceRevisionCommand
+        }, ct)));
+        commandHandles.Add(ScopeWorkflowCommandAcceptedHandle.FromReceipt(
+            "publish_revision",
+            await _serviceCommandPort.PublishRevisionAsync(new PublishServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
-        }, ct);
-        await _serviceCommandPort.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+        }, ct)));
+        commandHandles.Add(ScopeWorkflowCommandAcceptedHandle.FromReceipt(
+            "set_default_serving_revision",
+            await _serviceCommandPort.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
-        }, ct);
-        await _serviceCommandPort.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
+        }, ct)));
+        commandHandles.Add(ScopeWorkflowCommandAcceptedHandle.FromReceipt(
+            "activate_service_revision",
+            await _serviceCommandPort.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
-        }, ct);
+        }, ct)));
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         var expectedActorId = $"{definitionActorIdPrefix}:{expectedDeploymentId}";
-        var workflowSummary =
-            await _scopeWorkflowQueryPort.GetByWorkflowIdAsync(normalizedScopeId, normalizedWorkflowId, ct) ??
-            new ScopeWorkflowSummary(
-                normalizedScopeId,
-                normalizedWorkflowId,
-                desiredDisplayName,
-                ServiceKeys.Build(identity),
-                ScopeWorkflowCapabilityConventions.NormalizeOptional(request.WorkflowName),
-                expectedActorId,
-                revisionId,
-                expectedDeploymentId,
-                "active",
-                DateTimeOffset.UtcNow);
-
+        // Refactor (issue1531): Old pattern: upsert queried or fabricated a workflow read model in the write path.  New principle: return accepted-only command handles; observed state stays behind the readmodel GET route.
         return new ScopeWorkflowUpsertResult(
-            workflowSummary,
+            normalizedScopeId,
+            normalizedWorkflowId,
+            ServiceKeys.Build(identity),
             revisionId,
             definitionActorIdPrefix,
-            expectedActorId);
+            expectedActorId,
+            expectedDeploymentId,
+            DateTimeOffset.UtcNow,
+            commandHandles,
+            BuildReadModelUrl(normalizedScopeId, normalizedWorkflowId),
+            DisplayName: desiredDisplayName,
+            WorkflowName: ScopeWorkflowCapabilityConventions.NormalizeOptional(request.WorkflowName));
     }
+
+    private static string BuildReadModelUrl(string scopeId, string workflowId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/workflows/{Uri.EscapeDataString(workflowId)}";
 
     private static ServiceEndpointSpec BuildChatEndpointSpec() =>
         new()

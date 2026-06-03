@@ -35,6 +35,11 @@ import {
 } from '@/shared/ui/proComponents';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 import StudioFilesDetailPane from './StudioFilesDetailPane';
+import {
+  formatConsoleMessage,
+  t,
+  type ConsoleMessageDescriptor,
+} from "@/shared/i18n/messages";
 
 type QueryState<T> = {
   readonly isLoading: boolean;
@@ -54,7 +59,7 @@ type StudioFileKey =
 type StaticFileDescriptor = {
   readonly file: 'settings.json' | 'role-catalog' | 'connector-catalog';
   readonly icon: React.ReactNode;
-  readonly label: string;
+  readonly label: ConsoleMessageDescriptor;
 };
 
 type FilesViewMode = 'curated' | 'explorer';
@@ -80,17 +85,26 @@ const staticFiles: readonly StaticFileDescriptor[] = [
   {
     file: 'settings.json',
     icon: <SettingOutlined />,
-    label: 'settings.json',
+    label: {
+      id: 'pages.studio.studiofilespage.settings.json',
+      defaultMessage: 'settings.json',
+    },
   },
   {
     file: 'role-catalog',
     icon: <TeamOutlined />,
-    label: 'Role Catalog',
+    label: {
+      id: 'pages.studio.studiofilespage.role.catalog',
+      defaultMessage: 'Role Catalog',
+    },
   },
   {
     file: 'connector-catalog',
     icon: <ApiOutlined />,
-    label: 'Connector Catalog',
+    label: {
+      id: 'pages.studio.studiofilespage.connector.catalog',
+      defaultMessage: 'Connector Catalog',
+    },
   },
 ];
 
@@ -330,7 +344,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   const visibleStaticFiles = React.useMemo(
     () =>
       staticFiles
-        .filter((item) => matchesSearch([item.label], search))
+        .filter((item) => matchesSearch([formatConsoleMessage(item.label)], search))
         .map((item) => item.file),
     [search],
   );
@@ -509,12 +523,9 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
           {showHeader ? (
             <div style={cardStackStyle}>
               <Typography.Title level={4} style={{ margin: 0 }}>
-                Files
-              </Typography.Title>
+                {t("pages.studio.studiofilespage.files", "Files")}</Typography.Title>
               <Typography.Text type="secondary">
-                Use the guided Studio view for common assets, or switch to raw storage
-                when you need to inspect the underlying files directly.
-              </Typography.Text>
+                {t("pages.studio.studiofilespage.use.the.guided.studio.view", "Use the guided Studio view for common assets, or switch to raw storage when you need to inspect the underlying files directly.")}</Typography.Text>
             </div>
           ) : null}
 
@@ -525,22 +536,20 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                 icon={<AppstoreOutlined />}
                 onClick={() => handleViewModeChange('curated')}
               >
-                Studio View
-              </Button>
+                {t("pages.studio.studiofilespage.studio.view", "Studio View")}</Button>
               <Button
                 type={viewMode === 'explorer' ? 'primary' : 'default'}
                 icon={<BarsOutlined />}
                 onClick={() => handleViewModeChange('explorer')}
               >
-                Storage Explorer
-              </Button>
+                {t("pages.studio.studiofilespage.storage.explorer", "Storage Explorer")}</Button>
             </Space.Compact>
           </div>
 
           <Input
             allowClear
             prefix={<SearchOutlined />}
-            aria-label="Search files"
+            aria-label={t("pages.studio.studiofilespage.search.files", "Search files")}
             placeholder={viewMode === 'explorer' ? 'Search explorer' : 'Search files'}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -550,7 +559,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
             <Alert
               type="warning"
               showIcon
-              message="You have unsaved Explorer changes"
+              message={t("pages.studio.studiofilespage.you.have.unsaved.explorer.changes", "You have unsaved Explorer changes")}
               description={
                 pendingExplorerAction.kind === 'switch-view'
                   ? 'Discard the current edits before leaving Storage Explorer.'
@@ -559,11 +568,9 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
               action={
                 <Space wrap size={[8, 8]}>
                   <Button size="small" onClick={handleKeepEditingExplorer}>
-                    Keep editing
-                  </Button>
+                    {t("pages.studio.studiofilespage.keep.editing", "Keep editing")}</Button>
                   <Button danger size="small" onClick={handleDiscardExplorerChanges}>
-                    Discard changes
-                  </Button>
+                    {t("pages.studio.studiofilespage.discard.changes", "Discard changes")}</Button>
                 </Space>
               }
             />
@@ -607,7 +614,15 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                   ))
                 ) : (
                   <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                    {workflows.isLoading ? 'Loading workflows...' : 'No workflow files matched.'}
+                    {workflows.isLoading
+                      ? t(
+                          "pages.studio.studiofilespage.loading.workflows",
+                          "Loading workflows...",
+                        )
+                      : t(
+                          "pages.studio.studiofilespage.no.workflow.files.matched",
+                          "No workflow files matched.",
+                        )}
                   </Typography.Text>
                 )
               ) : null}
@@ -640,13 +655,20 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                         ))
                       ) : (
                         <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                          {scripts.isLoading ? 'Loading scripts...' : 'No script files matched.'}
+                          {scripts.isLoading
+                            ? t(
+                                "pages.studio.studiofilespage.loading.scripts",
+                                "Loading scripts...",
+                              )
+                            : t(
+                                "pages.studio.studiofilespage.no.script.files.matched",
+                                "No script files matched.",
+                              )}
                         </Typography.Text>
                       )
                     ) : (
                       <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                        Resolve a project scope to browse scripts.
-                      </Typography.Text>
+                        {t("pages.studio.studiofilespage.resolve.project.scope.to.browse", "Resolve a project scope to browse scripts.")}</Typography.Text>
                     )
                   ) : null}
                 </>
@@ -665,7 +687,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                     key={descriptor.file}
                     active={selectedFile === descriptor.file}
                     icon={descriptor.icon}
-                    label={descriptor.label}
+                    label={formatConsoleMessage(descriptor.label)}
                     onClick={() => setSelectedFile(descriptor.file)}
                   />
                 );
@@ -695,14 +717,13 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                   ) : (
                     <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
                       {chatConversations.isLoading
-                        ? 'Loading conversations...'
-                        : 'No conversations matched.'}
+                        ? t("pages.studio.studiofilespage.loading.conversations", "Loading conversations...")
+                        : t("pages.studio.studiofilespage.no.conversations.matched", "No conversations matched.")}
                     </Typography.Text>
                   )
                 ) : (
                   <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                    Resolve a project scope to browse chat histories.
-                  </Typography.Text>
+                    {t("pages.studio.studiofilespage.resolve.project.scope.to.browse.2", "Resolve a project scope to browse chat histories.")}</Typography.Text>
                 )
               ) : null}
             </div>

@@ -22,6 +22,7 @@ import {
   waitingSignalColumns,
 } from "../runWorkbenchConfig";
 import { isHumanApprovalSuspension } from "../runEventPresentation";
+import { t } from "@/shared/i18n/messages";
 
 type RunsActionRequiredPanelProps = {
   humanInputRecord?: HumanInputRecord;
@@ -74,17 +75,17 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
   return (
     <div style={actionRequiredCardStyle}>
       <div style={actionRequiredHeaderStyle}>
-        <Typography.Text strong>Action required</Typography.Text>
+        <Typography.Text strong>{t("pages.runs.runsactionrequiredpanel.action.required", "Action required")}</Typography.Text>
         <Space wrap size={[6, 6]}>
           {humanInputRecord ? (
             <Tag color="warning">
               {isHumanApprovalSuspension(humanInputRecord.suspensionType)
-                ? "Approval required"
-                : "Human input required"}
+                ? t("pages.runs.runsactionrequiredpanel.approval.required", "Approval required")
+                : t("pages.runs.runsactionrequiredpanel.human.input.required", "Human input required")}
             </Tag>
           ) : null}
           {waitingSignalRecord ? (
-            <Tag color="warning">Signal required</Tag>
+            <Tag color="warning">{t("pages.runs.runsactionrequiredpanel.signal.required", "Signal required")}</Tag>
           ) : null}
         </Space>
       </div>
@@ -95,15 +96,14 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
               <div>
                 <Typography.Text strong>
                   {isHumanApprovalSuspension(humanInputRecord.suspensionType)
-                    ? "Review and continue the run"
-                    : "Respond before the run can continue"}
+                    ? t("pages.runs.runsactionrequiredpanel.review.and.continue", "Review and continue the run")
+                    : t("pages.runs.runsactionrequiredpanel.respond.before.continue", "Respond before the run can continue")}
                 </Typography.Text>
                 <Typography.Paragraph
                   style={{ margin: "4px 0 0" }}
                   type="secondary"
                 >
-                  This run is blocked on operator action.
-                </Typography.Paragraph>
+                  {t("pages.runs.runsactionrequiredpanel.this.run.is.blocked.on", "This run is blocked on operator action.")}</Typography.Paragraph>
               </div>
               {variant === "card" ? (
                 <ProDescriptions<HumanInputRecord>
@@ -142,18 +142,18 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
                 submitter={false}
               >
                 <ProFormSwitch
-                  label={
-                    isHumanApprovalSuspension(humanInputRecord.suspensionType)
-                      ? "Approved"
-                      : "Continue run"
-                  }
+	                  label={
+	                    isHumanApprovalSuspension(humanInputRecord.suspensionType)
+	                      ? t("pages.runs.runsactionrequiredpanel.approved", "Approved")
+	                      : t("pages.runs.runsactionrequiredpanel.continue.run", "Continue run")
+	                  }
                   name="approved"
                 />
                 <ProFormTextArea
                   fieldProps={{ rows: 4 }}
-                  label="Operator response"
+                  label={t("pages.runs.runsactionrequiredpanel.operator.response", "Operator response")}
                   name="userInput"
-                  placeholder="Optional response for the blocked step"
+                  placeholder={t("pages.runs.runsactionrequiredpanel.optional.response.for.the.blocked", "Optional response for the blocked step")}
                 />
               </ProForm>
               <Space wrap>
@@ -163,8 +163,8 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
                   type="primary"
                 >
                   {isHumanApprovalSuspension(humanInputRecord.suspensionType)
-                    ? "Approve and continue"
-                    : "Submit response"}
+                    ? t("pages.runs.runsactionrequiredpanel.approve.and.continue", "Approve and continue")
+                    : t("pages.runs.runsactionrequiredpanel.submit.response", "Submit response")}
                 </Button>
               </Space>
             </Space>
@@ -175,13 +175,12 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
           <div style={embeddedPanelStyle}>
             <Space direction="vertical" size={16} style={{ width: "100%" }}>
               <div>
-                <Typography.Text strong>Send the expected signal</Typography.Text>
+                <Typography.Text strong>{t("pages.runs.runsactionrequiredpanel.send.the.expected.signal", "Send the expected signal")}</Typography.Text>
                 <Typography.Paragraph
                   style={{ margin: "4px 0 0" }}
                   type="secondary"
                 >
-                  The run is paused until this signal arrives.
-                </Typography.Paragraph>
+                  {t("pages.runs.runsactionrequiredpanel.the.run.is.paused.until", "The run is paused until this signal arrives.")}</Typography.Paragraph>
               </div>
               {variant === "card" ? (
                 <ProDescriptions<WaitingSignalRecord>
@@ -221,9 +220,9 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
               >
                 <ProFormTextArea
                   fieldProps={{ rows: 4 }}
-                  label="Signal payload"
+                  label={t("pages.runs.runsactionrequiredpanel.signal.payload", "Signal payload")}
                   name="payload"
-                  placeholder="Optional payload for the expected signal"
+                  placeholder={t("pages.runs.runsactionrequiredpanel.optional.payload.for.the.expected", "Optional payload for the expected signal")}
                 />
               </ProForm>
               <Space wrap>
@@ -232,8 +231,7 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
                   onClick={() => signalFormRef.current?.submit?.()}
                   type="primary"
                 >
-                  Send signal
-                </Button>
+                  {t("pages.runs.runsactionrequiredpanel.send.signal", "Send signal")}</Button>
               </Space>
             </Space>
           </div>

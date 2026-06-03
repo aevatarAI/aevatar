@@ -6,6 +6,7 @@ import {
   workbenchConsoleScrollStyle,
   workbenchConsoleSurfaceStyle,
 } from "../runWorkbenchConfig";
+import { t } from "@/shared/i18n/messages";
 
 export type RunMessageRecord = {
   complete?: boolean;
@@ -90,16 +91,20 @@ function resolveRoleTone(role: string): "blue" | "cyan" | "gold" | "default" {
 }
 
 const RunsMessagesView: React.FC<RunsMessagesViewProps> = ({
-  emptyDescription = "No message output yet.",
+  emptyDescription = t("pages.runs.runsmessagesview.no.message.output.yet", "No message output yet."),
   messages,
   topAccessory,
-  title = "Message stream",
+  title = t("pages.runs.runsmessagesview.message.stream", "Message stream"),
 }) => (
   <div style={workbenchConsoleSurfaceStyle}>
     <div style={panelHeaderStyle}>
       <Space wrap size={[8, 8]}>
         <Typography.Text type="secondary">{title}</Typography.Text>
-        <Tag>{messages.length} observed</Tag>
+        <Tag>
+          {t("pages.runs.runsmessagesview.observed.count", "{count} observed", {
+            count: messages.length,
+          })}
+        </Tag>
       </Space>
     </div>
     <div style={workbenchConsoleScrollStyle}>
@@ -131,7 +136,9 @@ const RunsMessagesView: React.FC<RunsMessagesViewProps> = ({
                   <div style={messageMetaStyle}>
                     <Tag color={resolveRoleTone(role)}>{role}</Tag>
                     <Tag color={streaming ? "processing" : "success"}>
-                      {streaming ? "streaming" : "complete"}
+                      {streaming
+                        ? t("pages.runs.runsmessagesview.streaming", "streaming")
+                        : t("pages.runs.runsmessagesview.complete", "complete")}
                     </Tag>
                   <AevatarCompactText
                     monospace
@@ -140,7 +147,7 @@ const RunsMessagesView: React.FC<RunsMessagesViewProps> = ({
                   />
                   </div>
                   <Typography.Paragraph style={messageBodyStyle}>
-                    {record.content || "(streaming...)"}
+                    {record.content || t("pages.runs.runsmessagesview.streaming.placeholder", "(streaming...)")}
                   </Typography.Paragraph>
                 </div>
               );

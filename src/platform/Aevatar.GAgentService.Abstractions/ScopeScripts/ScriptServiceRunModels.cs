@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 
 namespace Aevatar.GAgentService.Abstractions.ScopeScripts;
 

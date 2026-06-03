@@ -6,7 +6,7 @@ using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 

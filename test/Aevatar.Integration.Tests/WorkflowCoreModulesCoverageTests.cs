@@ -1,7 +1,4 @@
-using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -58,11 +55,11 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         ctx.Published.Should().HaveCount(3);
         ctx.Published.Select(x => x.evt.GetType()).Should().ContainInOrder(
-            typeof(ToolCallEvent),
-            typeof(ToolResultEvent),
+            typeof(WorkflowToolCallStartedEvent),
+            typeof(WorkflowToolCallCompletedEvent),
             typeof(StepCompletedEvent));
 
-        var toolResult = ctx.Published[1].evt.Should().BeOfType<ToolResultEvent>().Subject;
+        var toolResult = ctx.Published[1].evt.Should().BeOfType<WorkflowToolCallCompletedEvent>().Subject;
         toolResult.Success.Should().BeFalse();
         toolResult.Error.Should().Contain("tool 'missing_tool' execution failed");
 
@@ -78,7 +75,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("echo", args => args),
             ]);
-        IAgentToolSource[] toolSources = [new ThrowingToolSource(), source];
+        IWorkflowToolSource[] toolSources = [new ThrowingToolSource(), source];
         var module = new ToolCallModule(toolSources, NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
         var request = new StepRequestEvent
@@ -92,7 +89,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
         source.DiscoverCalls.Should().Be(1);
-        var toolResult = ctx.Published.Select(x => x.evt).OfType<ToolResultEvent>().Single();
+        var toolResult = ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Single();
         toolResult.Success.Should().BeTrue();
         toolResult.ResultJson.Should().Be("""{"msg":"ok"}""");
     }
@@ -130,7 +127,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
 
         source.DiscoverCalls.Should().Be(1);
-        ctx.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().OnlyContain(x => x.Success);
+        ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Should().OnlyContain(x => x.Success);
     }
 
     [Fact]
@@ -176,7 +173,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         source.DiscoverCalls.Should().Be(1);
         contexts.SelectMany(ctx => ctx.Published.Select(x => x.evt))
-            .OfType<ToolResultEvent>()
+            .OfType<WorkflowToolCallCompletedEvent>()
             .Should()
             .HaveCount(32)
             .And.OnlyContain(x => x.Success);
@@ -223,7 +220,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
 
         source.DiscoverCalls.Should().Be(2);
-        retryContext.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().ContainSingle()
+        retryContext.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle()
             .Which.ResultJson.Should().Be("""{"msg":"retry"}""");
     }
 
@@ -898,9 +895,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         var module = new LLMCallModule();
 
         module.CanHandle(Envelope(new StepRequestEvent { StepType = "llm_call", StepId = "s1" })).Should().BeTrue();
-        module.CanHandle(Envelope(RoleReply("s1", "done"))).Should().BeTrue();
-        module.CanHandle(Envelope(new TextMessageEndEvent { SessionId = "s1", Content = "done" })).Should().BeFalse();
-        module.CanHandle(Envelope(new ChatResponseEvent { SessionId = "s1", Content = "done" })).Should().BeFalse();
+        module.CanHandle(Envelope(new WorkflowLlmInvocationCompletedEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
         module.CanHandle(Envelope(new WorkflowCompletedEvent { WorkflowName = "wf", Success = true })).Should().BeFalse();
         module.CanHandle(new EventEnvelope()).Should().BeFalse();
     }
@@ -934,17 +929,17 @@ public sealed class WorkflowCoreModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
-        chat.Prompt.Should().Be("system\n\nquestion");
-        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1", attempt: 1));
-        chat.TimeoutMs.Should().Be(1800000);
+        var intent = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single();
+        intent.Prompt.Should().Be("system\n\nquestion");
+        intent.SessionId.Should().Be($"{ctx.AgentId}:run-llm-1:llm-1:a1");
+        intent.TimeoutMs.Should().Be(1800000);
         ctx.Sent.Should().ContainSingle();
         ctx.Sent[0].targetActorId.Should().Be($"{ctx.AgentId}:assistant");
         ctx.Published.Last().direction.Should().Be(TopologyAudience.Self);
     }
 
     [Fact]
-    public async Task LLMCallModule_WhenTelegramTimeoutParameterIsZero_ShouldPromoteTypedPresence()
+    public async Task LLMCallModule_WhenReservedTimeoutParameterIsZero_ShouldNotCopyItToIntentAnnotations()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -958,18 +953,17 @@ public sealed class WorkflowCoreModulesCoverageTests
                 Input = "wait",
                 Parameters =
                 {
-                    ["telegram.wait_timeout_ms"] = "0",
-                    ["telegram.timeout_ms"] = "0",
+                    ["llm_timeout_ms"] = "0",
+                    ["custom"] = "value",
                 },
             }),
             ctx,
             CancellationToken.None);
 
-        var zeroRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
-        zeroRequest.Telegram.HasWaitTimeoutMs.Should().BeTrue();
-        zeroRequest.Telegram.WaitTimeoutMs.Should().Be(0);
-        zeroRequest.Telegram.HasTimeoutMs.Should().BeTrue();
-        zeroRequest.Telegram.TimeoutMs.Should().Be(0);
+        var zeroIntent = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single();
+        zeroIntent.TimeoutMs.Should().Be(1800000);
+        zeroIntent.Annotations.Should().NotContainKey("llm_timeout_ms");
+        zeroIntent.Annotations["custom"].Should().Be("value");
 
         ctx = CreateContext();
         await module.HandleAsync(
@@ -983,94 +977,13 @@ public sealed class WorkflowCoreModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var absentRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
-        absentRequest.Telegram.HasWaitTimeoutMs.Should().BeFalse();
-        absentRequest.Telegram.HasTimeoutMs.Should().BeFalse();
+        var absentIntent = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single();
+        absentIntent.TimeoutMs.Should().Be(1800000);
+        absentIntent.Annotations.Should().BeEmpty();
     }
 
     [Fact]
-    public void LLMCallModule_TryApplyTelegramParameter_ShouldPromoteTypedTelegramFields()
-    {
-        var telegram = new TelegramBridgeRequest();
-
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.connector", " telegram_user ").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.chat_id", " 10001 ").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.operation", "/waitReply").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.message_thread_id", "42").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.text", "hello typed").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.parse_mode", "Markdown").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.disable_web_page_preview", "true").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.reply_to_message_id", "99").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.expected_from_user_id", "2002").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.expected_from_username", "@openclaw_bot").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.correlation_contains", "done").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.wait_timeout_ms", "5000").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.poll_timeout_seconds", "2").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.settle_polls_after_match", "3").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.collect_all_replies", "true").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.start_from_latest", "false").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.offset", "123").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.http_method", "GET").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.content_type", "application/custom").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.timeout_ms", "7000").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.phone_number", "+8613800000000").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.verification_code", "123 456").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.2fa_password", "secret").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "telegram.emit_chat_response", "true").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "workflow.run_id", "run-1").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "workflow.step_id", "step-1").Should().BeTrue();
-
-        telegram.ConnectorName.Should().Be(" telegram_user ");
-        telegram.ChatId.Should().Be(" 10001 ");
-        telegram.Operation.Should().Be(TelegramBridgeOperation.WaitReply);
-        telegram.MessageThreadId.Should().Be(42);
-        telegram.Text.Should().Be("hello typed");
-        telegram.ParseMode.Should().Be("Markdown");
-        telegram.HasDisableWebPagePreview.Should().BeTrue();
-        telegram.DisableWebPagePreview.Should().BeTrue();
-        telegram.ReplyToMessageId.Should().Be(99);
-        telegram.ExpectedFromUserId.Should().Be("2002");
-        telegram.ExpectedFromUsername.Should().Be("@openclaw_bot");
-        telegram.CorrelationContains.Should().Be("done");
-        telegram.WaitTimeoutMs.Should().Be(5000);
-        telegram.PollTimeoutSeconds.Should().Be(2);
-        telegram.SettlePollsAfterMatch.Should().Be(3);
-        telegram.CollectAllReplies.Should().BeTrue();
-        telegram.StartFromLatest.Should().BeFalse();
-        telegram.Offset.Should().Be(123);
-        telegram.HttpMethod.Should().Be("GET");
-        telegram.ContentType.Should().Be("application/custom");
-        telegram.TimeoutMs.Should().Be(7000);
-        telegram.PhoneNumber.Should().Be("+8613800000000");
-        telegram.VerificationCode.Should().Be("123 456");
-        telegram.Password.Should().Be("secret");
-        telegram.EmitChatResponse.Should().BeTrue();
-        telegram.RunId.Should().Be("run-1");
-        telegram.StepId.Should().Be("step-1");
-    }
-
-    [Fact]
-    public void LLMCallModule_TryApplyTelegramParameter_ShouldHandleAliasesAndInvalidValues()
-    {
-        var telegram = new TelegramBridgeRequest();
-
-        LLMCallModule.TryApplyTelegramParameter(telegram, "path", "/ensureLogin").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "operation", "/sendMessage").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "llm_timeout_ms", "10000", timeoutMs: 6000).Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "timeout_ms", "10000", timeoutMs: 6000).Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "offset", "0").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "disable_web_page_preview", "not-bool").Should().BeTrue();
-        LLMCallModule.TryApplyTelegramParameter(telegram, "unknown", "value").Should().BeFalse();
-
-        telegram.Operation.Should().Be(TelegramBridgeOperation.SendMessage);
-        telegram.HasTimeoutMs.Should().BeTrue();
-        telegram.TimeoutMs.Should().Be(5000);
-        telegram.Offset.Should().Be(0);
-        telegram.HasDisableWebPagePreview.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task LLMCallModule_LiveFramesShouldNotCompleteAndRoleReplyShouldCompleteMatchingPendingStep()
+    public async Task LLMCallModule_WorkflowLlmInvocationCompleted_ShouldCompleteMatchingPendingStep()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1087,25 +1000,16 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text", attempt: 1);
+        var textSessionId = $"{ctx.AgentId}:run-text:llm-text:a1";
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
+                RunId = "run-text",
+                StepId = "llm-text",
                 SessionId = textSessionId,
+                Success = true,
                 Content = "a1",
             }, publisherId: "role-worker-1"),
-            ctx,
-            CancellationToken.None);
-
-        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
-
-        await module.HandleAsync(
-            Envelope(new WorkflowRoleReplyRecordedEvent
-            {
-                SessionId = textSessionId,
-                Content = "a1",
-                RoleActorId = "role-worker-1",
-            }),
             ctx,
             CancellationToken.None);
 
@@ -1128,22 +1032,14 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat", attempt: 1);
+        var chatSessionId = $"{ctx.AgentId}:run-chat:llm-chat:a1";
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
+                RunId = "run-chat",
+                StepId = "llm-chat",
                 SessionId = chatSessionId,
-                Content = "a2",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
-
-        await module.HandleAsync(
-            Envelope(new WorkflowRoleReplyRecordedEvent
-            {
-                SessionId = chatSessionId,
+                Success = true,
                 Content = "a2",
             }),
             ctx,
@@ -1156,54 +1052,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_PresentationFrames_ShouldNotCompletePendingStep()
-    {
-        var module = new LLMCallModule();
-        var ctx = CreateContext();
-
-        await module.HandleAsync(
-            Envelope(new StepRequestEvent
-            {
-                StepId = "llm-presentation",
-                StepType = "llm_call",
-                RunId = "run-presentation",
-                Input = "q",
-            }),
-            ctx,
-            CancellationToken.None);
-        ctx.Published.Clear();
-
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-presentation", "llm-presentation", attempt: 1);
-        await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
-            {
-                SessionId = sessionId,
-                Content = "presentation text",
-            }),
-            ctx,
-            CancellationToken.None);
-        await module.HandleAsync(
-            Envelope(new ChatResponseEvent
-            {
-                SessionId = sessionId,
-                Content = "presentation response",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
-
-        await module.HandleAsync(
-            Envelope(RoleReply(sessionId, "committed role reply")),
-            ctx,
-            CancellationToken.None);
-        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        completed.StepId.Should().Be("llm-presentation");
-        completed.Output.Should().Be("committed role reply");
-    }
-
-    [Fact]
-    public async Task LLMCallModule_WhenRolePublishesInternalFailureMarker_ShouldPublishFailedStepCompleted()
+    public async Task LLMCallModule_WhenRolePublishesFailureCompletion_ShouldPublishFailedStepCompleted()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -1220,9 +1069,16 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed", attempt: 1);
+        var sessionId = $"{ctx.AgentId}:run-failed:llm-failed:a1";
         await module.HandleAsync(
-            Envelope(RoleReply(sessionId, "[[AEVATAR_LLM_ERROR]] provider returned 429", roleActorId: "role-worker-failed")),
+            Envelope(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = "run-failed",
+                StepId = "llm-failed",
+                SessionId = sessionId,
+                Success = false,
+                Error = "provider returned 429",
+            }, publisherId: "role-worker-failed"),
             ctx,
             CancellationToken.None);
 
@@ -1264,45 +1120,22 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_LiveFrames_ShouldNotCompletePendingStep()
+    public async Task LLMCallModule_WhenSessionNotPendingOrEmpty_ShouldIgnoreCompletionEvents()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
-                StepId = "llm-live-frame",
-                StepType = "llm_call",
-                RunId = "run-live-frame",
-                Input = "q-live",
-            }),
-            ctx,
-            CancellationToken.None);
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-live-frame", "llm-live-frame", attempt: 1);
-        ctx.Published.Clear();
-
-        await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
-            {
-                SessionId = sessionId,
-                Content = "x",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        await module.HandleAsync(
-            Envelope(new ChatResponseEvent
-            {
-                SessionId = sessionId,
+                SessionId = "missing",
+                Success = true,
                 Content = "y",
             }),
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
-        ctx.LoadState<LLMCallModuleState>("llm_call")
-            .PendingBySessionId.Should().ContainKey(sessionId);
+        ctx.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -1578,25 +1411,9 @@ public sealed class WorkflowCoreModulesCoverageTests
         };
     }
 
-    private static WorkflowRoleReplyRecordedEvent RoleReply(
-        string sessionId,
-        string content,
-        string roleActorId = "role-worker") =>
-        new()
-        {
-            RunId = "run",
-            RoleActorId = roleActorId,
-            RoleId = "assistant",
-            SessionId = sessionId,
-            Content = content,
-            ContentEmitted = true,
-        };
-
-    private sealed class FakeAgentTool(string name, Func<string, string> execute) : IAgentTool
+    private sealed class FakeAgentTool(string name, Func<string, string> execute) : IWorkflowTool
     {
         public string Name { get; } = name;
-        public string Description => "fake tool";
-        public string ParametersSchema => "{}";
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
@@ -1604,39 +1421,39 @@ public sealed class WorkflowCoreModulesCoverageTests
         }
     }
 
-    private sealed class CountingToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    private sealed class CountingToolSource(IReadOnlyList<IWorkflowTool> tools) : IWorkflowToolSource
     {
         public int DiscoverCalls { get; private set; }
 
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
         {
             DiscoverCalls++;
             return Task.FromResult(tools);
         }
     }
 
-    private sealed class ThrowingToolSource : IAgentToolSource
+    private sealed class ThrowingToolSource : IWorkflowToolSource
     {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
         {
             throw new InvalidOperationException("discovery failed");
         }
     }
 
-    private sealed class CancellableToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    private sealed class CancellableToolSource(IReadOnlyList<IWorkflowTool> tools) : IWorkflowToolSource
     {
         public int DiscoverCalls { get; private set; }
         public TaskCompletionSource<bool> FirstDiscoveryStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> FirstDiscoveryCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        public async Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
         {
             DiscoverCalls++;
             if (DiscoverCalls > 1)
                 return tools;
 
             FirstDiscoveryStarted.TrySetResult(true);
-            var pending = new TaskCompletionSource<IReadOnlyList<IAgentTool>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var pending = new TaskCompletionSource<IReadOnlyList<IWorkflowTool>>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = ct.Register(() =>
             {
                 FirstDiscoveryCancelled.TrySetResult(true);
@@ -1647,7 +1464,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         }
     }
 
-    private sealed class BlockingCountingToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource, IDisposable
+    private sealed class BlockingCountingToolSource(IReadOnlyList<IWorkflowTool> tools) : IWorkflowToolSource, IDisposable
     {
         private readonly TaskCompletionSource<bool> _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1655,7 +1472,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         public int DiscoverCalls => Volatile.Read(ref _discoverCalls);
 
-        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        public async Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
         {
             Interlocked.Increment(ref _discoverCalls);
             _entered.TrySetResult(true);

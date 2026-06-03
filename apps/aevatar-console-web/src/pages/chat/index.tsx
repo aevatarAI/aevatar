@@ -91,6 +91,7 @@ import type {
   StepInfo,
   ToolCallInfo,
 } from "./chatTypes";
+import { t } from "@/shared/i18n/messages";
 
 function readChatQueryValue(
   key: string,
@@ -424,19 +425,20 @@ const ChatPage: React.FC = () => {
     userLlmSettingsQuery.data?.effectiveRoute
   );
   const routeOptions = useMemo(
-    () =>
-      buildConversationRouteOptions(
-        userLlmSettingsQuery.data,
-        globalPreferredRoute,
-        conversationRoute
-      ),
-    [conversationRoute, globalPreferredRoute, userLlmSettingsQuery.data]
+    () => buildConversationRouteOptions(userLlmSettingsQuery.data),
+    [userLlmSettingsQuery.data]
   );
   const effectiveRoute =
     conversationRoute !== undefined ? conversationRoute : globalPreferredRoute;
+  const backendEffectiveRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.effectiveRouteLabel
+  );
   const effectiveRouteLabel = useMemo(
-    () => describeConversationRoute(effectiveRoute, routeOptions),
-    [effectiveRoute, routeOptions]
+    () =>
+      conversationRoute === undefined && backendEffectiveRouteLabel
+        ? backendEffectiveRouteLabel
+        : describeConversationRoute(effectiveRoute, routeOptions),
+    [backendEffectiveRouteLabel, conversationRoute, effectiveRoute, routeOptions]
   );
   const effectiveModel =
     trimConversationValue(conversationModel) ||
@@ -445,16 +447,10 @@ const ChatPage: React.FC = () => {
   const modelGroups = useMemo(
     () =>
       buildConversationModelGroups({
-        conversationModel,
         effectiveRoute,
-        globalDefaultModel: userLlmSettingsQuery.data?.defaultModel,
         settings: userLlmSettingsQuery.data,
       }),
-    [
-      conversationModel,
-      effectiveRoute,
-      userLlmSettingsQuery.data,
-    ]
+    [effectiveRoute, userLlmSettingsQuery.data]
   );
   const conversationHeaders = useMemo(
     () => buildConversationHeaders(conversationRoute, conversationModel),
@@ -2048,8 +2044,7 @@ const ChatPage: React.FC = () => {
                   fontWeight: 600,
                 }}
               >
-                Console
-              </div>
+                {t("pages.chat.index.console", "Console")}</div>
               {scopeId && services.length > 0 ? (
                 <ServiceSelector
                   onCreate={handleCreate}
@@ -2084,8 +2079,7 @@ const ChatPage: React.FC = () => {
                 }}
                 type="button"
               >
-                New Chat
-              </button>
+                {t("pages.chat.index.new.chat", "New Chat")}</button>
               <ChatToolsMenu
                 advancedOpen={advancedOpen}
                 eventStreamOpen={showDebug}
@@ -2156,13 +2150,13 @@ const ChatPage: React.FC = () => {
                   ) : !scopeId ? (
                     <Alert
                       showIcon
-                    title="No project scope is currently available."
+                    title={t("pages.chat.index.no.project.scope.is.currently", "No project scope is currently available.")}
                     type="warning"
                   />
                 ) : !selectedService || !selectedServiceId ? (
                   <Alert
                     showIcon
-                    title="No chat-capable services are currently available."
+                    title={t("pages.chat.index.no.chat.capable.services.are", "No chat-capable services are currently available.")}
                     type="info"
                   />
                 ) : messages.length === 0 &&

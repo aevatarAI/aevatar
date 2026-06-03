@@ -10,7 +10,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -237,6 +237,41 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCode(output).Should().Be("actor_not_found");
         harness.ActorRegistry.LastScopeId.Should().Be("scope-1");
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InvokeGAgent_ShouldNotResolveCallerScopeFromExternalMetadata()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = AgentToolContextScope.Push(new AgentToolExecutionContext(
+            new AgentToolRequestIdentity("request-1", "call-gagent-no-scope"),
+            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCallerContext(null, "owner-1", "response-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolSenderBindingContext("binding-1"),
+            new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
+            new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["scope_id"] = "metadata-scope",
+                [LLMRequestMetadataKeys.ScopeId] = "metadata-aevatar-scope",
+                ["external"] = "value",
+            }));
+
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_id": "actor-1",
+              "payload": { "prompt": "hello" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        harness.ActorRegistry.LastScopeId.Should().BeNull();
         harness.ActorDispatch.Calls.Should().BeEmpty();
     }
 
@@ -575,9 +610,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.ScopeId.Should().Be("scope-1");
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command.Metadata);
-        ShouldCarryTypedToolControlValues(
-            harness.WorkflowDispatch.Command.ToolContext,
-            harness.WorkflowDispatch.Command.LlmControl);
+        ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
 
         var result = Read(output);
@@ -624,43 +657,6 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command!);
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
-    }
-
-    [Theory]
-    [InlineData("aevatar_invoke_gagent")]
-    [InlineData("aevatar_invoke_team")]
-    [InlineData("aevatar_start_workflow")]
-    public async Task InvocationTools_ShouldImplementChatRunWrapperAndPreserveRequestFields(string toolName)
-    {
-        var harness = new Harness();
-        var tool = await harness.DiscoverToolAsync(toolName);
-        var chatRunTool = tool.Should().BeAssignableTo<IAevatarInvocationChatRunTool>().Subject;
-        var argumentsJson = BuildSuccessfulArguments(toolName);
-        if (toolName == "aevatar_start_workflow")
-        {
-            harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
-                .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "workflow-command", "workflow-correlation"));
-        }
-
-        using var _ = PushContext(callId: $"call-wrapper-{toolName}");
-        var request = BuildChatRunRequest(
-            $"response-{toolName}",
-            $"tool-call-{toolName}",
-            toolName,
-            argumentsJson);
-        var result = await chatRunTool.ExecuteForChatRunAsync(request);
-
-        result.ResponseId.Should().Be(request.ResponseId);
-        result.ModelName.Should().Be(request.ModelName);
-        result.Messages.Should().BeSameAs(request.Messages);
-        result.ToolCall.Should().BeSameAs(request.ToolCall);
-        result.ArgumentsJson.Should().Be(argumentsJson);
-        result.LlmRound.Should().Be(request.LlmRound);
-        result.ToolExecutionResultJson.Should().NotBeNullOrWhiteSpace();
-        result.ErrorCode.Should().BeEmpty();
-        result.RunId.Should().NotBeNullOrWhiteSpace();
-        result.ScopeId.Should().Be("scope-1");
-        result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Stream);
     }
 
     [Fact]
@@ -775,9 +771,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCodeOrNull(output).Should().BeNull(output);
         ShouldNotCarryTrustedCallerValues(harness.WorkflowDispatch.Command!.Metadata);
-        ShouldCarryTypedToolControlValues(
-            harness.WorkflowDispatch.Command.ToolContext,
-            harness.WorkflowDispatch.Command.LlmControl);
+        ShouldCarryWorkflowLlmControlValues(harness.WorkflowDispatch.Command.LlmControl);
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
     }
 
@@ -821,8 +815,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         var command = harness.WorkflowDispatch.Command!;
         command.ScopeId.Should().Be("scope-1");
-        command.ToolContext.Should().NotBeNull("trusted caller/tool context must use the typed sub-message");
-        command.LlmControl.Should().NotBeNull("trusted LLM control must use the typed control object");
+        command.LlmControl.Should().NotBeNull("trusted LLM routing must use the typed workflow control object");
         command.Metadata.Should().Contain("client-note", "open-extension");
         ShouldNotCarryTrustedCallerValues(command.Metadata);
         ShouldCarryTypedTrustedCallerValues(command);
@@ -1000,36 +993,12 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static void ShouldCarryTypedTrustedCallerValues(WorkflowChatRunRequest command)
     {
-        // Refactor (iter1353/cluster-001): Old pattern: workflow dispatch stamped trusted caller/control facts into Metadata.
-        // New principle: Metadata carries only filtered payload headers; ScopeId, ToolContext, and LlmControl carry trusted facts.
         command.ScopeId.Should().Be("scope-1");
-        command.ToolContext.Should().NotBeNull();
-        command.ToolContext!.Request.RequestId.Should().Be("request-1");
-        command.ToolContext.Request.CallId.Should().NotBeNullOrWhiteSpace();
-        command.ToolContext.Caller.ScopeId.Should().Be("scope-1");
-        command.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        command.ToolContext.Caller.ResponseId.Should().Be("response-1");
-        command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        command.ToolContext.Credentials.NyxIdOrgToken.Should().Be("org-token");
-        command.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
-        command.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
-        command.ToolContext.Routing.ModelOverride.Should().Be("model-1");
-        command.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-1");
-        command.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
-        command.ToolContext.ConnectedServices.ContextJson.Should().Be("""{"service":"ctx"}""");
-        command.LlmControl.Should().NotBeNull();
-        command.LlmControl!.NyxIdAccessToken.Should().Be("access-token");
-        command.LlmControl.NyxIdOrgToken.Should().Be("org-token");
-        command.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
-        command.LlmControl.ModelOverride.Should().Be("model-1");
-        command.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
-        command.LlmControl.MaxToolRoundsOverride.Should().Be(4);
+        ShouldCarryWorkflowLlmControlValues(command.LlmControl);
     }
 
     private static void ShouldNotCarryTrustedCallerValues(IEnumerable<KeyValuePair<string, string>>? metadata)
     {
-        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
-        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         metadata.Should().NotBeNull();
         var values = metadata!.ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal);
         values.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
@@ -1068,6 +1037,14 @@ public sealed class AevatarInvocationToolSourceTests
         llmControl.NyxIdRoutePreference.Should().Be("route-1");
     }
 
+    private static void ShouldCarryWorkflowLlmControlValues(WorkflowLlmControl? llmControl)
+    {
+        llmControl.Should().NotBeNull();
+        llmControl!.ModelOverride.Should().Be("model-1");
+        llmControl.MaxToolRoundsOverride.Should().Be(4);
+        llmControl.UserMemoryPrompt.Should().Be("memory");
+    }
+
     private static AgentToolContextScope PushContext(string callId, string? scopeId = "scope-1") =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity("request-1", callId),
@@ -1104,34 +1081,6 @@ public sealed class AevatarInvocationToolSourceTests
             string.Empty,
             3);
     }
-
-    private static string BuildSuccessfulArguments(string toolName) =>
-        toolName switch
-        {
-            "aevatar_invoke_gagent" => """
-                {
-                  "actor_id": "actor-1",
-                  "payload": { "prompt": "hello" },
-                  "wait": "stream"
-                }
-                """,
-            "aevatar_invoke_team" => """
-                {
-                  "team_id": "team-1",
-                  "endpoint_id": "entry",
-                  "payload": { "prompt": "go" },
-                  "wait": "stream"
-                }
-                """,
-            "aevatar_start_workflow" => """
-                {
-                  "workflow_id": "wf-main",
-                  "inputs": { "prompt": "run workflow" },
-                  "wait": "stream"
-                }
-                """,
-            _ => throw new ArgumentOutOfRangeException(nameof(toolName), toolName, null),
-        };
 
     private static ServiceRunSnapshot BuildServiceRun(
         string scopeId,

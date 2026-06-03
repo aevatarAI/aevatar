@@ -1,3 +1,5 @@
+using Aevatar.GAgentService.Abstractions.Commands;
+
 namespace Aevatar.GAgentService.Abstractions;
 
 public sealed record ScopeWorkflowUpsertRequest(
@@ -32,8 +34,30 @@ public sealed record ScopeWorkflowDetail(
     ScopeWorkflowSummary? Workflow,
     ScopeWorkflowSource? Source);
 
+public sealed record ScopeWorkflowCommandAcceptedHandle(
+    string Stage,
+    string TargetActorId,
+    string CommandId,
+    string CorrelationId)
+{
+    public static ScopeWorkflowCommandAcceptedHandle FromReceipt(
+        string stage,
+        ServiceCommandAcceptedReceipt receipt) =>
+        new(stage, receipt.TargetActorId, receipt.CommandId, receipt.CorrelationId);
+}
+
 public sealed record ScopeWorkflowUpsertResult(
-    ScopeWorkflowSummary Workflow,
+    string ScopeId,
+    string WorkflowId,
+    string ServiceKey,
     string RevisionId,
     string DefinitionActorIdPrefix,
-    string ExpectedActorId);
+    string ExpectedActorId,
+    string ExpectedDeploymentId,
+    DateTimeOffset AcceptedAtUtc,
+    IReadOnlyList<ScopeWorkflowCommandAcceptedHandle> CommandHandles,
+    string ReadModelUrl,
+    string AcceptanceStage = "accepted",
+    string PropagationStage = "readmodel_propagating",
+    string DisplayName = "",
+    string WorkflowName = "");

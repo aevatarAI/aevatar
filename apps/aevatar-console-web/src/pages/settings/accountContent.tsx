@@ -17,6 +17,7 @@ import {
   summaryMetricGridStyle,
 } from "@/shared/ui/proComponents";
 import { buildSettingsPanelStyle, SummaryField, SummaryMetric } from "./shared";
+import { t } from "@/shared/i18n/messages";
 
 function formatSessionExpiry(value?: number): string {
   if (!value) {
@@ -106,8 +107,7 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
         extra={
           authenticated && showInlineSignOut ? (
             <Button danger icon={<LogoutOutlined />} onClick={handleSignOut}>
-              Sign out
-            </Button>
+              {t("pages.settings.accountcontent.sign.out", "Sign out")}</Button>
           ) : null
         }
         style={settingsPanelStyle}
@@ -151,7 +151,7 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
 
             <div style={summaryFieldGridStyle}>
               <SummaryField
-                label="User ID"
+                label={t("pages.settings.accountcontent.user.id", "User ID")}
                 value={
                   <AevatarCompactText
                     copyable
@@ -169,15 +169,14 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
           </div>
         ) : (
           <Empty
-            description="This browser does not have a restorable sign-in session."
+            description={t("pages.settings.accountcontent.this.browser.does.not.have", "This browser does not have a restorable sign-in session.")}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           >
             <Button
               type="primary"
               onClick={() => window.location.replace("/login")}
             >
-              Sign in
-            </Button>
+              {t("pages.settings.accountcontent.sign.in", "Sign in")}</Button>
           </Empty>
         )}
       </AevatarPanel>
@@ -185,7 +184,7 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
       <AevatarPanel style={settingsPanelStyle} title="Authentication">
         <div style={summaryFieldGridStyle}>
           <SummaryField
-            label="Session expires"
+            label={t("pages.settings.accountcontent.session.expires", "Session expires")}
             value={
               backendSession?.expiresAtUtc
                 ? formatIsoSessionExpiry(backendSession.expiresAtUtc)
@@ -201,7 +200,7 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
             value={authMeQuery.data?.scopeId || authSession?.tokens.scope || "Unavailable"}
           />
           <SummaryField
-            label="Local refresh token"
+            label={t("pages.settings.accountcontent.local.refresh.token", "Local refresh token")}
             value={authSession?.tokens.refreshToken ? "Available" : "Unavailable"}
           />
         </div>
