@@ -3,6 +3,7 @@ import { Button, Input, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { moduleCardProps } from '@/shared/ui/proComponents';
 import type { ScopeQueryDraft } from './scopeQuery';
+import { t } from "@/shared/i18n/messages";
 
 type ScopeQueryCardProps = {
   activeScopeId?: string | null;
@@ -81,7 +82,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
       >
         <Input
           allowClear
-          placeholder="输入工作空间 ID"
+          placeholder={t("pages.scopes.scopequerycard.enter.workspace.id", "Enter workspace ID")}
           style={{ flex: '1 1 240px', minWidth: 0, width: '100%' }}
           value={draft.scopeId}
           onChange={(event) =>
@@ -96,8 +97,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
         </Button>
         {onReset ? (
           <Button disabled={resetDisabled ?? computedResetDisabled} onClick={onReset}>
-            重置
-          </Button>
+            {t("pages.scopes.scopequerycard.reset", "reset")}</Button>
         ) : null}
       </div>
       <div
@@ -111,8 +111,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
         {normalizedResolvedScopeId ? (
           <>
             <Typography.Text style={helperLabelStyle}>
-              已解析工作空间
-            </Typography.Text>
+              {t("pages.scopes.scopequerycard.resolved.workspace", "Resolved workspace")}</Typography.Text>
             <Typography.Paragraph
               copyable={{ text: normalizedResolvedScopeId }}
               style={resolvedScopeValueStyle}
@@ -130,24 +129,20 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
                   wordBreak: 'break-word',
                 }}
               >
-                当前会话已通过 {normalizedResolvedScopeSource} 解析出这个工作空间
-              </Typography.Text>
+                {t("pages.scopes.scopequerycard.the.current.session.has", "The current session has passed")}{normalizedResolvedScopeSource} {t("pages.scopes.scopequerycard.parse.out.this.workspace", "Parse out this workspace")}</Typography.Text>
             ) : null}
             {loadIsNoOp ? (
               <Typography.Text style={helperCopyStyle}>
-                当前已加载这个工作空间，所以“{loadLabel}”不会再触发变化。
-              </Typography.Text>
+                {t("pages.scopes.scopequerycard.this.workspace.is.currently", "This workspace is currently loaded, so \"")}{loadLabel}{t("pages.scopes.scopequerycard.will.no.longer.trigger", "\" will no longer trigger the change.")}</Typography.Text>
             ) : null}
             {resetIsNoOp ? (
               <Typography.Text style={helperCopyStyle}>
-                当前已经回到会话解析出的工作空间，所以“重置”不会再触发变化。
-              </Typography.Text>
+                {t("pages.scopes.scopequerycard.you.are.now.back", "You are now back to the session-resolved workspace, so \"reset\" will no longer trigger changes.")}</Typography.Text>
             ) : null}
             {canUseResolvedScope ? (
               <div>
                 <Button size="small" onClick={onUseResolvedScope}>
-                  使用会话工作空间
-                </Button>
+                  {t("pages.scopes.scopequerycard.use.session.workspace", "Use session workspace")}</Button>
               </div>
             ) : null}
           </>
@@ -162,8 +157,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
               wordBreak: 'break-word',
             }}
           >
-            当前会话里没有自动解析出工作空间。请手动输入一个工作空间 ID。
-          </Typography.Text>
+            {t("pages.scopes.scopequerycard.the.workspace.is.not", "The workspace is not automatically resolved in the current session. Please enter a workspace ID manually.")}</Typography.Text>
         )}
       </div>
     </ProCard>

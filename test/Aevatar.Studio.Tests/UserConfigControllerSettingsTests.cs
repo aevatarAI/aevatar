@@ -226,6 +226,128 @@ public sealed class UserConfigControllerSettingsTests
     }
 
     [Fact]
+    public async Task GetLlmSettings_LegacyStatusWithoutSource_ShouldRemainGatewayProviderAndNotBecomeUserServiceRoute()
+    {
+        var httpHandler = new RecordingHttpHandler(
+            (HttpStatusCode.NotFound, """{"message":"not found"}"""),
+            (HttpStatusCode.OK, """
+            {
+              "providers": [
+                {
+                  "provider_slug": "openai",
+                  "provider_name": "OpenAI Gateway",
+                  "status": "ready",
+                  "proxy_url": "/api/v1/llm/openai/v1"
+                }
+              ],
+              "supported_models": ["gpt-5.4"]
+            }
+            """),
+            (HttpStatusCode.OK, """{"services":[]}"""));
+        var controller = CreateController(
+            current: new UserConfig("gpt-5.4", "/api/v1/llm/openai/v1"),
+            httpHandler: httpHandler,
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
+        payload.RouteOptions.Should().NotContain(option => option.RouteValue == "/api/v1/llm/openai/v1");
+        payload.RouteOptions.Should()
+            .ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway)
+            .Which.Should().Match<UserLlmRouteOptionResponse>(option =>
+                option.Source == UserLlmRouteSource.GatewayProvider &&
+                option.Status == UserLlmRouteStatus.Ready &&
+                option.Allowed &&
+                option.Ready);
+        payload.ModelGroupsByRoute.Should()
+            .Contain(group =>
+                group.RouteValue == UserConfigLlmRouteDefaults.Gateway &&
+                group.GroupId == "openai" &&
+                group.Models.Contains("gpt-5.4"));
+        payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        httpHandler.Requests.Select(request => request.Path)
+            .Should()
+            .Equal("/api/v1/llm/services", "/api/v1/llm/status", "/api/v1/proxy/services?per_page=100");
+    }
+
+    [Fact]
+    public async Task GetLlmSettings_ServicesArrayWithoutSource_ShouldDefaultToUserServiceRouteWhenAllowedAndReady()
+    {
+        var controller = CreateController(
+            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            httpHandler: new RecordingHttpHandler("""
+            {
+              "services": [
+                {
+                  "user_service_id": "svc-openai",
+                  "service_slug": "openai-work",
+                  "display_name": "OpenAI Work",
+                  "route_value": "/api/v1/proxy/s/openai-work",
+                  "default_model": "gpt-5.4",
+                  "models": ["gpt-5.4"],
+                  "status": "ready",
+                  "allowed": true
+                }
+              ]
+            }
+            """),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
+        payload.RouteOptions.Should()
+            .ContainSingle(option => option.RouteValue == "/api/v1/proxy/s/openai-work")
+            .Which.Should().Match<UserLlmRouteOptionResponse>(option =>
+                option.Source == UserLlmRouteSource.UserService &&
+                option.Status == UserLlmRouteStatus.Ready &&
+                option.Allowed &&
+                option.Ready);
+        payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/openai-work");
+        payload.Capabilities.CanSave.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetLlmSettings_ServicesArrayWithoutAllowed_ShouldDefaultClosed()
+    {
+        var controller = CreateController(
+            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            httpHandler: new RecordingHttpHandler("""
+            {
+              "services": [
+                {
+                  "user_service_id": "svc-openai",
+                  "service_slug": "openai-work",
+                  "display_name": "OpenAI Work",
+                  "route_value": "/api/v1/proxy/s/openai-work",
+                  "default_model": "gpt-5.4",
+                  "models": ["gpt-5.4"],
+                  "status": "ready"
+                }
+              ]
+            }
+            """),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmSettings(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
+        payload.RouteOptions.Should()
+            .ContainSingle(option => option.RouteValue == "/api/v1/proxy/s/openai-work")
+            .Which.Should().Match<UserLlmRouteOptionResponse>(option =>
+                option.Source == UserLlmRouteSource.UserService &&
+                option.Status == UserLlmRouteStatus.Ready &&
+                !option.Allowed &&
+                !option.Ready);
+        payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        payload.RouteFallbackActive.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task SaveLlmSettings_WithGatewayRoute_ShouldPersistEmptyRoute()
     {
         var commandService = new RecordingUserConfigCommandService();

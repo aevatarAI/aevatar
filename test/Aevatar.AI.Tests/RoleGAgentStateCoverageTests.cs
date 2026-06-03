@@ -344,8 +344,6 @@ public sealed class RoleGAgentStateCoverageTests
                     ["trace-id"] = "trace-1",
                 }).ToPayload(),
         };
-        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
-
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
             RequestId = "req-1",
@@ -354,7 +352,7 @@ public sealed class RoleGAgentStateCoverageTests
         });
 
         agent.State.PendingApproval.Should().BeNull();
-        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
         observedToolContext.Should().NotBeNull();
         observedToolContext!.Caller.ScopeId.Should().Be("scope-a");
         observedToolContext.Caller.OwnerSubject.Should().Be("owner-a");
@@ -367,12 +365,10 @@ public sealed class RoleGAgentStateCoverageTests
                 x.ScopeId == "session-a" &&
                 x.ToolContext != null &&
                 x.ToolContext.Caller.ScopeId == "scope-a" &&
-                !x.Metadata.ContainsKey("nyxid.access_token") &&
-                x.Metadata["trace-id"] == "trace-1" &&
                 x.Prompt.Contains("dangerous_tool") &&
                 x.Prompt.Contains("RESULT:{\"value\":1}"))
             .Which;
-        continuation.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        continuation.Metadata.Should().BeEmpty();
         continuation.ToolContext.Should().NotBeNull();
         var context = AgentToolExecutionContextMapper.FromPayload(continuation.ToolContext);
         context.Request.RequestId.Should().Be("req-1");
@@ -385,7 +381,7 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
-    public async Task HandleToolApprovalDecision_ShouldPreferTypedToolContext_WhenLegacyMetadataDiffers()
+    public async Task HandleToolApprovalDecision_ShouldUseTypedToolContextOnly()
     {
         using var provider = BuildServiceProvider();
         AgentToolExecutionContext? observedToolContext = null;
@@ -428,10 +424,6 @@ public sealed class RoleGAgentStateCoverageTests
                     [LLMRequestMetadataKeys.NyxIdAccessToken] = "external-token",
                 }).ToPayload(),
         };
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.ScopeId] = "legacy-scope";
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.ModelOverride] = "legacy-model";
-        agent.State.PendingApproval.Metadata["legacy-trace"] = "legacy-value";
-
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
             RequestId = "req-1",
@@ -453,13 +445,11 @@ public sealed class RoleGAgentStateCoverageTests
         continuationContext.Credentials.Should().Be(AgentToolCredentials.Empty);
         continuationContext.ExternalMetadata.Should().ContainKey("typed-trace").WhoseValue.Should().Be("typed-value");
         continuationContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        continuation.Metadata.Should().ContainKey("legacy-trace").WhoseValue.Should().Be("legacy-value");
-        continuation.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        continuation.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        continuation.Metadata.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleToolApprovalDecision_ShouldUseLegacyMetadataFallbackForAnnotationsOnly_WhenToolContextMissing()
+    public async Task HandleToolApprovalDecision_ShouldUseEmptyContext_WhenToolContextMissing()
     {
         using var provider = BuildServiceProvider();
         AgentToolExecutionContext? observedToolContext = null;
@@ -488,15 +478,6 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.RequestId] = "legacy-request";
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.CallId] = "legacy-call";
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.ScopeId] = "legacy-scope";
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.OwnerSubject] = "legacy-owner";
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.ModelOverride] = "legacy-model";
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = "legacy-route";
-        agent.State.PendingApproval.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = "legacy-token";
-        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
-
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
             RequestId = "req-1",
@@ -511,16 +492,13 @@ public sealed class RoleGAgentStateCoverageTests
         observedToolContext.Routing.ModelOverride.Should().BeNull();
         observedToolContext.Routing.NyxIdRoutePreference.Should().BeNull();
         observedToolContext.Credentials.Should().Be(AgentToolCredentials.Empty);
-        observedToolContext.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
+        observedToolContext.ExternalMetadata.Should().BeEmpty();
         var continuation = publisher.Published.OfType<ChatRequestEvent>().Should().ContainSingle().Which;
         var continuationContext = AgentToolExecutionContextMapper.FromPayload(continuation.ToolContext);
         continuationContext.Caller.ScopeId.Should().BeNull();
         continuationContext.Routing.ModelOverride.Should().BeNull();
         continuationContext.Credentials.Should().Be(AgentToolCredentials.Empty);
-        continuation.Metadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
-        continuation.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        continuation.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        continuation.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        continuation.Metadata.Should().BeEmpty();
     }
 
     [Fact]
@@ -560,7 +538,7 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_continuation_failed: dispatch failed");
-        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]
@@ -644,9 +622,6 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-        agent.State.PendingApproval.Metadata["nyxid.access_token"] = "token-1";
-        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
-
         await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
         {
             RequestId = "req-1",
@@ -659,8 +634,7 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should()
             .Be(DateTimeOffset.FromUnixTimeSeconds(1_800).ToUnixTimeMilliseconds());
         remotePort.Submitted.Should().ContainSingle()
-            .Which.Items.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        remotePort.Submitted.Single().Items["trace-id"].Should().Be("trace-1");
+            .Which.RequestId.Should().Be("req-1");
         remotePort.StatusQueries.Should().BeEmpty();
         ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
             .TimeoutRequests.Should().ContainSingle(x =>
@@ -814,7 +788,7 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
-    public async Task HandleRemoteApprovalStatusCheck_ShouldScrubOwnedKeysAndPreserveTraceMetadata()
+    public async Task HandleRemoteApprovalStatusCheck_ShouldIssueStatusQueryWithoutPortLevelCarrier()
     {
         using var provider = BuildServiceProvider();
         var remotePort = new StubRemoteApprovalPort(
@@ -835,27 +809,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteStatusCheckAttempt = 1,
             RemoteApprovalExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
-        var ownedKeys = new[]
-        {
-            LLMRequestMetadataKeys.RequestId,
-            LLMRequestMetadataKeys.CallId,
-            LLMRequestMetadataKeys.ScopeId,
-            LLMRequestMetadataKeys.OwnerSubject,
-            LLMRequestMetadataKeys.ResponseId,
-            LLMRequestMetadataKeys.NyxIdAccessToken,
-            LLMRequestMetadataKeys.NyxIdOrgToken,
-            LLMRequestMetadataKeys.SenderNyxIdAccessToken,
-            LLMRequestMetadataKeys.SenderBindingId,
-            LLMRequestMetadataKeys.NyxIdRoutePreference,
-            LLMRequestMetadataKeys.ModelOverride,
-            LLMRequestMetadataKeys.MaxToolRoundsOverride,
-            LLMRequestMetadataKeys.UserMemoryPrompt,
-            LLMRequestMetadataKeys.ConnectedServicesContext,
-        };
-
-        foreach (var key in ownedKeys)
-            agent.State.PendingApproval.Metadata[key] = $"owned-{key}";
-        agent.State.PendingApproval.Metadata["trace-id"] = "trace-1";
 
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
@@ -865,9 +818,9 @@ public sealed class RoleGAgentStateCoverageTests
             Attempt = 1,
         });
 
-        var items = remotePort.StatusQueries.Should().ContainSingle().Which.Items;
-        items.Should().NotContainKeys(ownedKeys);
-        items.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
+        var query = remotePort.StatusQueries.Should().ContainSingle().Which;
+        query.RequestId.Should().Be("req-1");
+        query.RemoteApprovalId.Should().Be("remote-1");
     }
 
     [Fact]
@@ -1173,17 +1126,9 @@ public sealed class RoleGAgentStateCoverageTests
         context.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
         context.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-from-context");
         context.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        pending.Metadata["trace-id"].Should().Be("trace-1");
         pending.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
         pending.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
         pending.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
-        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
-        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
-        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
-        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
-        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        pending.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.OwnerSubject);
     }
 
     [Fact]

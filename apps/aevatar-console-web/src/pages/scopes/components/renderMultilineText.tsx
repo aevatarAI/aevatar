@@ -1,13 +1,13 @@
 import { Typography } from 'antd';
 import React from 'react';
 import { codeBlockStyle } from '@/shared/ui/proComponents';
+import { t } from "@/shared/i18n/messages";
 
 export function renderMultilineText(value: string | null | undefined) {
   if (!value) {
     return (
       <Typography.Text style={{ color: 'var(--ant-color-text-secondary)' }}>
-        No source attached.
-      </Typography.Text>
+        {t("pages.scopes.rendermultilinetext.no.source.attached", "No source attached.")}</Typography.Text>
     );
   }
 

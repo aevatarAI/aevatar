@@ -302,9 +302,10 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         }
 
         // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
-        var effectiveToolMiddlewares = new List<IToolCallMiddleware>();
-        if (_approvalHandler != null)
-            effectiveToolMiddlewares.Add(new Middleware.ToolApprovalMiddleware(_approvalHandler, _hooks));
+        var effectiveToolMiddlewares = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 1)
+        {
+            new Middleware.ToolApprovalMiddleware(_approvalHandler ?? Middleware.MissingApprovalHandler.Instance, _hooks),
+        };
         effectiveToolMiddlewares.AddRange(_toolMiddlewares);
 
         // 构建 Chat Runtime

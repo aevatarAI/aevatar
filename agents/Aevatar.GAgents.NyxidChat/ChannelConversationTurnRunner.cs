@@ -965,7 +965,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return ConversationStreamChunkResult.Failed(
                 string.IsNullOrWhiteSpace(emit.ErrorCode) ? "stream_chunk_rejected" : emit.ErrorCode,
                 emit.ErrorMessage ?? "Relay stream chunk rejected.",
-                editUnsupported);
+                editUnsupported,
+                emit.FailureKind,
+                emit.RetryAfterTimeSpan,
+                emit.HttpStatus,
+                emit.RawErrorKey,
+                emit.RawErrorCode);
         }
 
         var resolvedPlatformMessageId = string.IsNullOrWhiteSpace(emit.PlatformMessageId)
@@ -996,12 +1001,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
-                       await BuildAgentBuilderMetadataAsync(
+            var metadata = await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
-                    ResolveUserAccessToken(activity, runtimeContext),
-                    ct))))
+                    ct);
+            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
+                       inboundEvent,
+                       activity,
+                       ResolveUserAccessToken(activity, runtimeContext),
+                       metadata)))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
@@ -1383,7 +1391,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["scope_id"] = inboundEvent.RegistrationScopeId,
             [ChannelMetadataKeys.Platform] = inboundEvent.Platform,
             [ChannelMetadataKeys.SenderId] = inboundEvent.SenderId,
             [ChannelMetadataKeys.SenderName] = inboundEvent.SenderName,
@@ -1430,10 +1437,34 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return metadata;
     }
 
+    private static AgentToolExecutionContext BuildAgentBuilderToolContext(
+        ChannelInboundEvent inboundEvent,
+        ChatActivity activity,
+        string? userAccessToken,
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        var token = NormalizeOptional(userAccessToken);
+        return AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(inboundEvent.MessageId, null),
+            Credentials = new AgentToolCredentials(token, token, null),
+            Caller = new AgentToolCallerContext(
+                inboundEvent.RegistrationScopeId,
+                null,
+                inboundEvent.MessageId),
+            Channel = new AgentToolChannelContext(
+                inboundEvent.Platform,
+                inboundEvent.SenderId,
+                inboundEvent.RegistrationScopeId,
+                inboundEvent.MessageId,
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
+    }
+
     private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
-        string? userAccessToken,
         CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(
@@ -1442,11 +1473,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
-        if (!string.IsNullOrWhiteSpace(userAccessToken))
-        {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken.Trim();
-            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken.Trim();
-        }
         return metadata;
     }
 
@@ -1669,6 +1695,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return false;
         }
 
+        // Refactor (iter1/cluster-issue1553): Old pattern: hardcoded /daily skill name. New principle: generic skill discovery, no skill-name in routing logic.
         return TryBuildSlashSkillDiscoveryPrompt(text, commandName, argumentText, out prompt);
     }
 

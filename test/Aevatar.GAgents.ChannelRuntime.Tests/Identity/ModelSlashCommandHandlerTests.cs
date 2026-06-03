@@ -450,7 +450,7 @@ public sealed class ModelSlashCommandHandlerTests
     [Fact]
     public async Task Preset_UseExistingService_WritesRouteAndModel()
     {
-        var catalog = new StubCatalogClient { Services = [] };
+        var catalog = new StubCatalogClient { Services = [ChronoLlm] };
         var commandService = new StubUserConfigCommandService();
         var handler = CreateHandler(catalog, commandService: commandService);
 

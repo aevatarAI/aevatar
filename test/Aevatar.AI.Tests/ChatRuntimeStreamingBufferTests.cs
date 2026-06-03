@@ -270,6 +270,81 @@ public sealed class ChatRuntimeStreamingBufferTests
         tool.CapturedContext.Should().NotBeNull();
         tool.CapturedContext!.Request.CallId.Should().Be("tool-1");
         tool.CapturedContext.Request.RequestId.Should().Be("req-123");
+        tool.CapturedContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        tool.CapturedContext.Routing.ModelOverride.Should().Be("model-a");
+        tool.CapturedContext.ExternalMetadata["safe"].Should().Be("tool-context");
+        tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+    }
+
+    [Fact]
+    public async Task ExecuteToolStepAsync_WhenToolContextIsNull_ShouldNotPromoteRequestMetadataToToolControl()
+    {
+        var provider = new RecordingStepProvider();
+        var tool = new CapturingTool();
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = CreateRuntime(provider, tools);
+        var executor = runtime.CreateStepExecutor();
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            [LLMRequestMetadataKeys.ModelOverride] = "metadata-model",
+            [LLMRequestMetadataKeys.CallId] = "metadata-call",
+            ["trace-id"] = "trace-1",
+        };
+
+        var toolResults = await executor.ExecuteToolStepAsync(
+            [new ToolCall { Id = "tool-1", Name = "capture", ArgumentsJson = "{}" }],
+            metadata,
+            toolContext: null,
+            CancellationToken.None);
+
+        toolResults.Should().ContainSingle();
+        tool.CapturedContext.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateStepExecutor_BuildBaseRequest_ShouldMergeOverrideMetadataThenScrubOwnedKeys()
+    {
+        var provider = new RecordingStepProvider();
+        var runtime = CreateRuntime(
+            provider,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                RequestId = "base-request",
+                Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["safe"] = "base",
+                    ["override"] = "base",
+                    [LLMRequestMetadataKeys.NyxIdAccessToken] = "base-token",
+                    [LLMRequestMetadataKeys.ModelOverride] = "base-model",
+                },
+            });
+        var executor = runtime.CreateStepExecutor();
+
+        var request = executor.BuildBaseRequest(
+            " request-1 ",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["override"] = "override",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "override-token",
+                [LLMRequestMetadataKeys.CallId] = "override-call",
+            },
+            toolContext: null,
+            llmControl: null);
+
+        request.RequestId.Should().Be("request-1");
+        request.ToolContext!.Request.RequestId.Should().Be("request-1");
+        request.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        request.ToolContext.Routing.ModelOverride.Should().BeNull();
+        request.Metadata.Should().BeEquivalentTo(new Dictionary<string, string>
+        {
+            ["safe"] = "base",
+            ["override"] = "override",
+        });
     }
 
     [Fact]

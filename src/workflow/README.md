@@ -99,7 +99,7 @@ flowchart LR
 
 ## API 语义
 
-- `ChatInput.AgentId` 表示 workflow source actor id。推荐传 definition actor id；如果传的是已绑定 workflow 的 run actor，系统会读取其 definition binding 再创建新的 run actor。
+- `/api/chat` 的 actor-targeted 输入只使用 typed source 子消息：`source.definitionActor.actorId` 表示 workflow source actor id；如果传的是已绑定 workflow 的 run actor，系统会读取其 definition binding 再创建新的 run actor。
 - 对 named workflow，若 source actor 缺少 `DefinitionActorId`，系统会回落到 registry 的规范 definition actor id，而不是创建新的匿名 definition actor。
 - `WorkflowChatRunStarted.ActorId` 是新创建的 run actor id。
 - resume/signal 请求中的 `ActorId` 必须是 run actor id。

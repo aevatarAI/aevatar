@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
@@ -23,6 +22,7 @@ public sealed class NyxIdRemoteToolApprovalPortTests
         });
         var port = CreatePort(handler);
 
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
         var result = await port.SubmitAsync(
             new RemoteToolApprovalRequest(
                 "req-1",
@@ -30,11 +30,7 @@ public sealed class NyxIdRemoteToolApprovalPortTests
                 "call-1",
                 """{"command":"uptime"}""",
                 ToolApprovalMode.Auto,
-                true,
-                new Dictionary<string, string>
-                {
-                    [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-1",
-                }),
+                true),
             CancellationToken.None);
 
         result.RemoteApprovalId.Should().Be("approval-1");
@@ -70,14 +66,11 @@ public sealed class NyxIdRemoteToolApprovalPortTests
         });
         var port = CreatePort(handler);
 
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
         var result = await port.GetStatusAsync(
             new RemoteToolApprovalStatusQuery(
                 "req-1",
-                "approval-1",
-                new Dictionary<string, string>
-                {
-                    [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-1",
-                }),
+                "approval-1"),
             CancellationToken.None);
 
         result.Status.Should().Be(expected);
@@ -87,7 +80,58 @@ public sealed class NyxIdRemoteToolApprovalPortTests
         handler.Requests[0].Method.Should().Be(HttpMethod.Get);
         handler.Requests[0].RequestUri!.AbsolutePath.Should()
             .Be("/api/v1/approvals/requests/approval-1/status");
+        handler.Requests[0].Headers.Authorization!.ToString().Should().Be("Bearer token-1");
     }
+
+    [Fact]
+    public async Task SubmitAsync_ShouldRequireTypedCredential()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.Created)
+        {
+            Content = new StringContent("""{"id":"approval-1"}""", Encoding.UTF8, "application/json"),
+        });
+        var port = CreatePort(handler);
+
+        using var _ = AgentToolContextScope.Push(null);
+        var act = () => port.SubmitAsync(
+            new RemoteToolApprovalRequest(
+                "req-1",
+                "ssh_exec",
+                "call-1",
+                "{}",
+                ToolApprovalMode.Auto,
+                false),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("NyxID authentication required for remote approval.");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetStatusAsync_ShouldRequireTypedCredential()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"status":"pending"}""", Encoding.UTF8, "application/json"),
+        });
+        var port = CreatePort(handler);
+
+        using var _ = AgentToolContextScope.Push(null);
+        var act = () => port.GetStatusAsync(
+            new RemoteToolApprovalStatusQuery("req-1", "approval-1"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("NyxID authentication required for remote approval.");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    private static AgentToolExecutionContext WithNyxIdAccessToken(string token) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = token },
+        };
 
     private static NyxIdRemoteToolApprovalPort CreatePort(CaptureHandler handler)
     {

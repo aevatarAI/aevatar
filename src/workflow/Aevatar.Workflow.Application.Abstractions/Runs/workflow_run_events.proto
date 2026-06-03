@@ -187,6 +187,16 @@ message WorkflowHumanInputRequestCustomPayload {
   string redacted_output = 12;
 }
 
+message WorkflowToolApprovalSuspensionCustomPayload {
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  string tool_call_id = 5;
+  string approval_request_id = 6;
+  string arguments_json = 7;
+}
+
 message WorkflowHumanInputResponseCustomPayload {
   string step_id = 1;
   string run_id = 2;

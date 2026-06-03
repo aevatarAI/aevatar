@@ -6,21 +6,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-bash .claude/skills/codex-refactor-loop/scripts/test_spawn_codex.sh
-bash tests/test_codex_progress_reporter.sh
-bash tests/test_triage_monitor_envsubst.sh
-
 allowlist_file="tools/ci/test_polling_allowlist.txt"
 
-run_python_tests() {
-  if [ -d "tests" ] && command -v python3 >/dev/null 2>&1; then
-    if command -v pytest >/dev/null 2>&1 || python3 -m pytest --version >/dev/null 2>&1; then
-      echo "==> running python tests"
-      python3 -m pytest tests/ -v --tb=short || exit 1
-    else
-      echo "WARN: pytest not installed; skipping tests/ Python suite (install: pip install pytest)"
-    fi
-  fi
+run_guard_meta_tests() {
+  bash "${SCRIPT_DIR}/tests/test_project_reference_layer_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_architecture_guards_enforces_layer_guard.sh"
 }
 
 if [[ ! -f "${allowlist_file}" ]]; then
@@ -31,7 +21,7 @@ fi
 hits="$(rg -n "Task\\.Delay\\(|WaitUntilAsync\\(" test -g '*.cs' || true)"
 if [[ -z "${hits}" ]]; then
   echo "No polling waits found in tests."
-  run_python_tests
+  run_guard_meta_tests
   exit 0
 fi
 
@@ -53,4 +43,4 @@ if [[ -n "${disallowed}" ]]; then
 fi
 
 echo "Test stability guard passed (polling waits constrained by allowlist)."
-run_python_tests
+run_guard_meta_tests

@@ -1,5 +1,3 @@
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using System.Text.Json.Serialization;
 
@@ -23,6 +21,11 @@ public sealed record WorkflowChatInputPart
     public string? Uri { get; init; }
     public string? Name { get; init; }
 }
+
+public sealed record WorkflowLlmControl(
+    string? ModelOverride = null,
+    int? MaxToolRoundsOverride = null,
+    string? UserMemoryPrompt = null);
 
 public enum WorkflowChatSourceKind
 {
@@ -128,9 +131,9 @@ public sealed record WorkflowChatRunRequest(
     //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
     //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null,
-    LLMControlContext? LlmControl = null,
-    // Refactor (issue1332): Old pattern: workflow chat commands could only carry tool controls through metadata/LlmControl. New principle: reuse typed AgentToolExecutionContext as the workflow ToolContext control surface.
-    AgentToolExecutionContext? ToolContext = null,
+    WorkflowLlmControl? LlmControl = null,
+    // Refactor (iter169/cluster-issue1551): Old pattern: trusted connector bearer was smuggled through Metadata. New principle: Host/Application pass connector HTTP authorization as a typed command scalar.
+    string? ConnectorHttpAuthorization = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     string? CommandIdSeed = null,
     string? CorrelationIdSeed = null,

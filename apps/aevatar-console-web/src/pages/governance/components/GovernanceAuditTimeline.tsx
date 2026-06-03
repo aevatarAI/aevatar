@@ -14,6 +14,7 @@ import {
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
+import { t } from "@/shared/i18n/messages";
 
 export type GovernanceAuditEventTargetKind =
   | "service"
@@ -107,7 +108,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         }}
       >
         <Empty
-          description="暂无变更记录"
+          description={t("pages.governance.governanceaudittimeline.no.change.record.yet", "No change record yet")}
           style={{ margin: "auto" }}
         />
       </div>
@@ -129,11 +130,11 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         size={16}
         style={{ display: "flex", minHeight: 0 }}
       >
-        <Typography.Text strong>变更记录</Typography.Text>
+        <Typography.Text strong>{t("pages.governance.governanceaudittimeline.change.history", "Change history")}</Typography.Text>
 
         <div style={{ minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
           <Timeline
-            pending={loading ? "加载中..." : null}
+            pending={loading ? t("pages.governance.governanceaudittimeline.loading", "loading...") : null}
             items={events.map((event) => ({
               color: buildEventDotColor(surfaceToken, event.status),
               dot: (
@@ -210,10 +211,10 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
 
                       <Space size={[8, 8]} wrap>
                         <Typography.Text type="secondary">
-                          来源: {event.actor}
+                          {t("pages.governance.governanceaudittimeline.source", "source:")}{event.actor}
                         </Typography.Text>
                         <Typography.Text type="secondary">
-                          对象: {event.targetLabel}
+                          {t("pages.governance.governanceaudittimeline.object", "Object:")}{event.targetLabel}
                         </Typography.Text>
                       </Space>
                     </Space>

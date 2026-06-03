@@ -60,7 +60,8 @@ public sealed partial class ConversationGAgent
         string? PendingFinalizeText,
         string? PendingFinalizeCommandId,
         LlmReplyTerminalState PendingTerminalState,
-        IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory)
+        IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory,
+        int RetryAttempt)
     {
         public static NyxRelayStreamingState Initial { get; } =
             new(
@@ -75,7 +76,8 @@ public sealed partial class ConversationGAgent
                 PendingFinalizeText: null,
                 PendingFinalizeCommandId: null,
                 PendingTerminalState: LlmReplyTerminalState.Unspecified,
-                PendingAppendedHistory: []);
+                PendingAppendedHistory: [],
+                RetryAttempt: 0);
 
         public bool AllowsInterimEdit =>
             Phase is NyxRelayStreamingPhase.Idle
@@ -148,7 +150,8 @@ public sealed partial class ConversationGAgent
             NormalizeOptional(lifecycle.PendingFinalizeText),
             NormalizeOptional(lifecycle.PendingFinalizeCommandId),
             lifecycle.PendingNyxRelayTerminalState,
-            lifecycle.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray());
+            lifecycle.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray(),
+            lifecycle.NyxRelayRetryAttempt);
     }
 
     /// <summary>
@@ -212,6 +215,9 @@ public sealed partial class ConversationGAgent
             PendingTerminalState = IsTerminalNyxRelayStreamingPhase(next)
                 ? LlmReplyTerminalState.Unspecified
                 : carried.PendingTerminalState,
+            RetryAttempt = IsTerminalNyxRelayStreamingPhase(next)
+                ? 0
+                : carried.RetryAttempt,
             TerminalReason = IsTerminalNyxRelayStreamingPhase(next)
                 ? (terminalReason ?? carried.TerminalReason)
                 : carried.TerminalReason,
@@ -306,6 +312,8 @@ public sealed partial class ConversationGAgent
             evt.NyxRelayTerminalState = updated.PendingTerminalState;
         if (!HistoryEntriesEqual(current.PendingAppendedHistory, updated.PendingAppendedHistory))
             evt.AppendedHistory.AddRange(updated.PendingAppendedHistory.Select(entry => entry.Clone()));
+        if (current.RetryAttempt != updated.RetryAttempt)
+            evt.NyxRelayRetryAttempt = updated.RetryAttempt;
 
         return evt;
     }

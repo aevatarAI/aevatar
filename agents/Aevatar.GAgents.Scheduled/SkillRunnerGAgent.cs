@@ -325,8 +325,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = await BuildExecutionMetadataAsync(ct);
         var llmControl = await BuildExecutionLlmControlAsync(ct);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromMetadata(metadata));
         var requestId = Guid.NewGuid().ToString("N");
+        var toolContext = llmControl.ToToolContext(BuildExecutionToolContext(requestId, metadata));
         var content = new StringBuilder();
 
         var sink = TryCreateStreamingSink();
@@ -625,6 +625,22 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
+    private AgentToolExecutionContext BuildExecutionToolContext(
+        string requestId,
+        IReadOnlyDictionary<string, string>? metadata) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Caller = new AgentToolCallerContext(State.ScopeId, State.ScopeId, requestId),
+            Channel = new AgentToolChannelContext(
+                null,
+                null,
+                State.ScopeId,
+                null,
+                null),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
+
     private Task SendOutputAsync(string output, CancellationToken ct) =>
         SendOutputAsync(output, providerSlugOverride: null, ct);
 
@@ -801,8 +817,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
-        if (!string.IsNullOrWhiteSpace(State.ScopeId))
-            metadata["scope_id"] = State.ScopeId;
 
         return metadata;
     }

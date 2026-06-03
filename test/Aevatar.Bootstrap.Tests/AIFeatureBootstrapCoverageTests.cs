@@ -15,6 +15,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
@@ -23,6 +24,7 @@ using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
+using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -169,14 +171,14 @@ public class AIFeatureBootstrapCoverageTests
             .Single();
         provider.GetRequiredService<IVoiceToolCatalog>()
             .Should().BeOfType<AgentToolVoiceCatalog>();
-        provider.GetRequiredService<IVoicePresenceSessionResolver>()
-            .Should().BeOfType<ActorOwnedVoicePresenceSessionResolver>();
+        provider.GetRequiredService<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>()
+            .Should().BeOfType<ActorOwnedVoiceRealtimeSession>();
         provider.GetRequiredService<IVoicePresenceCapabilityQueryPort>()
             .Should().NotBeNull();
         provider.GetRequiredService<IVoicePresenceSessionLeasePort>()
             .Should().NotBeNull();
-        provider.GetRequiredService<IVoicePresenceTransportAttachmentPort>()
-            .Should().BeOfType<UnavailableVoicePresenceTransportAttachmentPort>();
+        provider.GetRequiredService<IVoiceVolatileMediaStreamPort>()
+            .Should().BeOfType<FailClosedVoiceVolatileMediaStreamPort>();
 
         factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
         defaultModule.Should().BeOfType<VoicePresenceModule>();
@@ -186,6 +188,58 @@ public class AIFeatureBootstrapCoverageTests
 
         factory.TryCreate("voice_presence_minicpm", out var miniCpmModule).Should().BeFalse();
         miniCpmModule.Should().BeNull();
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenVoicePresenceOpenAIEndpointOnlyConfigured_ShouldNotRegisterOpenAI()
+    {
+        using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["OPENAI_API_KEY"] = null,
+        });
+
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+        services.AddLogging();
+        services.AddSingleton<IActorDispatchPort, NoOpActorDispatchPort>();
+        services.AddSingleton<IProjectionDocumentReader<VoicePresenceCapabilityReadModel, string>>(
+            new EmptyVoicePresenceCapabilityReader());
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.VoicePresence.DefaultProvider = "minicpm";
+            options.VoicePresence.OpenAIProvider = new VoiceProviderConfig
+            {
+                ProviderName = "openai",
+                Endpoint = "https://nyx.example.com/api/v1/proxy/s/llm-openai",
+            };
+            options.VoicePresence.OpenAISession = new VoiceSessionConfig
+            {
+                Voice = "alloy",
+                SampleRateHz = 24000,
+            };
+            options.VoicePresence.MiniCPMProvider = new VoiceProviderConfig
+            {
+                ProviderName = "minicpm",
+                Endpoint = "https://minicpm.example.com",
+            };
+            options.VoicePresence.MiniCPMSession = new VoiceSessionConfig
+            {
+                SampleRateHz = 16000,
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
+            .OfType<VoicePresenceModuleFactory>()
+            .Single();
+
+        factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
+        defaultModule.Should().BeOfType<VoicePresenceModule>();
+
+        factory.TryCreate("voice_presence_openai", out var openAIModule).Should().BeFalse();
+        openAIModule.Should().BeNull();
     }
 
     [Fact]
@@ -486,6 +540,30 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
+    public async Task AddAevatarAIFeatures_ShouldRegisterWorkflowToolSourceAdapterForAgentTools()
+    {
+        var source = new StubAgentToolSource([new StubAgentTool("demo_tool", """{"ok":true}""")]);
+        var services = new ServiceCollection()
+            .AddSingleton<IAgentToolSource>(source);
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
+
+        await using var provider = services.BuildServiceProvider();
+        var workflowSource = provider.GetServices<IWorkflowToolSource>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        var tool = (await workflowSource.GetToolsAsync())
+            .Should()
+            .ContainSingle()
+            .Subject;
+
+        tool.Name.Should().Be("demo_tool");
+        (await tool.ExecuteAsync("{}")).Should().Be("""{"ok":true}""");
+    }
+
+    [Fact]
     public void MCPConnectorBuilder_ShouldValidateCommandAndBuildConnector()
     {
         var builder = new MCPConnectorBuilder();
@@ -637,6 +715,29 @@ public class AIFeatureBootstrapCoverageTests
         public void Set(string key, string value) => _values[key] = value;
 
         public void Remove(string key) => _values.Remove(key);
+    }
+
+    private sealed class StubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult(tools);
+        }
+    }
+
+    private sealed class StubAgentTool(string name, string resultJson) : IAgentTool
+    {
+        public string Name { get; } = name;
+        public string Description => "test tool";
+        public string ParametersSchema => """{"type":"object"}""";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            _ = argumentsJson;
+            _ = ct;
+            return Task.FromResult(resultJson);
+        }
     }
 
     private static void WriteFlatSecrets(string path, IReadOnlyDictionary<string, string> values)

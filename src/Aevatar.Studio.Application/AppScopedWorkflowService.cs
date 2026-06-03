@@ -1,6 +1,7 @@
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 
 using Aevatar.Studio.Application.Studio;
@@ -13,6 +14,7 @@ namespace Aevatar.Studio.Application;
 public sealed class AppScopedWorkflowService
 {
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
     private readonly IStudioWorkspaceQueryPort? _workspaceQueryPort;
     private readonly IStudioWorkspaceCommandPort? _workspaceCommandPort;
     private readonly IStudioMemberCommandPort? _memberCommandPort;
@@ -20,12 +22,14 @@ public sealed class AppScopedWorkflowService
 
     public AppScopedWorkflowService(
         IWorkflowYamlDocumentService yamlDocumentService,
+        IWorkflowDefinitionParser workflowDefinitionParser,
         IStudioWorkspaceQueryPort? workspaceQueryPort = null,
         IStudioWorkspaceCommandPort? workspaceCommandPort = null,
         IStudioMemberCommandPort? memberCommandPort = null,
         ILogger<AppScopedWorkflowService>? logger = null)
     {
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
+        _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
         _workspaceQueryPort = workspaceQueryPort;
         _workspaceCommandPort = workspaceCommandPort;
         _memberCommandPort = memberCommandPort;
@@ -91,6 +95,10 @@ public sealed class AppScopedWorkflowService
         {
             normalizedYaml = AlignWorkflowYamlName(normalizedYaml, requestedWorkflowName);
         }
+
+        var validation = await _workflowDefinitionParser.ParseWorkflowYamlAsync(normalizedYaml, ct);
+        if (!validation.Succeeded)
+            throw new InvalidOperationException(validation.Error);
 
         var parsed = _yamlDocumentService.Parse(normalizedYaml);
         var workflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName)

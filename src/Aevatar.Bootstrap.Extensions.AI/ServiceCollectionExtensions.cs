@@ -1,7 +1,6 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.Voice;
-using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.LLMProviders.NyxId;
@@ -19,8 +18,11 @@ using Aevatar.AI.Infrastructure.Local.Adapters;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Integration.AI;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -92,7 +94,8 @@ public static class ServiceCollectionExtensions
         var options = new AevatarAIFeatureOptions();
         configure?.Invoke(options);
 
-        services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.TryAddSingleton<IRoleAgentTypeResolver, WorkflowRoleGAgentTypeResolver>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
@@ -135,9 +138,6 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
-    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
-    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
     private static void RegisterVoicePresenceModules(
         IServiceCollection services,
         IConfiguration configuration,
@@ -151,13 +151,11 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
-        // Refactor (iter51/issue-888-voice-presence-lease-ack-snapshot):
-        //   Old pattern: lease ACK returned VoicePresenceSession bound to pre-lease capability snapshot; endpoint accept/reject closed over stale transport facts.
-        //   New principle: lease ACK only signals inbox receipt; attach readiness is a separate signal; resolver preflights capability and returns typed sentinel (Unsupported/PreflightFailed/PendingAttach/Attached); endpoint maps typed sentinel, not boolean closure.
         services.TryAddSingleton<IVoicePresenceCapabilityQueryPort, VoicePresenceCapabilityQueryPort>();
         services.TryAddSingleton<IVoicePresenceSessionLeasePort, VoicePresenceSessionLeasePort>();
-        services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, UnavailableVoicePresenceTransportAttachmentPort>();
-        services.TryAddSingleton<IVoicePresenceSessionResolver, ActorOwnedVoicePresenceSessionResolver>();
+        services.TryAddSingleton<IVoicePresenceTransportAttachmentPort, NoOpVoicePresenceTransportAttachmentPort>();
+        services.TryAddSingleton<IVoiceVolatileMediaStreamPort, FailClosedVoiceVolatileMediaStreamPort>();
+        services.TryAddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>, ActorOwnedVoiceRealtimeSession>();
         services.AddVoicePresenceCapabilityProjection();
         services.AddVoicePresenceCapabilityProjectionStore(configuration);
         services.TryAddEnumerable(
@@ -383,8 +381,7 @@ public static class ServiceCollectionExtensions
         };
 
     private static bool IsOpenAIVoiceConfigured(VoiceProviderConfig config) =>
-        !string.IsNullOrWhiteSpace(config.ApiKey) ||
-        !string.IsNullOrWhiteSpace(config.Endpoint);
+        !string.IsNullOrWhiteSpace(config.ApiKey);
 
     private static bool IsMiniCpmVoiceConfigured(VoiceProviderConfig config) =>
         !string.IsNullOrWhiteSpace(config.Endpoint);

@@ -63,6 +63,7 @@ import {
   SummaryField,
   SummaryMetric,
 } from "./shared";
+import { t } from "@/shared/i18n/messages";
 
 type SettingsSection = "llm" | "account";
 
@@ -225,13 +226,18 @@ function formatProviderHealth(
   if (unavailableCount > 0) {
     return {
       tone: "warning",
-      value: `${readyCount} ready / ${unavailableCount} unavailable`,
+      value: t("pages.settings.index.routes.ready.unavailable", "{readyCount} ready / {unavailableCount} unavailable", {
+        readyCount,
+        unavailableCount,
+      }),
     };
   }
 
   return {
     tone: "success",
-    value: `${readyCount} routes ready`,
+    value: t("pages.settings.index.routes.ready.count", "{readyCount} routes ready", {
+      readyCount,
+    }),
   };
 }
 
@@ -454,17 +460,8 @@ const SettingsPage: React.FC = () => {
 
   const routeCatalogOptions = userLlmSettingsQuery.data?.routeOptions ?? [];
   const routeOptions = React.useMemo(
-    () =>
-      buildConversationRouteOptions(
-        userLlmSettingsQuery.data,
-        loadedDraft.preferredLlmRoute,
-        draft.preferredLlmRoute,
-      ),
-    [
-      draft.preferredLlmRoute,
-      loadedDraft.preferredLlmRoute,
-      userLlmSettingsQuery.data,
-    ],
+    () => buildConversationRouteOptions(userLlmSettingsQuery.data),
+    [userLlmSettingsQuery.data],
   );
   const savedRouteOption = React.useMemo(
     () => findConversationRouteOption(userLlmSettingsQuery.data, draft.preferredLlmRoute),
@@ -478,37 +475,42 @@ const SettingsPage: React.FC = () => {
         : draft.preferredLlmRoute,
     [draft, loadedDraft, userLlmSettingsQuery.data?.effectiveRoute],
   );
-  const routeFallbackActive = draftsEqual(draft, loadedDraft)
+  const draftMatchesLoaded = draftsEqual(draft, loadedDraft);
+  const routeFallbackActive = draftMatchesLoaded
     ? Boolean(userLlmSettingsQuery.data?.routeFallbackActive)
     : false;
-  const routeSummaryLabel = describeConversationRoute(effectiveRoute, routeOptions);
-  const preferredRouteLabel = describeConversationRoute(
-    draft.preferredLlmRoute,
-    routeOptions,
+  const backendEffectiveRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.effectiveRouteLabel,
   );
+  const backendSavedRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.savedRouteLabel,
+  );
+  const routeSummaryLabel =
+    draftMatchesLoaded && backendEffectiveRouteLabel
+      ? backendEffectiveRouteLabel
+      : describeConversationRoute(effectiveRoute, routeOptions);
+  const preferredRouteLabel =
+    draftMatchesLoaded && backendSavedRouteLabel
+      ? backendSavedRouteLabel
+      : describeConversationRoute(draft.preferredLlmRoute, routeOptions);
   const modelGroups = React.useMemo(
     () =>
       buildConversationModelGroups({
-        conversationModel: draft.defaultModel,
         effectiveRoute: draft.preferredLlmRoute,
         settings: userLlmSettingsQuery.data,
       }),
-    [draft.defaultModel, draft.preferredLlmRoute, userLlmSettingsQuery.data],
-  );
-  const liveModelGroups = React.useMemo(
-    () => modelGroups.filter((group) => group.id !== "__current__"),
-    [modelGroups],
+    [draft.preferredLlmRoute, userLlmSettingsQuery.data],
   );
   const modelOptions = React.useMemo<SelectProps["options"]>(
     () =>
-      (liveModelGroups.length > 0 ? modelGroups : []).map((group) => ({
+      modelGroups.map((group) => ({
         label: group.label,
         options: group.models.map((model) => ({
           label: model,
           value: model,
         })),
       })),
-    [liveModelGroups.length, modelGroups],
+    [modelGroups],
   );
   const displayedRuntimeBaseUrl = React.useMemo(
     () => userRuntimeQuery.data?.activeRuntimeBaseUrl ?? "",
@@ -584,17 +586,19 @@ const SettingsPage: React.FC = () => {
   );
 
   const routeSelectOptions = React.useMemo<SelectProps["options"]>(() => {
+    const draftRouteSelectValue = encodeConversationRouteSelectValue(
+      normalizeUserLlmRoute(draft.preferredLlmRoute),
+    );
     const readyOptions = routeCatalogOptions
       .filter((option) => option.ready && option.allowed)
       .map((option) => ({
         label: option.label,
         value: encodeConversationRouteSelectValue(normalizeUserLlmRoute(option.routeValue)),
       }));
-    const hasDraftRoute = readyOptions.some(
-      (option) =>
-        decodeConversationRouteSelectValue(String(option.value)) === draft.preferredLlmRoute,
+    const hasDraftRoute = Boolean(
+      draftRouteSelectValue &&
+        readyOptions.some((option) => option.value === draftRouteSelectValue),
     );
-
     return [
       {
         label: "Routes",
@@ -603,10 +607,12 @@ const SettingsPage: React.FC = () => {
       ...(draft.preferredLlmRoute && !hasDraftRoute
         ? [
             {
-              label: "Current saved route",
+              label: t("pages.settings.index.current.saved.route", "Current saved route"),
               options: [
                 {
-                  label: `${preferredRouteLabel} (unavailable)`,
+                  label: t("pages.settings.index.route.unavailable", "{route} (unavailable)", {
+                    route: preferredRouteLabel,
+                  }),
                   value: encodeConversationRouteSelectValue(draft.preferredLlmRoute),
                 },
               ],
@@ -620,18 +626,17 @@ const SettingsPage: React.FC = () => {
     () => [
       {
         key: "advanced-runtime",
-        label: "Advanced runtime",
+        label: t("pages.settings.index.advanced.runtime", "Advanced runtime"),
         children: (
           <div style={panelStackStyle}>
             <div style={formSectionStyle}>
               <div style={readOnlyFieldHeaderStyle}>
-                <Typography.Text strong>Runtime base URL</Typography.Text>
+                <Typography.Text strong>{t("pages.settings.index.runtime.base.url", "Runtime base URL")}</Typography.Text>
                 <FieldMetaPill label={runtimeModeLabel} tone="info" />
-                <FieldMetaPill label="Read only" />
+                <FieldMetaPill label={t("pages.settings.index.read.only", "Read only")} />
               </div>
               <Typography.Text type="secondary">
-                Console default runtime endpoint resolved from the active mode.
-              </Typography.Text>
+                {t("pages.settings.index.console.default.runtime.endpoint.resolved", "Console default runtime endpoint resolved from the active mode.")}</Typography.Text>
               <Input
                 prefix={
                   <LockOutlined
@@ -701,18 +706,14 @@ const SettingsPage: React.FC = () => {
         decodeConversationRouteSelectValue(nextValue),
       );
       const nextRouteGroups = buildConversationModelGroups({
-        conversationModel: draft.defaultModel,
         effectiveRoute: nextRoute,
         settings: userLlmSettingsQuery.data,
       });
       const currentModel = trimConversationValue(draft.defaultModel);
-      const nextLiveRouteGroups = nextRouteGroups.filter(
-        (group) => group.id !== "__current__",
-      );
       const shouldClearModel =
         Boolean(currentModel) &&
-        nextLiveRouteGroups.length > 0 &&
-        !nextLiveRouteGroups.some((group) => group.models.includes(currentModel!));
+        nextRouteGroups.length > 0 &&
+        !nextRouteGroups.some((group) => group.models.includes(currentModel!));
 
       setDraft((currentDraft) => ({
         ...currentDraft,
@@ -748,16 +749,14 @@ const SettingsPage: React.FC = () => {
           icon={<ReloadOutlined />}
           onClick={handleReset}
         >
-          Reset
-        </Button>
+          {t("pages.settings.index.reset", "Reset")}</Button>
         <Button
           disabled={!draftDirty || !canSaveLlmSettings}
           loading={saveMutation.isPending}
           onClick={handleSave}
           type="primary"
         >
-          Save config
-        </Button>
+          {t("pages.settings.index.save.config", "Save config")}</Button>
       </Space>
     ) : null;
 
@@ -809,17 +808,17 @@ const SettingsPage: React.FC = () => {
       <div style={tabBodyStyle}>
             <div style={summaryGridStyle}>
               <SummaryMetric
-                label="Effective route"
+                label={t("pages.settings.index.effective.route", "Effective route")}
                 tone={routeFallbackActive ? "warning" : "success"}
-                value={routeSummaryLabel || "NyxID Gateway"}
+                value={routeSummaryLabel}
               />
               <SummaryMetric
-                label="Default model"
+                label={t("pages.settings.index.default.model", "Default model")}
                 tone={trimConversationValue(draft.defaultModel) ? "info" : "default"}
                 value={trimConversationValue(draft.defaultModel) || "Not set"}
               />
               <SummaryMetric
-                label="Provider health"
+                label={t("pages.settings.index.provider.health", "Provider health")}
                 tone={providerHealth.tone}
                 value={providerHealth.value}
               />
@@ -827,7 +826,7 @@ const SettingsPage: React.FC = () => {
 
             {llmLoadError ? (
               <Alert
-                message="Failed to load defaults"
+                message={t("pages.settings.index.failed.to.load.defaults", "Failed to load defaults")}
                 description={llmLoadError}
                 showIcon
                 type="error"
@@ -836,7 +835,7 @@ const SettingsPage: React.FC = () => {
 
             {saveError ? (
               <Alert
-                message="Save failed"
+                message={t("pages.settings.index.save.failed", "Save failed")}
                 description={saveError}
                 showIcon
                 type="error"
@@ -852,12 +851,11 @@ const SettingsPage: React.FC = () => {
                       onClick={() => userLlmSettingsQuery.refetch()}
                       size="small"
                     >
-                      Retry
-                    </Button>
+                      {t("pages.settings.index.retry", "Retry")}</Button>
                   ) : undefined
                 }
-                message="LLM catalog is unavailable"
-                description="Saved route and model are shown from your stored settings. Route and model editing are temporarily disabled until the catalog responds."
+                message={t("pages.settings.index.llm.catalog.is.unavailable", "LLM catalog is unavailable")}
+                description={t("pages.settings.index.saved.route.and.model.are", "Saved route and model are shown from your stored settings. Route and model editing are temporarily disabled until the catalog responds.")}
                 showIcon
                 type="warning"
               />
@@ -879,21 +877,20 @@ const SettingsPage: React.FC = () => {
             <div style={bodyGridStyle}>
               <div style={panelStackStyle}>
                 <AevatarPanel
-                  description="Choose the route and model used for new chats, Studio sessions, and global tools that do not set their own overrides."
+                  description={t("pages.settings.index.choose.the.route.and.model", "Choose the route and model used for new chats, Studio sessions, and global tools that do not set their own overrides.")}
                   style={settingsPanelStyle}
-                  title="Edit defaults"
+                  title={t("pages.settings.index.edit.defaults", "Edit defaults")}
                 >
                   {userLlmSettingsQuery.isLoading || userRuntimeQuery.isLoading ? (
                     <div style={{ padding: 20 }}>
                       <Typography.Text type="secondary">
-                        Loading your current defaults...
-                      </Typography.Text>
+                        {t("pages.settings.index.loading.your.current.defaults", "Loading your current defaults...")}</Typography.Text>
                     </div>
                   ) : (
                     <div style={{ ...panelStackStyle, padding: 20 }}>
                       <div style={{ ...insetCardStyle, ...fieldCardStyle }}>
                         <div style={fieldHeaderRowStyle}>
-                          <Typography.Text strong>Preferred route</Typography.Text>
+                          <Typography.Text strong>{t("pages.settings.index.preferred.route", "Preferred route")}</Typography.Text>
                           <FieldMetaPill
                             label={
                               routeFallbackActive ? "Fallback active" : "In sync"
@@ -902,10 +899,9 @@ const SettingsPage: React.FC = () => {
                           />
                         </div>
                         <Typography.Text type="secondary">
-                          Choose the primary route used for requests.
-                        </Typography.Text>
+                          {t("pages.settings.index.choose.the.primary.route.used", "Choose the primary route used for requests.")}</Typography.Text>
                         <Select
-                          aria-label="Preferred route"
+                          aria-label={t("pages.settings.index.preferred.route.2", "Preferred route")}
                           disabled={!canEditRoute}
                           onChange={handlePreferredRouteChange}
                           optionFilterProp="label"
@@ -917,19 +913,19 @@ const SettingsPage: React.FC = () => {
                         />
                         {!preferredRouteAvailable && draft.preferredLlmRoute ? (
                           <Typography.Text type="warning">
-                            Saved route unavailable. New requests will use{" "}
+                            {t("pages.settings.index.saved.route.unavailable.new.requests", "Saved route unavailable. New requests will use")}{" "}
                             {routeSummaryLabel}.
                           </Typography.Text>
                         ) : (
                           <Typography.Text type="secondary">
-                            Effective now: {routeSummaryLabel || preferredRouteLabel}
+                            {t("pages.settings.index.effective.now", "Effective now:")}{routeSummaryLabel || preferredRouteLabel}
                           </Typography.Text>
                         )}
                       </div>
 
                       <div style={{ ...insetCardStyle, ...fieldCardStyle }}>
                         <div style={fieldHeaderRowStyle}>
-                          <Typography.Text strong>Connected providers</Typography.Text>
+                          <Typography.Text strong>{t("pages.settings.index.connected.providers", "Connected providers")}</Typography.Text>
                           <Space size={6} wrap>
                             <FieldMetaPill
                               label={`${readyProviderCount} ready`}
@@ -944,8 +940,8 @@ const SettingsPage: React.FC = () => {
                           </Space>
                         </div>
                         <Typography.Text type="secondary">
-                          Current route resolves through{" "}
-                          {routeSummaryLabel || "NyxID Gateway"}.
+                          {t("pages.settings.index.current.route.resolves.through", "Current route resolves through")}{" "}
+                          {`${routeSummaryLabel}.`}
                         </Typography.Text>
                         {providerDisplayList.length > 0 ? (
                           <div style={providerRailStyle}>
@@ -959,18 +955,17 @@ const SettingsPage: React.FC = () => {
                           </div>
                         ) : (
                           <Typography.Text type="secondary">
-                            No connected providers discovered yet.
-                          </Typography.Text>
+                            {t("pages.settings.index.no.connected.providers.discovered.yet", "No connected providers discovered yet.")}</Typography.Text>
                         )}
                       </div>
 
                       <div style={{ ...insetCardStyle, ...fieldCardStyle }}>
                         <div style={fieldHeaderRowStyle}>
-                          <Typography.Text strong>Default model</Typography.Text>
+                          <Typography.Text strong>{t("pages.settings.index.default.model.2", "Default model")}</Typography.Text>
                           <FieldMetaPill
                             label={
                               modelOptions && modelOptions.length > 0
-                                ? `${liveModelGroups.reduce(
+                                ? `${modelGroups.reduce(
                                     (count, group) => count + group.models.length,
                                     0,
                                   )} live`
@@ -981,7 +976,7 @@ const SettingsPage: React.FC = () => {
                         </div>
                         {modelOptions && modelOptions.length > 0 ? (
                           <Select
-                            aria-label="Default model"
+                            aria-label={t("pages.settings.index.default.model.3", "Default model")}
                             allowClear
                             disabled={!canEditModel}
                             onChange={(nextValue) =>
@@ -998,7 +993,7 @@ const SettingsPage: React.FC = () => {
                           />
                         ) : (
                           <Input
-                            aria-label="Default model"
+                            aria-label={t("pages.settings.index.default.model.4", "Default model")}
                             disabled={!canEditModel}
                             onChange={(event) =>
                               setDraft((currentDraft) => ({
@@ -1029,7 +1024,7 @@ const SettingsPage: React.FC = () => {
               </div>
 
               <div style={panelStackStyle}>
-                <AevatarPanel style={settingsPanelStyle} title="How defaults work">
+                <AevatarPanel style={settingsPanelStyle} title={t("pages.settings.index.how.defaults.work", "How defaults work")}>
                   <div style={{ ...panelStackStyle, padding: 20 }}>
                     <div
                       style={{
@@ -1038,14 +1033,14 @@ const SettingsPage: React.FC = () => {
                         gridTemplateColumns: "repeat(1, minmax(0, 1fr))",
                       }}
                     >
-                      <SummaryField label="Saved route" value={preferredRouteLabel} />
+                      <SummaryField label={t("pages.settings.index.saved.route", "Saved route")} value={preferredRouteLabel} />
                       <SummaryField
-                        label="Effective route"
-                        value={routeSummaryLabel || "NyxID Gateway"}
+                        label={t("pages.settings.index.effective.route.2", "Effective route")}
+                        value={routeSummaryLabel}
                       />
-                      <SummaryField label="Runtime mode" value={runtimeModeLabel} />
+                      <SummaryField label={t("pages.settings.index.runtime.mode", "Runtime mode")} value={runtimeModeLabel} />
                       <SummaryField
-                        label="Runtime URL"
+                        label={t("pages.settings.index.runtime.url", "Runtime URL")}
                         value={
                           <Tooltip
                             mouseEnterDelay={0.15}
@@ -1060,36 +1055,28 @@ const SettingsPage: React.FC = () => {
                       />
                     </div>
                     <p style={statusCopyStyle}>
-                      These defaults apply when creating new chats, Studio
-                      sessions, and global tools that do not specify their own
-                      route or model.
-                    </p>
+                      {t("pages.settings.index.these.defaults.apply.when.creating", "These defaults apply when creating new chats, Studio sessions, and global tools that do not specify their own route or model.")}</p>
                     <p style={statusCopyStyle}>
-                      If the saved route becomes unavailable, requests
-                      automatically use the effective route shown above.
-                    </p>
+                      {t("pages.settings.index.if.the.saved.route.becomes", "If the saved route becomes unavailable, requests automatically use the effective route shown above.")}</p>
                   </div>
                 </AevatarPanel>
 
-                <AevatarPanel style={settingsPanelStyle} title="Apply scope">
+                <AevatarPanel style={settingsPanelStyle} title={t("pages.settings.index.apply.scope", "Apply scope")}>
                   <div style={{ ...panelStackStyle, padding: 20 }}>
                     <Typography.Text type="secondary">
-                      These defaults currently apply to:
-                    </Typography.Text>
+                      {t("pages.settings.index.these.defaults.currently.apply.to", "These defaults currently apply to:")}</Typography.Text>
                     <Space size={[10, 10]} wrap>
                       <ScopeChip icon={<CommentOutlined />} label="Chat" />
                       <ScopeChip icon={<ExperimentOutlined />} label="Studio" />
-                      <ScopeChip icon={<ToolOutlined />} label="Global tools" />
+                      <ScopeChip icon={<ToolOutlined />} label={t("pages.settings.index.global.tools", "Global tools")} />
                     </Space>
                   </div>
                 </AevatarPanel>
 
-                <AevatarPanel style={settingsPanelStyle} title="Technical preview">
+                <AevatarPanel style={settingsPanelStyle} title={t("pages.settings.index.technical.preview", "Technical preview")}>
                   <div style={{ ...panelStackStyle, padding: 20 }}>
                     <Typography.Text type="secondary">
-                      These values reflect the effective route, the current model draft,
-                      and the stored runtime defaults.
-                    </Typography.Text>
+                      {t("pages.settings.index.these.values.reflect.the.effective", "These values reflect the effective route, the current model draft, and the stored runtime defaults.")}</Typography.Text>
                     <div style={codePreviewStyle}>
                       {technicalPreviewRows.map((row, index) => (
                         <div
@@ -1142,7 +1129,7 @@ const SettingsPage: React.FC = () => {
       canEditRoute,
       catalogUnavailable,
       llmLoadError,
-      liveModelGroups,
+      modelGroups,
       modelOptions,
       insetCardStyle,
       preferredRouteAvailable,
@@ -1176,8 +1163,8 @@ const SettingsPage: React.FC = () => {
       <div style={tabBodyStyle}>
         {draftDirty ? (
           <Alert
-            message="LLM changes are still pending save."
-            description="You can return to the LLM tab and save whenever you are ready."
+            message={t("pages.settings.index.llm.changes.are.still.pending", "LLM changes are still pending save.")}
+            description={t("pages.settings.index.you.can.return.to.the", "You can return to the LLM tab and save whenever you are ready.")}
             showIcon
             type="info"
           />

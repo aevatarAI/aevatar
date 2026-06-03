@@ -4,11 +4,14 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -36,9 +39,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
             GAgentToolHint("voice-agent-default"),
             []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-default"]);
-        var resolver = RecordingVoiceSessionResolver.Attached(CreateInitializedSession());
+        var session = new RecordingVoiceRealtimeSession();
         var socket = new FakeWebSocket(WebSocketState.Open);
-        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, session);
         var context = CreateVoiceContext(app, "/ws/voice?codec=pcm16&sample_rate_hz=24000");
         var wsFeature = new FakeHttpWebSocketFeature(socket);
         context.Features.Set<IHttpWebSocketFeature>(wsFeature);
@@ -50,7 +53,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
         policyPort.LastCallerScope!.NyxUserId.Should().Be("user-1");
         wsFeature.AcceptCalls.Should().Be(0);
         catalog.Requests.Should().BeEmpty();
-        resolver.Requests.Should().BeEmpty();
+        session.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -74,11 +77,20 @@ public sealed class PolicyAwareVoiceEndpointsTests
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
         var attachedTransports = new List<IVoiceTransport>();
         var detachedTransports = new List<IVoiceTransport?>();
-        var resolver = RecordingVoiceSessionResolver.Attached(CreateSessionCompletingOnAttach(
-            attachedTransports,
-            detachedTransports));
+        var session = new RecordingVoiceRealtimeSession();
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: transport =>
+            {
+                attachedTransports.Add(transport);
+                return transport.DisposeAsync().AsTask();
+            },
+            detachAsync: transport =>
+            {
+                detachedTransports.Add(transport);
+                return Task.CompletedTask;
+            });
         var socket = new FakeWebSocket(WebSocketState.Open);
-        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, session, mediaPort);
         var context = CreateVoiceContext(app, "/ws/voice?channel=lark&registration_scope_id=bot-1&sender_id=sender-1");
         var wsFeature = new FakeHttpWebSocketFeature(socket);
         context.Features.Set<IHttpWebSocketFeature>(wsFeature);
@@ -88,11 +100,11 @@ public sealed class PolicyAwareVoiceEndpointsTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         wsFeature.AcceptCalls.Should().Be(1);
         catalog.Requests.Should().BeEmpty();
-        resolver.Requests.Should().ContainSingle()
-            .Which.Should().Be(new VoicePresenceSessionRequest(
+        session.Requests.Should().ContainSingle()
+            .Which.Should().Be(new VoiceRealtimeSessionRequest(
                 "voice-agent-lark",
                 "voice_presence_openai",
-                VoicePresenceSessionRequestPurpose.Attach));
+                VoiceRealtimeSessionPurpose.Attach));
         attachedTransports.Should().ContainSingle();
         detachedTransports.Should().ContainSingle()
             .Which.Should().BeSameAs(attachedTransports.Single());
@@ -111,19 +123,19 @@ public sealed class PolicyAwareVoiceEndpointsTests
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
             VoiceAttachTarget(" voice-agent-lark ", " voice_presence_openai "),
             []));
-        var resolver = resolutionCase switch
+        var session = resolutionCase switch
         {
-            "unsupported" => RecordingVoiceSessionResolver.Unsupported(),
-            "not-found" => RecordingVoiceSessionResolver.PreflightFailed(VoicePresencePreflightFailureKind.NotFound),
-            "not-initialized" => RecordingVoiceSessionResolver.PreflightFailed(VoicePresencePreflightFailureKind.NotInitialized),
-            "transport-attached" => RecordingVoiceSessionResolver.PreflightFailed(VoicePresencePreflightFailureKind.TransportAlreadyAttached),
+            "unsupported" => new RecordingVoiceRealtimeSession(VoiceRealtimeSessionStartError.Unsupported),
+            "not-found" => new RecordingVoiceRealtimeSession(VoiceRealtimeSessionStartError.NotFound),
+            "not-initialized" => new RecordingVoiceRealtimeSession(VoiceRealtimeSessionStartError.NotInitialized),
+            "transport-attached" => new RecordingVoiceRealtimeSession(VoiceRealtimeSessionStartError.TransportAlreadyAttached),
             _ => throw new ArgumentOutOfRangeException(nameof(resolutionCase), resolutionCase, null),
         };
         var socket = new FakeWebSocket(WebSocketState.Open);
         using var app = CreatePolicyAwareApp(
             policyPort,
             new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
-            resolver);
+            session);
         var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
         var wsFeature = new FakeHttpWebSocketFeature(socket);
         context.Features.Set<IHttpWebSocketFeature>(wsFeature);
@@ -133,11 +145,11 @@ public sealed class PolicyAwareVoiceEndpointsTests
         context.Response.StatusCode.Should().Be(expectedStatusCode);
         (await ReadBodyAsync(context)).Should().Be(expectedBody);
         wsFeature.AcceptCalls.Should().Be(0);
-        resolver.Requests.Should().ContainSingle()
-            .Which.Should().Be(new VoicePresenceSessionRequest(
+        session.Requests.Should().ContainSingle()
+            .Which.Should().Be(new VoiceRealtimeSessionRequest(
                 "voice-agent-lark",
                 "voice_presence_openai",
-                VoicePresenceSessionRequestPurpose.Attach));
+                VoiceRealtimeSessionPurpose.Attach));
     }
 
     [Theory]
@@ -150,20 +162,20 @@ public sealed class PolicyAwareVoiceEndpointsTests
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
             VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
             []));
-        var session = failureCase switch
+        var mediaPort = failureCase switch
         {
-            "remote-audio-unavailable" => CreateSessionThrowingOnAttach(
-                new NotSupportedException("remote_audio_transport_unavailable")),
-            "already-attached" => CreateSessionThrowingOnAttach(
-                new InvalidOperationException("already attached")),
+            "remote-audio-unavailable" => new RecordingVolatileMediaStreamPort(
+                attachAsync: static _ => throw new VoiceVolatileMediaStreamUnavailableException()),
+            "already-attached" => new RecordingVolatileMediaStreamPort(
+                attachAsync: static _ => throw new InvalidOperationException("already attached")),
             _ => throw new ArgumentOutOfRangeException(nameof(failureCase), failureCase, null),
         };
-        var resolver = RecordingVoiceSessionResolver.Attached(session);
         var socket = new FakeWebSocket(WebSocketState.Open);
         using var app = CreatePolicyAwareApp(
             policyPort,
             new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
-            resolver);
+            new RecordingVoiceRealtimeSession(),
+            mediaPort);
         var context = CreateVoiceContext(app, "/ws/voice?channel=lark");
         var wsFeature = new FakeHttpWebSocketFeature(socket);
         context.Features.Set<IHttpWebSocketFeature>(wsFeature);
@@ -194,9 +206,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
         // Refactor (issue1321-first): all ForwardToModel voice decisions fail closed before WebSocket accept.
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToModel("realtime-model"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
-        var resolver = RecordingVoiceSessionResolver.Attached(CreateInitializedSession());
+        var session = new RecordingVoiceRealtimeSession();
         var socket = new FakeWebSocket(WebSocketState.Open);
-        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, session);
         var context = CreateVoiceContext(app, "/ws/voice");
         var wsFeature = new FakeHttpWebSocketFeature(socket);
         context.Features.Set<IHttpWebSocketFeature>(wsFeature);
@@ -206,7 +218,28 @@ public sealed class PolicyAwareVoiceEndpointsTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented);
         wsFeature.AcceptCalls.Should().Be(0);
         catalog.Requests.Should().BeEmpty();
-        resolver.Requests.Should().BeEmpty();
+        session.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenForwardToModelHasOnlyPrefilledVoiceTarget_ShouldReturn501BeforeUpgrade()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToModelWithPrefilledVoiceTarget(), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]);
+        var session = new RecordingVoiceRealtimeSession();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, session);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented);
+        (await ReadBodyAsync(context)).Should().Be("Voice ForwardToModel is not supported in v1.");
+        wsFeature.AcceptCalls.Should().Be(0);
+        catalog.Requests.Should().BeEmpty();
+        session.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -214,9 +247,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(Reject("voice denied"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
-        var resolver = RecordingVoiceSessionResolver.Attached(CreateInitializedSession());
+        var session = new RecordingVoiceRealtimeSession();
         var socket = new FakeWebSocket(WebSocketState.Open);
-        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, session);
         var context = CreateVoiceContext(app, "/ws/voice");
         var wsFeature = new FakeHttpWebSocketFeature(socket);
         context.Features.Set<IHttpWebSocketFeature>(wsFeature);
@@ -226,7 +259,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
         wsFeature.AcceptCalls.Should().Be(0);
         catalog.Requests.Should().BeEmpty();
-        resolver.Requests.Should().BeEmpty();
+        session.Requests.Should().BeEmpty();
     }
 
     private static ChatRouteAction GAgentToolHint(string actorId) =>
@@ -251,6 +284,26 @@ public sealed class PolicyAwareVoiceEndpointsTests
             ForwardToModel = new ForwardToModel { ModelName = modelName },
         };
 
+    private static ChatRouteAction ForwardToModelWithPrefilledVoiceTarget() =>
+        new()
+        {
+            ForwardToModel = new ForwardToModel
+            {
+                ToolChoiceHint = new ChatRouteToolChoiceHint
+                {
+                    ToolName = "aevatar_invoke_gagent",
+                    PrefilledArguments = new Struct
+                    {
+                        Fields =
+                        {
+                            ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString("voice-agent-lark"),
+                            ["voice_module_name"] = Google.Protobuf.WellKnownTypes.Value.ForString("voice_presence_openai"),
+                        },
+                    },
+                },
+            },
+        };
+
     private static ChatRouteAction Reject(string reason) =>
         new()
         {
@@ -260,7 +313,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
     private static WebApplication CreatePolicyAwareApp(
         StaticPolicyPort policyPort,
         RecordingCatalogQueryPort catalog,
-        RecordingVoiceSessionResolver resolver,
+        RecordingVoiceRealtimeSession session,
+        RecordingVolatileMediaStreamPort? mediaPort = null,
         Action<PolicyAwareVoiceEndpointOptions>? configureOptions = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -272,7 +326,8 @@ public sealed class PolicyAwareVoiceEndpointsTests
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(policyPort);
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticFallbackProvider("fallback-model")));
         builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalog);
-        builder.Services.AddSingleton<IVoicePresenceSessionResolver>(resolver);
+        builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(session);
+        builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(mediaPort ?? new RecordingVolatileMediaStreamPort());
         var app = builder.Build();
         app.MapPolicyAwareVoiceEndpoint();
         return app;
@@ -296,8 +351,9 @@ public sealed class PolicyAwareVoiceEndpointsTests
                     PolicyAwareVoiceEndpoints.IsVoiceDevBypassPrincipal(context.User));
             });
         });
-        builder.Services.AddSingleton<IVoicePresenceSessionResolver>(
-            RecordingVoiceSessionResolver.PreflightFailed(VoicePresencePreflightFailureKind.NotFound));
+        builder.Services.AddSingleton<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>(
+            new RecordingVoiceRealtimeSession(VoiceRealtimeSessionStartError.NotFound));
+        builder.Services.AddSingleton<IVoiceVolatileMediaStreamPort>(new RecordingVolatileMediaStreamPort());
 
         var app = builder.Build();
         app.UseAuthentication();
@@ -339,71 +395,16 @@ public sealed class PolicyAwareVoiceEndpointsTests
             .OfType<RouteEndpoint>()
             .Single(endpoint => endpoint.RoutePattern.RawText == pattern);
 
-    private static VoicePresenceSession CreateInitializedSession() =>
+    private static VoicePresenceSessionLeaseHandle CreateLeaseHandle(string actorId, string? moduleName) =>
         new(
-            isInitialized: static () => true,
-            isTransportAttached: static () => false,
-            attachTransportAsync: static (_, _) => Task.CompletedTask,
-            detachTransportAsync: static (_, _) => Task.CompletedTask,
-            pcmSampleRateHz: 24000);
-
-    private static VoicePresenceSession CreateSessionCompletingOnAttach(
-        List<IVoiceTransport>? attachedTransports = null,
-        List<IVoiceTransport?>? detachedTransports = null) =>
-        new(
-            isInitialized: static () => true,
-            isTransportAttached: static () => false,
-            attachTransportAsync: (transport, _) =>
-            {
-                attachedTransports?.Add(transport);
-                if (transport is IAsyncDisposable disposable)
-                    return disposable.DisposeAsync().AsTask();
-
-                return Task.CompletedTask;
-            },
-            detachTransportAsync: (transport, _) =>
-            {
-                detachedTransports?.Add(transport);
-                return Task.CompletedTask;
-            },
-            pcmSampleRateHz: 24000);
-
-    private static VoicePresenceSession CreateSessionThrowingOnAttach(Exception exception) =>
-        new(
-            isInitialized: static () => true,
-            isTransportAttached: static () => false,
-            attachTransportAsync: (_, _) => Task.FromException(exception),
-            detachTransportAsync: static (_, _) => Task.CompletedTask,
-            pcmSampleRateHz: 24000);
-
-    private static VoicePresenceSession CreateSessionWithRuntimeState(List<VoicePresenceRuntimeStatus> transitions)
-    {
-        var runtimeState = new VoicePresenceRuntimeState
-        {
-            Status = VoicePresenceRuntimeStatus.Idle,
-            NextResponseId = 1,
-            LastDrainAckResponseId = -1,
-            LastDrainAckPlayoutSequence = -1,
-        };
-        transitions.Add(runtimeState.Status);
-        return new VoicePresenceSession(
-            isInitialized: static () => true,
-            isTransportAttached: static () => false,
-            attachTransportAsync: (_, _) =>
-            {
-                runtimeState.Status = VoicePresenceRuntimeStatus.UserSpeaking;
-                transitions.Add(runtimeState.Status);
-                runtimeState.CurrentResponseId = 1;
-                runtimeState.NextResponseId = 2;
-                runtimeState.Status = VoicePresenceRuntimeStatus.ResponseInProgress;
-                transitions.Add(runtimeState.Status);
-                runtimeState.Status = VoicePresenceRuntimeStatus.AudioDraining;
-                transitions.Add(runtimeState.Status);
-                return Task.CompletedTask;
-            },
-            detachTransportAsync: static (_, _) => Task.CompletedTask,
-            pcmSampleRateHz: 24000);
-    }
+            actorId,
+            moduleName ?? "voice_presence",
+            "session-1",
+            "voice-presence.host",
+            42,
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            VoiceRemoteAudioSupport.Supported,
+            "transport-1");
 
     private sealed class StaticFallbackProvider(string modelName) : IChatRouteFallbackProvider
     {
@@ -466,42 +467,93 @@ public sealed class PolicyAwareVoiceEndpointsTests
             Task.FromResult<long?>(null);
     }
 
-    private sealed class RecordingVoiceSessionResolver : IVoicePresenceSessionResolver
+    private sealed class RecordingVoiceRealtimeSession(
+        VoiceRealtimeSessionStartError? failure = null)
+        : IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>
     {
-        private readonly VoicePresenceSessionResolution _resolution;
+        public List<VoiceRealtimeSessionRequest> Requests { get; } = [];
 
-        private RecordingVoiceSessionResolver(
-            VoicePresenceSessionResolution resolution,
-            IReadOnlyList<VoicePresenceRuntimeStatus>? statusTransitions = null)
-        {
-            _resolution = resolution;
-            StatusTransitions = statusTransitions ?? [];
-        }
-
-        public List<VoicePresenceSessionRequest> Requests { get; } = [];
-        public IReadOnlyList<VoicePresenceRuntimeStatus> StatusTransitions { get; }
-
-        public static RecordingVoiceSessionResolver Attached(
-            VoicePresenceSession session,
-            IReadOnlyList<VoicePresenceRuntimeStatus>? statusTransitions = null) =>
-            new(VoicePresenceSessionResolution.LeaseAcceptedAttached(session), statusTransitions);
-
-        public static RecordingVoiceSessionResolver PendingAttach(VoicePresenceSession session) =>
-            new(VoicePresenceSessionResolution.LeaseAcceptedPendingAttach(session));
-
-        public static RecordingVoiceSessionResolver Unsupported() =>
-            new(VoicePresenceSessionResolution.Unsupported());
-
-        public static RecordingVoiceSessionResolver PreflightFailed(VoicePresencePreflightFailureKind failure) =>
-            new(VoicePresenceSessionResolution.PreflightFailed(failure));
-
-        public Task<VoicePresenceSessionResolution> ResolveAsync(
-            VoicePresenceSessionRequest request,
+        public Task<RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>> ExecuteAsync(
+            VoiceRealtimeSessionRequest inbound,
+            Func<VoiceRealtimeFrame, CancellationToken, ValueTask> emitAsync,
+            Func<VoiceRealtimeSessionAccepted, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
-            _ = ct;
-            Requests.Add(request);
-            return Task.FromResult(_resolution);
+            _ = emitAsync;
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(inbound);
+            if (failure.HasValue)
+            {
+                return Task.FromResult(
+                    RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>
+                        .Failure(failure.Value));
+            }
+
+            var accepted = new VoiceRealtimeSessionAccepted(
+                inbound.ActorId,
+                inbound.ModuleName ?? "voice_presence",
+                "session-1",
+                24000,
+                42,
+                CreateLeaseHandle(inbound.ActorId, inbound.ModuleName));
+            return Task.FromResult(
+                RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>
+                    .Success(accepted, VoiceRealtimeSessionCompletion.Accepted, completed: true));
+        }
+    }
+
+    private sealed class RecordingVolatileMediaStreamPort(
+        Func<IVoiceTransport, Task>? attachAsync = null,
+        Func<IVoiceTransport?, Task>? detachAsync = null)
+        : IVoiceVolatileMediaStreamPort
+    {
+        public bool SupportsRemoteAudio => true;
+
+        public Task<VoiceTransportLifetimeCompleted?> AttachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport transport,
+            CancellationToken ct = default)
+        {
+            _ = handle;
+            ct.ThrowIfCancellationRequested();
+            return AttachCoreAsync(transport);
+        }
+
+        public Task DetachAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            IVoiceTransport? expectedTransport,
+            CancellationToken ct = default)
+        {
+            _ = handle;
+            ct.ThrowIfCancellationRequested();
+            return detachAsync?.Invoke(expectedTransport) ?? Task.CompletedTask;
+        }
+
+        public Task CompleteTransportLifetimeAsync(
+            VoicePresenceSessionLeaseHandle handle,
+            VoiceTransportLifetimeCompleted? completed,
+            string reason,
+            CancellationToken ct = default)
+        {
+            _ = handle;
+            _ = completed;
+            _ = reason;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        private async Task<VoiceTransportLifetimeCompleted?> AttachCoreAsync(IVoiceTransport transport)
+        {
+            if (attachAsync != null)
+                await attachAsync(transport);
+
+            return new VoiceTransportLifetimeCompleted
+            {
+                SessionId = "session-1",
+                TransportLeaseId = "transport-1",
+                Reason = "completed",
+                OwnerId = "voice-presence.host",
+            };
         }
     }
 

@@ -85,6 +85,7 @@ check_directory_build_version_guard
 check_channel_inbound_no_runtime_credential() {
   local proto_file="agents/Aevatar.GAgents.Channel.Runtime/protos/channel_bot_registration.proto"
   local runner_file="agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs"
+  local canon_dir="docs/canon"
 
   if ! awk '
     /message ChannelInboundEvent[[:space:]]*\{/ { in_msg = 1 }
@@ -112,6 +113,10 @@ check_channel_inbound_no_runtime_credential() {
     exit 1
   fi
 
+  if rg -n "registration_token" "${canon_dir}"; then
+    echo "Canonical channel inbound durable facts docs must not list registration_token."
+    exit 1
+  fi
 }
 
 check_channel_inbound_no_runtime_credential
@@ -845,6 +850,10 @@ bash "${SCRIPT_DIR}/proto_lint_guard.sh"
 bash "${SCRIPT_DIR}/channel_mega_interface_guard.sh"
 bash "${SCRIPT_DIR}/channel_native_sdk_import_guard.sh"
 bash "${SCRIPT_DIR}/channel_platform_project_reference_guard.sh"
+python3 "${REPO_ROOT}/tools/ci/guards/project_reference_layer_guard.py" \
+  --root "${REPO_ROOT}" \
+  --allowlist "${REPO_ROOT}/tools/ci/project_reference_layer_allowlist.tsv" \
+  --mode fail
 bash "${SCRIPT_DIR}/channel_inbox_gagent_guard.sh"
 bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
@@ -1234,14 +1243,13 @@ if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevata
 fi
 
 tool_context_metadata_hits="$(
-  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()" src agents \
-    -g '*.cs' \
-    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolRequestContext.cs' || true
+  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()|\\.ToLegacyMetadata\\(|HttpAuthorizationMetadataKey" src agents \
+    -g '*.cs' || true
 )"
 
 if [ -n "${tool_context_metadata_hits}" ]; then
   echo "${tool_context_metadata_hits}"
-  echo "Agent tool control facts must use typed AgentToolExecutionContext accessors. CurrentMetadata/TryGet are legacy mapper shims only."
+  echo "Public legacy metadata control shims are forbidden. Use typed context fields and local scrub-only blocked keys."
   exit 1
 fi
 

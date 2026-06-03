@@ -25,8 +25,6 @@ public sealed class ChatCompletionsCommandFacade(
     IResponsesDirectToolPlanService directToolPlanService,
     ILogger<ChatCompletionsCommandFacade> logger) : IChatCompletionsCommandFacade
 {
-    private const string RegistrationScopeMetadataKey = "scope_id";
-
     public async Task<ChatCompletionsCreateCommandResult> CreateAsync(
         ChatCompletionsCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -355,16 +353,11 @@ public sealed class ChatCompletionsCommandFacade(
         ResponsesToolClassification toolClassification,
         AgentToolExecutionContext toolContext)
     {
-        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.CompletionId,
-            [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-        };
         return new LLMRequest
         {
             Messages = [.. normalized.ChatMessages],
             RequestId = normalized.CompletionId,
-            Metadata = llmMetadata,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
             CallerContext = new LLMRequestCallerContext(
                 callerScope.ScopeId,
                 callerScope.OwnerSubject,
@@ -501,6 +494,7 @@ public sealed class ChatCompletionsCommandFacade(
             ScopeId = request.CallerContext?.ScopeId ?? string.Empty,
             OwnerSubject = request.CallerContext?.OwnerSubject ?? string.Empty,
             BearerToken = request.CallerContext?.Credentials?.NyxIdBearer ?? string.Empty,
+            ToolContext = (request.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload(),
             RequestedAt = Timestamp.FromDateTimeOffset(requestedAt),
         };
         if (request.Temperature is not null)

@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -610,6 +610,32 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+        if (evt.SuspensionType == "tool_approval")
+        {
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    Custom = new WorkflowCustomEventPayload
+                    {
+                        Name = "aevatar.tool_approval.pending",
+                        Payload = Any.Pack(new WorkflowToolApprovalSuspensionCustomPayload
+                        {
+                            RunId = evt.RunId,
+                            StepId = evt.StepId,
+                            ExecutionId = evt.ToolApproval?.ExecutionId ?? string.Empty,
+                            ToolName = evt.ToolApproval?.ToolName ?? string.Empty,
+                            ToolCallId = evt.ToolApproval?.ToolCallId ?? string.Empty,
+                            ApprovalRequestId = evt.ToolApproval?.ApprovalRequestId ?? string.Empty,
+                            ArgumentsJson = evt.ToolApproval?.ArgumentsJson ?? string.Empty,
+                        }),
+                    },
+                },
+            ];
+            return true;
+        }
+
         // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
         //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
         //   New principle: typed suspension fields are the single source; Metadata is open extension data only.

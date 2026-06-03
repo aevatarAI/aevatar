@@ -10,7 +10,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Tests.TestSupport;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -136,7 +136,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var frame = new AGUIEvent
         {
-            TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+            TextMessageContent = new Aevatar.AGUI.Contracts.TextMessageContentEvent
             {
                 MessageId = "msg-1",
                 Delta = "hello",

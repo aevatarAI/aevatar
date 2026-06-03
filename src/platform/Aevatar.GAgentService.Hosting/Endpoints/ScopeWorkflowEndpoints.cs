@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -6,7 +7,8 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Hosting;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
+using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -21,11 +23,13 @@ namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 public static class ScopeWorkflowEndpoints
 {
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+
     public static IEndpointRouteBuilder MapScopeWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = ScopeEndpointRouteGroups.MapScopeGroup(app).WithTags("ScopeWorkflows");
         group.MapPut("/{scopeId}/workflows/{workflowId}", HandleUpsertWorkflowAsync)
-            .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status200OK)
+            .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
@@ -108,7 +112,7 @@ public static class ScopeWorkflowEndpoints
                 request.DisplayName,
                 request.InlineWorkflowYamls,
                 request.RevisionId), ct);
-            return Results.Ok(result);
+            return Results.Accepted(result.ReadModelUrl, result);
         }
         catch (InvalidOperationException ex)
         {
@@ -311,13 +315,20 @@ public static class ScopeWorkflowEndpoints
 
         if (resolvedEventFormat == ScopeWorkflowStreamEventFormat.Workflow)
         {
-            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, headers, http, ct);
+            var scopedHeaders = BuildScopedHeaders(headers);
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
                 {
                     Prompt = prompt,
-                    AgentId = workflow.ActorId,
+                    Source = new WorkflowChatSourceInput
+                    {
+                        Kind = "definition_actor",
+                        DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                        {
+                            ActorId = workflow.ActorId,
+                        },
+                    },
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
                     Headers = scopedHeaders,
@@ -328,7 +339,7 @@ public static class ScopeWorkflowEndpoints
             return;
         }
 
-        var aguiHeaders = await BuildScopedHeadersAsync(scopeId, headers, http, ct);
+        var aguiHeaders = BuildScopedHeaders(headers);
         await HandleAguiStreamAsync(
             http,
             scopeId,
@@ -436,8 +447,9 @@ public static class ScopeWorkflowEndpoints
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
-                Headers: headers,
-                LlmControl: llmControl),
+                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                LlmControl: ToWorkflowLlmControl(llmControl),
+                Headers: headers),
             chatRunService,
             ct);
     }
@@ -537,26 +549,16 @@ public static class ScopeWorkflowEndpoints
         return false;
     }
 
-    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
-        string scopeId,
-        IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null,
-        CancellationToken cancellationToken = default)
+    private static Dictionary<string, string> BuildScopedHeaders(
+        IReadOnlyDictionary<string, string>? headers)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        if (http != null)
-        {
-            var auth = http.Request.Headers.Authorization.FirstOrDefault();
-            if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            {
-                var bearerToken = auth["Bearer ".Length..].Trim();
-                scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-            }
-        }
+        scopedHeaders.Remove(LegacyConnectorHttpAuthorizationBlockedKey);
+        // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses WorkflowChatRunRequest.ConnectorHttpAuthorization.
 
         return scopedHeaders;
     }
@@ -578,6 +580,25 @@ public static class ScopeWorkflowEndpoints
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
             UserMemoryPrompt = control.UserMemoryPrompt,
         };
+    }
+
+    private static WorkflowLlmControl? ToWorkflowLlmControl(LLMControlContext? control)
+    {
+        if (control == null)
+            return null;
+
+        var model = NormalizeOptional(control.ModelOverride);
+        var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
+        var maxToolRounds = control.MaxToolRoundsOverride is > 0
+            ? control.MaxToolRoundsOverride
+            : null;
+        if (model == null && userMemoryPrompt == null && maxToolRounds == null)
+            return null;
+
+        return new WorkflowLlmControl(
+            model,
+            maxToolRounds,
+            userMemoryPrompt);
     }
 
     internal static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
@@ -627,6 +648,9 @@ public static class ScopeWorkflowEndpoints
 
         return control == LLMControlContext.Empty ? null : control;
     }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string? ExtractBearerToken(HttpContext http)
     {

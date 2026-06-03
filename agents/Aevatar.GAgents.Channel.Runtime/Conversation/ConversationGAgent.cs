@@ -65,6 +65,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private const int RelayReplayClaimsCap = 10000;
     private const int PendingRelayAdmissionsCap = 1000;
     private const int RetainedHistoryMessagesCap = 100;
+    private const int MaxNyxRelayInterimUpdateRetryCount = 2;
 
     /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still
@@ -951,6 +952,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     generation),
                 OperationGeneration = generation,
                 PendingAccumulatedText = evt.AccumulatedText,
+                RetryAttempt = 0,
             });
         await ScheduleNyxRelayTextOperationTimeoutAsync(
             correlationId,
@@ -1063,6 +1065,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                         sequence,
                         generation),
                     OperationGeneration = generation,
+                    RetryAttempt = 0,
                 });
             await ScheduleNyxRelayTextOperationTimeoutAsync(
                 correlationId,
@@ -1136,6 +1139,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                         sequence,
                         generation),
                     OperationGeneration = generation,
+                    RetryAttempt = 0,
                 });
             await ScheduleNyxRelayTextOperationTimeoutAsync(
                 correlationId,
@@ -1431,6 +1435,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             EditUnsupported = result.EditUnsupported,
             RawErrorCode = result.ErrorCode ?? string.Empty,
             RawErrorSummary = result.ErrorSummary ?? string.Empty,
+            FailureKind = result.FailureKind,
+            RetryAfterMs = result.RetryAfter.HasValue ? (long)result.RetryAfter.Value.TotalMilliseconds : 0,
+            HttpStatus = result.HttpStatus,
+            RawErrorKey = result.RawErrorKey ?? string.Empty,
+            RawErrorCodeValue = result.RawErrorCode,
         };
 
     private static NyxRelayTextOperationRawResult ToNyxRelayTextRawFault(Exception ex) =>
@@ -1453,7 +1462,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             evt.State == NyxRelayTextOperationResultState.Faulted
                 ? raw.ExceptionMessage
                 : raw.RawErrorSummary,
-            raw.EditUnsupported);
+            raw.EditUnsupported,
+            raw.FailureKind,
+            raw.RetryAfterMs > 0 ? TimeSpan.FromMilliseconds(raw.RetryAfterMs) : null,
+            raw.HttpStatus,
+            raw.RawErrorKey,
+            raw.RawErrorCodeValue);
     }
 
     private static string BuildNyxRelayTextFaultErrorCode(NyxRelayTextOperationRawResult raw)
@@ -1503,6 +1517,37 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var result = ToStreamChunkResult(evt);
         if (!result.Success)
         {
+            if (ShouldRetryNyxRelayInterimUpdate(result, state))
+            {
+                var retryAttempt = state.RetryAttempt + 1;
+                var retryGeneration = NextNyxRelayTextOperationGeneration(state);
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    state.Phase,
+                    fieldUpdate: s => s with
+                    {
+                        InFlight = new NyxRelayTextOperationInFlight(
+                            NyxRelayTextOperationKind.Interim,
+                            evt.Sequence,
+                            retryGeneration),
+                        OperationGeneration = retryGeneration,
+                        RetryAttempt = retryAttempt,
+                    });
+                await StartNyxRelayTextOperationAsync(
+                    NyxRelayTextOperationKind.Interim,
+                    evt.Chunk?.Clone() ?? new LlmReplyStreamChunkEvent(),
+                    correlationId,
+                    NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId,
+                    commandId: string.Empty,
+                    finalText: string.Empty,
+                    lastFlushedText: state.LastFlushedText,
+                    editCount: state.EditCount,
+                    evt.Sequence,
+                    retryGeneration);
+                return;
+            }
+
             if (state.AllowsFinalEdit)
             {
                 Logger.LogInformation(
@@ -1515,7 +1560,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     NyxRelayStreamingPhase.SuppressingInterim,
                     terminalReason: $"interim_edit_failed:{result.ErrorCode}",
-                    fieldUpdate: s => s with { InFlight = null });
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
             }
             else
             {
@@ -1529,7 +1574,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     NyxRelayStreamingPhase.DisabledPreSend,
                     terminalReason: $"first_send_failed:{result.ErrorCode}",
-                    fieldUpdate: s => s with { InFlight = null });
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
             }
             return;
         }
@@ -1553,9 +1598,18 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 EditCount = isFirstChunk ? 0 : s.EditCount + 1,
                 InFlight = null,
                 PendingAccumulatedText = pendingText,
+                RetryAttempt = 0,
             });
         await ContinueNyxRelayTextCoalescedWorkAsync(correlationId, updated, evt.Chunk);
     }
+
+    private static bool ShouldRetryNyxRelayInterimUpdate(
+        ConversationStreamChunkResult result,
+        NyxRelayStreamingState state) =>
+        state.AllowsFinalEdit &&
+        result.FailureKind == FailureKind.TransientAdapterError &&
+        (result.RetryAfter is null || result.RetryAfter <= TimeSpan.Zero) &&
+        state.RetryAttempt < MaxNyxRelayInterimUpdateRetryCount;
 
     private async Task HandleNyxRelayTextFailureSelfHealCompletionAsync(
         string correlationId,
@@ -1577,7 +1631,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 state,
                 NyxRelayStreamingPhase.TerminalSucceeded,
                 terminalReason: "failed_self_heal",
-                fieldUpdate: s => s with { InFlight = null });
+                fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
             await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, failureText, state.EditCount + 1);
             return;
         }
@@ -1592,7 +1646,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             state,
             NyxRelayStreamingPhase.TerminalPartial,
             terminalReason: $"failed_self_heal_edit_failed:{result.ErrorCode}",
-            fieldUpdate: s => s with { InFlight = null });
+            fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
         await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, state.LastFlushedText, state.EditCount);
     }
 
@@ -1617,7 +1671,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 state,
                 NyxRelayStreamingPhase.TerminalPartial,
                 terminalReason: $"final_edit_failed:{result.ErrorCode}",
-                fieldUpdate: s => s with { InFlight = null });
+                fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
             await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, state.LastFlushedText, state.EditCount);
             return;
         }
@@ -1632,6 +1686,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 LastFlushedText = finalText,
                 EditCount = state.EditCount + 1,
                 InFlight = null,
+                RetryAttempt = 0,
             });
         await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, finalText, state.EditCount + 1);
     }
@@ -1658,7 +1713,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                         state,
                         NyxRelayStreamingPhase.SuppressingInterim,
                         terminalReason: "interim_edit_timeout",
-                        fieldUpdate: s => s with { InFlight = null });
+                        fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
                 }
                 else
                 {
@@ -1667,7 +1722,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                         state,
                         NyxRelayStreamingPhase.DisabledPreSend,
                         terminalReason: "first_send_timeout",
-                        fieldUpdate: s => s with { InFlight = null });
+                        fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
                 }
                 return;
             case NyxRelayTextOperationKind.FailureSelfHeal:
@@ -1676,7 +1731,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     NyxRelayStreamingPhase.TerminalPartial,
                     terminalReason: "failed_self_heal_timeout",
-                    fieldUpdate: s => s with { InFlight = null });
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
                 await PersistStreamedCompletionAsync(
                     evt,
                     NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
@@ -1690,7 +1745,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     NyxRelayStreamingPhase.TerminalPartial,
                     terminalReason: "final_edit_timeout",
-                    fieldUpdate: s => s with { InFlight = null });
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
                 await PersistStreamedCompletionAsync(
                     evt,
                     NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
@@ -2558,6 +2613,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             lifecycle.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
         if (evt.HasNyxRelayTerminalState)
             lifecycle.PendingNyxRelayTerminalState = evt.NyxRelayTerminalState;
+        if (evt.HasNyxRelayRetryAttempt)
+            lifecycle.NyxRelayRetryAttempt = evt.NyxRelayRetryAttempt;
         if (evt.AppendedHistory.Count > 0)
         {
             lifecycle.PendingAppendedHistory.Clear();

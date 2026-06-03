@@ -78,7 +78,6 @@ internal static class VoiceDemoBootstrapEndpoints
             agent_correlation_id = voiceDemoReceipt.CorrelationId,
             route_policy_command_id = routePolicyReceipt?.CommandId,
             route_policy_correlation_id = routePolicyReceipt?.CorrelationId,
-            nyxid_proxy = "https://nyx.chrono-ai.fun/api/v1/proxy/s/llm-openai",
             readiness = "query readmodels or subscribe to events; this POST only confirms dispatch acceptance",
         });
     }

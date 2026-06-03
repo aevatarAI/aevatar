@@ -6,6 +6,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -170,7 +171,8 @@ public sealed class ChatEndpointsInternalTests
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("[image]");
         service.LastCommand.InputParts.Should().ContainSingle();
-        service.LastCommand.InputParts![0].Kind.Should().Be(WorkflowChatInputPartKind.Image);
+        service.LastCommand.InputParts![0].Kind.Should()
+            .Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image);
     }
 
     [Fact]
@@ -322,6 +324,41 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         body.Should().Contain("WORKFLOW_BINDING_MISMATCH");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldPassTrustedBearerAsTypedConnectorAuthorization()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer trusted-token";
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "hello",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["connector.http.authorization"] = "Bearer untrusted",
+                },
+            },
+            interactionService,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.ConnectorHttpAuthorization.Should().Be("Bearer trusted-token");
+        capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]

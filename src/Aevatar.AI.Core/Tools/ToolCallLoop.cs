@@ -276,7 +276,12 @@ public sealed class ToolCallLoop
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct)
     {
-        using var _ = AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(metadata));
+        // Refactor (issue1574): Old pattern: standalone tool execution promoted Metadata into tool control.
+        // New principle: core tool execution receives typed control; Metadata only supplies scrubbed annotations.
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        });
         await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
     }
 

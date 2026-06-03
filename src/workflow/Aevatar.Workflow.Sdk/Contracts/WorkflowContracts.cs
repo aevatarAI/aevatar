@@ -8,7 +8,6 @@ public sealed record ChatRunRequest
     public IReadOnlyList<ChatRunContentPart>? InputParts { get; init; }
     public string? ScopeId { get; init; }
     public string? Workflow { get; init; }
-    public string? AgentId { get; init; }
     public string? SessionId { get; init; }
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }

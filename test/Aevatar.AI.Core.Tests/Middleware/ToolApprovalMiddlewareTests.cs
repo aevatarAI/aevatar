@@ -198,11 +198,25 @@ public class ToolApprovalMiddlewareTests
             ArgumentsJson = "{}",
         };
 
-        await middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+        var nextExecuted = false;
+        await middleware.InvokeAsync(ctx, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
 
+        nextExecuted.Should().BeFalse();
         ctx.Terminate.Should().BeTrue();
         ctx.Result.Should().Contain("\"approval_required\":true");
         ctx.Result.Should().Contain("\"request_id\":\"");
+        ctx.PendingApproval.Should().NotBeNull();
+        ctx.PendingApproval!.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        ctx.PendingApproval.ToolCallId.Should().Be("tc-8");
+        ctx.PendingApproval.ToolName.Should().Be("danger");
+        ctx.PendingApproval.ArgumentsJson.Should().Be("{}");
+        ctx.PendingApproval.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        ctx.PendingApproval.IsReadOnly.Should().BeFalse();
+        ctx.PendingApproval.IsDestructive.Should().BeTrue();
     }
 
     [Fact]

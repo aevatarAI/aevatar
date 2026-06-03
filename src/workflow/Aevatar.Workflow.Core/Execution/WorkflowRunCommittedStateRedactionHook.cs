@@ -1,4 +1,4 @@
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Execution;
@@ -77,8 +77,6 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
         if (delta == null)
             return;
 
-        if (!string.IsNullOrWhiteSpace(delta.Llm?.NyxidAccessToken))
-            delta.Llm.NyxidAccessToken = string.Empty;
         if (!string.IsNullOrWhiteSpace(delta.Connector?.HttpAuthorization))
             delta.Connector.HttpAuthorization = string.Empty;
     }

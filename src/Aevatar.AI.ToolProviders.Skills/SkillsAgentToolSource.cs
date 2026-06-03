@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -21,6 +22,7 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
     private readonly SkillDiscovery _discovery;
     private readonly LocalSkillCatalog _localCatalog;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
+    private readonly IScopeWorkflowCommandPort? _scopeWorkflowCommandPort;
     private readonly ILogger _logger;
 
     public SkillsAgentToolSource(
@@ -28,12 +30,14 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
         SkillDiscovery discovery,
         LocalSkillCatalog localCatalog,
         IRemoteSkillFetcher? remoteFetcher = null,
+        IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null,
         ILogger<SkillsAgentToolSource>? logger = null)
     {
         _options = options;
         _discovery = discovery;
         _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
+        _scopeWorkflowCommandPort = scopeWorkflowCommandPort;
         _logger = logger ?? NullLogger<SkillsAgentToolSource>.Instance;
     }
 
@@ -57,7 +61,7 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
         }
 
         // 2. 返回统一的 UseSkillTool（单个工具）
-        IReadOnlyList<IAgentTool> tools = [new UseSkillTool(_localCatalog, _remoteFetcher)];
+        IReadOnlyList<IAgentTool> tools = [new UseSkillTool(_localCatalog, _remoteFetcher, _scopeWorkflowCommandPort)];
         return Task.FromResult(tools);
     }
 }

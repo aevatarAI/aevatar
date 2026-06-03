@@ -8,6 +8,7 @@ using Aevatar.Studio.Hosting.NyxId;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
 using Aevatar.Studio.Projection.DependencyInjection;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -52,6 +53,7 @@ internal static class StudioHostingServiceCollectionExtensions
     {
         services.AddSingleton(sp => new AppScopedWorkflowService(
             sp.GetRequiredService<IWorkflowYamlDocumentService>(),
+            sp.GetRequiredService<IWorkflowDefinitionParser>(),
             sp.GetService<IStudioWorkspaceQueryPort>(),
             sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetService<IStudioMemberCommandPort>(),

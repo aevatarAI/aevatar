@@ -1,4 +1,5 @@
 import type { WorkflowCatalogItem } from "@/shared/models/runtime/catalog";
+import { t } from "@/shared/i18n/messages";
 
 export type WorkflowCatalogOption = {
   label: string;
@@ -58,7 +59,9 @@ export function buildWorkflowCatalogOptions(
 
     return [
       {
-        label: `${normalizedCurrentWorkflowName} · Unavailable in catalog`,
+        label: t("shared.workflows.catalogvisibility.unavailable.in.catalog", "{name} · Unavailable in catalog", {
+          name: normalizedCurrentWorkflowName,
+        }),
         value: normalizedCurrentWorkflowName,
       },
       ...options,
@@ -71,7 +74,10 @@ export function buildWorkflowCatalogOptions(
 
   return [
     {
-      label: `${currentItem.name} · ${currentItem.groupLabel} · Hidden from library`,
+      label: t("shared.workflows.catalogvisibility.hidden.from.library", "{name} · {group} · Hidden from library", {
+        group: currentItem.groupLabel,
+        name: currentItem.name,
+      }),
       value: currentItem.name,
     },
     ...options,

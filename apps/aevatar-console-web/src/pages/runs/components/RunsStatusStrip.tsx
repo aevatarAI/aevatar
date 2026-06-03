@@ -3,6 +3,7 @@ import React from "react";
 import type { RunEndpointKind } from "@/shared/runs/endpointKinds";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import type { RunTransport } from "../runEventPresentation";
+import { t } from "@/shared/i18n/messages";
 
 type RunsStatusStripProps = {
   activeStepCount: number;
@@ -105,7 +106,7 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
     <div style={stripStyle}>
       <div style={metricsWrapStyle}>
         <div style={metricPillStyle}>
-          <Typography.Text style={metricLabelStyle}>Status</Typography.Text>
+          <Typography.Text style={metricLabelStyle}>{t("pages.runs.runsstatusstrip.status", "Status")}</Typography.Text>
           <Space size={6}>
             <Badge status={statusTone} />
             <Typography.Text style={metricValueStyle}>
@@ -115,7 +116,7 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
         </div>
 
         <div style={metricPillStyle}>
-          <Typography.Text style={metricLabelStyle}>Run ID</Typography.Text>
+          <Typography.Text style={metricLabelStyle}>{t("pages.runs.runsstatusstrip.run.id", "Run ID")}</Typography.Text>
           <AevatarCompactText
             maxWidth={180}
             monospace
@@ -126,12 +127,12 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
         </div>
 
         <div style={metricPillStyle}>
-          <Typography.Text style={metricLabelStyle}>Elapsed</Typography.Text>
+          <Typography.Text style={metricLabelStyle}>{t("pages.runs.runsstatusstrip.elapsed", "Elapsed")}</Typography.Text>
           <Typography.Text style={metricValueStyle}>{elapsedLabel}</Typography.Text>
         </div>
 
         <div style={metricPillStyle}>
-          <Typography.Text style={metricLabelStyle}>Endpoint</Typography.Text>
+          <Typography.Text style={metricLabelStyle}>{t("pages.runs.runsstatusstrip.endpoint", "Endpoint")}</Typography.Text>
           <AevatarCompactText
             maxWidth={180}
             monospace={endpointKind !== "chat"}
@@ -144,17 +145,16 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
         {!compact ? (
           <>
             <div style={metricPillStyle}>
-              <Typography.Text style={metricLabelStyle}>Transport</Typography.Text>
+              <Typography.Text style={metricLabelStyle}>{t("pages.runs.runsstatusstrip.transport", "Transport")}</Typography.Text>
               <Tag color="processing">
                 {transportLabel}
               </Tag>
             </div>
 
             <div style={metricPillStyle}>
-              <Typography.Text style={metricLabelStyle}>Activity</Typography.Text>
+              <Typography.Text style={metricLabelStyle}>{t("pages.runs.runsstatusstrip.activity", "Activity")}</Typography.Text>
               <Typography.Text style={metricValueStyle}>
-                {messageCount} msg · {eventCount} evt · {activeStepCount} active
-              </Typography.Text>
+                {messageCount} {t("pages.runs.runsstatusstrip.msg", "msg ·")}{eventCount} {t("pages.runs.runsstatusstrip.evt", "evt ·")}{activeStepCount} {t("pages.runs.runsstatusstrip.active", "active")}</Typography.Text>
             </div>
           </>
         ) : null}
@@ -167,16 +167,14 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
             onClick={onOpenSetup}
             type="default"
           >
-            Run setup
-          </Button>
+            {t("pages.runs.runsstatusstrip.run.setup", "Run setup")}</Button>
         ) : null}
         <Button
           size="small"
           onClick={onOpenDetails}
           type={hasPendingInteraction ? "primary" : "default"}
         >
-          Details
-        </Button>
+          {t("pages.runs.runsstatusstrip.details", "Details")}</Button>
         <Button
           danger
           size="small"
@@ -184,8 +182,7 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
           disabled={!isRunLive}
           onClick={onAbort}
         >
-          Abort
-        </Button>
+          {t("pages.runs.runsstatusstrip.abort", "Abort")}</Button>
       </div>
     </div>
   );

@@ -55,5 +55,6 @@
   <ItemGroup>
     <Compile Include="..\Shared\ProjectionActivationPlanProviderTestBase.cs" Link="Shared\ProjectionActivationPlanProviderTestBase.cs" />
     <Compile Include="..\Shared\SharedOrleansPortAllocator.cs" Link="Shared\SharedOrleansPortAllocator.cs" />
+    <Compile Include="..\TestAgentToolContexts.cs" Link="TestAgentToolContexts.cs" />
   </ItemGroup>
 </Project>

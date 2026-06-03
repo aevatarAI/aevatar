@@ -17,8 +17,7 @@ public sealed record RemoteToolApprovalRequest(
     string ToolCallId,
     string ArgumentsJson,
     ToolApprovalMode ApprovalMode,
-    bool IsDestructive,
-    IReadOnlyDictionary<string, string> Items);
+    bool IsDestructive);
 
 public sealed record RemoteToolApprovalSubmission(
     string RemoteApprovalId,
@@ -26,8 +25,7 @@ public sealed record RemoteToolApprovalSubmission(
 
 public sealed record RemoteToolApprovalStatusQuery(
     string RequestId,
-    string RemoteApprovalId,
-    IReadOnlyDictionary<string, string> Items);
+    string RemoteApprovalId);
 
 public sealed record RemoteToolApprovalStatusSnapshot(
     RemoteToolApprovalStatus Status,

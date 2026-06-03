@@ -1,7 +1,5 @@
 const TARGET_SAMPLE_RATE = 24000;
 const FRAME_SAMPLES = 480;
-const NYXID_BASE_URL = "https://nyx.chrono-ai.fun";
-const NYXID_VOICE_PROXY_ENDPOINT = `${NYXID_BASE_URL}/api/v1/proxy/s/llm-openai`;
 const TOKEN_STORAGE_KEYS = [
   "aevatar.nyxid.access_token",
   "nyxid.access_token",
@@ -11,7 +9,6 @@ const TOKEN_STORAGE_KEYS = [
 const nyxidAccessToken = resolveNyxIdAccessToken();
 
 const els = {
-  nyxidEndpoint: document.getElementById("nyxidEndpoint"),
   endpointMode: document.getElementById("endpointMode"),
   actorField: document.getElementById("actorField"),
   actorId: document.getElementById("actorId"),
@@ -293,7 +290,6 @@ function createBlockResampler(fromRate, toRate) {
 function openSocket() {
   const url = buildWsUrl({ includeAccessToken: true });
   log(`连接 ${redactAccessToken(url)}`);
-  log(`上游 Realtime 固定走 NyxID proxy: ${NYXID_VOICE_PROXY_ENDPOINT}`);
   const ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
   state.ws = ws;
@@ -455,7 +451,4 @@ els.connectBtn.addEventListener("click", connect);
 els.disconnectBtn.addEventListener("click", disconnect);
 els.muteBtn.addEventListener("click", toggleMute);
 
-if (els.nyxidEndpoint) {
-  els.nyxidEndpoint.value = NYXID_VOICE_PROXY_ENDPOINT;
-}
 refreshUrl();

@@ -40,11 +40,11 @@ Phase 7 adds a WebRTC transport path for `VoicePresence`, including a minimal WH
 - Added `MapVoicePresenceWhip(...)` to `VoicePresenceEndpoints`.
 - `POST` accepts an SDP offer and returns `201 application/sdp` with the generated answer.
 - `DELETE` detaches the current transport for the actor.
-- The endpoint reuses the existing `VoicePresenceSession` resolution contract and does not add any host-level in-memory actor/session registry.
+- The endpoint resolves an actor-owned realtime lease through the shared realtime session contract and does not add any host-level in-memory actor/session registry.
 
 ### Transport lifetime safety
 
-- `VoicePresenceSession` now carries the PCM sample rate required by the resolved voice session.
+- The accepted realtime session receipt carries the PCM sample rate required by the resolved voice session.
 - `VoicePresenceModule.DetachTransportAsync(...)` now accepts an optional expected transport instance.
 - WHIP background cleanup uses that expected instance so a stale completion from an old transport cannot detach a newer one.
 

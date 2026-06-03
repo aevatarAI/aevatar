@@ -22,6 +22,7 @@ import {
   type AevatarThemeSurfaceToken,
 } from '@/shared/ui/aevatarWorkbench';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
+import { t } from "@/shared/i18n/messages";
 
 export type AevatarLayoutMode = 'viewport' | 'document';
 
@@ -212,7 +213,7 @@ export const AevatarHelpTooltip: React.FC<{
       title={<div>{content}</div>}
     >
       <button
-        aria-label="Show help"
+        aria-label={t("shared.ui.aevatarpageshells.show.help", "Show help")}
         className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         style={{ ...helpTriggerButtonStyle, color: token.colorTextDescription }}
         type="button"
