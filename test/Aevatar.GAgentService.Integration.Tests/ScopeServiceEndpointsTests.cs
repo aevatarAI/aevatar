@@ -3712,8 +3712,127 @@ public sealed class ScopeServiceEndpointsTests
         response.ActorId.Should().Be("run-actor-orders-detail-1");
         response.RevisionId.Should().Be("rev-1");
         response.WorkflowName.Should().Be("orders");
+        response.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
+        response.LastOutput.Should().Be("done");
+        response.LastSuccess.Should().BeTrue();
         response.StateVersion.Should().Be(8);
         response.LastEventId.Should().Be("evt-8");
+        host.WorkflowQueryService.SnapshotCalls.Should().ContainSingle("workflow runs should still read current state from the workflow query service");
+        host.WorkflowQueryService.SnapshotCalls[0].Should().Be("run-actor-orders-detail-1");
+    }
+
+    [Fact]
+    public async Task GetRunEndpoint_ShouldReturnRegistryBackedSummaryForStaticService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "static-actor-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:orders", "dep-1", "rev-1", "static-actor-1");
+
+        var registration = await host.ServiceRunRegistrationPort.RegisterAsync(
+            new ServiceRunRecord
+            {
+                ScopeId = "scope-a",
+                ServiceId = "orders",
+                ServiceKey = "scope-a:default:default:orders",
+                RunId = "run-static-detail-1",
+                CommandId = "cmd-static-1",
+                CorrelationId = "corr-static-1",
+                EndpointId = "chat",
+                ImplementationKind = ServiceImplementationKind.Static,
+                TargetActorId = "static-actor-1",
+                RevisionId = "rev-1",
+                DeploymentId = "dep-1",
+                Status = ServiceRunStatus.Accepted,
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "orders",
+                },
+            },
+            CancellationToken.None);
+        await host.ServiceRunRegistrationPort.UpdateStatusAsync(
+            registration.RunActorId,
+            registration.RunId,
+            ServiceRunStatus.Completed,
+            "static result",
+            null,
+            CancellationToken.None);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunSummaryHttpResponse>(
+            "/api/scopes/scope-a/services/orders/runs/run-static-detail-1");
+
+        response.Should().NotBeNull();
+        response!.ScopeId.Should().Be("scope-a");
+        response.ServiceId.Should().Be("orders");
+        response.RunId.Should().Be("run-static-detail-1");
+        response.ActorId.Should().Be("static-actor-1");
+        response.ImplementationKind.Should().Be(ServiceImplementationKind.Static.ToString());
+        response.Status.Should().Be(ServiceRunStatus.Completed.ToString());
+        response.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
+        response.LastOutput.Should().Be("static result");
+        response.LastError.Should().BeEmpty();
+        response.LastSuccess.Should().BeTrue();
+        response.WorkflowName.Should().BeEmpty();
+        host.WorkflowQueryService.SnapshotCalls.Should().BeEmpty("static runs should read persisted terminal facts from the service-run registry");
+    }
+
+    [Fact]
+    public async Task GetRunEndpoint_ShouldReturnRegistryBackedSummaryForScriptingService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "script-actor-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:orders", "dep-1", "rev-1", "script-actor-1");
+
+        var registration = await host.ServiceRunRegistrationPort.RegisterAsync(
+            new ServiceRunRecord
+            {
+                ScopeId = "scope-a",
+                ServiceId = "orders",
+                ServiceKey = "scope-a:default:default:orders",
+                RunId = "run-script-detail-1",
+                CommandId = "cmd-script-1",
+                CorrelationId = "corr-script-1",
+                EndpointId = "chat",
+                ImplementationKind = ServiceImplementationKind.Scripting,
+                TargetActorId = "script-actor-1",
+                RevisionId = "rev-1",
+                DeploymentId = "dep-1",
+                Status = ServiceRunStatus.Accepted,
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "orders",
+                },
+            },
+            CancellationToken.None);
+        await host.ServiceRunRegistrationPort.UpdateStatusAsync(
+            registration.RunActorId,
+            registration.RunId,
+            ServiceRunStatus.Failed,
+            null,
+            "script failed",
+            CancellationToken.None);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunSummaryHttpResponse>(
+            "/api/scopes/scope-a/services/orders/runs/run-script-detail-1");
+
+        response.Should().NotBeNull();
+        response!.ScopeId.Should().Be("scope-a");
+        response.ServiceId.Should().Be("orders");
+        response.RunId.Should().Be("run-script-detail-1");
+        response.ActorId.Should().Be("script-actor-1");
+        response.ImplementationKind.Should().Be(ServiceImplementationKind.Scripting.ToString());
+        response.Status.Should().Be(ServiceRunStatus.Failed.ToString());
+        response.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Failed);
+        response.LastOutput.Should().BeEmpty();
+        response.LastError.Should().Be("script failed");
+        response.LastSuccess.Should().BeFalse();
+        response.WorkflowName.Should().BeEmpty();
+        host.WorkflowQueryService.SnapshotCalls.Should().BeEmpty("scripting runs should read persisted terminal facts from the service-run registry");
     }
 
     [Fact]
@@ -5100,7 +5219,7 @@ public sealed class ScopeServiceEndpointsTests
     private sealed class RecordingServiceRunRegistrationPort : IServiceRunRegistrationPort
     {
         public List<ServiceRunRecord> RegisterCalls { get; } = [];
-        public List<(string runActorId, string runId, ServiceRunStatus status)> StatusCalls { get; } = [];
+        public List<(string runActorId, string runId, ServiceRunStatus status, string lastOutput, string lastError)> StatusCalls { get; } = [];
 
         public FakeServiceRunQueryPort? LinkedQueryPort { get; set; }
 
@@ -5111,9 +5230,19 @@ public sealed class ScopeServiceEndpointsTests
             return Task.FromResult(new ServiceRunRegistrationResult($"service-run:{record.ScopeId}:{record.ServiceId}:{record.RunId}", record.RunId));
         }
 
-        public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default)
+        public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default) =>
+            UpdateStatusAsync(runActorId, runId, status, null, null, ct);
+
+        public Task UpdateStatusAsync(
+            string runActorId,
+            string runId,
+            ServiceRunStatus status,
+            string? lastOutput,
+            string? lastError,
+            CancellationToken ct = default)
         {
-            StatusCalls.Add((runActorId, runId, status));
+            StatusCalls.Add((runActorId, runId, status, lastOutput ?? string.Empty, lastError ?? string.Empty));
+            LinkedQueryPort?.UpdateStatus(runActorId, runId, status, lastOutput, lastError);
             return Task.CompletedTask;
         }
 
@@ -5138,7 +5267,9 @@ public sealed class ScopeServiceEndpointsTests
                 StateVersion: 1,
                 LastEventId: $"{record.RunId}:registered",
                 CreatedAt: record.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow,
-                UpdatedAt: record.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow);
+                UpdatedAt: record.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow,
+                LastOutput: record.LastOutput ?? string.Empty,
+                LastError: record.LastError ?? string.Empty);
     }
 
     private sealed class FakeServiceRunQueryPort : IServiceRunQueryPort
@@ -5162,6 +5293,31 @@ public sealed class ScopeServiceEndpointsTests
                 string.Equals(x.ServiceId, snapshot.ServiceId, StringComparison.Ordinal) &&
                 string.Equals(x.RunId, snapshot.RunId, StringComparison.Ordinal));
             _snapshots.Add(snapshot);
+        }
+
+        public void UpdateStatus(
+            string runActorId,
+            string runId,
+            ServiceRunStatus status,
+            string? lastOutput,
+            string? lastError)
+        {
+            var index = _snapshots.FindIndex(x =>
+                string.Equals(x.ActorId, runActorId, StringComparison.Ordinal) &&
+                string.Equals(x.RunId, runId, StringComparison.Ordinal));
+            if (index < 0)
+                return;
+
+            var current = _snapshots[index];
+            _snapshots[index] = current with
+            {
+                Status = status,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                LastOutput = lastOutput ?? current.LastOutput,
+                LastError = lastError ?? current.LastError,
+                StateVersion = current.StateVersion + 1,
+                LastEventId = $"{current.RunId}:status:{(int)status}",
+            };
         }
 
         public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(ServiceRunQuery query, CancellationToken ct = default)
@@ -5235,7 +5391,9 @@ public sealed class ScopeServiceEndpointsTests
                 StateVersion: binding.SourceVersion,
                 LastEventId: binding.SourceEventId ?? string.Empty,
                 CreatedAt: binding.CreatedAt ?? DateTimeOffset.UtcNow,
-                UpdatedAt: binding.UpdatedAt ?? DateTimeOffset.UtcNow);
+                UpdatedAt: binding.UpdatedAt ?? DateTimeOffset.UtcNow,
+                LastOutput: string.Empty,
+                LastError: string.Empty);
     }
 
     private sealed class FakeTeamEntryMemberResolver : ITeamEntryMemberResolver

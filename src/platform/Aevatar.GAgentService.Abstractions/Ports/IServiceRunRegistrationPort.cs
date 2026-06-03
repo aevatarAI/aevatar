@@ -16,6 +16,15 @@ public interface IServiceRunRegistrationPort
         string runId,
         ServiceRunStatus status,
         CancellationToken ct = default);
+
+    Task UpdateStatusAsync(
+        string runActorId,
+        string runId,
+        ServiceRunStatus status,
+        string? lastOutput,
+        string? lastError,
+        CancellationToken ct = default) =>
+        UpdateStatusAsync(runActorId, runId, status, ct);
 }
 
 public sealed record ServiceRunRegistrationResult(

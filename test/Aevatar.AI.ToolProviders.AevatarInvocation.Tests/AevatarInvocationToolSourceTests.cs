@@ -1107,7 +1107,9 @@ public sealed class AevatarInvocationToolSourceTests
             1,
             "event-1",
             DateTimeOffset.UtcNow,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            string.Empty,
+            string.Empty);
 
     private sealed class Harness
     {

@@ -30,6 +30,8 @@ public sealed class ServiceRunCurrentStateProjectorTests
             implementation: ServiceImplementationKind.Workflow,
             targetActorId: "workflow-run:abc",
             createdAt: observedAt);
+        record.LastOutput = "final output";
+        record.LastError = "final error";
         var envelope = WrapCommittedRunState(
             record,
             stateVersion: 3,
@@ -53,6 +55,8 @@ public sealed class ServiceRunCurrentStateProjectorTests
         doc.ImplementationKind.Should().Be((int)ServiceImplementationKind.Workflow);
         doc.TargetActorId.Should().Be("workflow-run:abc");
         doc.Status.Should().Be((int)ServiceRunStatus.Accepted);
+        doc.LastOutput.Should().Be("final output");
+        doc.LastError.Should().Be("final error");
         doc.StateVersion.Should().Be(3);
         doc.LastEventId.Should().Be("evt-registered");
     }
@@ -119,6 +123,8 @@ public sealed class ServiceRunCurrentStateProjectorTests
         var byRun = await reader.GetByRunIdAsync("tenant-1", "svc-1", "run-a");
         byRun.Should().NotBeNull();
         byRun!.CommandId.Should().Be("cmd-a");
+        byRun.LastOutput.Should().BeEmpty();
+        byRun.LastError.Should().BeEmpty();
 
         var byCommand = await reader.GetByCommandIdAsync("tenant-1", "svc-1", "cmd-b");
         byCommand.Should().NotBeNull();

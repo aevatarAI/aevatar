@@ -64,6 +64,15 @@ public sealed class ServiceRunRegistrationAdapter : IServiceRunRegistrationPort
         string runActorId,
         string runId,
         ServiceRunStatus status,
+        CancellationToken ct = default) =>
+        await UpdateStatusAsync(runActorId, runId, status, null, null, ct);
+
+    public async Task UpdateStatusAsync(
+        string runActorId,
+        string runId,
+        ServiceRunStatus status,
+        string? lastOutput,
+        string? lastError,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(runActorId))
@@ -71,14 +80,20 @@ public sealed class ServiceRunRegistrationAdapter : IServiceRunRegistrationPort
         if (status == ServiceRunStatus.Unspecified)
             return;
 
+        var command = new UpdateServiceRunStatusRequested
+        {
+            RunId = runId ?? string.Empty,
+            Status = status,
+        };
+        if (lastOutput != null)
+            command.LastOutput = lastOutput;
+        if (lastError != null)
+            command.LastError = lastError;
+
         var commandId = Guid.NewGuid().ToString("N");
         var envelope = CreateEnvelope(
             runActorId,
-            Any.Pack(new UpdateServiceRunStatusRequested
-            {
-                RunId = runId ?? string.Empty,
-                Status = status,
-            }),
+            Any.Pack(command),
             commandId,
             commandId);
         await _dispatchPort.DispatchAsync(runActorId, envelope, ct);
