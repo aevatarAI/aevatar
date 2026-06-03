@@ -86,6 +86,68 @@ function renderEventIcon(kind: GovernanceAuditEventTargetKind) {
   return <ClockCircleOutlined />;
 }
 
+function renderEventCard(
+  surfaceToken: AevatarThemeSurfaceToken,
+  event: GovernanceAuditEvent,
+) {
+  return (
+    <div
+      style={{
+        ...buildAevatarPanelStyle(surfaceToken, {
+          background: surfaceToken.colorFillAlter,
+          padding: 14,
+        }),
+        boxShadow: "none",
+      }}
+    >
+      <Space
+        align="start"
+        orientation="vertical"
+        size={10}
+        style={{ display: "flex" }}
+      >
+        <Space
+          align="center"
+          style={{
+            justifyContent: "space-between",
+            width: "100%",
+          }}
+          wrap
+        >
+          <Space size={[8, 8]} wrap>
+            <Typography.Text strong>{event.action}</Typography.Text>
+            <span
+              style={buildAevatarTagStyle(
+                surfaceToken,
+                "governance" as AevatarStatusDomain,
+                event.status,
+              )}
+            >
+              {formatAevatarStatusLabel(event.status)}
+            </span>
+          </Space>
+          <Typography.Text type="secondary">
+            {formatDateTime(event.at)}
+          </Typography.Text>
+        </Space>
+
+        <Typography.Paragraph style={{ margin: 0 }}>
+          {event.summary}
+        </Typography.Paragraph>
+
+        <Space size={[8, 8]} wrap>
+          <Typography.Text type="secondary">
+            来源: {event.actor}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            对象: {event.targetLabel}
+          </Typography.Text>
+        </Space>
+      </Space>
+    </div>
+  );
+}
+
 const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
   events,
   loading = false,
@@ -136,7 +198,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
             pending={loading ? "加载中..." : null}
             items={events.map((event) => ({
               color: buildEventDotColor(surfaceToken, event.status),
-              dot: (
+              icon: (
                 <span
                   style={{
                     alignItems: "center",
@@ -149,14 +211,14 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
                   {renderEventIcon(event.targetKind)}
                 </span>
               ),
-              children: (
+              content: onSelect ? (
                 <button
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                  onClick={() => onSelect?.(event)}
+                  onClick={() => onSelect(event)}
                   style={{
                     background: "transparent",
                     border: "none",
-                    cursor: onSelect ? "pointer" : "default",
+                    cursor: "pointer",
                     display: "block",
                     padding: 0,
                     textAlign: "left",
@@ -164,61 +226,10 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
                   }}
                   type="button"
                 >
-                  <div
-                    style={{
-                      ...buildAevatarPanelStyle(surfaceToken, {
-                        background: surfaceToken.colorFillAlter,
-                        padding: 14,
-                      }),
-                      boxShadow: "none",
-                    }}
-                  >
-                    <Space
-                      align="start"
-                      orientation="vertical"
-                      size={10}
-                      style={{ display: "flex" }}
-                    >
-                      <Space
-                        align="center"
-                        style={{
-                          justifyContent: "space-between",
-                          width: "100%",
-                        }}
-                        wrap
-                      >
-                        <Space size={[8, 8]} wrap>
-                          <Typography.Text strong>{event.action}</Typography.Text>
-                          <span
-                            style={buildAevatarTagStyle(
-                              surfaceToken,
-                              "governance" as AevatarStatusDomain,
-                              event.status,
-                            )}
-                          >
-                            {formatAevatarStatusLabel(event.status)}
-                          </span>
-                        </Space>
-                        <Typography.Text type="secondary">
-                          {formatDateTime(event.at)}
-                        </Typography.Text>
-                      </Space>
-
-                      <Typography.Paragraph style={{ margin: 0 }}>
-                        {event.summary}
-                      </Typography.Paragraph>
-
-                      <Space size={[8, 8]} wrap>
-                        <Typography.Text type="secondary">
-                          来源: {event.actor}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          对象: {event.targetLabel}
-                        </Typography.Text>
-                      </Space>
-                    </Space>
-                  </div>
+                  {renderEventCard(surfaceToken, event)}
                 </button>
+              ) : (
+                renderEventCard(surfaceToken, event)
               ),
             }))}
           />
