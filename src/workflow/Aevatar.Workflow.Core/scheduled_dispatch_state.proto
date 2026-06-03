@@ -3,7 +3,9 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Core";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
 import "agent_messages.proto";
+import "service_endpoint.proto";
 
 message ScheduledDispatchState
 {
@@ -29,7 +31,7 @@ message ScheduledDispatchState
   string last_admission_actor_id = 20;
   ScheduledDispatchRuntimeCallbackLeaseState next_fire_lease = 21;
   map<string, ScheduledDispatchFireRecordState> fire_records = 22;
-  WorkflowScheduleTargetState workflow_target = 23;
+  ScheduledDispatchTargetState target = 23;
 }
 
 enum ScheduledDispatchRuntimeCallbackBackendState
@@ -45,6 +47,32 @@ message ScheduledDispatchRuntimeCallbackLeaseState
   string callback_id = 2;
   int64 generation = 3;
   ScheduledDispatchRuntimeCallbackBackendState backend = 4;
+}
+
+message ScheduledDispatchTargetState
+{
+  ScheduledDispatchTargetKindState kind = 1;
+  string actor_id = 2;
+  aevatar.EventEnvelope envelope = 3;
+  ScheduledServiceInvocationTargetState service_invocation = 4;
+  WorkflowScheduleTargetState workflow = 5;
+}
+
+enum ScheduledDispatchTargetKindState
+{
+  SCHEDULED_DISPATCH_TARGET_KIND_STATE_UNSPECIFIED = 0;
+  SCHEDULED_DISPATCH_TARGET_KIND_STATE_ENVELOPE = 1;
+  SCHEDULED_DISPATCH_TARGET_KIND_STATE_SERVICE_INVOCATION = 2;
+  SCHEDULED_DISPATCH_TARGET_KIND_STATE_WORKFLOW = 3;
+}
+
+message ScheduledServiceInvocationTargetState
+{
+  aevatar.gagentservice.ServiceIdentity identity = 1;
+  string endpoint_id = 2;
+  google.protobuf.Any payload = 3;
+  string revision_id = 4;
+  aevatar.gagentservice.ServiceInvocationCaller caller = 5;
 }
 
 message WorkflowScheduleTargetState
@@ -66,7 +94,7 @@ message ScheduledDispatchCreateCommand
   bool enabled = 7;
   map<string, string> headers = 8;
   string payload_type_url = 9;
-  WorkflowScheduleTargetState workflow_target = 10;
+  ScheduledDispatchTargetState target = 10;
 }
 
 message ScheduledDispatchUpdateCommand
@@ -80,7 +108,7 @@ message ScheduledDispatchUpdateCommand
   bool enabled = 7;
   map<string, string> headers = 8;
   string payload_type_url = 9;
-  WorkflowScheduleTargetState workflow_target = 10;
+  ScheduledDispatchTargetState target = 10;
 }
 
 message ScheduledDispatchConfiguredEvent
@@ -95,7 +123,7 @@ message ScheduledDispatchConfiguredEvent
   google.protobuf.Timestamp configured_at = 8;
   map<string, string> headers = 9;
   string payload_type_url = 10;
-  WorkflowScheduleTargetState workflow_target = 11;
+  ScheduledDispatchTargetState target = 11;
   bool created = 12;
 }
 

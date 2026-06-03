@@ -44,11 +44,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configured.ActorId.Should().Be("actor:daily-report");
         configured.Configuration.ScheduleId.Should().Be("daily-report");
         configured.Configuration.DisplayName.Should().Be("Daily report");
-        configured.Configuration.WorkflowName.Should().Be("direct");
-        configured.Configuration.Prompt.Should().Be("summarize status");
+        configured.Configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.Workflow);
+        configured.Configuration.Target.Workflow.Should().NotBeNull();
+        configured.Configuration.Target.Workflow!.WorkflowName.Should().Be("direct");
+        configured.Configuration.Target.Workflow.Prompt.Should().Be("summarize status");
         configured.Configuration.Timezone.Should().Be("UTC");
-        configured.Configuration.ScopeId.Should().Be("scope-1");
-        configured.Configuration.SourceActorId.Should().Be("actor-1");
+        configured.Configuration.Target.Workflow.ScopeId.Should().Be("scope-1");
+        configured.Configuration.Target.Workflow.SourceActorId.Should().Be("actor-1");
         configured.Configuration.Headers.Should().Contain(
             new KeyValuePair<string, string>("trace", "enabled"));
         configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.workflow_name");
@@ -56,7 +58,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.scope_id");
         configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.source_actor_id");
         configured.Dispatch.TargetActorId.Should().Be("target:daily-report");
-        configured.Dispatch.WorkflowTarget.Should().Be(new WorkflowScheduleTargetDescriptor(
+        configured.Dispatch.Descriptor.Workflow.Should().Be(new WorkflowScheduleTargetDescriptor(
             "direct",
             "summarize status",
             "scope-1",
@@ -215,7 +217,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var act = () => service.DisableAsync("missing", string.Empty);
 
-        await act.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
+        await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         actorPort.EnsureScheduleIds.Should().BeEmpty();
         actorPort.Disabled.Should().BeEmpty();
     }
@@ -247,8 +249,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var enable = () => service.EnableAsync(" schedule-1 ", " resume ");
         var runNow = () => service.RunNowAsync("schedule-1");
 
-        await enable.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
-        await runNow.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
+        await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         actorPort.ResolveScheduleIds.Should().Equal("schedule-1", "schedule-1");
         actorPort.Enabled.Should().BeEmpty();
         actorPort.RunNowRequests.Should().BeEmpty();
@@ -305,8 +307,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configuration.ScheduleId.Should().Be("route-schedule");
         configuration.DisplayName.Should().BeEmpty();
         configuration.Timezone.Should().Be("UTC");
-        configuration.ScopeId.Should().BeNull();
-        configuration.SourceActorId.Should().BeNull();
+        configuration.Target.Workflow.Should().NotBeNull();
+        configuration.Target.Workflow!.ScopeId.Should().BeEmpty();
+        configuration.Target.Workflow.SourceActorId.Should().BeEmpty();
         configuration.Headers.Should().Contain("x", "y");
         configuration.Headers.Should().NotContainKey("empty");
         configuration.Headers.Should().Contain("workflow.schedule.scope_id", "caller-extension");
@@ -316,21 +319,17 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task PrepareAsync_ShouldCreateStoredWorkflowStartRequestWithoutResolvingRunActor()
     {
-        var service = new WorkflowScheduledDispatchPreparationService();
-        var configuration = new WorkflowScheduleConfiguration(
-            ScheduleId: "schedule-1",
-            DisplayName: "Daily",
-            WorkflowName: "daily-workflow",
-            Prompt: "run the daily workflow",
-            CronExpression: "0 9 * * *",
-            Timezone: "UTC",
-            Enabled: true,
-            Headers: new Dictionary<string, string>
+        var service = new ScheduledDispatchTargetPreparationService();
+        var configuration = CreateScheduledWorkflowConfiguration(
+            scheduleId: "schedule-1",
+            workflowName: "daily-workflow",
+            prompt: "run the daily workflow",
+            headers: new Dictionary<string, string>
             {
                 ["x-trace"] = "trace-1",
             },
-            ScopeId: "scope-1",
-            SourceActorId: "definition-actor-1");
+            scopeId: "scope-1",
+            sourceActorId: "definition-actor-1");
 
         var preparation = await service.PrepareAsync(
             configuration,
@@ -338,7 +337,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
             "correlation-1");
 
         preparation.TargetActorId.Should().BeNull();
-        preparation.WorkflowTarget.Should().Be(new WorkflowScheduleTargetDescriptor(
+        preparation.Descriptor.Workflow.Should().Be(new WorkflowScheduleTargetDescriptor(
             "daily-workflow",
             "run the daily workflow",
             "scope-1",
@@ -362,18 +361,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task PrepareAsync_ShouldUseCatalogSourceAndOmitBlankScopeAndActor()
     {
-        var service = new WorkflowScheduledDispatchPreparationService();
-        var configuration = new WorkflowScheduleConfiguration(
-            ScheduleId: "schedule-1",
-            DisplayName: string.Empty,
-            WorkflowName: "catalog-workflow",
-            Prompt: "hello",
-            CronExpression: "*/15 * * * *",
-            Timezone: "UTC",
-            Enabled: true,
-            Headers: new Dictionary<string, string>(),
-            ScopeId: " ",
-            SourceActorId: " ");
+        var service = new ScheduledDispatchTargetPreparationService();
+        var configuration = CreateScheduledWorkflowConfiguration(
+            scheduleId: "schedule-1",
+            workflowName: "catalog-workflow",
+            prompt: "hello",
+            scopeId: " ",
+            sourceActorId: " ");
 
         var preparation = await service.PrepareAsync(configuration, "command-1", "correlation-1");
 
@@ -545,19 +539,19 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var created = actorPort.Created.Single();
         created.Configuration.Headers.Should().Contain(new KeyValuePair<string, string>("caller", "kept"));
-        created.Dispatch.WorkflowTarget.Should().Be(new WorkflowScheduleTargetDescriptor(
+        created.Dispatch.Descriptor.Workflow.Should().Be(new WorkflowScheduleTargetDescriptor(
             "direct",
             "hello",
             "scope-1",
             "source-1"));
     }
 
-    private sealed class FakeWorkflowScheduleActorPort : IWorkflowScheduleActorPort
+    private sealed class FakeWorkflowScheduleActorPort : IScheduledDispatchActorPort
     {
         public List<string> EnsureScheduleIds { get; } = [];
         public List<string> ResolveScheduleIds { get; } = [];
-        public List<(string ActorId, WorkflowScheduleConfiguration Configuration, ScheduledDispatchPreparation Dispatch)> Created { get; } = [];
-        public List<(string ActorId, WorkflowScheduleConfiguration Configuration, ScheduledDispatchPreparation Dispatch)> Updated { get; } = [];
+        public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Created { get; } = [];
+        public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Updated { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
@@ -579,8 +573,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         public Task<DispatchAdmission> DispatchCreateAsync(
             string actorId,
-            WorkflowScheduleConfiguration configuration,
-            ScheduledDispatchPreparation dispatch,
+            ScheduledDispatchConfiguration configuration,
+            PreparedScheduledDispatchTarget dispatch,
             CancellationToken ct = default)
         {
             Created.Add((actorId, configuration, dispatch));
@@ -589,8 +583,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         public Task<DispatchAdmission> DispatchUpdateAsync(
             string actorId,
-            WorkflowScheduleConfiguration configuration,
-            ScheduledDispatchPreparation dispatch,
+            ScheduledDispatchConfiguration configuration,
+            PreparedScheduledDispatchTarget dispatch,
             CancellationToken ct = default)
         {
             Updated.Add((actorId, configuration, dispatch));
@@ -635,19 +629,19 @@ public sealed class WorkflowScheduleApplicationServiceTests
             };
     }
 
-    private sealed class FakeWorkflowScheduledDispatchPreparationService : IWorkflowScheduledDispatchPreparationService
+    private sealed class FakeWorkflowScheduledDispatchPreparationService : IScheduledDispatchTargetPreparationService
     {
-        public List<WorkflowScheduleConfiguration> Configurations { get; } = [];
+        public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
 
-        public Task<ScheduledDispatchPreparation> PrepareAsync(
-            WorkflowScheduleConfiguration configuration,
+        public Task<PreparedScheduledDispatchTarget> PrepareAsync(
+            ScheduledDispatchConfiguration configuration,
             string commandId,
             string correlationId,
             CancellationToken ct = default)
         {
             Configurations.Add(configuration);
             var targetActorId = $"target:{configuration.ScheduleId}";
-            return Task.FromResult(new ScheduledDispatchPreparation(
+            return Task.FromResult(new PreparedScheduledDispatchTarget(
                 targetActorId,
                 new EventEnvelope
                 {
@@ -661,11 +655,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                     },
                 },
                 Any.Pack(new Empty()).TypeUrl,
-                new WorkflowScheduleTargetDescriptor(
-                    configuration.WorkflowName,
-                    configuration.Prompt,
-                    configuration.ScopeId ?? string.Empty,
-                    configuration.SourceActorId ?? string.Empty)));
+                configuration.Target));
         }
     }
 
@@ -673,26 +663,26 @@ public sealed class WorkflowScheduleApplicationServiceTests
         FakeWorkflowScheduleActorPort? actorPort = null,
         FakeWorkflowScheduleQueryPort? queryPort = null,
         FakeWorkflowScheduledDispatchPreparationService? preparation = null) =>
-        new(
+        new(new ScheduledDispatchApplicationService(
             actorPort ?? new FakeWorkflowScheduleActorPort(),
             queryPort ?? new FakeWorkflowScheduleQueryPort(),
-            preparation ?? new FakeWorkflowScheduledDispatchPreparationService());
+            preparation ?? new FakeWorkflowScheduledDispatchPreparationService()));
 
-    private sealed class FakeWorkflowScheduleQueryPort : IWorkflowScheduleQueryPort
+    private sealed class FakeWorkflowScheduleQueryPort : IScheduledDispatchQueryPort
     {
-        public Dictionary<string, WorkflowScheduleDetail> Details { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, ScheduledDispatchDetail> Details { get; } = new(StringComparer.Ordinal);
         public List<string> GetScheduleIds { get; } = [];
         public int? LastTake { get; private set; }
         public string? LastCursor { get; private set; }
         public bool? LastIncludeTotalCount { get; private set; }
 
-        public Task<WorkflowScheduleDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
+        public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
         {
             GetScheduleIds.Add(scheduleId);
             return Task.FromResult(Details.GetValueOrDefault(scheduleId));
         }
 
-        public Task<WorkflowScheduleListResult> ListAsync(
+        public Task<ScheduledDispatchListResult> ListAsync(
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,
@@ -701,7 +691,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
             LastTake = take;
             LastCursor = cursor;
             LastIncludeTotalCount = includeTotalCount;
-            return Task.FromResult(new WorkflowScheduleListResult([], null, null));
+            return Task.FromResult(new ScheduledDispatchListResult([], null, null));
         }
     }
 
@@ -767,14 +757,42 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Enabled: true,
             Headers: new Dictionary<string, string>());
 
-    private static WorkflowScheduleDetail CreateDetail(
+    private static ScheduledDispatchConfiguration CreateScheduledWorkflowConfiguration(
+        string scheduleId,
+        string workflowName,
+        string prompt,
+        IReadOnlyDictionary<string, string>? headers = null,
+        string? scopeId = null,
+        string? sourceActorId = null) =>
+        new(
+            ScheduleId: scheduleId,
+            DisplayName: string.Empty,
+            Target: new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.Workflow,
+                Workflow: new WorkflowScheduleTargetDescriptor(
+                    workflowName,
+                    prompt,
+                    scopeId ?? string.Empty,
+                    sourceActorId ?? string.Empty)),
+            CronExpression: "*/15 * * * *",
+            Timezone: "UTC",
+            Enabled: true,
+            Headers: headers ?? new Dictionary<string, string>());
+
+    private static ScheduledDispatchDetail CreateDetail(
         string scheduleId,
         string workflowName = "direct",
         string cronExpression = "*/15 * * * *") =>
         new(
-            new WorkflowScheduleSummary(
+            new ScheduledDispatchSummary(
                 ScheduleId: scheduleId,
                 DisplayName: string.Empty,
+                TargetKind: ScheduledDispatchTargetKind.Workflow,
+                TargetActorId: string.Empty,
+                PayloadTypeUrl: string.Empty,
+                ServiceKey: string.Empty,
+                ServiceId: string.Empty,
+                ServiceEndpointId: string.Empty,
                 WorkflowName: workflowName,
                 CronExpression: cronExpression,
                 Timezone: "UTC",
@@ -783,16 +801,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 UpdatedAt: DateTimeOffset.UnixEpoch,
                 NextFireAt: null,
                 LastFireAt: null,
-                LastRunActorId: string.Empty,
+                LastTargetActorId: string.Empty,
                 LastCommandId: string.Empty,
                 LastCorrelationId: string.Empty,
                 LastError: string.Empty,
                 FireCount: 0,
                 FailureCount: 0,
                 Headers: new Dictionary<string, string>(),
-                ScopeId: string.Empty,
-                SourceActorId: string.Empty,
-                ScheduleActorId: string.Empty,
-                TargetActorId: string.Empty),
+                ScheduleActorId: string.Empty),
             []);
 }

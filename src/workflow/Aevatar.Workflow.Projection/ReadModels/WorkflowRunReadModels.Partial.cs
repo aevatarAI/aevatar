@@ -180,7 +180,7 @@ public sealed partial class WorkflowExecutionSummary
     }
 }
 
-public sealed partial class WorkflowScheduleDocument : IProjectionReadModel<WorkflowScheduleDocument>
+public sealed partial class ScheduledDispatchDocument : IProjectionReadModel<ScheduledDispatchDocument>
 {
     public DateTimeOffset CreatedAt
     {
@@ -214,7 +214,7 @@ public sealed partial class WorkflowScheduleDocument : IProjectionReadModel<Work
 
 }
 
-public sealed partial class WorkflowScheduleFireRecordDocument
+public sealed partial class ScheduledDispatchFireRecordDocument
 {
     public DateTimeOffset ScheduledFireAt
     {

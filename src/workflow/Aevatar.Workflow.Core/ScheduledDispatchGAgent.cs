@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Google.Protobuf;
@@ -59,7 +60,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.Timezone,
             command.Enabled,
             command.Headers,
-            command.WorkflowTarget,
+            command.Target,
             isCreate: true);
 
     [EventHandler]
@@ -74,7 +75,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.Timezone,
             command.Enabled,
             command.Headers,
-            command.WorkflowTarget,
+            command.Target,
             isCreate: false);
 
     private async Task HandleConfigureAsync(
@@ -87,7 +88,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         string timezone,
         bool enabled,
         IEnumerable<KeyValuePair<string, string>> headers,
-        WorkflowScheduleTargetState? workflowTarget,
+        ScheduledDispatchTargetState? target,
         bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -95,7 +96,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
-        EnsureValidDefinition(targetActorId, workflowTarget, triggerEnvelope, cronExpression, timezone);
+        EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone);
 
         var now = DateTimeOffset.UtcNow;
         var configured = new ScheduledDispatchConfiguredEvent
@@ -109,7 +110,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Enabled = enabled,
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
             PayloadTypeUrl = ResolvePayloadTypeUrl(triggerEnvelope),
-            WorkflowTarget = NormalizeWorkflowTarget(workflowTarget),
+            Target = NormalizeTarget(target),
             Created = isCreate,
         };
         foreach (var (key, value) in NormalizeHeaders(headers))
@@ -272,13 +273,23 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var propagation = envelope.EnsurePropagation();
         if (string.IsNullOrWhiteSpace(propagation.CorrelationId))
             propagation.CorrelationId = idempotencyKey;
+        foreach (var (key, value) in headers)
+            propagation.Baggage[key] = value;
 
         if (envelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out var workflowStartRequest))
         {
-            ApplyWorkflowTarget(workflowStartRequest, State.WorkflowTarget);
+            ApplyWorkflowTarget(workflowStartRequest, State.Target?.Workflow);
             foreach (var (key, value) in headers)
                 workflowStartRequest.Headers[key] = value;
             envelope.Payload = Any.Pack(workflowStartRequest);
+            return new ScheduledDispatchEnvelope(ResolveDispatchTargetActorId(), envelope);
+        }
+
+        if (envelope.Payload.TryUnpack<ServiceInvocationRequest>(out var serviceInvocationRequest))
+        {
+            serviceInvocationRequest.CommandId = idempotencyKey;
+            serviceInvocationRequest.CorrelationId = propagation.CorrelationId;
+            envelope.Payload = Any.Pack(serviceInvocationRequest);
             return new ScheduledDispatchEnvelope(ResolveDispatchTargetActorId(), envelope);
         }
 
@@ -289,11 +300,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             foreach (var (key, value) in headers)
                 chatRequest.Metadata[key] = value;
             envelope.Payload = Any.Pack(chatRequest);
-        }
-        else
-        {
-            throw new NotSupportedException(
-                $"Scheduled dispatch payload type '{envelope.Payload.TypeUrl}' does not support scheduled fire headers.");
         }
 
         return new ScheduledDispatchEnvelope(ResolveDispatchTargetActorId(), envelope);
@@ -410,19 +416,25 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static void EnsureValidDefinition(
         string? targetActorId,
-        WorkflowScheduleTargetState? workflowTarget,
+        ScheduledDispatchTargetState? target,
         EventEnvelope? triggerEnvelope,
         string cronExpression,
         string timezone)
     {
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
-        if (triggerEnvelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out _) ||
-            HasWorkflowTarget(workflowTarget))
+        var normalizedTarget = NormalizeTarget(target);
+        if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.Workflow ||
+            triggerEnvelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out _))
         {
-            var normalizedTarget = NormalizeWorkflowTarget(workflowTarget);
-            _ = NormalizeRequired(normalizedTarget.WorkflowName, "workflowTarget.workflowName");
-            _ = NormalizeRequired(normalizedTarget.Prompt, "workflowTarget.prompt");
+            var workflowTarget = NormalizeWorkflowTarget(normalizedTarget.Workflow);
+            _ = NormalizeRequired(workflowTarget.WorkflowName, "target.workflow.workflowName");
+            _ = NormalizeRequired(workflowTarget.Prompt, "target.workflow.prompt");
+        }
+        else if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.ServiceInvocation ||
+                 triggerEnvelope.Payload.TryUnpack<ServiceInvocationRequest>(out _))
+        {
+            _ = NormalizeRequired(targetActorId, nameof(targetActorId));
         }
         else
         {
@@ -442,12 +454,53 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
     }
 
-    private static bool HasWorkflowTarget(WorkflowScheduleTargetState? workflowTarget) =>
-        workflowTarget != null &&
-        (!string.IsNullOrWhiteSpace(workflowTarget.WorkflowName) ||
-         !string.IsNullOrWhiteSpace(workflowTarget.Prompt) ||
-         !string.IsNullOrWhiteSpace(workflowTarget.ScopeId) ||
-         !string.IsNullOrWhiteSpace(workflowTarget.SourceActorId));
+    private static ScheduledDispatchTargetState NormalizeTarget(ScheduledDispatchTargetState? target)
+    {
+        if (target == null)
+            return new ScheduledDispatchTargetState();
+
+        return target.Kind switch
+        {
+            ScheduledDispatchTargetKindState.Workflow => new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.Workflow,
+                Workflow = NormalizeWorkflowTarget(target.Workflow),
+            },
+            ScheduledDispatchTargetKindState.ServiceInvocation => new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = NormalizeServiceInvocationTarget(target.ServiceInvocation),
+            },
+            ScheduledDispatchTargetKindState.Envelope => new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.Envelope,
+                ActorId = NormalizeOptional(target.ActorId),
+                Envelope = target.Envelope?.Clone(),
+            },
+            _ => new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.Envelope,
+                ActorId = NormalizeOptional(target.ActorId),
+                Envelope = target.Envelope?.Clone(),
+            },
+        };
+    }
+
+    private static ScheduledServiceInvocationTargetState NormalizeServiceInvocationTarget(
+        ScheduledServiceInvocationTargetState? serviceInvocation)
+    {
+        if (serviceInvocation == null)
+            return new ScheduledServiceInvocationTargetState();
+
+        return new ScheduledServiceInvocationTargetState
+        {
+            Identity = serviceInvocation.Identity?.Clone(),
+            EndpointId = NormalizeOptional(serviceInvocation.EndpointId),
+            Payload = serviceInvocation.Payload?.Clone(),
+            RevisionId = NormalizeOptional(serviceInvocation.RevisionId),
+            Caller = serviceInvocation.Caller?.Clone(),
+        };
+    }
 
     private static WorkflowScheduleTargetState NormalizeWorkflowTarget(WorkflowScheduleTargetState? workflowTarget)
     {
@@ -499,7 +552,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.Headers.Clear();
         foreach (var (key, value) in NormalizeHeaders(evt.Headers))
             next.Headers[key] = value;
-        next.WorkflowTarget = NormalizeWorkflowTarget(evt.WorkflowTarget);
+        next.Target = NormalizeTarget(evt.Target);
         if (!next.Enabled)
         {
             next.NextFireAt = null;

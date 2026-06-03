@@ -121,7 +121,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
-        services.TryAddSingleton<IWorkflowScheduledDispatchPreparationService, WorkflowScheduledDispatchPreparationService>();
+        services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
+        services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IWorkflowScheduleApplicationService, WorkflowScheduleApplicationService>();
         return services;
     }

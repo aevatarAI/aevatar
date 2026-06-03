@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Google.Protobuf.WellKnownTypes;
@@ -10,17 +12,35 @@ namespace Aevatar.Workflow.Infrastructure.Schedules;
 internal sealed class WorkflowScheduledDispatchAdapterPort : IActorDispatchPort
 {
     private readonly IActorDispatchPort _inner;
-    private readonly IWorkflowRunActorResolver _workflowRunActorResolver;
-    private readonly ICommandEnvelopeFactory<WorkflowChatRunRequest> _workflowChatEnvelopeFactory;
+    private readonly Func<IWorkflowRunActorResolver> _workflowRunActorResolver;
+    private readonly Func<ICommandEnvelopeFactory<WorkflowChatRunRequest>> _workflowChatEnvelopeFactory;
+    private readonly Func<IServiceInvocationPort?> _serviceInvocationPortResolver;
 
     public WorkflowScheduledDispatchAdapterPort(
         IActorDispatchPort inner,
         IWorkflowRunActorResolver workflowRunActorResolver,
-        ICommandEnvelopeFactory<WorkflowChatRunRequest> workflowChatEnvelopeFactory)
+        ICommandEnvelopeFactory<WorkflowChatRunRequest> workflowChatEnvelopeFactory,
+        Func<IServiceInvocationPort?>? serviceInvocationPortResolver = null)
+        : this(
+            inner,
+            () => workflowRunActorResolver,
+            () => workflowChatEnvelopeFactory,
+            serviceInvocationPortResolver)
+    {
+        ArgumentNullException.ThrowIfNull(workflowRunActorResolver);
+        ArgumentNullException.ThrowIfNull(workflowChatEnvelopeFactory);
+    }
+
+    public WorkflowScheduledDispatchAdapterPort(
+        IActorDispatchPort inner,
+        Func<IWorkflowRunActorResolver> workflowRunActorResolver,
+        Func<ICommandEnvelopeFactory<WorkflowChatRunRequest>> workflowChatEnvelopeFactory,
+        Func<IServiceInvocationPort?>? serviceInvocationPortResolver = null)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _workflowRunActorResolver = workflowRunActorResolver ?? throw new ArgumentNullException(nameof(workflowRunActorResolver));
         _workflowChatEnvelopeFactory = workflowChatEnvelopeFactory ?? throw new ArgumentNullException(nameof(workflowChatEnvelopeFactory));
+        _serviceInvocationPortResolver = serviceInvocationPortResolver ?? (() => null);
     }
 
     public async Task<DispatchAdmission> DispatchAsync(
@@ -30,6 +50,25 @@ internal sealed class WorkflowScheduledDispatchAdapterPort : IActorDispatchPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(envelope);
+
+        if (string.Equals(
+                actorId.Trim(),
+                ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+                StringComparison.Ordinal) &&
+            envelope.Payload?.TryUnpack<ServiceInvocationRequest>(out var serviceInvocationRequest) == true)
+        {
+            var serviceInvocationPort = _serviceInvocationPortResolver();
+            if (serviceInvocationPort == null)
+                throw new InvalidOperationException("Service invocation scheduled dispatch adapter is not registered.");
+
+            var receipt = await serviceInvocationPort.InvokeAsync(serviceInvocationRequest, ct);
+            return new DispatchAdmission(
+                true,
+                receipt.CommandId,
+                DateTimeOffset.UtcNow,
+                receipt.TargetActorId,
+                receipt.CorrelationId);
+        }
 
         if (!string.Equals(
                 actorId.Trim(),
@@ -72,7 +111,7 @@ internal sealed class WorkflowScheduledDispatchAdapterPort : IActorDispatchPort
             Metadata: requestHeaders,
             ScopeId: string.IsNullOrWhiteSpace(request.ScopeId) ? null : request.ScopeId);
 
-        var actorResolution = await _workflowRunActorResolver.ResolveOrCreateAsync(workflowRequest, ct);
+        var actorResolution = await _workflowRunActorResolver().ResolveOrCreateAsync(workflowRequest, ct);
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
         {
             throw new InvalidOperationException(
@@ -84,7 +123,7 @@ internal sealed class WorkflowScheduledDispatchAdapterPort : IActorDispatchPort
             commandId,
             scheduledEnvelope.Propagation?.CorrelationId ?? commandId,
             requestHeaders);
-        var envelope = _workflowChatEnvelopeFactory.CreateEnvelope(workflowRequest, context);
+        var envelope = _workflowChatEnvelopeFactory().CreateEnvelope(workflowRequest, context);
         envelope.Id = commandId;
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
         envelope.Route = EnvelopeRouteSemantics.CreateDirect(

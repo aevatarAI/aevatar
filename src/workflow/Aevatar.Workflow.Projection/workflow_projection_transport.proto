@@ -106,7 +106,7 @@ message WorkflowExecutionSummary {
   map<string, int32> step_type_counts_map = 5;
 }
 
-message WorkflowScheduleDocument {
+message ScheduledDispatchDocument {
   string id = 1;
   int64 state_version = 2;
   string last_event_id = 3;
@@ -115,32 +115,34 @@ message WorkflowScheduleDocument {
   string schedule_id = 6;
   string actor_id = 7;
   string display_name = 8;
-  string workflow_name = 9;
-  string prompt = 10;
+  string target_kind = 9;
+  string payload_type_url = 10;
   string cron_expression = 11;
   string timezone = 12;
   bool enabled = 13;
   google.protobuf.Timestamp next_fire_at_utc_value = 14;
   google.protobuf.Timestamp last_fire_at_utc_value = 15;
-  string last_run_actor_id = 16;
+  string last_target_actor_id = 16;
   string last_command_id = 17;
   string last_correlation_id = 18;
   string last_error = 19;
   int32 fire_count = 20;
   int32 failure_count = 21;
   map<string, string> headers_map = 22;
-  string scope_id = 23;
+  string service_key = 23;
   string target_actor_id = 24;
-  repeated WorkflowScheduleFireRecordDocument fire_records = 25;
-  string source_actor_id = 26;
+  repeated ScheduledDispatchFireRecordDocument fire_records = 25;
+  string workflow_name = 26;
   string schedule_actor_id = 27;
+  string service_id = 28;
+  string service_endpoint_id = 29;
 }
 
-message WorkflowScheduleFireRecordDocument {
+message ScheduledDispatchFireRecordDocument {
   google.protobuf.Timestamp scheduled_fire_at_utc_value = 1;
   google.protobuf.Timestamp completed_at_utc_value = 2;
   string idempotency_key = 3;
-  string run_actor_id = 4;
+  string target_actor_id = 4;
   string command_id = 5;
   string correlation_id = 6;
   string error = 7;

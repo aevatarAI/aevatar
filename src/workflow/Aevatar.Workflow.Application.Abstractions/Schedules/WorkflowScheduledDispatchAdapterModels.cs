@@ -5,11 +5,7 @@ public static class WorkflowScheduledDispatchAdapterConventions
     public const string TargetActorId = "workflow.schedule.adapter";
 }
 
-public interface IWorkflowScheduledDispatchPreparationService
+public static class ScheduledDispatchAdapterConventions
 {
-    Task<ScheduledDispatchPreparation> PrepareAsync(
-        WorkflowScheduleConfiguration configuration,
-        string commandId,
-        string correlationId,
-        CancellationToken ct = default);
+    public const string ServiceInvocationTargetActorId = "scheduled.dispatch.service-invocation.adapter";
 }

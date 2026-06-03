@@ -96,20 +96,20 @@ BindWorkflowDefinition(yaml)
 
 模块和静态 `[EventHandler]` 方法一起进入统一事件管线。可以在不改业务代码的情况下替换流程行为。
 
-### Scheduled Trigger API
+### Scheduled Dispatch API
 
-第一版定时触发只提供 API 配置面，不提供 UI。API 路径为 `/api/workflow-schedules`，支持 create/update/enable/disable/list/get/preview/run-now。
+第一版定时触发只提供 API 配置面，不提供 UI。主 API 路径为 `/api/scheduled-dispatches`，支持 create/update/enable/disable/list/get/preview/run-now。`/api/workflow-schedules` 仅作为 workflow 兼容入口，内部映射到统一 scheduled dispatch 应用契约。
 
 运行边界：
 
-- `ScheduledDispatchGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed workflow target descriptor、dispatch headers、next fire lease 与 recent fire records。
+- `ScheduledDispatchGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed target descriptor、dispatch headers、next fire lease 与 recent fire records。
 - 定时唤醒走 `ScheduleSelfDurableTimeoutAsync`，在 Orleans runtime 下由 durable callback/reminder 机制承载；回调只向 schedule actor 发 fire command，不在中间层保存 schedule 状态。
-- schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 typed workflow scheduled start command；workflow run actor resolution、binding read-model access 与 run provisioning 由 infrastructure adapter 承载，不进入 schedule actor core。
-- workflow schedule 的 `WorkflowName`、`Prompt`、`ScopeId`、`SourceActorId` 存在 typed schedule config/state/event fields；dispatch `Headers` 只保留传输扩展。
+- schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 prepared target envelope；workflow、GAgent service invocation 与 scripting 目标准备由 application/infrastructure adapter 承载，不进入 schedule actor core。
+- workflow schedule 的 `WorkflowName`、`Prompt`、`ScopeId`、`SourceActorId` 仅存在 typed workflow target descriptor 中；service invocation 与 envelope target 使用各自 typed target descriptor；dispatch `Headers` 只保留传输扩展。
 - public API identity fields 必须显式区分 `SourceActorId`、`ScheduleActorId` 与 `TargetActorId`，不得用一个 `ActorId` 混用请求来源、schedule actor receipt 和目标摘要。
 - 幂等 key 格式固定为 `schedule:{scheduleId}:fire:{scheduledFireAtUtc:o}`，并随 scheduled fire dispatch headers 透传。
-- schedule 查询只读取 `WorkflowScheduleDocument` read model；API 不读取 actor state，不在 query path replay event store。
-- projection 使用 committed `WorkflowScheduleState` current-state payload 物化 read model，版本来自权威 actor committed version。
+- schedule 查询只读取 `ScheduledDispatchDocument` read model；API 不读取 actor state，不在 query path replay event store。
+- projection 使用 committed `ScheduledDispatchState` current-state payload 物化 read model，版本来自权威 actor committed version。
 
 配置边界：
 

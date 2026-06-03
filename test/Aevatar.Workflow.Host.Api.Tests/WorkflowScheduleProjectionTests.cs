@@ -24,7 +24,7 @@ public sealed class WorkflowScheduleProjectionTests
         var olderFireAt = observedAt.AddHours(-1);
         var newerFireAt = observedAt.AddMinutes(-5);
         var dispatcher = new RecordingScheduleWriteDispatcher();
-        var projector = new WorkflowScheduleCurrentStateProjector(
+        var projector = new ScheduledDispatchCurrentStateProjector(
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-05-29T10:00:00+00:00")));
         var state = new ScheduledDispatchState
@@ -44,12 +44,16 @@ public sealed class WorkflowScheduleProjectionTests
             LastError = "last error",
             FireCount = 2,
             FailureCount = 1,
-            WorkflowTarget = new WorkflowScheduleTargetState
+            Target = new ScheduledDispatchTargetState
             {
-                WorkflowName = "workflow-a",
-                Prompt = "run it",
-                ScopeId = "scope-1",
-                SourceActorId = "definition-actor-1",
+                Kind = ScheduledDispatchTargetKindState.Workflow,
+                Workflow = new WorkflowScheduleTargetState
+                {
+                    WorkflowName = "workflow-a",
+                    Prompt = "run it",
+                    ScopeId = "scope-1",
+                    SourceActorId = "definition-actor-1",
+                },
             },
         };
         state.Headers["caller"] = "kept";
@@ -86,8 +90,8 @@ public sealed class WorkflowScheduleProjectionTests
         document.ScheduleActorId.Should().Be("scheduled-dispatch:schedule-1");
         document.ScheduleId.Should().Be("schedule-1");
         document.DisplayName.Should().Be("Daily report");
+        document.TargetKind.Should().Be(ScheduledDispatchTargetKind.Workflow.ToString());
         document.WorkflowName.Should().Be("workflow-a");
-        document.Prompt.Should().Be("run it");
         document.CronExpression.Should().Be("*/15 * * * *");
         document.Timezone.Should().Be("UTC");
         document.Enabled.Should().BeTrue();
@@ -95,21 +99,22 @@ public sealed class WorkflowScheduleProjectionTests
         document.UpdatedAt.Should().Be(observedAt);
         document.NextFireAt.Should().Be(nextFireAt);
         document.LastFireAt.Should().Be(lastFireAt);
-        document.LastRunActorId.Should().Be("run-actor-2");
+        document.LastTargetActorId.Should().Be("run-actor-2");
         document.LastCommandId.Should().Be("cmd-last");
         document.LastCorrelationId.Should().Be("corr-last");
         document.LastError.Should().Be("last error");
         document.FireCount.Should().Be(2);
         document.FailureCount.Should().Be(1);
-        document.ScopeId.Should().Be("scope-1");
-        document.SourceActorId.Should().Be("definition-actor-1");
+        document.ServiceKey.Should().BeEmpty();
+        document.ServiceId.Should().BeEmpty();
+        document.ServiceEndpointId.Should().BeEmpty();
         document.TargetActorId.Should().Be("target-actor-1");
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("evt-7");
         document.Headers.Should().ContainSingle().Which.Should().Be(
             new KeyValuePair<string, string>("caller", "kept"));
         document.FireRecords.Select(x => x.IdempotencyKey).Should().Equal("newer", "older");
-        document.FireRecords[0].RunActorId.Should().Be("run-actor-2");
+        document.FireRecords[0].TargetActorId.Should().Be("run-actor-2");
         document.FireRecords[0].Manual.Should().BeTrue();
         document.FireRecords[0].Error.Should().Be("failed");
         document.FireRecords[1].ScheduledFireAt.Should().Be(olderFireAt);
@@ -120,7 +125,7 @@ public sealed class WorkflowScheduleProjectionTests
     {
         var fallbackNow = DateTimeOffset.Parse("2026-05-29T11:00:00+00:00");
         var dispatcher = new RecordingScheduleWriteDispatcher();
-        var projector = new WorkflowScheduleCurrentStateProjector(
+        var projector = new ScheduledDispatchCurrentStateProjector(
             dispatcher,
             new FixedProjectionClock(fallbackNow));
 
@@ -143,19 +148,19 @@ public sealed class WorkflowScheduleProjectionTests
         document.ScheduleId.Should().Be("scheduled-dispatch:fallback");
         document.DisplayName.Should().BeEmpty();
         document.WorkflowName.Should().BeEmpty();
-        document.Prompt.Should().BeEmpty();
         document.CronExpression.Should().BeEmpty();
         document.Timezone.Should().BeEmpty();
         document.CreatedAt.Should().Be(fallbackNow);
         document.UpdatedAt.Should().Be(fallbackNow);
         document.NextFireAt.Should().BeNull();
         document.LastFireAt.Should().BeNull();
-        document.LastRunActorId.Should().BeEmpty();
+        document.LastTargetActorId.Should().BeEmpty();
         document.LastCommandId.Should().BeEmpty();
         document.LastCorrelationId.Should().BeEmpty();
         document.LastError.Should().BeEmpty();
-        document.ScopeId.Should().BeEmpty();
-        document.SourceActorId.Should().BeEmpty();
+        document.ServiceKey.Should().BeEmpty();
+        document.ServiceId.Should().BeEmpty();
+        document.ServiceEndpointId.Should().BeEmpty();
         document.ScheduleActorId.Should().Be("scheduled-dispatch:fallback");
         document.TargetActorId.Should().BeEmpty();
         document.LastEventId.Should().BeEmpty();
@@ -168,7 +173,7 @@ public sealed class WorkflowScheduleProjectionTests
     {
         var completedAt = DateTimeOffset.Parse("2026-05-29T09:00:00+00:00");
         var reader = new StubScheduleDocumentReader();
-        reader.Documents["schedule-1"] = new WorkflowScheduleDocument
+        reader.Documents["schedule-1"] = new ScheduledDispatchDocument
         {
             Id = "doc-1",
             ScheduleId = "schedule-1",
@@ -183,18 +188,18 @@ public sealed class WorkflowScheduleProjectionTests
             },
             FireRecords =
             {
-                new WorkflowScheduleFireRecordDocument
+                new ScheduledDispatchFireRecordDocument
                 {
                     ScheduledFireAt = completedAt.AddMinutes(-1),
                     CompletedAt = completedAt,
                     IdempotencyKey = "older",
                 },
-                new WorkflowScheduleFireRecordDocument
+                new ScheduledDispatchFireRecordDocument
                 {
                     ScheduledFireAt = completedAt.AddMinutes(9),
                     CompletedAt = completedAt.AddMinutes(10),
                     IdempotencyKey = "newer",
-                    RunActorId = "run-actor",
+                    TargetActorId = "run-actor",
                     CommandId = "cmd",
                     CorrelationId = "corr",
                     Error = "boom",
@@ -202,7 +207,7 @@ public sealed class WorkflowScheduleProjectionTests
                 },
             },
         };
-        var port = new WorkflowScheduleQueryPort(reader);
+        var port = new ScheduledDispatchQueryPort(reader);
 
         (await port.GetAsync(" ")).Should().BeNull();
         var detail = await port.GetAsync(" schedule-1 ");
@@ -214,22 +219,20 @@ public sealed class WorkflowScheduleProjectionTests
         detail.Schedule.WorkflowName.Should().BeEmpty();
         detail.Schedule.CronExpression.Should().BeEmpty();
         detail.Schedule.Timezone.Should().BeEmpty();
-        detail.Schedule.LastRunActorId.Should().BeEmpty();
+        detail.Schedule.LastTargetActorId.Should().BeEmpty();
         detail.Schedule.LastCommandId.Should().BeEmpty();
         detail.Schedule.LastCorrelationId.Should().BeEmpty();
         detail.Schedule.LastError.Should().BeEmpty();
         detail.Schedule.Headers.Should().Contain("caller", "kept");
-        detail.Schedule.ScopeId.Should().BeEmpty();
-        detail.Schedule.SourceActorId.Should().BeEmpty();
         detail.Schedule.ScheduleActorId.Should().BeEmpty();
         detail.Schedule.TargetActorId.Should().BeEmpty();
         detail.RecentFires.Select(x => x.IdempotencyKey).Should().Equal("newer", "older");
-        detail.RecentFires[0].RunActorId.Should().Be("run-actor");
+        detail.RecentFires[0].TargetActorId.Should().Be("run-actor");
         detail.RecentFires[0].CommandId.Should().Be("cmd");
         detail.RecentFires[0].CorrelationId.Should().Be("corr");
         detail.RecentFires[0].Error.Should().Be("boom");
         detail.RecentFires[0].Manual.Should().BeTrue();
-        detail.RecentFires[1].RunActorId.Should().BeEmpty();
+        detail.RecentFires[1].TargetActorId.Should().BeEmpty();
         detail.RecentFires[1].CommandId.Should().BeEmpty();
         detail.RecentFires[1].CorrelationId.Should().BeEmpty();
         detail.RecentFires[1].Error.Should().BeEmpty();
@@ -240,11 +243,11 @@ public sealed class WorkflowScheduleProjectionTests
     {
         var reader = new StubScheduleDocumentReader
         {
-            QueryResult = new ProjectionDocumentQueryResult<WorkflowScheduleDocument>
+            QueryResult = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
             {
                 Items =
                 [
-                    new WorkflowScheduleDocument
+                    new ScheduledDispatchDocument
                     {
                         ScheduleId = "schedule-1",
                         DisplayName = "Daily",
@@ -258,8 +261,6 @@ public sealed class WorkflowScheduleProjectionTests
                         {
                             ["trace"] = "on",
                         },
-                        ScopeId = "scope-1",
-                        SourceActorId = "source-actor",
                         ScheduleActorId = "schedule-actor",
                         TargetActorId = "target-actor",
                     },
@@ -268,7 +269,7 @@ public sealed class WorkflowScheduleProjectionTests
                 TotalCount = 12,
             },
         };
-        var port = new WorkflowScheduleQueryPort(reader);
+        var port = new ScheduledDispatchQueryPort(reader);
 
         var result = await InvokeScheduleListQueryAsync(port, 0, "cursor", includeTotalCount: true);
         await InvokeScheduleListQueryAsync(port, 500);
@@ -287,8 +288,6 @@ public sealed class WorkflowScheduleProjectionTests
         summary.WorkflowName.Should().Be("workflow");
         summary.CronExpression.Should().Be("0 9 * * *");
         summary.Headers.Should().Contain("trace", "on");
-        summary.ScopeId.Should().Be("scope-1");
-        summary.SourceActorId.Should().Be("source-actor");
         summary.ScheduleActorId.Should().Be("schedule-actor");
         summary.TargetActorId.Should().Be("target-actor");
     }
@@ -297,7 +296,7 @@ public sealed class WorkflowScheduleProjectionTests
     public void WorkflowScheduleReadModelsAndMetadata_ShouldNormalizeNullableTimestampsAndMaps()
     {
         var localTime = new DateTimeOffset(2026, 5, 29, 17, 0, 0, TimeSpan.FromHours(8));
-        var document = new WorkflowScheduleDocument();
+        var document = new ScheduledDispatchDocument();
 
         document.CreatedAt.Should().Be(default);
         document.UpdatedAt.Should().Be(default);
@@ -325,7 +324,7 @@ public sealed class WorkflowScheduleProjectionTests
         document.NextFireAt.Should().BeNull();
         document.LastFireAt.Should().BeNull();
 
-        var fireRecord = new WorkflowScheduleFireRecordDocument();
+        var fireRecord = new ScheduledDispatchFireRecordDocument();
         fireRecord.ScheduledFireAt.Should().Be(default);
         fireRecord.CompletedAt.Should().Be(default);
         fireRecord.ScheduledFireAt = localTime;
@@ -333,8 +332,8 @@ public sealed class WorkflowScheduleProjectionTests
         fireRecord.ScheduledFireAt.Offset.Should().Be(TimeSpan.Zero);
         fireRecord.CompletedAt.Offset.Should().Be(TimeSpan.Zero);
 
-        var metadata = new WorkflowScheduleDocumentMetadataProvider().Metadata;
-        metadata.IndexName.Should().Be("workflow-schedules");
+        var metadata = new ScheduledDispatchDocumentMetadataProvider().Metadata;
+        metadata.IndexName.Should().Be("scheduled-dispatches");
         metadata.Mappings.Should().Contain("dynamic", true);
         metadata.Settings.Should().BeEmpty();
         metadata.Aliases.Should().BeEmpty();
@@ -368,13 +367,13 @@ public sealed class WorkflowScheduleProjectionTests
             }),
         };
 
-    private sealed class RecordingScheduleWriteDispatcher : IProjectionWriteDispatcher<WorkflowScheduleDocument>
+    private sealed class RecordingScheduleWriteDispatcher : IProjectionWriteDispatcher<ScheduledDispatchDocument>
     {
-        public List<WorkflowScheduleDocument> Upserts { get; } = [];
+        public List<ScheduledDispatchDocument> Upserts { get; } = [];
         public List<string> Deletes { get; } = [];
 
         public Task<ProjectionWriteResult> UpsertAsync(
-            WorkflowScheduleDocument readModel,
+            ScheduledDispatchDocument readModel,
             CancellationToken ct = default)
         {
             Upserts.Add(readModel.Clone());
@@ -388,21 +387,21 @@ public sealed class WorkflowScheduleProjectionTests
         }
     }
 
-    private sealed class StubScheduleDocumentReader : IProjectionDocumentReader<WorkflowScheduleDocument, string>
+    private sealed class StubScheduleDocumentReader : IProjectionDocumentReader<ScheduledDispatchDocument, string>
     {
-        public Dictionary<string, WorkflowScheduleDocument> Documents { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, ScheduledDispatchDocument> Documents { get; } = new(StringComparer.Ordinal);
         public List<string> GetKeys { get; } = [];
         public List<ProjectionDocumentQuery> Queries { get; } = [];
-        public ProjectionDocumentQueryResult<WorkflowScheduleDocument> QueryResult { get; set; } =
-            ProjectionDocumentQueryResult<WorkflowScheduleDocument>.Empty;
+        public ProjectionDocumentQueryResult<ScheduledDispatchDocument> QueryResult { get; set; } =
+            ProjectionDocumentQueryResult<ScheduledDispatchDocument>.Empty;
 
-        public Task<WorkflowScheduleDocument?> GetAsync(string key, CancellationToken ct = default)
+        public Task<ScheduledDispatchDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             GetKeys.Add(key);
             return Task.FromResult(Documents.GetValueOrDefault(key));
         }
 
-        public Task<ProjectionDocumentQueryResult<WorkflowScheduleDocument>> QueryAsync(
+        public Task<ProjectionDocumentQueryResult<ScheduledDispatchDocument>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default)
         {
@@ -411,8 +410,8 @@ public sealed class WorkflowScheduleProjectionTests
         }
     }
 
-    private static async Task<WorkflowScheduleListResult> InvokeScheduleListQueryAsync(
-        WorkflowScheduleQueryPort port,
+    private static async Task<ScheduledDispatchListResult> InvokeScheduleListQueryAsync(
+        ScheduledDispatchQueryPort port,
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
@@ -422,7 +421,7 @@ public sealed class WorkflowScheduleProjectionTests
         return await query(take, cursor, includeTotalCount, ct);
     }
 
-    private delegate Task<WorkflowScheduleListResult> ScheduleListQuery(
+    private delegate Task<ScheduledDispatchListResult> ScheduleListQuery(
         int take,
         string? cursor,
         bool includeTotalCount,

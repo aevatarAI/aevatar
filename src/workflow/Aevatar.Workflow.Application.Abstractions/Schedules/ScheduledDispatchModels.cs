@@ -1,0 +1,341 @@
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+
+namespace Aevatar.Workflow.Application.Abstractions.Schedules;
+
+public enum ScheduledDispatchTargetKind
+{
+    Envelope = 0,
+    ServiceInvocation = 1,
+    Workflow = 2,
+}
+
+public sealed record ScheduledDispatchTargetDescriptor(
+    ScheduledDispatchTargetKind Kind,
+    string? ActorId = null,
+    EventEnvelope? Envelope = null,
+    ScheduledServiceInvocationTargetDescriptor? ServiceInvocation = null,
+    WorkflowScheduleTargetDescriptor? Workflow = null);
+
+public sealed record ScheduledServiceInvocationTargetDescriptor(
+    ServiceIdentity Identity,
+    string EndpointId,
+    Google.Protobuf.WellKnownTypes.Any Payload,
+    string? RevisionId = null,
+    ServiceInvocationCaller? Caller = null);
+
+public sealed record ScheduledDispatchConfiguration(
+    string ScheduleId,
+    string DisplayName,
+    ScheduledDispatchTargetDescriptor Target,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    IReadOnlyDictionary<string, string> Headers);
+
+public sealed record PreparedScheduledDispatchTarget(
+    string? TargetActorId,
+    EventEnvelope TriggerEnvelope,
+    string PayloadTypeUrl,
+    ScheduledDispatchTargetDescriptor Descriptor);
+
+public sealed record ScheduledDispatchSummary(
+    string ScheduleId,
+    string DisplayName,
+    ScheduledDispatchTargetKind TargetKind,
+    string TargetActorId,
+    string PayloadTypeUrl,
+    string ServiceKey,
+    string ServiceId,
+    string ServiceEndpointId,
+    string WorkflowName,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? NextFireAt,
+    DateTimeOffset? LastFireAt,
+    string LastTargetActorId,
+    string LastCommandId,
+    string LastCorrelationId,
+    string LastError,
+    int FireCount,
+    int FailureCount,
+    IReadOnlyDictionary<string, string> Headers,
+    string ScheduleActorId);
+
+public sealed record ScheduledDispatchFireRecord(
+    DateTimeOffset ScheduledFireAt,
+    DateTimeOffset CompletedAt,
+    string IdempotencyKey,
+    string TargetActorId,
+    string CommandId,
+    string CorrelationId,
+    string Error,
+    bool Manual);
+
+public sealed record ScheduledDispatchDetail(
+    ScheduledDispatchSummary Schedule,
+    IReadOnlyList<ScheduledDispatchFireRecord> RecentFires);
+
+public sealed record ScheduledDispatchPreview(
+    string CronExpression,
+    string Timezone,
+    IReadOnlyList<DateTimeOffset> NextFireTimes);
+
+public sealed record ScheduledDispatchMutationReceipt(
+    string ScheduleId,
+    string ScheduleActorId,
+    bool Accepted);
+
+public sealed record ScheduledDispatchRunNowReceipt(
+    string ScheduleId,
+    string ScheduleActorId,
+    DateTimeOffset ScheduledFireAt,
+    string IdempotencyKey,
+    bool Accepted);
+
+public sealed record ScheduledDispatchListResult(
+    IReadOnlyList<ScheduledDispatchSummary> Items,
+    string? NextCursor,
+    long? TotalCount);
+
+public interface IScheduledDispatchActorPort
+{
+    Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default);
+
+    Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default);
+
+    Task<DispatchAdmission> DispatchCreateAsync(
+        string actorId,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
+        CancellationToken ct = default);
+
+    Task<DispatchAdmission> DispatchUpdateAsync(
+        string actorId,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
+        CancellationToken ct = default);
+
+    Task<DispatchAdmission> DispatchEnableAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<DispatchAdmission> DispatchDisableAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<DispatchAdmission> DispatchRunNowAsync(
+        string actorId,
+        DateTimeOffset scheduledFireAt,
+        CancellationToken ct = default);
+}
+
+public interface IScheduledDispatchTargetPreparationService
+{
+    Task<PreparedScheduledDispatchTarget> PrepareAsync(
+        ScheduledDispatchConfiguration configuration,
+        string commandId,
+        string correlationId,
+        CancellationToken ct = default);
+}
+
+public interface IScheduledDispatchQueryPort
+{
+    Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default);
+
+    Task<ScheduledDispatchListResult> ListAsync(
+        int take = 50,
+        string? cursor = null,
+        bool includeTotalCount = false,
+        CancellationToken ct = default);
+}
+
+public interface IScheduledDispatchApplicationService
+{
+    Task<ScheduledDispatchMutationReceipt> CreateAsync(
+        ScheduledDispatchConfiguration configuration,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> UpdateAsync(
+        string scheduleId,
+        ScheduledDispatchConfiguration configuration,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> EnableAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> DisableAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchDetail?> GetAsync(
+        string scheduleId,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchListResult> ListAsync(
+        int take = 50,
+        string? cursor = null,
+        bool includeTotalCount = false,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchPreview> PreviewAsync(
+        string cronExpression,
+        string? timezone,
+        int count,
+        DateTimeOffset? fromUtc = null,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
+        string scheduleId,
+        CancellationToken ct = default);
+}
+
+public abstract class ScheduledDispatchApplicationException : Exception
+{
+    protected ScheduledDispatchApplicationException(string scheduleId, string message)
+        : base(message)
+    {
+        ScheduleId = scheduleId;
+    }
+
+    public string ScheduleId { get; }
+}
+
+public sealed class ScheduledDispatchNotFoundException : ScheduledDispatchApplicationException
+{
+    public ScheduledDispatchNotFoundException(string scheduleId)
+        : base(scheduleId, $"Scheduled dispatch '{scheduleId}' was not found.")
+    {
+    }
+}
+
+public sealed class ScheduledDispatchConflictException : ScheduledDispatchApplicationException
+{
+    public ScheduledDispatchConflictException(string scheduleId, string message)
+        : base(scheduleId, message)
+    {
+    }
+}
+
+public sealed record WorkflowScheduleConfiguration(
+    string ScheduleId,
+    string DisplayName,
+    string WorkflowName,
+    string Prompt,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    IReadOnlyDictionary<string, string> Headers,
+    string? ScopeId = null,
+    string? SourceActorId = null);
+
+public sealed record WorkflowScheduleTargetDescriptor(
+    string WorkflowName,
+    string Prompt,
+    string ScopeId,
+    string SourceActorId);
+
+public sealed record WorkflowScheduleSummary(
+    string ScheduleId,
+    string DisplayName,
+    string WorkflowName,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? NextFireAt,
+    DateTimeOffset? LastFireAt,
+    string LastRunActorId,
+    string LastCommandId,
+    string LastCorrelationId,
+    string LastError,
+    int FireCount,
+    int FailureCount,
+    IReadOnlyDictionary<string, string> Headers,
+    string ScopeId,
+    string SourceActorId,
+    string ScheduleActorId,
+    string TargetActorId);
+
+public sealed record WorkflowScheduleFireRecord(
+    DateTimeOffset ScheduledFireAt,
+    DateTimeOffset CompletedAt,
+    string IdempotencyKey,
+    string RunActorId,
+    string CommandId,
+    string CorrelationId,
+    string Error,
+    bool Manual);
+
+public sealed record WorkflowScheduleDetail(
+    WorkflowScheduleSummary Schedule,
+    IReadOnlyList<WorkflowScheduleFireRecord> RecentFires);
+
+public sealed record WorkflowScheduleMutationReceipt(
+    string ScheduleId,
+    string ScheduleActorId,
+    bool Accepted);
+
+public sealed record WorkflowScheduleRunNowReceipt(
+    string ScheduleId,
+    string ScheduleActorId,
+    DateTimeOffset ScheduledFireAt,
+    string IdempotencyKey,
+    bool Accepted);
+
+public sealed record WorkflowScheduleListResult(
+    IReadOnlyList<WorkflowScheduleSummary> Items,
+    string? NextCursor,
+    long? TotalCount);
+
+public interface IWorkflowScheduleApplicationService
+{
+    Task<WorkflowScheduleMutationReceipt> CreateAsync(
+        WorkflowScheduleConfiguration configuration,
+        CancellationToken ct = default);
+
+    Task<WorkflowScheduleMutationReceipt> UpdateAsync(
+        string scheduleId,
+        WorkflowScheduleConfiguration configuration,
+        CancellationToken ct = default);
+
+    Task<WorkflowScheduleMutationReceipt> EnableAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<WorkflowScheduleMutationReceipt> DisableAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<WorkflowScheduleDetail?> GetAsync(
+        string scheduleId,
+        CancellationToken ct = default);
+
+    Task<WorkflowScheduleListResult> ListAsync(
+        int take = 50,
+        string? cursor = null,
+        bool includeTotalCount = false,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchPreview> PreviewAsync(
+        string cronExpression,
+        string? timezone,
+        int count,
+        DateTimeOffset? fromUtc = null,
+        CancellationToken ct = default);
+
+    Task<WorkflowScheduleRunNowReceipt> RunNowAsync(
+        string scheduleId,
+        CancellationToken ct = default);
+}

@@ -2,16 +2,16 @@ using Aevatar.Workflow.Application.Abstractions.Schedules;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowScheduleQueryPort : IWorkflowScheduleQueryPort
+public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
 {
-    private readonly IProjectionDocumentReader<WorkflowScheduleDocument, string> _documentReader;
+    private readonly IProjectionDocumentReader<ScheduledDispatchDocument, string> _documentReader;
 
-    public WorkflowScheduleQueryPort(IProjectionDocumentReader<WorkflowScheduleDocument, string> documentReader)
+    public ScheduledDispatchQueryPort(IProjectionDocumentReader<ScheduledDispatchDocument, string> documentReader)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
 
-    public async Task<WorkflowScheduleDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
+    public async Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(scheduleId))
             return null;
@@ -20,7 +20,7 @@ public sealed class WorkflowScheduleQueryPort : IWorkflowScheduleQueryPort
         return document == null ? null : MapDetail(document);
     }
 
-    public async Task<WorkflowScheduleListResult> ListAsync(
+    public async Task<ScheduledDispatchListResult> ListAsync(
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
@@ -33,13 +33,13 @@ public sealed class WorkflowScheduleQueryPort : IWorkflowScheduleQueryPort
             IncludeTotalCount = includeTotalCount,
         }, ct);
 
-        return new WorkflowScheduleListResult(
+        return new ScheduledDispatchListResult(
             result.Items.Select(MapSummary).ToArray(),
             result.NextCursor,
             result.TotalCount);
     }
 
-    private static WorkflowScheduleDetail MapDetail(WorkflowScheduleDocument document) =>
+    private static ScheduledDispatchDetail MapDetail(ScheduledDispatchDocument document) =>
         new(
             MapSummary(document),
             document.FireRecords
@@ -47,10 +47,16 @@ public sealed class WorkflowScheduleQueryPort : IWorkflowScheduleQueryPort
                 .OrderByDescending(static x => x.CompletedAt)
                 .ToArray());
 
-    private static WorkflowScheduleSummary MapSummary(WorkflowScheduleDocument document) =>
+    private static ScheduledDispatchSummary MapSummary(ScheduledDispatchDocument document) =>
         new(
             document.ScheduleId,
             document.DisplayName ?? string.Empty,
+            ParseTargetKind(document.TargetKind),
+            document.TargetActorId ?? string.Empty,
+            document.PayloadTypeUrl ?? string.Empty,
+            document.ServiceKey ?? string.Empty,
+            document.ServiceId ?? string.Empty,
+            document.ServiceEndpointId ?? string.Empty,
             document.WorkflowName ?? string.Empty,
             document.CronExpression ?? string.Empty,
             document.Timezone ?? string.Empty,
@@ -59,26 +65,28 @@ public sealed class WorkflowScheduleQueryPort : IWorkflowScheduleQueryPort
             document.UpdatedAt,
             document.NextFireAt,
             document.LastFireAt,
-            document.LastRunActorId ?? string.Empty,
+            document.LastTargetActorId ?? string.Empty,
             document.LastCommandId ?? string.Empty,
             document.LastCorrelationId ?? string.Empty,
             document.LastError ?? string.Empty,
             document.FireCount,
             document.FailureCount,
             document.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
-            document.ScopeId ?? string.Empty,
-            document.SourceActorId ?? string.Empty,
-            document.ScheduleActorId ?? string.Empty,
-            document.TargetActorId ?? string.Empty);
+            document.ScheduleActorId ?? string.Empty);
 
-    private static WorkflowScheduleFireRecord MapFireRecord(WorkflowScheduleFireRecordDocument document) =>
+    private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
         new(
             document.ScheduledFireAt,
             document.CompletedAt,
             document.IdempotencyKey ?? string.Empty,
-            document.RunActorId ?? string.Empty,
+            document.TargetActorId ?? string.Empty,
             document.CommandId ?? string.Empty,
             document.CorrelationId ?? string.Empty,
             document.Error ?? string.Empty,
             document.Manual);
+
+    private static ScheduledDispatchTargetKind ParseTargetKind(string? value) =>
+        Enum.TryParse<ScheduledDispatchTargetKind>(value, ignoreCase: true, out var parsed)
+            ? parsed
+            : ScheduledDispatchTargetKind.Envelope;
 }

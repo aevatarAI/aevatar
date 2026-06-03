@@ -368,7 +368,7 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task HandleFireAsync_ShouldRejectUnsupportedPayloadToAvoidDroppingFireHeaders()
+    public async Task HandleFireAsync_ShouldDispatchUnsupportedPayloadWithFireHeadersInBaggage()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
@@ -385,9 +385,17 @@ public sealed class ScheduledDispatchGAgentTests
             Manual = true,
         });
 
-        dispatch.Dispatches.Should().BeEmpty();
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches.Single();
+        dispatched.ActorId.Should().Be("target-actor-1");
+        dispatched.Envelope.Payload.Unpack<Empty>().Should().NotBeNull();
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        dispatched.Envelope.Propagation!.Baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.FireAtUtc]
+            .Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         agent.State.FireRecords.Should().ContainSingle()
-            .Which.Value.Error.Should().Contain("does not support scheduled fire headers");
+            .Which.Value.TargetActorId.Should().Be("target-actor-1");
     }
 
     [Fact]
@@ -656,7 +664,7 @@ public sealed class ScheduledDispatchGAgentTests
             CronExpression = cronExpression,
             Timezone = "UTC",
             Enabled = enabled,
-            WorkflowTarget = workflowTarget,
+            Target = CreateTargetState(workflowTarget),
         };
     }
 
@@ -681,9 +689,18 @@ public sealed class ScheduledDispatchGAgentTests
             CronExpression = cronExpression,
             Timezone = "UTC",
             Enabled = enabled,
-            WorkflowTarget = workflowTarget,
+            Target = CreateTargetState(workflowTarget),
         };
     }
+
+    private static ScheduledDispatchTargetState CreateTargetState(WorkflowScheduleTargetState? workflowTarget) =>
+        workflowTarget == null
+            ? new ScheduledDispatchTargetState { Kind = ScheduledDispatchTargetKindState.Envelope }
+            : new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.Workflow,
+                Workflow = workflowTarget,
+            };
 
     private static EventEnvelope CreateTriggerEnvelope(string targetActorId, IMessage payload) =>
         new()

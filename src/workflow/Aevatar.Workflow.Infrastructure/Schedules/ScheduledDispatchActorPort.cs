@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
@@ -42,28 +43,30 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
     public async Task<DispatchAdmission> DispatchCreateAsync(
         string actorId,
         ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(dispatch);
         ct.ThrowIfCancellationRequested();
         var state = await GetScheduleStateAsync(actorId);
         if (IsConfigured(state))
-            throw new WorkflowScheduleConflictException(
+            throw new ScheduledDispatchConflictException(
                 configuration.ScheduleId,
-                $"Workflow schedule '{configuration.ScheduleId}' already exists.");
+                $"Scheduled dispatch '{configuration.ScheduleId}' already exists.");
 
         var command = new ScheduledDispatchCreateCommand
         {
             ScheduleId = configuration.ScheduleId,
             DisplayName = configuration.DisplayName,
-            TargetActorId = configuration.TargetActorId ?? string.Empty,
-            TriggerEnvelope = configuration.TriggerEnvelope.Clone(),
+            TargetActorId = dispatch.TargetActorId ?? string.Empty,
+            TriggerEnvelope = dispatch.TriggerEnvelope.Clone(),
             CronExpression = configuration.CronExpression,
             Timezone = configuration.Timezone,
             Enabled = configuration.Enabled,
-            PayloadTypeUrl = configuration.PayloadTypeUrl,
-            WorkflowTarget = CreateWorkflowTarget(configuration.WorkflowTarget),
+            PayloadTypeUrl = dispatch.PayloadTypeUrl,
+            Target = CreateTargetState(dispatch.Descriptor),
         };
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
@@ -74,26 +77,28 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
     public async Task<DispatchAdmission> DispatchUpdateAsync(
         string actorId,
         ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(dispatch);
         ct.ThrowIfCancellationRequested();
         var state = await GetScheduleStateAsync(actorId);
         if (!IsConfigured(state))
-            throw new WorkflowScheduleNotFoundException(configuration.ScheduleId);
+            throw new ScheduledDispatchNotFoundException(configuration.ScheduleId);
 
         var command = new ScheduledDispatchUpdateCommand
         {
             ScheduleId = configuration.ScheduleId,
             DisplayName = configuration.DisplayName,
-            TargetActorId = configuration.TargetActorId ?? string.Empty,
-            TriggerEnvelope = configuration.TriggerEnvelope.Clone(),
+            TargetActorId = dispatch.TargetActorId ?? string.Empty,
+            TriggerEnvelope = dispatch.TriggerEnvelope.Clone(),
             CronExpression = configuration.CronExpression,
             Timezone = configuration.Timezone,
             Enabled = configuration.Enabled,
-            PayloadTypeUrl = configuration.PayloadTypeUrl,
-            WorkflowTarget = CreateWorkflowTarget(configuration.WorkflowTarget),
+            PayloadTypeUrl = dispatch.PayloadTypeUrl,
+            Target = CreateTargetState(dispatch.Descriptor),
         };
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
@@ -160,7 +165,7 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         ct.ThrowIfCancellationRequested();
         var state = await GetScheduleStateAsync(actorId);
         if (!IsConfigured(state))
-            throw new WorkflowScheduleNotFoundException(ScheduledDispatchActorId.Unformat(actorId));
+            throw new ScheduledDispatchNotFoundException(ScheduledDispatchActorId.Unformat(actorId));
     }
 
     private async Task<ScheduledDispatchState?> GetScheduleStateAsync(string actorId)
@@ -180,6 +185,32 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         !string.IsNullOrWhiteSpace(state.CronExpression) &&
         state.TriggerEnvelope?.Payload != null;
 
+    private static ScheduledDispatchTargetState CreateTargetState(ScheduledDispatchTargetDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+
+        return descriptor.Kind switch
+        {
+            ScheduledDispatchTargetKind.Workflow => new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.Workflow,
+                Workflow = CreateWorkflowTarget(descriptor.Workflow),
+            },
+            ScheduledDispatchTargetKind.ServiceInvocation => new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = CreateServiceInvocationTarget(descriptor.ServiceInvocation),
+            },
+            ScheduledDispatchTargetKind.Envelope => new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.Envelope,
+                ActorId = descriptor.ActorId ?? string.Empty,
+                Envelope = descriptor.Envelope?.Clone(),
+            },
+            _ => throw new ArgumentException($"Unsupported scheduled dispatch target kind '{descriptor.Kind}'.", nameof(descriptor)),
+        };
+    }
+
     private static WorkflowScheduleTargetState CreateWorkflowTarget(WorkflowScheduleTargetDescriptor? descriptor)
     {
         if (descriptor == null)
@@ -191,6 +222,22 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             Prompt = descriptor.Prompt ?? string.Empty,
             ScopeId = descriptor.ScopeId ?? string.Empty,
             SourceActorId = descriptor.SourceActorId ?? string.Empty,
+        };
+    }
+
+    private static ScheduledServiceInvocationTargetState CreateServiceInvocationTarget(
+        ScheduledServiceInvocationTargetDescriptor? descriptor)
+    {
+        if (descriptor == null)
+            return new ScheduledServiceInvocationTargetState();
+
+        return new ScheduledServiceInvocationTargetState
+        {
+            Identity = descriptor.Identity.Clone(),
+            EndpointId = descriptor.EndpointId ?? string.Empty,
+            Payload = descriptor.Payload.Clone(),
+            RevisionId = descriptor.RevisionId ?? string.Empty,
+            Caller = descriptor.Caller?.Clone(),
         };
     }
 }

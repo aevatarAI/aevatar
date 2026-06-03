@@ -38,7 +38,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>, WorkflowExecutionCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowScheduleDocument>, WorkflowScheduleDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScheduledDispatchDocument>, ScheduledDispatchDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>, WorkflowCatalogCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
@@ -80,7 +80,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEventEnvelope>, WorkflowRunEventSessionCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
         services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
-        services.TryAddSingleton<WorkflowScheduleQueryPort>();
+        services.TryAddSingleton<ScheduledDispatchQueryPort>();
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
@@ -101,8 +101,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
         services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionArtifactQueryPort>());
-        services.TryAddSingleton<IWorkflowScheduleQueryPort>(sp =>
-            sp.GetRequiredService<WorkflowScheduleQueryPort>());
+        services.TryAddSingleton<IScheduledDispatchQueryPort>(sp =>
+            sp.GetRequiredService<ScheduledDispatchQueryPort>());
         services.TryAddSingleton<IWorkflowChatRunObservationScopeActivationPort, WorkflowChatRunObservationScopeActivationPort>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         services.AddProjectionArtifactMaterializer<
@@ -116,7 +116,7 @@ public static class ServiceCollectionExtensions
             WorkflowExecutionCurrentStateProjector>();
         services.AddCurrentStateProjectionMaterializer<
             WorkflowExecutionMaterializationContext,
-            WorkflowScheduleCurrentStateProjector>();
+            ScheduledDispatchCurrentStateProjector>();
         services.AddProjectionArtifactMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowRunInsightReportArtifactProjector>();

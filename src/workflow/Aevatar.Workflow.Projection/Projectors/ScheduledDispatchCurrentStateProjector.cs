@@ -1,19 +1,21 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
-public sealed class WorkflowScheduleCurrentStateProjector
+public sealed class ScheduledDispatchCurrentStateProjector
     : ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>
 {
-    private readonly IProjectionWriteDispatcher<WorkflowScheduleDocument> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScheduledDispatchDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
-    public WorkflowScheduleCurrentStateProjector(
-        IProjectionWriteDispatcher<WorkflowScheduleDocument> writeDispatcher,
+    public ScheduledDispatchCurrentStateProjector(
+        IProjectionWriteDispatcher<ScheduledDispatchDocument> writeDispatcher,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
@@ -41,32 +43,36 @@ public sealed class WorkflowScheduleCurrentStateProjector
         await _writeDispatcher.UpsertAsync(document, ct);
     }
 
-    private WorkflowScheduleDocument CreateDocument(
+    private ScheduledDispatchDocument CreateDocument(
         WorkflowExecutionMaterializationContext context,
         EventEnvelope envelope,
         StateEvent stateEvent,
         ScheduledDispatchState state)
     {
-        var document = new WorkflowScheduleDocument
+        var target = state.Target ?? new ScheduledDispatchTargetState();
+        var serviceIdentity = target.ServiceInvocation?.Identity;
+        var document = new ScheduledDispatchDocument
         {
             Id = context.RootActorId,
             ActorId = context.RootActorId,
             ScheduleActorId = context.RootActorId,
             ScheduleId = string.IsNullOrWhiteSpace(state.ScheduleId) ? context.RootActorId : state.ScheduleId,
             DisplayName = state.DisplayName ?? string.Empty,
-            WorkflowName = state.WorkflowTarget?.WorkflowName ?? string.Empty,
-            Prompt = state.WorkflowTarget?.Prompt ?? string.Empty,
+            TargetKind = ToApplicationTargetKind(target.Kind).ToString(),
+            PayloadTypeUrl = state.PayloadTypeUrl ?? string.Empty,
+            WorkflowName = target.Workflow?.WorkflowName ?? string.Empty,
             CronExpression = state.CronExpression ?? string.Empty,
             Timezone = state.Timezone ?? string.Empty,
             Enabled = state.Enabled,
-            LastRunActorId = state.LastTargetActorId ?? string.Empty,
+            LastTargetActorId = state.LastTargetActorId ?? string.Empty,
             LastCommandId = state.LastCommandId ?? string.Empty,
             LastCorrelationId = state.LastCorrelationId ?? string.Empty,
             LastError = state.LastError ?? string.Empty,
             FireCount = state.FireCount,
             FailureCount = state.FailureCount,
-            ScopeId = state.WorkflowTarget?.ScopeId ?? string.Empty,
-            SourceActorId = state.WorkflowTarget?.SourceActorId ?? string.Empty,
+            ServiceKey = serviceIdentity == null ? string.Empty : ServiceKeys.Build(serviceIdentity),
+            ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
+            ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
             TargetActorId = state.TargetActorId ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
@@ -83,23 +89,31 @@ public sealed class WorkflowScheduleCurrentStateProjector
         return document;
     }
 
-    private static WorkflowScheduleFireRecordDocument[] CreateFireRecords(ScheduledDispatchState state) =>
+    private static ScheduledDispatchFireRecordDocument[] CreateFireRecords(ScheduledDispatchState state) =>
         state.FireRecords.Values
             .OrderByDescending(static x => ResolveTimestampSeconds(x.CompletedAt))
             .ThenByDescending(static x => ResolveTimestampNanos(x.CompletedAt))
             .ThenByDescending(static x => x.IdempotencyKey ?? string.Empty, StringComparer.Ordinal)
-            .Select(static x => new WorkflowScheduleFireRecordDocument
+            .Select(static x => new ScheduledDispatchFireRecordDocument
             {
                 ScheduledFireAtUtcValue = x.ScheduledFireAt?.Clone(),
                 CompletedAtUtcValue = x.CompletedAt?.Clone(),
                 IdempotencyKey = x.IdempotencyKey ?? string.Empty,
-                RunActorId = x.TargetActorId ?? string.Empty,
+                TargetActorId = x.TargetActorId ?? string.Empty,
                 CommandId = x.CommandId ?? string.Empty,
                 CorrelationId = x.CorrelationId ?? string.Empty,
                 Error = x.Error ?? string.Empty,
                 Manual = x.Manual,
             })
             .ToArray();
+
+    private static ScheduledDispatchTargetKind ToApplicationTargetKind(ScheduledDispatchTargetKindState stateKind) =>
+        stateKind switch
+        {
+            ScheduledDispatchTargetKindState.ServiceInvocation => ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchTargetKindState.Workflow => ScheduledDispatchTargetKind.Workflow,
+            _ => ScheduledDispatchTargetKind.Envelope,
+        };
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>
         timestamp?.Seconds ?? 0;

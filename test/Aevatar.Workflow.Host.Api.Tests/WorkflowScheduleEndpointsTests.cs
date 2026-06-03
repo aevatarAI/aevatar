@@ -1,4 +1,8 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -163,7 +167,7 @@ public sealed class WorkflowScheduleEndpointsTests
     {
         var service = new RecordingScheduleService
         {
-            CreateException = new WorkflowScheduleConflictException("schedule-1", "Schedule target cannot be prepared."),
+            CreateException = new ScheduledDispatchConflictException("schedule-1", "Schedule target cannot be prepared."),
         };
 
         var result = await WorkflowScheduleEndpoints.Create(
@@ -187,7 +191,7 @@ public sealed class WorkflowScheduleEndpointsTests
     {
         var service = new RecordingScheduleService
         {
-            UpdateException = new WorkflowScheduleConflictException("schedule-1", "Schedule target cannot be prepared."),
+            UpdateException = new ScheduledDispatchConflictException("schedule-1", "Schedule target cannot be prepared."),
         };
 
         var result = await WorkflowScheduleEndpoints.Update(
@@ -262,54 +266,6 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
-    public async Task WorkflowScheduleActorPort_DispatchCreate_ShouldMapGenericConfiguration()
-    {
-        var scheduledPort = new RecordingScheduledDispatchActorPort();
-        var port = new WorkflowScheduleActorPort(scheduledPort);
-        var triggerEnvelope = new EventEnvelope
-        {
-            Id = "template",
-            Payload = Any.Pack(new Empty()),
-        };
-        var dispatch = new ScheduledDispatchPreparation(
-            "target-actor",
-            triggerEnvelope,
-            Any.Pack(new Empty()).TypeUrl,
-            new WorkflowScheduleTargetDescriptor("workflow", "prompt", "scope-1", "source-1"));
-
-        var admission = await port.DispatchCreateAsync(
-            "schedule-actor",
-            new WorkflowScheduleConfiguration(
-                "schedule-1",
-                "Daily",
-                "workflow",
-                "prompt",
-                "0 9 * * *",
-                "UTC",
-                true,
-                new Dictionary<string, string> { ["trace"] = "1" }),
-            dispatch);
-
-        admission.Accepted.Should().BeTrue();
-        var configured = scheduledPort.Created.Should().ContainSingle().Subject;
-        configured.ActorId.Should().Be("schedule-actor");
-        configured.Configuration.ScheduleId.Should().Be("schedule-1");
-        configured.Configuration.DisplayName.Should().Be("Daily");
-        configured.Configuration.TargetActorId.Should().Be("target-actor");
-        configured.Configuration.TriggerEnvelope.Should().BeSameAs(triggerEnvelope);
-        configured.Configuration.CronExpression.Should().Be("0 9 * * *");
-        configured.Configuration.Timezone.Should().Be("UTC");
-        configured.Configuration.Enabled.Should().BeTrue();
-        configured.Configuration.Headers.Should().Contain("trace", "1");
-        configured.Configuration.PayloadTypeUrl.Should().Be(Any.Pack(new Empty()).TypeUrl);
-        configured.Configuration.WorkflowTarget.Should().Be(new WorkflowScheduleTargetDescriptor(
-            "workflow",
-            "prompt",
-            "scope-1",
-            "source-1"));
-    }
-
-    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldCreateMissingActorAndPackCreateCommand()
     {
         var runtime = new RecordingActorRuntime();
@@ -322,18 +278,9 @@ public sealed class WorkflowScheduleEndpointsTests
         };
 
         var actorId = await port.EnsureScheduleActorAsync("schedule-1");
-        await port.DispatchCreateAsync(
-            actorId,
-            new ScheduledDispatchConfiguration(
-                "schedule-1",
-                "Daily",
-                "target-actor",
-                triggerEnvelope,
-                "0 9 * * *",
-                "UTC",
-                true,
-                new Dictionary<string, string> { ["trace"] = "1" },
-                Any.Pack(new Empty()).TypeUrl));
+        var configuration = CreateScheduledDispatchConfiguration("schedule-1");
+        var prepared = CreatePreparedScheduledDispatchTarget("target-actor", triggerEnvelope);
+        await port.DispatchCreateAsync(actorId, configuration, prepared);
         actorId.Should().Be("scheduled-dispatch:schedule-1");
         runtime.Created.Should().ContainSingle()
             .Which.Should().Be((actorId, typeof(ScheduledDispatchGAgent)));
@@ -353,6 +300,8 @@ public sealed class WorkflowScheduleEndpointsTests
         configure.Enabled.Should().BeTrue();
         configure.Headers.Should().Contain("trace", "1");
         configure.PayloadTypeUrl.Should().Be(Any.Pack(new Empty()).TypeUrl);
+        configure.Target.Kind.Should().Be(ScheduledDispatchTargetKindState.Envelope);
+        configure.Target.ActorId.Should().Be("target-actor");
     }
 
     [Fact]
@@ -394,18 +343,20 @@ public sealed class WorkflowScheduleEndpointsTests
 
         var duplicateCreate = () => port.DispatchCreateAsync(
             actorId,
-            CreateScheduledDispatchConfiguration("schedule-1"));
+            CreateScheduledDispatchConfiguration("schedule-1"),
+            CreatePreparedScheduledDispatchTarget());
 
-        await duplicateCreate.Should().ThrowAsync<WorkflowScheduleConflictException>();
+        await duplicateCreate.Should().ThrowAsync<ScheduledDispatchConflictException>();
 
         runtime.Existing[actorId] = new RecordingStatefulActor(actorId, new ScheduledDispatchState());
         var missingUpdate = () => port.DispatchUpdateAsync(
             actorId,
-            CreateScheduledDispatchConfiguration("schedule-1"));
+            CreateScheduledDispatchConfiguration("schedule-1"),
+            CreatePreparedScheduledDispatchTarget());
         var missingEnable = () => port.DispatchEnableAsync(actorId, "resume");
 
-        await missingUpdate.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
-        await missingEnable.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
+        await missingUpdate.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await missingEnable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         dispatch.Envelopes.Should().BeEmpty();
     }
 
@@ -439,6 +390,70 @@ public sealed class WorkflowScheduleEndpointsTests
         runtime.Created.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task WorkflowScheduledDispatchAdapterPort_ShouldResolveServiceInvocationPortOnlyForInvocationTarget()
+    {
+        var inner = new RecordingActorDispatchPort();
+        var workflowResolverCallCount = 0;
+        var workflowEnvelopeFactoryCallCount = 0;
+        var resolverCallCount = 0;
+        var invocationPort = new RecordingServiceInvocationPort();
+        var adapter = new WorkflowScheduledDispatchAdapterPort(
+            inner,
+            () =>
+            {
+                workflowResolverCallCount++;
+                return new ThrowingWorkflowRunActorResolver();
+            },
+            () =>
+            {
+                workflowEnvelopeFactoryCallCount++;
+                return new ThrowingWorkflowChatEnvelopeFactory();
+            },
+            () =>
+            {
+                resolverCallCount++;
+                return invocationPort;
+            });
+
+        var normalEnvelope = new EventEnvelope
+        {
+            Id = "cmd-normal",
+            Payload = Any.Pack(new Empty()),
+        };
+
+        await adapter.DispatchAsync("regular-actor", normalEnvelope);
+
+        workflowResolverCallCount.Should().Be(0);
+        workflowEnvelopeFactoryCallCount.Should().Be(0);
+        resolverCallCount.Should().Be(0);
+        inner.Envelopes.Should().ContainSingle(x => x.ActorId == "regular-actor");
+
+        var invocationEnvelope = new EventEnvelope
+        {
+            Id = "cmd-invoke",
+            Payload = Any.Pack(new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Payload = Any.Pack(new Empty()),
+            }),
+        };
+
+        var admission = await adapter.DispatchAsync(
+            ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+            invocationEnvelope);
+
+        workflowResolverCallCount.Should().Be(0);
+        workflowEnvelopeFactoryCallCount.Should().Be(0);
+        resolverCallCount.Should().Be(1);
+        invocationPort.Requests.Should().ContainSingle();
+        inner.Envelopes.Should().ContainSingle(x => x.ActorId == "regular-actor");
+        admission.CommandId.Should().Be("cmd-invoke");
+        admission.ActorId.Should().Be("service-actor");
+        admission.CorrelationId.Should().Be("corr-invoke");
+    }
+
     private static DefaultHttpContext CreateHttpContext()
     {
         var http = new DefaultHttpContext
@@ -454,7 +469,7 @@ public sealed class WorkflowScheduleEndpointsTests
 
     private sealed class ThrowingPreviewScheduleService : EmptyWorkflowScheduleApplicationService
     {
-        public override Task<WorkflowSchedulePreview> PreviewAsync(
+        public override Task<ScheduledDispatchPreview> PreviewAsync(
             string cronExpression,
             string? timezone,
             int count,
@@ -468,7 +483,7 @@ public sealed class WorkflowScheduleEndpointsTests
         public int LastCount { get; private set; }
         public DateTimeOffset? LastFromUtc { get; private set; }
 
-        public override Task<WorkflowSchedulePreview> PreviewAsync(
+        public override Task<ScheduledDispatchPreview> PreviewAsync(
             string cronExpression,
             string? timezone,
             int count,
@@ -477,7 +492,7 @@ public sealed class WorkflowScheduleEndpointsTests
         {
             LastCount = count;
             LastFromUtc = fromUtc;
-            return Task.FromResult(new WorkflowSchedulePreview(
+            return Task.FromResult(new ScheduledDispatchPreview(
                 cronExpression,
                 timezone ?? "UTC",
                 [
@@ -492,7 +507,7 @@ public sealed class WorkflowScheduleEndpointsTests
         public override Task<WorkflowScheduleRunNowReceipt> RunNowAsync(
             string scheduleId,
             CancellationToken ct = default) =>
-            throw new WorkflowScheduleNotFoundException(scheduleId);
+            throw new ScheduledDispatchNotFoundException(scheduleId);
     }
 
     private sealed class InvalidEnableScheduleService : EmptyWorkflowScheduleApplicationService
@@ -518,7 +533,7 @@ public sealed class WorkflowScheduleEndpointsTests
             string scheduleId,
             string reason,
             CancellationToken ct = default) =>
-            throw new WorkflowScheduleConflictException(scheduleId, "Schedule cannot be disabled.");
+            throw new ScheduledDispatchConflictException(scheduleId, "Schedule cannot be disabled.");
     }
 
     private sealed class RecordingScheduleService : EmptyWorkflowScheduleApplicationService
@@ -573,63 +588,6 @@ public sealed class WorkflowScheduleEndpointsTests
         }
     }
 
-    private sealed class RecordingScheduledDispatchActorPort : IScheduledDispatchActorPort
-    {
-        public List<(string ActorId, ScheduledDispatchConfiguration Configuration)> Created { get; } = [];
-        public List<(string ActorId, ScheduledDispatchConfiguration Configuration)> Updated { get; } = [];
-
-        public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default) =>
-            Task.FromResult($"scheduled-dispatch:{scheduleId}");
-
-        public Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default) =>
-            Task.FromResult<string?>($"scheduled-dispatch:{scheduleId}");
-
-        public Task<DispatchAdmission> DispatchCreateAsync(
-            string actorId,
-            ScheduledDispatchConfiguration configuration,
-            CancellationToken ct = default)
-        {
-            Created.Add((actorId, configuration));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-            }));
-        }
-
-        public Task<DispatchAdmission> DispatchUpdateAsync(
-            string actorId,
-            ScheduledDispatchConfiguration configuration,
-            CancellationToken ct = default)
-        {
-            Updated.Add((actorId, configuration));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-            }));
-        }
-
-        public Task<DispatchAdmission> DispatchEnableAsync(string actorId, string reason, CancellationToken ct = default) =>
-            Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-            }));
-
-        public Task<DispatchAdmission> DispatchDisableAsync(string actorId, string reason, CancellationToken ct = default) =>
-            Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-            }));
-
-        public Task<DispatchAdmission> DispatchRunNowAsync(
-            string actorId,
-            DateTimeOffset scheduledFireAt,
-            CancellationToken ct = default) =>
-            Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-            }));
-    }
-
     private sealed class RecordingActorRuntime : IActorRuntime
     {
         public Dictionary<string, IActor> Existing { get; } = new(StringComparer.Ordinal);
@@ -679,6 +637,39 @@ public sealed class WorkflowScheduleEndpointsTests
         }
     }
 
+    private sealed class RecordingServiceInvocationPort : IServiceInvocationPort
+    {
+        public List<ServiceInvocationRequest> Requests { get; } = [];
+
+        public Task<ServiceInvocationAcceptedReceipt> InvokeAsync(
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(new ServiceInvocationAcceptedReceipt
+            {
+                CommandId = request.CommandId,
+                CorrelationId = request.CorrelationId,
+                TargetActorId = "service-actor",
+            });
+        }
+    }
+
+    private sealed class ThrowingWorkflowRunActorResolver : IWorkflowRunActorResolver
+    {
+        public Task<WorkflowActorResolutionResult> ResolveOrCreateAsync(
+            WorkflowChatRunRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("Workflow target resolution is not used by this test.");
+    }
+
+    private sealed class ThrowingWorkflowChatEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
+    {
+        public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context) =>
+            throw new NotSupportedException("Workflow envelope creation is not used by this test.");
+    }
+
     private sealed class RecordingActor(string id) : IActor
     {
         public string Id { get; } = id;
@@ -717,17 +708,37 @@ public sealed class WorkflowScheduleEndpointsTests
         new(
             scheduleId,
             "Daily",
-            "target-actor",
-            new EventEnvelope
-            {
-                Id = "template",
-                Payload = Any.Pack(new Empty()),
-            },
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.Envelope,
+                ActorId: "target-actor",
+                Envelope: new EventEnvelope
+                {
+                    Id = "template",
+                    Payload = Any.Pack(new Empty()),
+                }),
             "0 9 * * *",
             "UTC",
             true,
-            new Dictionary<string, string>(),
-            Any.Pack(new Empty()).TypeUrl);
+            new Dictionary<string, string> { ["trace"] = "1" });
+
+    private static PreparedScheduledDispatchTarget CreatePreparedScheduledDispatchTarget(
+        string targetActorId = "target-actor",
+        EventEnvelope? triggerEnvelope = null)
+    {
+        var envelope = triggerEnvelope ?? new EventEnvelope
+        {
+            Id = "template",
+            Payload = Any.Pack(new Empty()),
+        };
+        return new PreparedScheduledDispatchTarget(
+            targetActorId,
+            envelope,
+            envelope.Payload?.TypeUrl ?? Any.Pack(new Empty()).TypeUrl,
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.Envelope,
+                ActorId: targetActorId,
+                Envelope: envelope));
+    }
 
     private static ScheduledDispatchState CreateConfiguredState() =>
         new()
@@ -778,7 +789,7 @@ public sealed class WorkflowScheduleEndpointsTests
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public virtual Task<WorkflowSchedulePreview> PreviewAsync(
+        public virtual Task<ScheduledDispatchPreview> PreviewAsync(
             string cronExpression,
             string? timezone,
             int count,

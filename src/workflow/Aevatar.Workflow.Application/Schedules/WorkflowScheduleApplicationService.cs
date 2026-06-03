@@ -4,36 +4,19 @@ namespace Aevatar.Workflow.Application.Schedules;
 
 public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplicationService
 {
-    private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-";
-    private readonly IWorkflowScheduleActorPort _actorPort;
-    private readonly IWorkflowScheduleQueryPort _queryPort;
-    private readonly IWorkflowScheduledDispatchPreparationService _dispatchPreparationService;
+    private readonly IScheduledDispatchApplicationService _scheduledDispatches;
 
-    public WorkflowScheduleApplicationService(
-        IWorkflowScheduleActorPort actorPort,
-        IWorkflowScheduleQueryPort queryPort,
-        IWorkflowScheduledDispatchPreparationService dispatchPreparationService)
+    public WorkflowScheduleApplicationService(IScheduledDispatchApplicationService scheduledDispatches)
     {
-        _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
-        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
-        _dispatchPreparationService = dispatchPreparationService ?? throw new ArgumentNullException(nameof(dispatchPreparationService));
+        _scheduledDispatches = scheduledDispatches ?? throw new ArgumentNullException(nameof(scheduledDispatches));
     }
 
     public async Task<WorkflowScheduleMutationReceipt> CreateAsync(
         WorkflowScheduleConfiguration configuration,
         CancellationToken ct = default)
     {
-        var normalized = NormalizeConfiguration(configuration, requireScheduleId: false);
-        ValidateSchedule(normalized);
-
-        var dispatch = await _dispatchPreparationService.PrepareAsync(
-            normalized,
-            BuildScheduleCommandId(normalized.ScheduleId),
-            BuildScheduleCorrelationId(normalized.ScheduleId),
-            ct);
-        var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
-        var admission = await _actorPort.DispatchCreateAsync(actorId, normalized, dispatch, ct);
-        return new WorkflowScheduleMutationReceipt(normalized.ScheduleId, actorId, admission.Accepted);
+        var receipt = await _scheduledDispatches.CreateAsync(ToScheduledDispatchConfiguration(configuration), ct);
+        return new WorkflowScheduleMutationReceipt(receipt.ScheduleId, receipt.ScheduleActorId, receipt.Accepted);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> UpdateAsync(
@@ -41,20 +24,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         WorkflowScheduleConfiguration configuration,
         CancellationToken ct = default)
     {
-        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        var normalized = NormalizeConfiguration(
-            configuration with { ScheduleId = normalizedScheduleId },
-            requireScheduleId: true);
-        ValidateSchedule(normalized);
-
-        var dispatch = await _dispatchPreparationService.PrepareAsync(
-            normalized,
-            BuildScheduleCommandId(normalized.ScheduleId),
-            BuildScheduleCorrelationId(normalized.ScheduleId),
-            ct);
-        var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
-        var admission = await _actorPort.DispatchUpdateAsync(actorId, normalized, dispatch, ct);
-        return new WorkflowScheduleMutationReceipt(normalized.ScheduleId, actorId, admission.Accepted);
+        var receipt = await _scheduledDispatches.UpdateAsync(scheduleId, ToScheduledDispatchConfiguration(configuration), ct);
+        return new WorkflowScheduleMutationReceipt(receipt.ScheduleId, receipt.ScheduleActorId, receipt.Accepted);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> EnableAsync(
@@ -62,10 +33,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         string reason,
         CancellationToken ct = default)
     {
-        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
-        var admission = await _actorPort.DispatchEnableAsync(actorId, NormalizeOptional(reason), ct);
-        return new WorkflowScheduleMutationReceipt(normalizedScheduleId, actorId, admission.Accepted);
+        var receipt = await _scheduledDispatches.EnableAsync(scheduleId, reason, ct);
+        return new WorkflowScheduleMutationReceipt(receipt.ScheduleId, receipt.ScheduleActorId, receipt.Accepted);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> DisableAsync(
@@ -73,155 +42,109 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         string reason,
         CancellationToken ct = default)
     {
-        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
-        var admission = await _actorPort.DispatchDisableAsync(actorId, NormalizeOptional(reason), ct);
-        return new WorkflowScheduleMutationReceipt(normalizedScheduleId, actorId, admission.Accepted);
+        var receipt = await _scheduledDispatches.DisableAsync(scheduleId, reason, ct);
+        return new WorkflowScheduleMutationReceipt(receipt.ScheduleId, receipt.ScheduleActorId, receipt.Accepted);
     }
 
-    public Task<WorkflowScheduleDetail?> GetAsync(
+    public async Task<WorkflowScheduleDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default)
     {
-        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        return _queryPort.GetAsync(normalizedScheduleId, ct);
+        var detail = await _scheduledDispatches.GetAsync(scheduleId, ct);
+        return detail == null ? null : ToWorkflowDetail(detail);
     }
 
-    public Task<WorkflowScheduleListResult> ListAsync(
+    public async Task<WorkflowScheduleListResult> ListAsync(
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
-        CancellationToken ct = default) =>
-        _queryPort.ListAsync(Math.Clamp(take, 1, 200), cursor, includeTotalCount, ct);
+        CancellationToken ct = default)
+    {
+        var result = await _scheduledDispatches.ListAsync(take, cursor, includeTotalCount, ct);
+        return new WorkflowScheduleListResult(
+            result.Items
+                .Where(static x => x.TargetKind == ScheduledDispatchTargetKind.Workflow)
+                .Select(ToWorkflowSummary)
+                .ToArray(),
+            result.NextCursor,
+            result.TotalCount);
+    }
 
-    public Task<WorkflowSchedulePreview> PreviewAsync(
+    public Task<ScheduledDispatchPreview> PreviewAsync(
         string cronExpression,
         string? timezone,
         int count,
         DateTimeOffset? fromUtc = null,
-        CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        var normalizedCron = NormalizeRequired(cronExpression, nameof(cronExpression));
-        var normalizedTimezone = ScheduledDispatchCalculator.NormalizeTimezone(timezone);
-        var nextFireTimes = ScheduledDispatchCalculator.GetNextOccurrences(
-            normalizedCron,
-            normalizedTimezone,
-            fromUtc ?? DateTimeOffset.UtcNow,
-            Math.Clamp(count, 1, 100));
-        return Task.FromResult(new WorkflowSchedulePreview(
-            normalizedCron,
-            normalizedTimezone,
-            nextFireTimes));
-    }
+        CancellationToken ct = default) =>
+        _scheduledDispatches.PreviewAsync(cronExpression, timezone, count, fromUtc, ct);
 
     public async Task<WorkflowScheduleRunNowReceipt> RunNowAsync(
         string scheduleId,
         CancellationToken ct = default)
     {
-        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
-        var scheduledFireAt = DateTimeOffset.UtcNow;
-        var admission = await _actorPort.DispatchRunNowAsync(actorId, scheduledFireAt, ct);
+        var receipt = await _scheduledDispatches.RunNowAsync(scheduleId, ct);
         return new WorkflowScheduleRunNowReceipt(
-            normalizedScheduleId,
-            actorId,
-            scheduledFireAt,
-            ScheduledDispatchCalculator.BuildIdempotencyKey(normalizedScheduleId, scheduledFireAt),
-            admission.Accepted);
+            receipt.ScheduleId,
+            receipt.ScheduleActorId,
+            receipt.ScheduledFireAt,
+            receipt.IdempotencyKey,
+            receipt.Accepted);
     }
 
-    private async Task<string> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct)
-    {
-        var actorId = await _actorPort.ResolveScheduleActorAsync(scheduleId, ct);
-        if (string.IsNullOrWhiteSpace(actorId))
-            throw new WorkflowScheduleNotFoundException(scheduleId);
-
-        return actorId;
-    }
-
-    private static WorkflowScheduleConfiguration NormalizeConfiguration(
-        WorkflowScheduleConfiguration configuration,
-        bool requireScheduleId)
+    private static ScheduledDispatchConfiguration ToScheduledDispatchConfiguration(
+        WorkflowScheduleConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var scheduleId = string.IsNullOrWhiteSpace(configuration.ScheduleId)
-            ? Guid.NewGuid().ToString("N")
-            : NormalizeScheduleId(configuration.ScheduleId);
-        if (requireScheduleId && string.IsNullOrWhiteSpace(scheduleId))
-            throw new ArgumentException("Schedule id is required.", nameof(configuration));
-
-        return configuration with
-        {
-            ScheduleId = scheduleId,
-            DisplayName = NormalizeOptional(configuration.DisplayName),
-            WorkflowName = NormalizeRequired(configuration.WorkflowName, nameof(configuration.WorkflowName)),
-            Prompt = NormalizeRequired(configuration.Prompt, nameof(configuration.Prompt)),
-            CronExpression = NormalizeRequired(configuration.CronExpression, nameof(configuration.CronExpression)),
-            Timezone = ScheduledDispatchCalculator.NormalizeTimezone(configuration.Timezone),
-            Headers = NormalizeHeaders(configuration.Headers),
-            ScopeId = NormalizeNullable(configuration.ScopeId),
-            SourceActorId = NormalizeNullable(configuration.SourceActorId),
-        };
+        return new ScheduledDispatchConfiguration(
+            configuration.ScheduleId,
+            configuration.DisplayName,
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.Workflow,
+                Workflow: new WorkflowScheduleTargetDescriptor(
+                    configuration.WorkflowName,
+                    configuration.Prompt,
+                    configuration.ScopeId ?? string.Empty,
+                    configuration.SourceActorId ?? string.Empty)),
+            configuration.CronExpression,
+            configuration.Timezone,
+            configuration.Enabled,
+            configuration.Headers);
     }
 
-    private static void ValidateSchedule(WorkflowScheduleConfiguration configuration)
-    {
-        var validation = ScheduledDispatchCalculator.Validate(configuration.CronExpression, configuration.Timezone);
-        if (!validation.Succeeded)
-            throw new ArgumentException(validation.Error, nameof(configuration));
-    }
+    private static WorkflowScheduleDetail ToWorkflowDetail(ScheduledDispatchDetail detail) =>
+        new(
+            ToWorkflowSummary(detail.Schedule),
+            detail.RecentFires.Select(static x => new WorkflowScheduleFireRecord(
+                x.ScheduledFireAt,
+                x.CompletedAt,
+                x.IdempotencyKey,
+                x.TargetActorId,
+                x.CommandId,
+                x.CorrelationId,
+                x.Error,
+                x.Manual)).ToArray());
 
-    private static string BuildScheduleCommandId(string scheduleId) =>
-        $"schedule-{scheduleId}-trigger";
-
-    private static string BuildScheduleCorrelationId(string scheduleId) =>
-        $"schedule-{scheduleId}";
-
-    private static string NormalizeScheduleId(string? scheduleId)
-    {
-        if (string.IsNullOrWhiteSpace(scheduleId))
-            throw new ArgumentException("Schedule id is required.", nameof(scheduleId));
-
-        var normalized = scheduleId.Trim();
-        if (normalized.Any(static ch => ScheduleIdAllowedCharacters.IndexOf(ch) < 0))
-            throw new ArgumentException(
-                "Schedule id may only contain letters, digits, '.', '_', ':', and '-'.",
-                nameof(scheduleId));
-
-        return normalized;
-    }
-
-    private static string NormalizeRequired(string? value, string parameterName)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            throw new ArgumentException($"{parameterName} is required.", parameterName);
-
-        return value.Trim();
-    }
-
-    private static string NormalizeOptional(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
-
-    private static string? NormalizeNullable(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static IReadOnlyDictionary<string, string> NormalizeHeaders(
-        IReadOnlyDictionary<string, string>? headers)
-    {
-        if (headers == null || headers.Count == 0)
-            return new Dictionary<string, string>(StringComparer.Ordinal);
-
-        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in headers)
-        {
-            var normalizedKey = NormalizeOptional(key);
-            var normalizedValue = NormalizeOptional(value);
-            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
-                continue;
-            normalized[normalizedKey] = normalizedValue;
-        }
-
-        return normalized;
-    }
+    private static WorkflowScheduleSummary ToWorkflowSummary(ScheduledDispatchSummary summary) =>
+        new(
+            summary.ScheduleId,
+            summary.DisplayName,
+            summary.WorkflowName,
+            summary.CronExpression,
+            summary.Timezone,
+            summary.Enabled,
+            summary.CreatedAt,
+            summary.UpdatedAt,
+            summary.NextFireAt,
+            summary.LastFireAt,
+            summary.LastTargetActorId,
+            summary.LastCommandId,
+            summary.LastCorrelationId,
+            summary.LastError,
+            summary.FireCount,
+            summary.FailureCount,
+            summary.Headers,
+            string.Empty,
+            string.Empty,
+            summary.ScheduleActorId,
+            summary.TargetActorId);
 }

@@ -2,11 +2,11 @@ using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Metadata;
 
-public sealed class WorkflowScheduleDocumentMetadataProvider
-    : IProjectionDocumentMetadataProvider<WorkflowScheduleDocument>
+public sealed class ScheduledDispatchDocumentMetadataProvider
+    : IProjectionDocumentMetadataProvider<ScheduledDispatchDocument>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
-        IndexName: "workflow-schedules",
+        IndexName: "scheduled-dispatches",
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = true,
