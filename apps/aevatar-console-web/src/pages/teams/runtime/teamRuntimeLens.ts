@@ -5,6 +5,7 @@ import type {
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import type { StudioMemberBindingRevision } from "@/shared/studio/models";
+import { selectLatestTeamRun } from "./runtimeRunSemantics";
 
 export type TeamRuntimeLens = {
   scopeId: string;
@@ -28,14 +29,6 @@ export type TeamRuntimeLensInput = {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
-}
-
-function sortRuns(runs: readonly ScopeServiceRunSummary[]): ScopeServiceRunSummary[] {
-  return [...runs].sort((left, right) => {
-    const leftTime = Date.parse(left.lastUpdatedAt || "");
-    const rightTime = Date.parse(right.lastUpdatedAt || "");
-    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
-  });
 }
 
 function sortServices(
@@ -66,15 +59,7 @@ export function selectCurrentTeamRun(
     preferredRunId?: string | null;
   },
 ): ScopeServiceRunSummary | null {
-  const sortedRuns = sortRuns(runs);
-  const preferredRunId = trimOptional(options?.preferredRunId);
-  return (
-    (preferredRunId
-      ? sortedRuns.find((run) => trimOptional(run.runId) === preferredRunId) ?? null
-      : null) ||
-    sortedRuns[0] ||
-    null
-  );
+  return selectLatestTeamRun(runs, options);
 }
 
 export function deriveTeamRuntimeLens(
