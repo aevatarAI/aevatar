@@ -563,16 +563,32 @@ const StudioMemberCurrentRunPanel: React.FC<
 
     if (invokeResult.status === 'success') {
       items.push({
-        detail: finishedAtLabel || 'Completed',
+        detail:
+          finishedAtLabel ||
+          t("pages.studio.studiomembercurrentrunpanel.completed", "Completed"),
         label: t("pages.studio.studiomembercurrentrunpanel.run.finished.2", "Run finished"),
       });
     } else if (invokeResult.status === 'error' || invokeResult.status === 'cancelled') {
       items.push({
-        detail: errorDescription || 'No extra error text',
-        label: invokeResult.status === 'cancelled' ? 'Run stopped' : 'Run failed',
+        detail:
+          errorDescription ||
+          t(
+            "pages.studio.studiomembercurrentrunpanel.no.extra.error.text",
+            "No extra error text",
+          ),
+        label:
+          invokeResult.status === 'cancelled'
+            ? t("pages.studio.studiomembercurrentrunpanel.run.stopped", "Run stopped")
+            : t("pages.studio.studiomembercurrentrunpanel.run.failed", "Run failed"),
       });
     } else if (invokeResult.status === 'running') {
-      items.push({ detail: 'Waiting for output', label: t("pages.studio.studiomembercurrentrunpanel.run.in.progress", "Run in progress") });
+      items.push({
+        detail: t(
+          "pages.studio.studiomembercurrentrunpanel.waiting.for.output.short",
+          "Waiting for output",
+        ),
+        label: t("pages.studio.studiomembercurrentrunpanel.run.in.progress", "Run in progress"),
+      });
     }
 
     return items;
@@ -586,10 +602,22 @@ const StudioMemberCurrentRunPanel: React.FC<
   ]);
 
   const tabItems = [
-    { key: 'output' as const, label: 'Output' },
-    { key: 'timeline' as const, label: 'Timeline' },
-    { key: 'events' as const, label: 'Events' },
-    { key: 'metadata' as const, label: 'Metadata' },
+    {
+      key: 'output' as const,
+      label: t("pages.studio.studiomembercurrentrunpanel.output", "Output"),
+    },
+    {
+      key: 'timeline' as const,
+      label: t("pages.studio.studiomembercurrentrunpanel.timeline", "Timeline"),
+    },
+    {
+      key: 'events' as const,
+      label: t("pages.studio.studiomembercurrentrunpanel.events", "Events"),
+    },
+    {
+      key: 'metadata' as const,
+      label: t("pages.studio.studiomembercurrentrunpanel.metadata", "Metadata"),
+    },
   ];
 
   const renderOutput = () => {
@@ -605,11 +633,14 @@ const StudioMemberCurrentRunPanel: React.FC<
     if (invokeResult.status === 'error' || invokeResult.status === 'cancelled') {
       const isCancelled = invokeResult.status === 'cancelled';
       return (
-        <div style={outputPaneStyle}>
-          <div style={sectionStyle}>
-            <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input", "Input")}</span>
-            <p style={bodyTextStyle}>{inputText || 'No prompt captured.'}</p>
-          </div>
+          <div style={outputPaneStyle}>
+            <div style={sectionStyle}>
+              <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input", "Input")}</span>
+            <p style={bodyTextStyle}>
+              {inputText ||
+                t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No prompt captured.")}
+            </p>
+            </div>
           <div style={isCancelled ? warningCardStyle : errorCardStyle}>
             {isCancelled ? (
               <ExclamationCircleFilled style={warningIconStyle} />
@@ -618,13 +649,15 @@ const StudioMemberCurrentRunPanel: React.FC<
             )}
             <div style={{ minWidth: 0 }}>
               <div style={errorTitleStyle}>
-                {isCancelled ? 'Run stopped' : 'Run failed'}
+                {isCancelled
+                  ? t("pages.studio.studiomembercurrentrunpanel.run.stopped", "Run stopped")
+                  : t("pages.studio.studiomembercurrentrunpanel.run.failed", "Run failed")}
               </div>
               <p style={errorDescriptionStyle}>
                 {errorDescription ||
                   (isCancelled
                     ? t("pages.studio.studiomembercurrentrunpanel.the.run.has.stopped", "The run has stopped and only partial output may currently be displayed.")
-                    : 'This run failed without an additional error message.')}
+                    : t("pages.studio.studiomembercurrentrunpanel.run.failed.without.message", "This run failed without an additional error message."))}
               </p>
             </div>
           </div>
@@ -671,7 +704,10 @@ const StudioMemberCurrentRunPanel: React.FC<
         </div>
         <div style={sectionStyle}>
           <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.input.2", "Input")}</span>
-          <p style={bodyTextStyle}>{inputText || 'No prompt captured.'}</p>
+          <p style={bodyTextStyle}>
+            {inputText ||
+              t("pages.studio.studiomembercurrentrunpanel.no.prompt.captured", "No prompt captured.")}
+          </p>
         </div>
         <div style={sectionStyle}>
           <span style={sectionLabelStyle}>{t("pages.studio.studiomembercurrentrunpanel.output.2", "Output")}</span>
@@ -726,7 +762,11 @@ const StudioMemberCurrentRunPanel: React.FC<
         <>
           <RuntimeEventPreviewPanel
             events={invokeResult.events}
-            title={`Events (${invokeResult.events.length})`}
+            title={t(
+              "pages.studio.studiomembercurrentrunpanel.events.count",
+              "Events ({count})",
+              { count: invokeResult.events.length },
+            )}
           />
           {invokeResult.events.map((event, index) => (
             <div
@@ -767,11 +807,11 @@ const StudioMemberCurrentRunPanel: React.FC<
             value={<MetadataValue value={memberId} />}
           />
           <MetadataItem
-            label="Endpoint"
+            label={t("pages.studio.studiomembercurrentrunpanel.endpoint", "Endpoint")}
             value={<MetadataValue value={endpointLabel} />}
           />
           <MetadataItem
-            label="Revision"
+            label={t("pages.studio.studiomembercurrentrunpanel.revision", "Revision")}
             value={<MetadataValue value={revisionId} />}
           />
           <MetadataItem
@@ -787,7 +827,7 @@ const StudioMemberCurrentRunPanel: React.FC<
             value={<MetadataValue value={finishedAtLabel} />}
           />
           <MetadataItem
-            label="Duration"
+            label={t("pages.studio.studiomembercurrentrunpanel.duration", "Duration")}
             value={<MetadataValue value={runElapsedLabel} />}
           />
           <MetadataItem
@@ -802,7 +842,10 @@ const StudioMemberCurrentRunPanel: React.FC<
       </div>
       <details style={sectionStyle}>
         <summary style={contractValueStyle}>{t("pages.studio.studiomembercurrentrunpanel.advanced.details", "Advanced details")}</summary>
-        <pre style={rawOutputStyle}>{currentRawOutput || 'No raw JSON.'}</pre>
+        <pre style={rawOutputStyle}>
+          {currentRawOutput ||
+            t("pages.studio.studiomembercurrentrunpanel.no.raw.json", "No raw JSON.")}
+        </pre>
       </details>
     </div>
   );

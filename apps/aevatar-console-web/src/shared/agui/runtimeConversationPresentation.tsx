@@ -205,7 +205,8 @@ function StepIndicator({
           fontWeight: 500,
         }}
       >
-        {step.name || "Processing"}
+        {step.name ||
+          t("shared.agui.runtimeconversationpresentation.processing", "Processing")}
       </span>
       {step.stepType ? (
         <span
@@ -688,7 +689,10 @@ export function RuntimeEventPreviewPanel({
           textTransform: "uppercase",
         }}
       >
-        {title || `Raw Events (${events.length})`}
+        {title ||
+          t("shared.agui.runtimeconversationpresentation.raw.events.count", "Raw Events ({count})", {
+            count: events.length,
+          })}
       </div>
       <div
         style={{

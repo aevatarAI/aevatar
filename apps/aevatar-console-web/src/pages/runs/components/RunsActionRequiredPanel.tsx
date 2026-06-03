@@ -80,8 +80,8 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
           {humanInputRecord ? (
             <Tag color="warning">
               {isHumanApprovalSuspension(humanInputRecord.suspensionType)
-                ? "Approval required"
-                : "Human input required"}
+                ? t("pages.runs.runsactionrequiredpanel.approval.required", "Approval required")
+                : t("pages.runs.runsactionrequiredpanel.human.input.required", "Human input required")}
             </Tag>
           ) : null}
           {waitingSignalRecord ? (
@@ -96,8 +96,8 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
               <div>
                 <Typography.Text strong>
                   {isHumanApprovalSuspension(humanInputRecord.suspensionType)
-                    ? "Review and continue the run"
-                    : "Respond before the run can continue"}
+                    ? t("pages.runs.runsactionrequiredpanel.review.and.continue", "Review and continue the run")
+                    : t("pages.runs.runsactionrequiredpanel.respond.before.continue", "Respond before the run can continue")}
                 </Typography.Text>
                 <Typography.Paragraph
                   style={{ margin: "4px 0 0" }}
@@ -142,11 +142,11 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
                 submitter={false}
               >
                 <ProFormSwitch
-                  label={
-                    isHumanApprovalSuspension(humanInputRecord.suspensionType)
-                      ? "Approved"
-                      : "Continue run"
-                  }
+	                  label={
+	                    isHumanApprovalSuspension(humanInputRecord.suspensionType)
+	                      ? t("pages.runs.runsactionrequiredpanel.approved", "Approved")
+	                      : t("pages.runs.runsactionrequiredpanel.continue.run", "Continue run")
+	                  }
                   name="approved"
                 />
                 <ProFormTextArea
@@ -163,8 +163,8 @@ const RunsActionRequiredPanel: React.FC<RunsActionRequiredPanelProps> = ({
                   type="primary"
                 >
                   {isHumanApprovalSuspension(humanInputRecord.suspensionType)
-                    ? "Approve and continue"
-                    : "Submit response"}
+                    ? t("pages.runs.runsactionrequiredpanel.approve.and.continue", "Approve and continue")
+                    : t("pages.runs.runsactionrequiredpanel.submit.response", "Submit response")}
                 </Button>
               </Space>
             </Space>

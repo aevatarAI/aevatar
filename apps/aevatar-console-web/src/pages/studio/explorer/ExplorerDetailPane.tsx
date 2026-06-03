@@ -199,7 +199,11 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
         </Space>
         <Typography.Text type="secondary">
           {selectedEntry.key}
-          {updatedAt ? ` · Updated ${updatedAt}` : ""}
+          {updatedAt
+            ? t("pages.studio.explorer.explorerdetailpane.updated.at", " · Updated {updatedAt}", {
+                updatedAt,
+              })
+            : ""}
         </Typography.Text>
         {isDirty ? (
           <Tag color="gold">{t("pages.studio.explorer.explorerdetailpane.unsaved.changes", "Unsaved changes")}</Tag>

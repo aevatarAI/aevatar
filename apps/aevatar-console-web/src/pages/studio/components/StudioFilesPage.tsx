@@ -614,7 +614,15 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                   ))
                 ) : (
                   <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                    {workflows.isLoading ? 'Loading workflows...' : 'No workflow files matched.'}
+                    {workflows.isLoading
+                      ? t(
+                          "pages.studio.studiofilespage.loading.workflows",
+                          "Loading workflows...",
+                        )
+                      : t(
+                          "pages.studio.studiofilespage.no.workflow.files.matched",
+                          "No workflow files matched.",
+                        )}
                   </Typography.Text>
                 )
               ) : null}
@@ -647,7 +655,15 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                         ))
                       ) : (
                         <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                          {scripts.isLoading ? 'Loading scripts...' : 'No script files matched.'}
+                          {scripts.isLoading
+                            ? t(
+                                "pages.studio.studiofilespage.loading.scripts",
+                                "Loading scripts...",
+                              )
+                            : t(
+                                "pages.studio.studiofilespage.no.script.files.matched",
+                                "No script files matched.",
+                              )}
                         </Typography.Text>
                       )
                     ) : (

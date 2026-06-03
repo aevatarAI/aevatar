@@ -190,14 +190,16 @@ function renderRouteMiniCard(
     <div style={embeddedPanelStyle}>
       <Space wrap size={[6, 6]}>
         <Tag color={activeEndpointKind === "chat" ? "processing" : "geekblue"}>
-          {activeEndpointKind === "chat" ? "Service SSE" : "Command invoke"}
+          {activeEndpointKind === "chat"
+            ? t("pages.runs.runslaunchrail.service.sse", "Service SSE")
+            : t("pages.runs.runslaunchrail.command.invoke", "Command invoke")}
         </Tag>
         <Tag>{selectedRouteRecord.groupLabel}</Tag>
         <Tag>{selectedRouteRecord.sourceLabel}</Tag>
         <Tag color={selectedRouteRecord.llmStatus === "processing" ? "blue" : "success"}>
           {selectedRouteRecord.llmStatus === "processing"
-            ? "LLM required"
-            : "LLM optional"}
+            ? t("pages.runs.runslaunchrail.llm.required", "LLM required")
+            : t("pages.runs.runslaunchrail.llm.optional", "LLM optional")}
         </Tag>
       </Space>
       <Typography.Text strong style={{ display: "block", marginTop: 10 }}>
@@ -208,7 +210,8 @@ function renderRouteMiniCard(
         style={{ margin: "6px 0 0" }}
         type="secondary"
       >
-        {selectedRouteRecord.description || "No description provided."}
+        {selectedRouteRecord.description ||
+          t("pages.runs.runslaunchrail.no.description.provided", "No description provided.")}
       </Typography.Paragraph>
       <Space wrap size={[6, 6]}>
         {selectedRouteDetailsPrimitives.slice(0, 3).map((primitive) => (
@@ -267,7 +270,7 @@ function renderRecentRunCards(
                     {resolveRunEndpointId(record.endpointKind, record.endpointId)}
                   </Tag>
                   <Tag>{formatDateTime(record.recordedAt)}</Tag>
-                  <Tag>{record.runId || "No runId"}</Tag>
+                  <Tag>{record.runId || t("pages.runs.runslaunchrail.no.run.id", "No run ID")}</Tag>
                 </div>
               </div>
             </div>
@@ -279,7 +282,7 @@ function renderRecentRunCards(
             >
               {record.lastMessagePreview ||
                 record.prompt ||
-                "No preview recorded."}
+                t("pages.runs.runslaunchrail.no.preview.recorded", "No preview recorded.")}
             </Typography.Paragraph>
 
             <div style={railListActionStyle}>
@@ -391,7 +394,11 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
 
   return (
     <ProCard
-      title={isChatVariant ? "Setup" : "Run setup"}
+      title={
+        isChatVariant
+          ? t("pages.runs.runslaunchrail.setup", "Setup")
+          : t("pages.runs.runslaunchrail.run.setup", "Run setup")
+      }
       hoverable
       {...moduleCardProps}
       style={workbenchCardStyle}
@@ -410,7 +417,9 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
               <div style={quickMetricStyle}>
                 <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.execution", "Execution")}</Typography.Text>
                 <Typography.Text style={quickMetricValueStyle}>
-                  {isChatEndpoint ? "STREAM" : "INVOKE"}
+                  {isChatEndpoint
+                    ? t("pages.runs.runslaunchrail.stream", "STREAM")
+                    : t("pages.runs.runslaunchrail.invoke", "INVOKE")}
                 </Typography.Text>
               </div>
               <div style={quickMetricStyle}>
@@ -418,11 +427,11 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                 <Typography.Text style={quickMetricValueStyle}>
                   {draftMode
                     ? isChatEndpoint
-                      ? "Draft run"
-                      : "Prepared invoke"
+                      ? t("pages.runs.runslaunchrail.draft.run", "Draft run")
+                      : t("pages.runs.runslaunchrail.prepared.invoke", "Prepared invoke")
                     : actorId
-                      ? "Continue actor"
-                      : "Endpoint invoke"}
+                      ? t("pages.runs.runslaunchrail.continue.actor", "Continue actor")
+                      : t("pages.runs.runslaunchrail.endpoint.invoke", "Endpoint invoke")}
                 </Typography.Text>
               </div>
               <div style={quickMetricStyle}>
@@ -438,7 +447,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
           items={[
             {
               key: "compose",
-              label: "Compose",
+              label: t("pages.runs.runslaunchrail.compose", "Compose"),
               children: (
                 <div style={compactStackStyle}>
                   {renderRouteMiniCard(
@@ -521,12 +530,16 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     {showPromptField ? (
                       <ProFormTextArea
                         name="prompt"
-                        label={isChatEndpoint ? "Prompt" : "Payload text"}
+                        label={
+                          isChatEndpoint
+                            ? t("pages.runs.runslaunchrail.prompt", "Prompt")
+                            : t("pages.runs.runslaunchrail.payload.text", "Payload text")
+                        }
                         fieldProps={{ rows: 5 }}
                         placeholder={
                           isChatEndpoint
-                            ? "Describe the task to run."
-                            : "Provide the payload text that should be encoded for this endpoint."
+                            ? t("pages.runs.runslaunchrail.describe.the.task.to.run", "Describe the task to run.")
+                            : t("pages.runs.runslaunchrail.provide.payload.text", "Provide the payload text that should be encoded for this endpoint.")
                         }
                         rules={[
                           {
@@ -541,7 +554,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     {!isChatVariant ? (
                       <ProFormSelect<RunTransport>
                         name="transport"
-                        label="Transport"
+                        label={t("pages.runs.runslaunchrail.transport", "Transport")}
                         options={transportOptions}
                         rules={[
                           {
@@ -635,7 +648,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                               <div style={compactStackStyle}>
                                 <ProFormText
                                   name="endpointId"
-                                  label="Endpoint"
+	                                  label={t("pages.runs.runslaunchrail.endpoint", "Endpoint")}
                                   placeholder={t("pages.runs.runslaunchrail.chat.or.custom.chat.endpoint", "chat (or a custom chat endpoint id)")}
                                   disabled={draftMode}
                                 />
@@ -675,11 +688,11 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                       <>
                         <ProFormText
                           name="endpointId"
-                          label="Endpoint"
+	                          label={t("pages.runs.runslaunchrail.endpoint.2", "Endpoint")}
                           placeholder={
                             isChatEndpoint
-                              ? "chat (or a custom chat endpoint id)"
-                              : "endpoint-id"
+	                              ? t("pages.runs.runslaunchrail.chat.or.custom.chat.endpoint.2", "chat (or a custom chat endpoint id)")
+	                              : "endpoint-id"
                           }
                           disabled={draftMode}
                           rules={[
@@ -751,7 +764,9 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
           <Alert
             showIcon
             type="info"
-            title={`Requests go through ${submitPathLabel}`}
+	            title={t("pages.runs.runslaunchrail.requests.go.through", "Requests go through {path}", {
+	              path: submitPathLabel,
+	            })}
           />
         ) : null}
         </div>

@@ -10,7 +10,7 @@ type MessageDescriptor = {
 type MessageValue = string | number | boolean | null | undefined | React.ReactNode;
 type LocaleListener = () => void;
 
-let currentLocale = 'zh-CN';
+let currentLocale = 'en-US';
 const localeListeners = new Set<LocaleListener>();
 
 const catalogs: Record<string, Record<string, string>> = {
@@ -33,7 +33,7 @@ function formatMessage(
   descriptor: MessageDescriptor,
   values?: Record<string, MessageValue>,
 ): string {
-  const catalog = catalogs[currentLocale] || catalogs['zh-CN'];
+  const catalog = catalogs[currentLocale] || catalogs['en-US'];
   const message = catalog[descriptor.id] || descriptor.defaultMessage || descriptor.id;
   return interpolate(message, values);
 }
@@ -43,7 +43,7 @@ export function getLocale(): string {
 }
 
 export function setLocale(locale: string): void {
-  currentLocale = catalogs[locale] ? locale : 'zh-CN';
+  currentLocale = catalogs[locale] ? locale : 'en-US';
   localeListeners.forEach((listener) => listener());
 }
 

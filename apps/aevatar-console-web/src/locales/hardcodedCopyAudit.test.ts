@@ -27,6 +27,22 @@ const jsxTextAttributeNames = new Set([
   'value',
 ]);
 
+const objectUiCopyPropertyNames = new Set([
+  'action',
+  'actor',
+  'detail',
+  'primaryActionLabel',
+  'secondaryActionLabel',
+  'summary',
+  'text',
+]);
+
+const sampleInputPropertyNames = new Set([
+  'inputPreview',
+  'prompt',
+  'sampleInput',
+]);
+
 function collectProductionSourceFiles(
   directory: string,
   result: string[] = [],
@@ -79,6 +95,38 @@ function isObjectPropertyName(node: ts.Node): boolean {
   );
 }
 
+function getPropertyAssignmentName(node: ts.Node): string | null {
+  if (!ts.isPropertyAssignment(node.parent) || node.parent.initializer !== node) {
+    return null;
+  }
+
+  const { name } = node.parent;
+  if (
+    ts.isIdentifier(name) ||
+    ts.isStringLiteral(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+
+  return null;
+}
+
+function isInsideJsonStringifyPayload(node: ts.Node): boolean {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (
+      ts.isCallExpression(parent) &&
+      ts.isPropertyAccessExpression(parent.expression) &&
+      parent.expression.expression.getText() === 'JSON' &&
+      parent.expression.name.text === 'stringify'
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isTypeOnlyLiteral(node: ts.Node): boolean {
   for (let parent = node.parent; parent; parent = parent.parent) {
     if (
@@ -111,8 +159,70 @@ function isUiFacingStringLiteral(
   }
 
   if (ts.isPropertyAssignment(node.parent) && node.parent.initializer === node) {
-    const name = node.parent.name.getText().replace(/^['"]|['"]$/g, '');
-    return jsxTextAttributeNames.has(name);
+    const name = getPropertyAssignmentName(node);
+    if (
+      !name ||
+      sampleInputPropertyNames.has(name) ||
+      isInsideJsonStringifyPayload(node)
+    ) {
+      return false;
+    }
+
+    return jsxTextAttributeNames.has(name) || objectUiCopyPropertyNames.has(name);
+  }
+
+  if (isDirectlyRenderedJsxExpressionLiteral(node)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isDirectlyRenderedJsxExpressionLiteral(node: ts.Node): boolean {
+  let isInJsxExpression = false;
+
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (ts.isJsxAttribute(parent)) {
+      return false;
+    }
+
+    if (ts.isJsxExpression(parent)) {
+      if (ts.isJsxAttribute(parent.parent)) {
+        return false;
+      }
+      isInJsxExpression = true;
+      break;
+    }
+  }
+
+  return isInJsxExpression && isRenderableExpressionPosition(node);
+}
+
+function isRenderableExpressionPosition(node: ts.Node): boolean {
+  const parent = node.parent;
+
+  if (!parent) {
+    return false;
+  }
+
+  if (ts.isParenthesizedExpression(parent) && parent.expression === node) {
+    return isRenderableExpressionPosition(parent);
+  }
+
+  if (ts.isAsExpression(parent) && parent.expression === node) {
+    return isRenderableExpressionPosition(parent);
+  }
+
+  if (ts.isConditionalExpression(parent)) {
+    return parent.whenTrue === node || parent.whenFalse === node;
+  }
+
+  if (ts.isBinaryExpression(parent)) {
+    return (
+      parent.right === node &&
+      (parent.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+    );
   }
 
   return false;
@@ -143,7 +253,7 @@ function isInsideExistingI18nCall(node: ts.Node): boolean {
 
 function isLikelyHardcodedEnglishUiText(
   value: string,
-  type: 'jsxAttribute' | 'jsxText' | 'string',
+  type: 'jsxAttribute' | 'jsxExpression' | 'jsxText' | 'string',
 ): boolean {
   const text = value.replace(/\s+/g, ' ').trim();
 
@@ -155,10 +265,15 @@ function isLikelyHardcodedEnglishUiText(
     return false;
   }
 
+  if (/^[a-z0-9_-]+\.[a-z0-9_-]+$/i.test(text)) {
+    return false;
+  }
+
   if (/^\$?[a-z0-9_./:#?=&%{}-]+$/i.test(text) && !text.includes(' ')) {
     return (
-      type === 'jsxText' &&
-      /^[A-Za-z][A-Za-z-]{2,}$/.test(text) &&
+      (type === 'jsxText' ||
+        (type === 'jsxExpression' && /^[A-Z]/.test(text))) &&
+      /^[A-Za-z][A-Za-z.-]{2,}$/.test(text) &&
       !/^(API|CSS|HTML|ID|JS|JSON|JSX|LLM|SDK|SSE|TS|TSX|URI|URL)$/i.test(text)
     );
   }
@@ -168,6 +283,10 @@ function isLikelyHardcodedEnglishUiText(
   }
 
   if (/^#[0-9a-f]{3,8}$/i.test(text)) {
+    return false;
+  }
+
+  if (/^rgba?\(/i.test(text)) {
     return false;
   }
 
@@ -182,10 +301,50 @@ function collectHardcodedUiText(
   filePath: string,
   shouldReport: (
     text: string,
-    type: 'jsxAttribute' | 'jsxText' | 'string',
+    type: 'jsxAttribute' | 'jsxExpression' | 'jsxText' | 'string',
   ) => boolean,
 ): string[] {
   const sourceText = fs.readFileSync(filePath, 'utf8');
+  return collectHardcodedUiTextFromSource(filePath, sourceText, shouldReport);
+}
+
+function collectHardcodedChineseUiText(filePath: string): string[] {
+  return collectHardcodedUiText(filePath, (text) =>
+    chineseTextPattern.test(text),
+  );
+}
+
+function collectHardcodedEnglishUiText(filePath: string): string[] {
+  return collectHardcodedUiText(filePath, isLikelyHardcodedEnglishUiText);
+}
+
+function collectHardcodedEnglishUiTextWithoutExpressions(filePath: string): string[] {
+  return collectHardcodedUiText(filePath, (text, type) =>
+    type === 'jsxExpression'
+      ? false
+      : isLikelyHardcodedEnglishUiText(text, type),
+  );
+}
+
+function collectHardcodedEnglishUiTextFromSource(
+  sourceText: string,
+  fileName = 'fixture.tsx',
+): string[] {
+  return collectHardcodedUiTextFromSource(
+    fileName,
+    sourceText,
+    isLikelyHardcodedEnglishUiText,
+  );
+}
+
+function collectHardcodedUiTextFromSource(
+  filePath: string,
+  sourceText: string,
+  shouldReport: (
+    text: string,
+    type: 'jsxAttribute' | 'jsxExpression' | 'jsxText' | 'string',
+  ) => boolean,
+): string[] {
   const sourceFile = ts.createSourceFile(
     filePath,
     sourceText,
@@ -229,7 +388,11 @@ function collectHardcodedUiText(
       isUiFacingStringLiteral(node) &&
       shouldReport(
         node.text,
-        ts.isJsxAttribute(node.parent) ? 'jsxAttribute' : 'string',
+        ts.isJsxAttribute(node.parent)
+          ? 'jsxAttribute'
+          : isDirectlyRenderedJsxExpressionLiteral(node)
+            ? 'jsxExpression'
+            : 'string',
       )
     ) {
       addViolation(node, node.text);
@@ -240,7 +403,10 @@ function collectHardcodedUiText(
       ts.isNoSubstitutionTemplateLiteral(node) &&
       !isInsideExistingI18nCall(node) &&
       isUiFacingStringLiteral(node) &&
-      shouldReport(node.text, 'string')
+      shouldReport(
+        node.text,
+        isDirectlyRenderedJsxExpressionLiteral(node) ? 'jsxExpression' : 'string',
+      )
     ) {
       addViolation(node, node.text);
       return;
@@ -250,7 +416,10 @@ function collectHardcodedUiText(
       ts.isTemplateExpression(node) &&
       !isInsideExistingI18nCall(node) &&
       isUiFacingStringLiteral(node) &&
-      shouldReport(getTemplateStaticText(node), 'string')
+      shouldReport(
+        getTemplateStaticText(node),
+        isDirectlyRenderedJsxExpressionLiteral(node) ? 'jsxExpression' : 'string',
+      )
     ) {
       addViolation(node, node.getText(sourceFile));
       return;
@@ -261,16 +430,6 @@ function collectHardcodedUiText(
 
   visit(sourceFile);
   return violations;
-}
-
-function collectHardcodedChineseUiText(filePath: string): string[] {
-  return collectHardcodedUiText(filePath, (text) =>
-    chineseTextPattern.test(text),
-  );
-}
-
-function collectHardcodedEnglishUiText(filePath: string): string[] {
-  return collectHardcodedUiText(filePath, isLikelyHardcodedEnglishUiText);
 }
 
 function isFunctionLike(node: ts.Node): boolean {
@@ -389,12 +548,32 @@ describe('console-wide i18n migration guard', () => {
     expect(violations).toEqual([]);
   });
 
-  it('keeps production UI copy out of hardcoded English literals', () => {
+  it('keeps production UI copy out of hardcoded English JSX text and UI properties', () => {
     const violations = collectProductionSourceFiles(sourceRoot).flatMap(
-      collectHardcodedEnglishUiText,
+      collectHardcodedEnglishUiTextWithoutExpressions,
     );
 
     expect(violations).toEqual([]);
+  });
+
+  it('detects hardcoded English copy inside directly rendered JSX expressions', () => {
+    const violations = collectHardcodedEnglishUiTextFromSource(`
+      const Demo = ({ description, loading, row }) => (
+        <section>
+          <p>{description || "No detail"}</p>
+          <button>{loading ? "Sending..." : "Send Signal"}</button>
+          <span>{row.message ?? "No message"}</span>
+          <span>{t("demo.already.localized", "Already localized")}</span>
+        </section>
+      );
+    `);
+
+    expect(violations.map((item) => item.replace(/^.*? /, ''))).toEqual([
+      'No detail',
+      'Sending...',
+      'Send Signal',
+      'No message',
+    ]);
   });
 
   it('keeps runtime-formatted copy out of static initialization paths', () => {

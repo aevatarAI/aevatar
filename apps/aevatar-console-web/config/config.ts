@@ -118,7 +118,7 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
     antd: true,
     baseNavigator: false,
     baseSeparator: '-',
-    default: 'zh-CN',
+    default: 'en-US',
     title: false,
     useLocalStorage: true,
   },

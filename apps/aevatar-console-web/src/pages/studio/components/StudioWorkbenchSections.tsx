@@ -428,10 +428,36 @@ function StudioCatalogEmptyPanel(props: {
   );
 }
 
+function formatObserveNotAvailable(): string {
+  return t("pages.studio.studioworkbenchsections.not.available", "n/a");
+}
+
+function formatObserveCoverageLogs(coverage: string, count: number): string {
+  return t(
+    "pages.studio.studioworkbenchsections.coverage.logs",
+    "{coverage} · {count} logs",
+    {
+      count,
+      coverage,
+    },
+  );
+}
+
+function formatObserveCoverageReplies(coverage: string, count: number): string {
+  return t(
+    "pages.studio.studioworkbenchsections.coverage.replies",
+    "{coverage} · {count} replies",
+    {
+      count,
+      coverage,
+    },
+  );
+}
+
 function trimObserveText(value: string | null | undefined, limit = 84): string {
   const trimmed = String(value || '').trim();
   if (!trimmed) {
-    return 'n/a';
+    return formatObserveNotAvailable();
   }
 
   return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
@@ -473,7 +499,7 @@ function readObserveStepCoverage(
       : fallbackTotal ?? null;
 
   if (completedSteps === null && totalSteps === null) {
-    return 'n/a';
+    return formatObserveNotAvailable();
   }
 
   return `${completedSteps ?? 0}/${totalSteps ?? 0}`;
@@ -484,7 +510,7 @@ function resolveObserveDelta(input: {
   baseline: string;
   regressionWhen?: boolean;
 }): ObserveCompareRow['delta'] {
-  if (!input.baseline || input.baseline === 'n/a') {
+  if (!input.baseline || input.baseline === formatObserveNotAvailable()) {
     return 'current-only';
   }
 
@@ -508,14 +534,14 @@ function buildObserveCompareRows(input: {
     ? formatDurationBetween(
         baselineExecution.startedAtUtc,
         baselineExecution.completedAtUtc,
-      ) || 'n/a'
-    : 'n/a';
+      ) || formatObserveNotAvailable()
+    : formatObserveNotAvailable();
   const currentDurationLabel = selectedExecution
     ? formatDurationBetween(
         selectedExecution.startedAtUtc,
         selectedExecution.completedAtUtc,
-      ) || 'n/a'
-    : 'n/a';
+      ) || formatObserveNotAvailable()
+    : formatObserveNotAvailable();
 
   const compare = (
     label: string,
@@ -531,15 +557,30 @@ function buildObserveCompareRows(input: {
 
   if (!selectedExecution) {
     return [
-      compare('status', 'no run selected', 'n/a', 'current-only'),
-      compare('duration', 'n/a', 'n/a', 'current-only'),
-      compare('actor', 'n/a', 'n/a', 'current-only'),
+      compare(
+        t("pages.studio.studioworkbenchsections.status", "status"),
+        t("pages.studio.studioworkbenchsections.no.run.selected.lower", "no run selected"),
+        formatObserveNotAvailable(),
+        'current-only',
+      ),
+      compare(
+        t("pages.studio.studioworkbenchsections.duration", "duration"),
+        formatObserveNotAvailable(),
+        formatObserveNotAvailable(),
+        'current-only',
+      ),
+      compare(
+        t("pages.studio.studioworkbenchsections.actor.lower", "actor"),
+        formatObserveNotAvailable(),
+        formatObserveNotAvailable(),
+        'current-only',
+      ),
     ];
   }
 
   const rows: ObserveCompareRow[] = [
     compare(
-      'status',
+      t("pages.studio.studioworkbenchsections.status", "status"),
       trimObserveText(selectedExecution.status),
       trimObserveText(baselineExecution?.status),
       resolveObserveDelta({
@@ -551,7 +592,7 @@ function buildObserveCompareRows(input: {
       }),
     ),
     compare(
-      'revision',
+      t("pages.studio.studioworkbenchsections.revision.lower", "revision"),
       trimObserveText(selectedExecution.revisionId),
       trimObserveText(baselineExecution?.revisionId),
       resolveObserveDelta({
@@ -560,36 +601,36 @@ function buildObserveCompareRows(input: {
       }),
     ),
     compare(
-      'state version',
+      t("pages.studio.studioworkbenchsections.state.version.lower", "state version"),
       trimObserveText(
         selectedExecution.stateVersion !== null &&
           selectedExecution.stateVersion !== undefined
           ? `v${selectedExecution.stateVersion}`
-          : 'n/a',
+          : formatObserveNotAvailable(),
       ),
       trimObserveText(
         baselineExecution?.stateVersion !== null &&
           baselineExecution?.stateVersion !== undefined
           ? `v${baselineExecution.stateVersion}`
-          : 'n/a',
+          : formatObserveNotAvailable(),
       ),
       resolveObserveDelta({
         current: trimObserveText(
           selectedExecution.stateVersion !== null &&
             selectedExecution.stateVersion !== undefined
             ? `v${selectedExecution.stateVersion}`
-            : 'n/a',
+            : formatObserveNotAvailable(),
         ),
         baseline: trimObserveText(
           baselineExecution?.stateVersion !== null &&
             baselineExecution?.stateVersion !== undefined
             ? `v${baselineExecution.stateVersion}`
-            : 'n/a',
+            : formatObserveNotAvailable(),
         ),
       }),
     ),
     compare(
-      'duration',
+      t("pages.studio.studioworkbenchsections.duration", "duration"),
       currentDurationLabel,
       baselineDurationLabel,
       resolveObserveDelta({
@@ -600,30 +641,32 @@ function buildObserveCompareRows(input: {
       }),
     ),
     compare(
-      'steps',
-      `${readObserveStepCoverage(
-        selectedExecution,
-        executedStepCount,
-      )} · ${traceLogCount} logs`,
+      t("pages.studio.studioworkbenchsections.steps.lower", "steps"),
+      formatObserveCoverageLogs(
+        readObserveStepCoverage(selectedExecution, executedStepCount),
+        traceLogCount,
+      ),
       baselineExecution
-        ? `${readObserveStepCoverage(baselineExecution)} · ${
-            baselineExecution.roleReplyCount ?? 0
-          } replies`
-        : 'n/a',
+        ? formatObserveCoverageReplies(
+            readObserveStepCoverage(baselineExecution),
+            baselineExecution.roleReplyCount ?? 0,
+          )
+        : formatObserveNotAvailable(),
       resolveObserveDelta({
-        current: `${readObserveStepCoverage(
-          selectedExecution,
-          executedStepCount,
-        )} · ${traceLogCount} logs`,
+        current: formatObserveCoverageLogs(
+          readObserveStepCoverage(selectedExecution, executedStepCount),
+          traceLogCount,
+        ),
         baseline: baselineExecution
-          ? `${readObserveStepCoverage(baselineExecution)} · ${
-              baselineExecution.roleReplyCount ?? 0
-            } replies`
-          : 'n/a',
+          ? formatObserveCoverageReplies(
+              readObserveStepCoverage(baselineExecution),
+              baselineExecution.roleReplyCount ?? 0,
+            )
+          : formatObserveNotAvailable(),
       }),
     ),
     compare(
-      'actor',
+      t("pages.studio.studioworkbenchsections.actor.lower", "actor"),
       trimObserveText(selectedExecution.actorId),
       trimObserveText(baselineExecution?.actorId),
       resolveObserveDelta({
@@ -632,7 +675,7 @@ function buildObserveCompareRows(input: {
       }),
     ),
     compare(
-      'output',
+      t("pages.studio.studioworkbenchsections.output", "output"),
       trimObserveText(selectedExecution.output),
       trimObserveText(baselineExecution?.output),
       resolveObserveDelta({
@@ -645,9 +688,15 @@ function buildObserveCompareRows(input: {
   if (selectedExecution.error || baselineExecution?.error) {
     rows.push(
       compare(
-        'error',
-        trimObserveText(selectedExecution.error || 'none'),
-        trimObserveText(baselineExecution?.error || 'none'),
+        t("pages.studio.studioworkbenchsections.error.lower", "error"),
+        trimObserveText(
+          selectedExecution.error ||
+            t("pages.studio.studioworkbenchsections.none", "none"),
+        ),
+        trimObserveText(
+          baselineExecution?.error ||
+            t("pages.studio.studioworkbenchsections.none", "none"),
+        ),
         baselineExecution
           ? selectedExecution.error === baselineExecution.error
             ? 'same'
@@ -688,20 +737,27 @@ function buildObserveHealthItems(input: {
   const auditReady = selectedExecution?.auditSource === 'run-audit';
   const humanGateValue = activeExecutionInteraction
     ? activeExecutionInteraction.kind === 'human_approval'
-      ? 'awaiting approval'
+      ? t("pages.studio.studioworkbenchsections.awaiting.approval", "awaiting approval")
       : activeExecutionInteraction.kind === 'wait_signal'
-        ? 'awaiting signal'
-        : 'awaiting input'
-    : 'clear';
+        ? t("pages.studio.studioworkbenchsections.awaiting.signal", "awaiting signal")
+        : t("pages.studio.studioworkbenchsections.awaiting.input", "awaiting input")
+    : t("pages.studio.studioworkbenchsections.clear", "clear");
 
   return [
     {
-      label: 'runtime',
+      label: t("pages.studio.studioworkbenchsections.runtime", "runtime"),
       note: selectedExecution
-        ? `Selected run ${trimObserveText(selectedExecution.executionId)} · updated ${formatDateTime(
-            selectedExecution.updatedAtUtc || selectedExecution.startedAtUtc,
-          )}`
-        : 'No workflow run selected yet.',
+        ? t(
+            "pages.studio.studioworkbenchsections.selected.run.updated",
+            "Selected run {executionId} · updated {updatedAt}",
+            {
+              executionId: trimObserveText(selectedExecution.executionId),
+              updatedAt: formatDateTime(
+                selectedExecution.updatedAtUtc || selectedExecution.startedAtUtc,
+              ),
+            },
+          )
+        : t("pages.studio.studioworkbenchsections.no.workflow.run.selected.yet", "No workflow run selected yet."),
       status: selectedExecution
         ? runtimeStatus.includes('fail')
           ? 'blocked'
@@ -711,21 +767,33 @@ function buildObserveHealthItems(input: {
             ? 'active'
             : 'pending'
         : 'pending',
-      value: selectedExecution ? trimObserveText(selectedExecution.status) : 'idle',
+      value: selectedExecution
+        ? trimObserveText(selectedExecution.status)
+        : t("pages.studio.studioworkbenchsections.idle", "idle"),
     },
     {
       label: t("pages.studio.studioworkbenchsections.recent.runs", "recent runs"),
-      note: `${failedCount} failed, ${stoppedCount} stopped in the latest ${
-        recentExecutions.length || 0
-      } runs.`,
+      note: t(
+        "pages.studio.studioworkbenchsections.recent.run.failures",
+        "{failedCount} failed, {stoppedCount} stopped in the latest {runCount} runs.",
+        {
+          failedCount,
+          runCount: recentExecutions.length || 0,
+          stoppedCount,
+        },
+      ),
       status: failedCount > 0 || stoppedCount > 0 ? 'warning' : 'active',
-      value: recentExecutions.length ? `${recentExecutions.length} tracked` : 'warming up',
+      value: recentExecutions.length
+        ? t("pages.studio.studioworkbenchsections.tracked.count", "{count} tracked", {
+            count: recentExecutions.length,
+          })
+        : t("pages.studio.studioworkbenchsections.warming.up", "warming up"),
     },
     {
       label: t("pages.studio.studioworkbenchsections.human.gate", "human gate"),
       note: activeExecutionInteraction
         ? activeExecutionInteraction.prompt
-        : 'No human approval or input is currently blocking this run.',
+        : t("pages.studio.studioworkbenchsections.no.human.approval.or.input", "No human approval or input is currently blocking this run."),
       status: activeExecutionInteraction ? 'warning' : 'active',
       value: humanGateValue,
     },
@@ -734,39 +802,56 @@ function buildObserveHealthItems(input: {
       note:
         selectedExecution
           ? auditReady
-            ? `Run audit updated ${formatDateTime(
-                selectedExecution.auditUpdatedAtUtc || selectedExecution.updatedAtUtc,
-              )}.`
-            : 'Only the run summary is available so far.'
-          : 'No run selected yet.',
+            ? t("pages.studio.studioworkbenchsections.run.audit.updated", "Run audit updated {updatedAt}.", {
+                updatedAt: formatDateTime(
+                  selectedExecution.auditUpdatedAtUtc ||
+                    selectedExecution.updatedAtUtc,
+                ),
+              })
+            : t("pages.studio.studioworkbenchsections.only.run.summary.available", "Only the run summary is available so far.")
+          : t("pages.studio.studioworkbenchsections.no.run.selected.yet", "No run selected yet."),
       status: selectedExecution ? (auditReady ? 'active' : 'pending') : 'pending',
-      value: auditReady ? 'run audit ready' : 'summary only',
+      value: auditReady
+        ? t("pages.studio.studioworkbenchsections.run.audit.ready", "run audit ready")
+        : t("pages.studio.studioworkbenchsections.summary.only", "summary only"),
     },
     {
-      label: 'coverage',
+      label: t("pages.studio.studioworkbenchsections.coverage", "coverage"),
       note:
         selectedExecution
-          ? `${selectedCoverage} steps completed · ${
-              selectedExecution.roleReplyCount ?? 0
-            } role replies · ${traceLogCount} trace logs.`
-          : 'No run selected yet.',
+          ? t(
+              "pages.studio.studioworkbenchsections.coverage.detail",
+              "{coverage} steps completed · {replyCount} role replies · {logCount} trace logs.",
+              {
+                coverage: selectedCoverage,
+                logCount: traceLogCount,
+                replyCount: selectedExecution.roleReplyCount ?? 0,
+              },
+            )
+          : t("pages.studio.studioworkbenchsections.no.run.selected.yet", "No run selected yet."),
       status:
         selectedExecution && traceLogCount > 0
           ? 'active'
           : selectedExecution
             ? 'warning'
             : 'pending',
-      value: selectedExecution ? selectedCoverage : 'n/a',
+      value: selectedExecution ? selectedCoverage : formatObserveNotAvailable(),
     },
     {
-      label: 'baseline',
+      label: t("pages.studio.studioworkbenchsections.baseline", "baseline"),
       note: baselineExecution
-        ? `Comparing against ${trimObserveText(
-            baselineExecution.executionId,
-          )} from the same member service.`
-        : 'Observe becomes more trustworthy after another member run lands and a baseline exists.',
+        ? t(
+            "pages.studio.studioworkbenchsections.comparing.against.baseline",
+            "Comparing against {executionId} from the same member service.",
+            {
+              executionId: trimObserveText(baselineExecution.executionId),
+            },
+          )
+        : t("pages.studio.studioworkbenchsections.observe.trustworthy.after.baseline", "Observe becomes more trustworthy after another member run lands and a baseline exists."),
       status: baselineExecution ? 'active' : 'pending',
-      value: baselineExecution ? 'available' : 'warming up',
+      value: baselineExecution
+        ? t("pages.studio.studioworkbenchsections.available", "available")
+        : t("pages.studio.studioworkbenchsections.warming.up", "warming up"),
     },
   ];
 }
@@ -1635,22 +1720,28 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             </Tag>
             <Tag color={selectedExecutionDetail?.auditSource === 'run-audit' ? 'green' : 'default'}>
               {selectedExecutionDetail?.auditSource === 'run-audit'
-                ? 'audit ready'
-                : 'summary only'}
+                ? t("pages.studio.studioworkbenchsections.audit.ready", "audit ready")
+                : t("pages.studio.studioworkbenchsections.summary.only", "summary only")}
             </Tag>
             <Tag color={baselineExecution ? 'blue' : 'default'}>
-              {baselineExecution ? 'baseline ready' : 'baseline warming'}
+              {baselineExecution
+                ? t("pages.studio.studioworkbenchsections.baseline.ready", "baseline ready")
+                : t("pages.studio.studioworkbenchsections.baseline.warming", "baseline warming")}
             </Tag>
           </Space>
           <h2 style={observeRunTitleStyle}>
-            {selectedMemberLabel || activeWorkflowName || draftWorkflowName || 'Current member'}
+            {selectedMemberLabel ||
+              activeWorkflowName ||
+              draftWorkflowName ||
+              t("pages.studio.studioworkbenchsections.current.member", "Current member")}
           </h2>
           <p style={observeRunSubtitleStyle}>
             {currentImplementationLabel ||
               activeWorkflowName ||
               draftWorkflowName ||
-              'Current implementation'}{' '}
-            · {selectedExecutionDetail?.executionId || 'No run selected'}
+              t("pages.studio.studioworkbenchsections.current.implementation", "Current implementation")}{' '}
+            · {selectedExecutionDetail?.executionId ||
+              t("pages.studio.studioworkbenchsections.no.run.selected", "No run selected")}
             {executionDurationLabel ? ` · ${executionDurationLabel}` : ''}
           </p>
           {executionPromptPreview ? (
@@ -1659,7 +1750,9 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               style={{ margin: 0 }}
               type="secondary"
             >
-              Input: {executionPromptPreview}
+              {t("pages.studio.studioworkbenchsections.input.preview", "Input: {preview}", {
+                preview: executionPromptPreview,
+              })}
             </Typography.Paragraph>
           ) : null}
         </div>
@@ -1687,8 +1780,13 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             </div>
             <div style={observeRunMetricStyle}>
               <Typography.Text type="secondary">{t("pages.studio.studioworkbenchsections.actor", "Actor")}</Typography.Text>
-              <Typography.Text strong ellipsis={{ tooltip: selectedExecutionActorId || 'n/a' }}>
-                {selectedExecutionActorId || 'n/a'}
+              <Typography.Text
+                strong
+                ellipsis={{
+                  tooltip: selectedExecutionActorId || formatObserveNotAvailable(),
+                }}
+              >
+                {selectedExecutionActorId || formatObserveNotAvailable()}
               </Typography.Text>
             </div>
             <div style={observeRunMetricStyle}>
@@ -1697,7 +1795,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 {selectedExecutionDetail?.stateVersion !== null &&
                 selectedExecutionDetail?.stateVersion !== undefined
                   ? `v${selectedExecutionDetail.stateVersion}`
-                  : 'n/a'}
+                  : formatObserveNotAvailable()}
               </Typography.Text>
             </div>
             <div style={observeRunMetricStyle}>
@@ -1705,7 +1803,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               <Typography.Text strong>
                 {selectedExecutionDetail?.updatedAtUtc
                   ? formatDateTime(selectedExecutionDetail.updatedAtUtc)
-                  : 'n/a'}
+                  : formatObserveNotAvailable()}
               </Typography.Text>
             </div>
           </div>
@@ -1809,7 +1907,11 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           titleHelp={t("pages.studio.studioworkbenchsections.compare.the.selected.run.with", "Compare the selected run with the nearest previous run from this member.")}
           extra={
             baselineExecution ? (
-              <Tag>{`${baselineExecution.executionId} baseline`}</Tag>
+              <Tag>
+                {t("pages.studio.studioworkbenchsections.baseline.execution.label", "{executionId} baseline", {
+                  executionId: baselineExecution.executionId,
+                })}
+              </Tag>
             ) : (
               <Tag>{t("pages.studio.studioworkbenchsections.no.baseline.yet", "no baseline yet")}</Tag>
             )
@@ -1922,37 +2024,52 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
             </div>
             <Space wrap size={[8, 8]}>
               <Tag>
-                {t("pages.studio.studioworkbenchsections.service", "Service")}{selectedExecutionDetail?.serviceId || 'n/a'}
+                {t("pages.studio.studioworkbenchsections.service", "Service")}{selectedExecutionDetail?.serviceId ||
+                  formatObserveNotAvailable()}
               </Tag>
               <Tag>
-                {t("pages.studio.studioworkbenchsections.revision", "Revision")}{selectedExecutionDetail?.revisionId || 'n/a'}
+                {t("pages.studio.studioworkbenchsections.revision", "Revision")}{selectedExecutionDetail?.revisionId ||
+                  formatObserveNotAvailable()}
               </Tag>
               <Tag>
-                {t("pages.studio.studioworkbenchsections.definition", "Definition")}{selectedExecutionDetail?.definitionActorId || 'n/a'}
+                {t("pages.studio.studioworkbenchsections.definition", "Definition")}{selectedExecutionDetail?.definitionActorId ||
+                  formatObserveNotAvailable()}
               </Tag>
               <Tag>
-                {t("pages.studio.studioworkbenchsections.last.event", "Last event")}{selectedExecutionDetail?.lastEventId || 'n/a'}
+                {t("pages.studio.studioworkbenchsections.last.event", "Last event")}{selectedExecutionDetail?.lastEventId ||
+                  formatObserveNotAvailable()}
               </Tag>
               <Tag>
-                {t("pages.studio.studioworkbenchsections.workspace", "Workspace")}{activeDirectoryLabel || 'Workspace'}
+                {t("pages.studio.studioworkbenchsections.workspace", "Workspace")}{activeDirectoryLabel ||
+                  t("pages.studio.studioworkbenchsections.workspace", "Workspace")}
               </Tag>
             </Space>
             <Typography.Text type="secondary">
               {selectedExecutionDetail
-                ? `Selected facts come from service ${trimObserveText(
-                    selectedExecutionDetail.serviceId,
-                  )}, revision ${trimObserveText(
-                    selectedExecutionDetail.revisionId,
-                  )}, actor ${trimObserveText(selectedExecutionDetail.actorId)}.`
+                ? t(
+                    "pages.studio.studioworkbenchsections.selected.facts.come.from",
+                    "Selected facts come from service {serviceId}, revision {revisionId}, actor {actorId}.",
+                    {
+                      actorId: trimObserveText(selectedExecutionDetail.actorId),
+                      revisionId: trimObserveText(selectedExecutionDetail.revisionId),
+                      serviceId: trimObserveText(selectedExecutionDetail.serviceId),
+                    },
+                  )
                 : activeWorkflowDescription ||
                   t("pages.studio.studioworkbenchsections.the.current.observe.page", "The current Observe page only displays the running facts of the current member; contract and release information remain in Bind.")}
             </Typography.Text>
             <Typography.Text type="secondary">
               {baselineExecution
-                ? `Baseline: ${baselineExecution.executionId}, revision ${trimObserveText(
-                    baselineExecution.revisionId,
-                  )}, started ${formatDateTime(baselineExecution.startedAtUtc)}.`
-                : 'Observe can compare more meaningfully after another run lands.'}
+                ? t(
+                    "pages.studio.studioworkbenchsections.baseline.detail",
+                    "Baseline: {executionId}, revision {revisionId}, started {startedAt}.",
+                    {
+                      executionId: baselineExecution.executionId,
+                      revisionId: trimObserveText(baselineExecution.revisionId),
+                      startedAt: formatDateTime(baselineExecution.startedAtUtc),
+                    },
+                  )
+                : t("pages.studio.studioworkbenchsections.observe.can.compare.more", "Observe can compare more meaningfully after another run lands.")}
             </Typography.Text>
           </div>
         </AevatarPanel>

@@ -8,7 +8,7 @@ import { layout } from "./app";
 
 describe("layout menu collapse behavior", () => {
   beforeEach(() => {
-    setLocale("zh-CN", false);
+    setLocale("en-US", false);
     window.history.replaceState({}, "", "/teams");
   });
 
@@ -116,11 +116,11 @@ describe("layout menu collapse behavior", () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "切换语言" }));
-    fireEvent.click(await screen.findByText("English"));
+    fireEvent.click(screen.getByRole("button", { name: "Switch language" }));
+    fireEvent.click(await screen.findByText("中文"));
 
     await waitFor(() => {
-      expect(getLocale()).toBe("en-US");
+      expect(getLocale()).toBe("zh-CN");
     });
   });
 
@@ -146,16 +146,16 @@ describe("layout menu collapse behavior", () => {
       ),
     );
 
-    expect(screen.getByText("我的 AI 团队")).toBeTruthy();
+    expect(screen.getByText("My AI teams")).toBeTruthy();
 
     act(() => {
-      setLocale("en-US", false);
+      setLocale("zh-CN", false);
     });
 
     await waitFor(() => {
-      expect(screen.getByText("My AI teams")).toBeTruthy();
+      expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     });
-    expect(screen.queryByText("我的 AI 团队")).toBeNull();
+    expect(screen.queryByText("My AI teams")).toBeNull();
   });
 });
 

@@ -389,8 +389,20 @@ const WorkflowsPage: React.FC = () => {
         width: "24%",
         render: (_value, role) => (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <Typography.Text>{role.provider || "No provider"}</Typography.Text>
-            <Typography.Text type="secondary">{role.model || "No model"}</Typography.Text>
+            <Typography.Text>
+              {role.provider ||
+                intl.formatMessage({
+                  id: "pages.workflows.index.no.provider",
+                  defaultMessage: "No provider",
+                })}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {role.model ||
+                intl.formatMessage({
+                  id: "pages.workflows.index.no.model",
+                  defaultMessage: "No model",
+                })}
+            </Typography.Text>
           </div>
         ),
       },
@@ -471,8 +483,17 @@ const WorkflowsPage: React.FC = () => {
             {step.next
               ? `Next: ${step.next}`
               : step.branchCount > 0
-                ? `${step.branchCount} branch routes`
-                : "No explicit next step"}
+                ? intl.formatMessage(
+                    {
+                      id: "pages.workflows.index.branch.routes",
+                      defaultMessage: "{count} branch routes",
+                    },
+                    { count: step.branchCount },
+                  )
+                : intl.formatMessage({
+                    id: "pages.workflows.index.no.explicit.next.step",
+                    defaultMessage: "No explicit next step",
+                  })}
           </Typography.Text>
         ),
       },
@@ -760,7 +781,10 @@ const WorkflowsPage: React.FC = () => {
                           {t("pages.workflows.index.description", "Description")}</Typography.Text>
                         <Typography.Text>
                           {selectedWorkflowDetail.catalog.description ||
-                            "No description provided."}
+                            intl.formatMessage({
+                              id: "pages.workflows.index.no.description.provided",
+                              defaultMessage: "No description provided.",
+                            })}
                         </Typography.Text>
                       </div>
                       <div

@@ -281,7 +281,15 @@ const ExplorerTree: React.FC<ExplorerTreeProps> = ({
           {t("pages.studio.explorer.explorertree.resolve.project.scope.to.browse", "Resolve a project scope to browse explorer storage.")}</Typography.Text>
       ) : filteredManifest.length === 0 ? (
         <Typography.Text style={{ ...treeMetaStyle, paddingInline: 12 }}>
-          {manifest.length === 0 ? "No explorer files found." : "No explorer files matched."}
+          {manifest.length === 0
+            ? t(
+                "pages.studio.explorer.explorertree.no.explorer.files.found",
+                "No explorer files found.",
+              )
+            : t(
+                "pages.studio.explorer.explorertree.no.explorer.files.matched",
+                "No explorer files matched.",
+              )}
         </Typography.Text>
       ) : (
         tree.map((node) => renderNode(node))

@@ -258,7 +258,10 @@ function buildScriptWorkspaceItems(
       secondaryMetaLabel: "Updated",
       secondaryMetaValue: formatDateTime(script.updatedAt),
       subtitle: t("pages.scopes.assets.script.capability", "Script capability"),
-      summary: "Governed script asset ready for Studio and catalog inspection.",
+      summary: t(
+        "pages.scopes.assets.governed.script.asset.ready",
+        "Governed script asset ready for Studio and catalog inspection.",
+      ),
       tertiaryMetaLabel: "Source hash",
       tertiaryMetaValue: script.activeSourceHash || "n/a",
       title: script.scriptId,

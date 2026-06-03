@@ -603,13 +603,26 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                   revision.implementationKind,
                 )}
               />
-              {revision.isDefaultServing ? <AevatarStatusTag domain="governance" status="active" label="default" /> : null}
-              {revision.isActiveServing ? <AevatarStatusTag domain="run" status="running" label="active" /> : null}
+              {revision.isDefaultServing ? (
+                <AevatarStatusTag
+                  domain="governance"
+                  status="active"
+                  label={t("pages.scopes.scopeserviceruntimeworkbench.default", "default")}
+                />
+              ) : null}
+              {revision.isActiveServing ? (
+                <AevatarStatusTag
+                  domain="run"
+                  status="running"
+                  label={t("pages.scopes.scopeserviceruntimeworkbench.active", "active")}
+                />
+              ) : null}
               {revision.retiredAt ? <AevatarStatusTag domain="governance" status="retired" /> : null}
             </Space>
             <Typography.Text type="secondary">
               {describeStudioMemberBindingRevisionTarget(revision)} ·{" "}
-              {describeStudioMemberBindingRevisionContext(revision) || "No detail"}
+              {describeStudioMemberBindingRevisionContext(revision) ||
+                t("pages.scopes.scopeserviceruntimeworkbench.no.detail", "No detail")}
             </Typography.Text>
             <Typography.Text type="secondary">
               {t("pages.scopes.scopeserviceruntimeworkbench.serving", "Serving")}{revision.servingState || revision.status} {t("pages.scopes.scopeserviceruntimeworkbench.published", "· Published")}{" "}
@@ -621,7 +634,9 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 onClick={() => setSelectedRevisionId(revision.revisionId)}
                 type={isSelected ? "primary" : "default"}
               >
-                {isSelected ? "Inspecting" : "Inspect"}
+                {isSelected
+                  ? t("pages.scopes.scopeserviceruntimeworkbench.inspecting", "Inspecting")
+                  : t("pages.scopes.scopeserviceruntimeworkbench.inspect", "Inspect")}
               </Button>
               <Button
                 danger
@@ -785,7 +800,11 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                       />
                     </Space>
                     <Typography.Text type="secondary">
-                      {endpoint.description || "No endpoint description."}
+                      {endpoint.description ||
+                        t(
+                          "pages.scopes.scopeserviceruntimeworkbench.no.endpoint.description",
+                          "No endpoint description."
+                        )}
                     </Typography.Text>
                     <Typography.Text type="secondary">
                       {t("pages.scopes.scopeserviceruntimeworkbench.request", "Request")}{endpoint.requestTypeUrl || "n/a"}
@@ -805,8 +824,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                         }
                       >
                         {endpoint.endpointId === resolvedSelectedEndpointId
-                          ? "Selected"
-                          : "Use endpoint"}
+                          ? t("pages.scopes.scopeserviceruntimeworkbench.selected", "Selected")
+                          : t("pages.scopes.scopeserviceruntimeworkbench.use.endpoint", "Use endpoint")}
                       </Button>
                     </Space>
                   </div>
@@ -1062,7 +1081,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                                 {event.stage || event.eventType || "event"}
                               </Typography.Text>
                               <Typography.Text type="secondary">
-                                {event.message || "No message"}
+                                {event.message ||
+                                  t("pages.scopes.scopeserviceruntimeworkbench.no.message", "No message")}
                               </Typography.Text>
                               <Typography.Text type="secondary">
                                 {formatDateTime(event.timestamp)}
@@ -1106,7 +1126,12 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                                 {step.targetRole || "unassigned"}
                               </Typography.Text>
                               <Typography.Text type="secondary">
-                                {step.outputPreview || step.error || "No step preview."}
+                                {step.outputPreview ||
+                                  step.error ||
+                                  t(
+                                    "pages.scopes.scopeserviceruntimeworkbench.no.step.preview",
+                                    "No step preview."
+                                  )}
                               </Typography.Text>
                             </div>
                           ))}
@@ -1180,8 +1205,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                       }
                     >
                       {service.serviceId === resolvedSelectedServiceId
-                        ? "Selected"
-                        : "Inspect service"}
+                        ? t("pages.scopes.scopeserviceruntimeworkbench.selected", "Selected")
+                        : t("pages.scopes.scopeserviceruntimeworkbench.inspect.service", "Inspect service")}
                     </Button>
                     <Button
                       icon={<LinkOutlined />}
@@ -1447,21 +1472,40 @@ const RunSummaryCard: React.FC<{
       <AevatarStatusTag
         domain="run"
         status={run.completionStatus || "unknown"}
-        label={run.completionStatus || "unknown"}
+        label={
+          run.completionStatus ||
+          t("pages.scopes.scopeserviceruntimeworkbench.unknown", "unknown")
+        }
       />
     </Space>
     <Typography.Text type="secondary">
-      {t("pages.scopes.scopeserviceruntimeworkbench.workflow", "Workflow")}{run.workflowName || "n/a"} {t("pages.scopes.scopeserviceruntimeworkbench.revision", "· Revision")}{run.revisionId || "n/a"}
+      {t("pages.scopes.scopeserviceruntimeworkbench.workflow", "Workflow")}
+      {run.workflowName ||
+        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}{" "}
+      {t("pages.scopes.scopeserviceruntimeworkbench.revision", "· Revision")}
+      {run.revisionId ||
+        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}
     </Typography.Text>
     <Typography.Text type="secondary">
-      {t("pages.scopes.scopeserviceruntimeworkbench.updated", "Updated")}{formatDateTime(run.lastUpdatedAt)} {t("pages.scopes.scopeserviceruntimeworkbench.actor", "· Actor")}{run.actorId || "n/a"}
+      {t("pages.scopes.scopeserviceruntimeworkbench.updated", "Updated")}
+      {formatDateTime(run.lastUpdatedAt)}{" "}
+      {t("pages.scopes.scopeserviceruntimeworkbench.actor", "· Actor")}
+      {run.actorId ||
+        t("pages.scopes.scopeserviceruntimeworkbench.not.available", "n/a")}
     </Typography.Text>
     <Typography.Text type="secondary">
-      {run.lastError || run.lastOutput || "No output snapshot has been captured yet."}
+      {run.lastError ||
+        run.lastOutput ||
+        t(
+          "pages.scopes.scopeserviceruntimeworkbench.no.output.snapshot.captured",
+          "No output snapshot has been captured yet."
+        )}
     </Typography.Text>
     <Space wrap>
       <Button icon={<EyeOutlined />} onClick={onInspectAudit} type={selected ? "primary" : "default"}>
-        {selected ? "Inspecting" : "Load audit"}
+        {selected
+          ? t("pages.scopes.scopeserviceruntimeworkbench.inspecting", "Inspecting")
+          : t("pages.scopes.scopeserviceruntimeworkbench.load.audit", "Load audit")}
       </Button>
       <Button icon={<BranchesOutlined />} onClick={onOpenExplorer}>
         {t("pages.scopes.scopeserviceruntimeworkbench.runtime", "Runtime")}</Button>

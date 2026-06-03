@@ -205,7 +205,8 @@ const StudioMemberInvokeHistoryPanel: React.FC<
               >
                 <div style={historyCardHeaderStyle}>
                   <span style={historyCardTitleStyle}>
-                    {trimPreview(entry.prompt || entry.summary, 72) || 'Run'}
+                    {trimPreview(entry.prompt || entry.summary, 72) ||
+                      t("pages.studio.studiomemberinvokehistorypanel.run", "Run")}
                   </span>
                   <AevatarStatusTag
                     domain="run"

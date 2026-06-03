@@ -1113,7 +1113,9 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
                             )
                           }
                         >
-                          {expanded ? 'Collapse' : 'Edit'}
+                          {expanded
+                            ? t("pages.studio.studioinspectorpane.collapse", "Collapse")
+                            : t("pages.studio.studioinspectorpane.edit", "Edit")}
                         </Button>
                         <Button
                           danger
@@ -1310,7 +1312,8 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
             ellipsis={{ rows: 3, expandable: true, symbol: 'more' }}
             style={{ margin: '8px 0 0', whiteSpace: 'pre-wrap' }}
           >
-            {activeWorkflowDescription || 'No description'}
+            {activeWorkflowDescription ||
+              t("pages.studio.studioinspectorpane.no.description", "No description")}
           </Typography.Paragraph>
         </div>
       </div>

@@ -197,10 +197,19 @@ export const ChatOnboardingGuide: React.FC<ChatOnboardingGuideProps> = ({
                     ) : null}
                   </div>
                   <div style={helperTextStyle}>
-                    {providerType.description || "Provider configuration"}
+                    {providerType.description ||
+                      t(
+                        "pages.chat.chatonboardingguide.provider.configuration",
+                        "Provider configuration",
+                      )}
                   </div>
                   <div style={{ color: "#9ca3af", fontSize: 12 }}>
-                    {t("pages.chat.chatonboardingguide.default.endpoint", "Default endpoint:")}{providerType.defaultEndpoint || "Custom endpoint required"}
+                    {t("pages.chat.chatonboardingguide.default.endpoint", "Default endpoint:")}
+                    {providerType.defaultEndpoint ||
+                      t(
+                        "pages.chat.chatonboardingguide.custom.endpoint.required",
+                        "Custom endpoint required",
+                      )}
                   </div>
                 </button>
               ))}

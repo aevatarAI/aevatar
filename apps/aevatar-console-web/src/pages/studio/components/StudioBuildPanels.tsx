@@ -1305,7 +1305,9 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           <div style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
             <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.build.actions", "Build actions")}</div>
             <Tag color={canSaveWorkflow ? 'gold' : 'default'}>
-              {canSaveWorkflow ? 'draft ready' : 'saved'}
+              {canSaveWorkflow
+                ? t("pages.studio.studiobuildpanels.draft.ready", "draft ready")
+                : t("pages.studio.studiobuildpanels.saved", "saved")}
             </Tag>
           </div>
           <Space wrap size={[8, 8]}>
@@ -1343,7 +1345,8 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.dag.canvas", "DAG Canvas")}</div>
               <Tag color="processing">{t("pages.studio.studiobuildpanels.canvas.live", "canvas · live")}</Tag>
               <Typography.Text type="secondary">
-                {workflowName || 'Untitled workflow'}
+                {workflowName ||
+                  t("pages.studio.studiobuildpanels.untitled.workflow", "Untitled workflow")}
               </Typography.Text>
             </Space>
             <div style={workflowToolbarActionsStyle}>
@@ -1648,7 +1651,10 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                               />
                             )}
                             <div style={workflowInlineMetaStyle}>
-                              {parameter.description || `Type: ${parameter.type}`}
+                              {parameter.description ||
+                                t("pages.studio.studiobuildpanels.type.parameter", "Type: {type}", {
+                                  type: parameter.type,
+                                })}
                             </div>
                           </div>
                         );
@@ -1747,10 +1753,17 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         </div>
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={workflowInlineMetaStyle}>
-            Route: {dryRunRouteLabel || 'Config default'}
+            {t("pages.studio.studiobuildpanels.route.label", "Route: ")}
+            {dryRunRouteLabel ||
+              t("pages.studio.studiobuildpanels.config.default", "Config default")}
           </div>
           <div style={workflowInlineMetaStyle}>
-            Model: {dryRunModelLabel || 'Use configured default'}
+            {t("pages.studio.studiobuildpanels.model.label", "Model: ")}
+            {dryRunModelLabel ||
+              t(
+                "pages.studio.studiobuildpanels.use.configured.default",
+                "Use configured default"
+              )}
           </div>
         </div>
         {dryRunBlockedReason ? (
@@ -2739,7 +2752,8 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               <Typography.Text type="secondary">
                 {activeScript?.script?.scriptId || '-'} · {lifecycleStatus} {t("pages.studio.studiobuildpanels.validation", "· validation")}{' '}
                 {validationStatus} {t("pages.studio.studiobuildpanels.save", "· save")}{saveObservationStatus} {t("pages.studio.studiobuildpanels.rev", "· rev")}{' '}
-                {currentRevision || 'generated on save'}
+                {currentRevision ||
+                  t("pages.studio.studiobuildpanels.generated.on.save", "generated on save")}
               </Typography.Text>
             </div>
           ) : null}
@@ -2770,7 +2784,8 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                   <span style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.advanced.package", "Advanced package")}</span>
                   <Typography.Text type="secondary">
                     {packageEntries.length} {t("pages.studio.studiobuildpanels.file", "file")}{packageEntries.length === 1 ? '' : 's'} ·{' '}
-                    {scriptPackage.entrySourcePath || 'no entry'} {t("pages.studio.studiobuildpanels.entry", "entry")}</Typography.Text>
+                    {scriptPackage.entrySourcePath ||
+                      t("pages.studio.studiobuildpanels.no.entry", "no entry")} {t("pages.studio.studiobuildpanels.entry", "entry")}</Typography.Text>
                 </summary>
                 <div
                   style={{
@@ -2838,7 +2853,9 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                       }}
                     >
                       {entry.kind === 'csharp' ? 'C#' : 'proto'} · {entry.path}
-                      {entry.path === scriptPackage.entrySourcePath ? ' · entry' : ''}
+                      {entry.path === scriptPackage.entrySourcePath
+                        ? t("pages.studio.studiobuildpanels.entry.suffix", " · entry")
+                        : ''}
                     </button>
                   ))}
                 </div>
@@ -2898,9 +2915,18 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                   <Typography.Text type="secondary">
                     {validationResult
                       ? validationResult.success
-                        ? 'Validation completed without blocking errors.'
-                        : 'Validation returned blocking diagnostics.'
-                      : 'Run Validate to refresh compiler diagnostics.'}
+                        ? t(
+                            "pages.studio.studiobuildpanels.validation.completed.without.blocking.errors",
+                            "Validation completed without blocking errors."
+                          )
+                        : t(
+                            "pages.studio.studiobuildpanels.validation.returned.blocking.diagnostics",
+                            "Validation returned blocking diagnostics."
+                          )
+                      : t(
+                          "pages.studio.studiobuildpanels.run.validate.refresh.compiler.diagnostics",
+                          "Run Validate to refresh compiler diagnostics."
+                        )}
                   </Typography.Text>
                 </div>
                 <Space wrap size={[8, 8]}>
@@ -2997,8 +3023,15 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
           <Typography.Text type="secondary">
             {scriptReadyToBind
-              ? 'Script revision is catalog-applied. Continue to Bind to publish the callable member contract.'
-              : `Script Build keeps code editing here. ${bindReadinessLabel}.`}
+              ? t(
+                  "pages.studio.studiobuildpanels.script.revision.catalog.applied",
+                  "Script revision is catalog-applied. Continue to Bind to publish the callable member contract."
+                )
+              : t(
+                  "pages.studio.studiobuildpanels.script.build.keeps.code.editing",
+                  "Script Build keeps code editing here. {readiness}.",
+                  { readiness: bindReadinessLabel }
+                )}
           </Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -3146,7 +3179,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                       }}
                     >
                       <Typography.Text strong>
-                        {decision.accepted ? 'Accepted' : decision.status || 'Decision'}
+                        {decision.accepted
+                          ? t("pages.studio.studiobuildpanels.accepted", "Accepted")
+                          : decision.status ||
+                            t("pages.studio.studiobuildpanels.decision", "Decision")}
                       </Typography.Text>
                       <Typography.Text type="secondary">
                         {decision.scriptId} · {decision.baseRevision || '-'} →{' '}
