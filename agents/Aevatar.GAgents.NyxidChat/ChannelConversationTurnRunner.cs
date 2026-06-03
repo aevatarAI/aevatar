@@ -26,7 +26,6 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 {
-    private const string DailySkillName = "chrono-ai-daily";
     private static readonly HashSet<string> LocalSlashCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "approve",
@@ -48,6 +47,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     };
 
     private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
+
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    private sealed record SlashBindingLookup(
+        bool IdentityEnabled,
+        bool SubjectResolved,
+        ExternalSubjectRef? Subject,
+        BindingId? BindingId);
 
     private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
@@ -147,7 +156,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
 
-        var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity, runtimeContext));
+        var inboundEvent = ToInboundEvent(activity, registration, inbound);
 
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
@@ -214,74 +223,33 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         var handler = ResolveSlashCommandHandler(commandName);
+        var bindingLookup = await ResolveSlashBindingAsync(commandName, inbound, registration, queryPort, ct)
+            .ConfigureAwait(false);
+
         if (handler is null)
         {
-            // Unknown slash command — fall through to the LLM path to preserve
-            // the prior behaviour where /<unknown> just looked like a regular
-            // user message.
+            if (bindingLookup.IdentityEnabled && bindingLookup.SubjectResolved && bindingLookup.BindingId is null)
+                return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+
+            // Unknown slash command for bound senders falls through to the Ornn
+            // skill-discovery rewrite in BuildLlmReplyRequestAsync.
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
-        {
-            _logger.LogWarning(
-                "Slash command rejected: missing sender_id or platform on inbound message");
-            return null;
-        }
-
-        // Tenant resolution priority (avoids cross-tenant identity collapse on
-        // multi-tenant platforms like Lark — see ADR-0018 §Actor Architecture):
-        //   1. Platform adapter populated `tenant` / `open_tenant_id` in
-        //      InboundMessage.Extra. Preferred — adapter knows its own scope.
-        //   2. Fall back to `registration.ScopeId` so the binding is at least
-        //      per-bot-scoped (each bot is registered to one tenant; same
-        //      sender across two bots in two tenants becomes two bindings).
-        //   3. As a last resort, refuse the slash command rather than commit
-        //      a tenant-collapsed binding — production deployments MUST
-        //      surface this as a configuration error.
-        var tenant = ResolveTenant(inbound, registration);
-        if (tenant is null)
-        {
-            _logger.LogWarning(
-                "Slash command rejected: cannot resolve tenant for platform={Platform}, sender={Sender}, registration={RegistrationId}",
-                inbound.Platform,
-                inbound.SenderId,
-                registration.Id);
-            return null;
-        }
-
-        var subject = new ExternalSubjectRef
-        {
-            Platform = inbound.Platform.Trim().ToLowerInvariant(),
-            Tenant = tenant,
-            ExternalUserId = inbound.SenderId.Trim(),
-        };
-
-        BindingId? existing;
-        try
-        {
-            existing = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // Fail closed: if we can't tell whether the sender is bound, treat
-            // them as unbound so commands that need binding don't proceed
-            // against bot-owner credentials.
-            _logger.LogError(ex, "Binding lookup for slash command {Command} failed; treating sender as unbound", commandName);
-            existing = null;
-        }
-
-        if (handler.RequiresBinding && existing is null)
+        if (handler.RequiresBinding && bindingLookup.BindingId is null)
         {
             return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
         }
+
+        if (bindingLookup.Subject is null)
+            return null;
 
         var commandContext = new ChannelSlashCommandContext
         {
             CommandName = handler.Name,
             ArgumentText = argumentText,
-            Subject = subject,
-            BindingIdValue = existing?.Value,
+            Subject = bindingLookup.Subject,
+            BindingIdValue = bindingLookup.BindingId?.Value,
             RegistrationId = registration.Id,
             RegistrationScopeId = registration.ScopeId ?? string.Empty,
             SenderId = inbound.SenderId.Trim(),
@@ -682,6 +650,45 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
     }
 
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    private async Task<SlashBindingLookup> ResolveSlashBindingAsync(
+        string commandName,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        IExternalIdentityBindingQueryPort queryPort,
+        CancellationToken ct)
+    {
+        if (!TryResolveExternalSubject(inbound, registration, out var subject))
+        {
+            _logger.LogWarning(
+                "Slash command rejected: cannot resolve subject for command={Command}, platform={Platform}, sender={Sender}, registration={RegistrationId}",
+                commandName,
+                inbound.Platform,
+                inbound.SenderId,
+                registration.Id);
+            return new SlashBindingLookup(true, false, null, null);
+        }
+
+        BindingId? existing;
+        try
+        {
+            existing = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Fail closed: if we can't tell whether the sender is bound, treat
+            // them as unbound so commands that need binding don't proceed
+            // against bot-owner credentials.
+            _logger.LogError(ex, "Binding lookup for slash command {Command} failed; treating sender as unbound", commandName);
+            existing = null;
+        }
+
+        return new SlashBindingLookup(true, true, subject, existing);
+    }
+
     private static bool TryResolveLlmSelectionAction(
         CardActionSubmission? cardAction,
         InboundMessage inbound,
@@ -958,7 +965,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return ConversationStreamChunkResult.Failed(
                 string.IsNullOrWhiteSpace(emit.ErrorCode) ? "stream_chunk_rejected" : emit.ErrorCode,
                 emit.ErrorMessage ?? "Relay stream chunk rejected.",
-                editUnsupported);
+                editUnsupported,
+                emit.FailureKind,
+                emit.RetryAfterTimeSpan,
+                emit.HttpStatus,
+                emit.RawErrorKey,
+                emit.RawErrorCode);
         }
 
         var resolvedPlatformMessageId = string.IsNullOrWhiteSpace(emit.PlatformMessageId)
@@ -975,37 +987,33 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         Task typingReactionTask,
         CancellationToken ct)
     {
-        AgentBuilderFlowDecision? decision = null;
-        var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(
             inboundEvent,
-            out decision);
-        if (!relayDecisionMatched &&
-            ((decision = await AgentBuilderCardFlow.TryResolveAsync(
-                    inboundEvent,
-                    _userConfigQueryPort,
-                    ct)) is null))
-        {
-            // No slash-command/card flow matched.
-        }
-
+            _userConfigQueryPort,
+            ct);
         if (decision is null)
+        {
+            // No slash-command/card flow matched. AgentBuilderCardFlow explicitly leaves
+            // non-slash text and unknown slash shortcuts for the LLM fallback path.
             return null;
+        }
 
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
-                       await BuildAgentBuilderMetadataAsync(
+            var metadata = await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
-                    ResolveUserAccessToken(activity, runtimeContext),
-                    ct))))
+                    ct);
+            using (AgentToolContextScope.Push(BuildAgentBuilderToolContext(
+                       inboundEvent,
+                       activity,
+                       ResolveUserAccessToken(activity, runtimeContext),
+                       metadata)))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
-                replyContent = relayDecisionMatched
-                    ? NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResult)
-                    : AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
+                replyContent = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
             }
         }
 
@@ -1383,7 +1391,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["scope_id"] = inboundEvent.RegistrationScopeId,
             [ChannelMetadataKeys.Platform] = inboundEvent.Platform,
             [ChannelMetadataKeys.SenderId] = inboundEvent.SenderId,
             [ChannelMetadataKeys.SenderName] = inboundEvent.SenderName,
@@ -1415,13 +1422,49 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkChatId))
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
 
+        var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorUserId))
+            metadata[ChannelMetadataKeys.LarkOperatorUserId] = larkOperatorUserId;
+
+        var larkOperatorOpenId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorOpenId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorOpenId))
+            metadata[ChannelMetadataKeys.LarkOperatorOpenId] = larkOperatorOpenId;
+
+        var larkOperatorUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUnionId);
+        if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
+            metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
+
         return metadata;
+    }
+
+    private static AgentToolExecutionContext BuildAgentBuilderToolContext(
+        ChannelInboundEvent inboundEvent,
+        ChatActivity activity,
+        string? userAccessToken,
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        var token = NormalizeOptional(userAccessToken);
+        return AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(inboundEvent.MessageId, null),
+            Credentials = new AgentToolCredentials(token, token, null),
+            Caller = new AgentToolCallerContext(
+                inboundEvent.RegistrationScopeId,
+                null,
+                inboundEvent.MessageId),
+            Channel = new AgentToolChannelContext(
+                inboundEvent.Platform,
+                inboundEvent.SenderId,
+                inboundEvent.RegistrationScopeId,
+                inboundEvent.MessageId,
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
     }
 
     private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
-        string? userAccessToken,
         CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(
@@ -1430,11 +1473,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
-        if (!string.IsNullOrWhiteSpace(userAccessToken))
-        {
-            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userAccessToken.Trim();
-            metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = userAccessToken.Trim();
-        }
         return metadata;
     }
 
@@ -1485,9 +1523,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static ChannelInboundEvent ToInboundEvent(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
-        InboundMessage inbound,
-        string? userAccessToken)
+        InboundMessage inbound)
     {
+        // Refactor (v1/issue1466-first):
+        //   Old: ChannelInboundEvent copied userAccessToken into registration_token.
+        //   New: inbound durable facts carry only stable routing facts.
+        //   Principle: runtime credentials flow through transient context, not proto facts.
         var inboundEvent = new ChannelInboundEvent
         {
             Text = inbound.Text,
@@ -1498,7 +1539,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ChatType = inbound.ChatType ?? string.Empty,
             Platform = inbound.Platform,
             RegistrationId = registration.Id,
-            RegistrationToken = userAccessToken ?? string.Empty,
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
@@ -1517,15 +1557,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ResolvedSenderBinding? senderBinding,
         CancellationToken ct)
     {
-        var requestActivity = BuildLlmRequestActivity(activity, inboundEvent.Text);
+        var requestActivity = BuildLlmRequestActivity(
+            activity,
+            inboundEvent.Text,
+            _identityBindingQueryPort is null || senderBinding is not null);
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = activity.Id,
             // Refactor (iter98/cluster-002): Old=correlation_id doubled as run identity; New=run_id is explicit before persistence/dispatch.
             RunId = AgentRunId.New().Value,
-            TargetActorId = ConversationGAgent.BuildActorId(activity.Conversation!.CanonicalKey),
             RegistrationId = registration.Id,
             Activity = requestActivity,
+            // Refactor (iter394/cluster-issue-394-design): Old pattern: runner filled a canonical TargetActorId placeholder. New principle: ConversationGAgent stamps its owning actor id before persistence/dispatch.
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
@@ -1543,6 +1586,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
+
+        if (TryBuildSkillRecoveryContext(inboundEvent.Text, out var skillRecovery))
+        {
+            request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+            {
+                SkillRecovery = skillRecovery,
+            }).ToPayload();
+        }
 
         request.LlmControl = (await BuildOwnerLlmControlAsync(
                 inboundEvent,
@@ -1578,6 +1629,32 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return request;
     }
 
+    private bool TryBuildSkillRecoveryContext(string? text, out AgentSkillRecoveryContext context)
+    {
+        context = AgentSkillRecoveryContext.Empty;
+        if (!TryParseSlashCommand(text, out var commandName, out _))
+            return false;
+
+        var normalizedCommand = commandName.Trim().TrimStart('/');
+        if (string.IsNullOrWhiteSpace(normalizedCommand))
+            return false;
+
+        if (LocalSlashCommands.Contains(normalizedCommand) ||
+            ResolveSlashCommandHandler(normalizedCommand) is not null)
+        {
+            return false;
+        }
+
+        context = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: normalizedCommand,
+            OriginalCommand: (text ?? string.Empty).Trim(),
+            PrimarySkillName: null,
+            MaxOrnnSearchAttempts: 2);
+        return true;
+    }
+
     private async Task<LLMControlContext> BuildOwnerLlmControlAsync(
         ChannelInboundEvent inboundEvent,
         LLMControlContext control,
@@ -1594,13 +1671,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             .ConfigureAwait(false);
     }
 
-    private ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText)
+    // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+    // slash silently consumed.
+    // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+    // non-slash text path unchanged (owner-LLM chat fallback).
+    private ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText, bool allowSkillInvocationPrompt)
     {
         var requestActivity = activity.Clone();
         if (requestActivity.Content is null)
             return requestActivity;
 
-        if (TryBuildSkillInvocationPrompt(inboundText, out var prompt))
+        if (allowSkillInvocationPrompt && TryBuildSkillInvocationPrompt(inboundText, out var prompt))
             requestActivity.Content.Text = prompt;
 
         return requestActivity;
@@ -1614,29 +1695,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return false;
         }
 
-        if (string.Equals(commandName, "daily", StringComparison.OrdinalIgnoreCase))
-            return TryBuildDailySkillInvocationPrompt(text, argumentText, out prompt);
-
+        // Refactor (iter1/cluster-issue1553): Old pattern: hardcoded /daily skill name. New principle: generic skill discovery, no skill-name in routing logic.
         return TryBuildSlashSkillDiscoveryPrompt(text, commandName, argumentText, out prompt);
-    }
-
-    private static bool TryBuildDailySkillInvocationPrompt(
-        string? text,
-        string argumentText,
-        out string prompt)
-    {
-        var argsJson = JsonSerializer.Serialize(argumentText);
-        var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
-        prompt =
-            "The user invoked the Lark `/daily` shortcut.\n" +
-            $"This is a deterministic command execution, not an open-ended chat answer. Route this turn through the Ornn skill `{DailySkillName}`.\n" +
-            $"First call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}. Do not search for this skill first.\n" +
-            "After the skill is loaded, follow its instructions exactly and continue using tools until the final daily report is ready.\n" +
-            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
-            "If the loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
-            "The only final user-visible answer should be the completed daily report or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
-            $"Original command: {originalJson}";
-        return true;
     }
 
     private bool TryBuildSlashSkillDiscoveryPrompt(
@@ -1664,12 +1724,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         prompt =
             $"The user invoked the Lark `/{normalizedCommand}` shortcut.\n" +
             "This slash command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
-            $"First call `ornn_search_skills` with `query` = {queryJson} and `scope` = `mixed`.\n" +
-            $"Then call `use_skill` for the best matching skill and pass `args` = {argsJson}. Prefer an exact or near-exact command/skill name match when available.\n" +
-            "After the skill is loaded, follow its instructions exactly and continue using tools until the command's final result is ready.\n" +
-            "Do not narrate intermediate work, data-source discovery, repository/path guesses, API fallbacks, or partial findings as the user-visible reply.\n" +
-            "If no matching skill is found, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
+            $"Aevatar has already executed `ornn_search_skills` (query = {queryJson}) and `use_skill` for the best matching skill before this turn (their tool results are in the messages above); the loaded skill's instructions are the only source of truth for this command.\n" +
+            $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
+            "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
+            "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
             "If a loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
+            "Do not narrate intermediate work, path guesses, or partial findings as the user-visible reply.\n" +
             "The only final user-visible answer should be the completed command result or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
             $"Original command: {originalJson}";
         return true;

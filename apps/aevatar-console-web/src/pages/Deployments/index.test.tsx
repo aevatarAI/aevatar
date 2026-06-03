@@ -330,7 +330,7 @@ describe("DeploymentsPage", () => {
     expect(screen.getByRole("button", { name: "加载范围变更" })).toBeInTheDocument();
     expect(screen.getByText("Trade Agent")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /重\s*置/ }));
+    fireEvent.click(screen.getByRole("button", { name: "重置" }));
 
     expect(await screen.findByText("已加载范围已锁定")).toBeInTheDocument();
     expect(screen.getByText("显示已加载 Scope")).toBeInTheDocument();

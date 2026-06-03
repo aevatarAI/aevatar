@@ -161,13 +161,13 @@ public sealed class WebFetchUrlGuardTests
         var handler = new RecordingHandler();
         var client = new WebApiClient(new WebToolOptions(), new HttpClient(handler));
         var tool = new WebFetchTool(client);
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "secret-token",
-            };
+            });
 
             var result = await tool.ExecuteAsync("""{"url":"http://8.8.8.8/"}""");
 
@@ -177,7 +177,7 @@ public sealed class WebFetchUrlGuardTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
     }
 

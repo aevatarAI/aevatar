@@ -151,9 +151,11 @@ message WorkflowRunExecutionContextState
 
 message WorkflowLlmExecutionContextState
 {
-  string nyxid_access_token = 1;
+  reserved 1, 3;
+  reserved "nyxid_access_token", "nyxid_route_preference";
   string model_override = 2;
-  string nyxid_route_preference = 3;
+  optional int32 max_tool_rounds_override = 4;
+  string user_memory_prompt = 5;
 }
 
 message WorkflowConnectorExecutionContextState
@@ -287,6 +289,23 @@ message SecureInputModuleState
 {
   map<string, PendingSecureInputState> pending = 1;
   map<string, CapturedSecureInputState> captured = 2;
+}
+
+message PendingToolCallApprovalState
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  string tool_call_id = 5;
+  string approval_request_id = 6;
+  string arguments_json = 7;
+  string input = 8;
+}
+
+message ToolCallModuleState
+{
+  map<string, PendingToolCallApprovalState> pending_approvals = 1;
 }
 
 message PendingApprovalState
@@ -430,6 +449,32 @@ message LLMCallModuleState
 {
   map<string, PendingLlmCallState> pending_by_session_id = 1;
   map<string, int32> attempts_by_step_id = 2;
+}
+
+message PendingConnectorCallState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string operation_id = 3;
+  string input = 4;
+  string connector_name = 5;
+  string operation = 6;
+  int32 attempt = 7;
+  int32 attempts = 8;
+  int32 timeout_ms = 9;
+  bool on_error_continue = 10;
+  WorkflowRuntimeCallbackLeaseState timeout_lease = 11;
+  string timeout_callback_id = 12;
+  string execution_id = 13;
+  map<string, string> parameters = 14;
+  bool secure_step = 15;
+  string connector_type = 16;
+}
+
+message ConnectorCallModuleState
+{
+  map<string, PendingConnectorCallState> pending_by_operation_id = 1;
+  map<string, string> pending_operation_id_by_step_id = 2;
 }
 
 message EvalContextState

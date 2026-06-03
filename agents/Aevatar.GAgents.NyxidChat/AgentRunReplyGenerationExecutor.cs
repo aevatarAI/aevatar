@@ -76,11 +76,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
             var generator = RequireStepGenerator();
             var plan = await generator.BuildStepPlanAsync(
-                    replyRequest.Activity!,
-                    generationContext.Metadata,
-                    generationContext.LlmControl,
-                    generationContext.ToolContext,
-                    metadataCts.Token)
+                replyRequest.Activity!,
+                generationContext.Metadata,
+                generationContext.LlmControl,
+                generationContext.ToolContext,
+                replyRequest.PriorHistory.ToArray(),
+                forceDisableTools: false,
+                metadataCts.Token)
                 .ConfigureAwait(false);
 
             var state = new AgentRunReplyStepState
@@ -92,6 +94,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 NextStepIndex = 1,
                 Round = 0,
                 MaxToolRounds = plan.MaxToolRounds,
+                // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+                // slash silently consumed.
+                // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+                // non-slash text path unchanged (owner-LLM chat fallback).
+                FinalNoToolsStep = plan.DisableTools,
                 LlmControl = plan.LlmControl.ToPayload(),
                 ToolContext = plan.ToolContext.ToPayload(),
             };
@@ -167,12 +174,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
         var generator = RequireStepGenerator();
+        var planToolContext = AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState);
+        if (workItem.StepState.FinalNoToolsStep)
+        {
+            // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+            // slash silently consumed.
+            // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+            // non-slash text path unchanged (owner-LLM chat fallback).
+            planToolContext = planToolContext with { SenderBinding = AgentToolSenderBindingContext.Empty };
+        }
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity!,
                 AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
                 AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
-                AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
-                ct)
+                planToolContext,
+                priorHistory: null,
+                forceDisableTools: workItem.StepState.FinalNoToolsStep,
+                ct: ct)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
@@ -183,6 +201,28 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             plan.LlmControl,
             workItem.StepState.Round,
             workItem.StepState.FinalNoToolsStep);
+        if (workItem.StepState.FinalNoToolsStep && llmRequest.Tools is { Count: > 0 })
+        {
+            // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+            // slash silently consumed.
+            // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+            // non-slash text path unchanged (owner-LLM chat fallback).
+            llmRequest = new LLMRequest
+            {
+                Messages = llmRequest.Messages,
+                RequestId = llmRequest.RequestId,
+                Metadata = llmRequest.Metadata,
+                CallerContext = llmRequest.CallerContext,
+                ToolContext = llmRequest.ToolContext,
+                RoutingContext = llmRequest.RoutingContext,
+                LlmControl = llmRequest.LlmControl,
+                Tools = null,
+                Model = llmRequest.Model,
+                Temperature = llmRequest.Temperature,
+                MaxTokens = llmRequest.MaxTokens,
+                ResponseFormat = llmRequest.ResponseFormat,
+            };
+        }
 
         var output = new StringBuilder(workItem.StepState.AccumulatedText ?? string.Empty);
         using var interactiveScope = TryBeginInteractiveScope(request);
@@ -202,8 +242,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (streamingState is not null)
             await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
+        // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+        // slash silently consumed.
+        // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+        // non-slash text path unchanged (owner-LLM chat fallback).
         var effectiveContent = llmResult.Content;
-        var effectiveToolCalls = llmResult.ToolCalls;
+        var effectiveToolCalls = workItem.StepState.FinalNoToolsStep
+            ? []
+            : llmResult.ToolCalls;
         if (effectiveToolCalls is not { Count: > 0 } && !workItem.StepState.FinalNoToolsStep && effectiveContent is not null)
         {
             var parsed = TextToolCallParser.Parse(effectiveContent);
@@ -255,6 +301,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
                 AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
                 AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
+                priorHistory: null,
+                forceDisableTools: false,
                 ct)
             .ConfigureAwait(false);
         var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();

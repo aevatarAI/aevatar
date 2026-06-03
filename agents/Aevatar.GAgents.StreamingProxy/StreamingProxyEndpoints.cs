@@ -238,9 +238,6 @@ public static class StreamingProxyEndpoints
             var accessToken = ExtractBearerToken(http);
             var preferredRoute = request.LlmRoute?.Trim();
             var defaultModel = request.LlmModel?.Trim();
-            // Refactor (iter104/cluster-1):
-            //   Old pattern: StreamingProxyChatLifecycleFacade owned chat continuation orchestration in Application layer.
-            //   New principle: StreamingProxyGAgent owns typed lifecycle facts; deprecated compat endpoints only normalize and dispatch typed commands.
             var result = await interactionService.ExecuteAsync(
                 new StreamingProxyRoomChatCommand(
                     roomId,
@@ -431,7 +428,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IStreamingProxyRoomParticipantService participantService,
+        [FromServices] IStreamingProxyRoomParticipantsQueryPort participantsQueryPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -450,10 +447,11 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            var result = await participantService.ListAsync(
-                new StreamingProxyRoomParticipantListQuery(roomId),
-                ct);
-            return Results.Ok(result.Participants);
+            var snapshot = await participantsQueryPort.GetAsync(roomId, ct);
+            return Results.Ok(snapshot?.Participants.Select(participant => new ParticipantResponse(
+                participant.AgentId,
+                participant.DisplayName,
+                participant.JoinedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue)) ?? []);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -687,6 +685,7 @@ public static class StreamingProxyEndpoints
         string? LlmModel = null);
     public sealed record PostMessageRequest(string? AgentId, string? AgentName, string? Content, string? SessionId = null);
     public sealed record JoinRoomRequest(string? AgentId, string? DisplayName);
+    private sealed record ParticipantResponse(string AgentId, string DisplayName, DateTimeOffset JoinedAt);
 
     private static string? ExtractBearerToken(HttpContext http)
     {

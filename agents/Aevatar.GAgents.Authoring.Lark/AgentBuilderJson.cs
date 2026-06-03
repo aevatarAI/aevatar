@@ -7,8 +7,8 @@ namespace Aevatar.GAgents.Authoring.Lark;
 /// Shared <see cref="JsonElement"/> reading helpers for the agent-builder formatters.
 /// </summary>
 /// <remarks>
-/// These were previously copy-pasted across <see cref="AgentBuilderCardContent"/>,
-/// <see cref="AgentBuilderCardFlow"/>, and <see cref="NyxRelayAgentBuilderFlow"/>; a fix in one
+/// These were previously copy-pasted across <see cref="AgentBuilderCardContent"/> and
+/// <see cref="AgentBuilderCardFlow"/>; a fix in one
 /// copy needed manual replication everywhere or behavior would silently diverge across the typed
 /// and card-action surfaces. The helpers are intentionally narrow — only the json-shape concerns
 /// every formatter shares — so this file does not become a junk drawer.

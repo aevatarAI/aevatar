@@ -193,7 +193,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         {
             BlockId = "agents_list",
             Title = "Your Agents (1)",
-            Text = "1. `daily` · running",
+            Text = "1. `summary` · running",
         });
         intent.Actions.Add(new ActionElement
         {
@@ -225,7 +225,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var cardMarkdown = bodyElements[0].GetProperty("content").GetString();
         cardMarkdown.ShouldNotBeNull();
         cardMarkdown.ShouldNotContain("**Your Agents (1)**");
-        cardMarkdown.ShouldContain("daily");
+        cardMarkdown.ShouldContain("summary");
     }
 
     [Fact]

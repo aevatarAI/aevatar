@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Presentation.AGUI;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,8 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
     private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
     private readonly IScopeResourceAdmissionPort _admissionPort;
     private readonly ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> _interactionService;
+    private readonly IGAgentDraftRunObservationScopeActivationPort _observationScopeActivationPort;
+    private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ILogger<GAgentDraftRunInteractionService>? _logger;
 
     public GAgentDraftRunInteractionService(
@@ -25,12 +28,17 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         IGAgentActorRegistryCommandPort registryCommandPort,
         IScopeResourceAdmissionPort admissionPort,
         ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        IGAgentDraftRunObservationScopeActivationPort observationScopeActivationPort,
+        IAgentKindRegistry? agentKindRegistry = null,
         ILogger<GAgentDraftRunInteractionService>? logger = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
         _admissionPort = admissionPort ?? throw new ArgumentNullException(nameof(admissionPort));
         _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
+        _observationScopeActivationPort = observationScopeActivationPort
+            ?? throw new ArgumentNullException(nameof(observationScopeActivationPort));
+        _agentKindRegistry = agentKindRegistry;
         _logger = logger;
     }
 
@@ -48,8 +56,25 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
             return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(preparedActor.Error);
 
         var actor = preparedActor.Actor!;
+        var commandId = CreateInteractionId();
+        var correlationId = CreateInteractionId();
+        var activation = await _observationScopeActivationPort.ActivateAsync(
+            actor.ActorId,
+            commandId,
+            correlationId,
+            ct);
+        if (activation == null)
+        {
+            await RollbackAsync(actor, CancellationToken.None);
+            return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
+                GAgentDraftRunStartError.ProjectionUnavailable);
+        }
+
+        var accepted = false;
         try
         {
+            // Refactor (iter1353/cluster-001): Old pattern: the port forwarded only legacy scalar control fields.
+            // New principle: the port preserves typed ToolContext and LlmControl into the command boundary.
             var command = new GAgentDraftRunCommand(
                 ScopeId: request.ScopeId.Trim(),
                 ActorTypeName: actor.ActorTypeName,
@@ -59,17 +84,39 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
                 NyxIdAccessToken: NormalizeOptional(request.NyxIdAccessToken),
                 ModelOverride: NormalizeOptional(request.ModelOverride),
                 PreferredLlmRoute: NormalizeOptional(request.PreferredLlmRoute),
-                InputParts: request.InputParts);
+                Headers: request.Headers,
+                InputParts: request.InputParts,
+                AgentKind: NormalizeOptional(request.AgentKind),
+                ToolContext: request.ToolContext,
+                LlmControl: request.LlmControl,
+                UseCorrelationIdAsFallbackSessionId: request.UseCorrelationIdAsFallbackSessionId,
+                CommandIdSeed: commandId,
+                CorrelationIdSeed: correlationId);
 
-            var result = await _interactionService.ExecuteAsync(command, emitAsync, onAcceptedAsync, ct);
-            if (!result.Succeeded)
+            async ValueTask OnAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken token)
+            {
+                accepted = true;
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, token);
+            }
+
+            var result = await _interactionService.ExecuteAsync(command, emitAsync, OnAcceptedAsync, ct);
+            if (!result.Succeeded && !accepted)
+            {
+                await _observationScopeActivationPort.ReleaseAsync(activation, CancellationToken.None);
                 await RollbackAsync(actor, CancellationToken.None);
+            }
 
             return result;
         }
         catch
         {
-            await RollbackAsync(actor, CancellationToken.None);
+            if (!accepted)
+            {
+                await _observationScopeActivationPort.ReleaseAsync(activation, CancellationToken.None);
+                await RollbackAsync(actor, CancellationToken.None);
+            }
+
             throw;
         }
     }
@@ -79,7 +126,11 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         CancellationToken ct)
     {
         var scopeId = request.ScopeId.Trim();
-        var actorTypeName = request.ActorTypeName.Trim();
+        var agentKind = NormalizeOptional(request.AgentKind);
+        var actorTypeName = ResolveActorTypeName(agentKind, request.ActorTypeName);
+        if (string.IsNullOrWhiteSpace(actorTypeName))
+            return PreparationResult.Failure(GAgentDraftRunStartError.UnknownActorType);
+
         var actorType = ScopeGAgentActorTypeResolver.Resolve(actorTypeName);
         if (actorType is null)
             return PreparationResult.Failure(GAgentDraftRunStartError.UnknownActorType);
@@ -111,7 +162,9 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         IActor? createdActor = null;
         try
         {
-            createdActor = await _actorRuntime.CreateAsync(actorType, actorId, ct);
+            createdActor = string.IsNullOrWhiteSpace(agentKind)
+                ? await _actorRuntime.CreateAsync(actorType, actorId, ct)
+                : await _actorRuntime.CreateByKindAsync(agentKind, actorId, ct);
             var receipt = await _registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, actorTypeName, actorId),
                 ct);
@@ -140,6 +193,26 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
             actorTypeName,
             actorId,
             RequiresRollbackOnFailure: true));
+    }
+
+    private string? ResolveActorTypeName(string? agentKind, string actorTypeName)
+    {
+        if (!string.IsNullOrWhiteSpace(agentKind))
+        {
+            try
+            {
+                var implementation = _agentKindRegistry?.Resolve(agentKind);
+                if (implementation != null)
+                    return implementation.Metadata.ImplementationClrTypeName;
+            }
+            catch (UnknownAgentKindException)
+            {
+                return null;
+            }
+        }
+
+        var normalizedActorTypeName = actorTypeName.Trim();
+        return string.IsNullOrWhiteSpace(normalizedActorTypeName) ? null : normalizedActorTypeName;
     }
 
     private async Task RollbackAsync(
@@ -191,6 +264,8 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
+
+    private static string CreateInteractionId() => Guid.NewGuid().ToString("N");
 
     private sealed record PreparationResult(
         GAgentDraftRunPreparedActor? Actor,

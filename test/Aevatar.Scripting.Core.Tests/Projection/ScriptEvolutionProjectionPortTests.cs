@@ -32,7 +32,7 @@ public sealed class ScriptEvolutionProjectionPortTests
         attachment!.ProjectionLease.ActorId.Should().Be("session-1");
         attachment.ProjectionLease.ProposalId.Should().Be("proposal-1");
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("session-1");
+        hub.LastRootActorId.Should().Be("session-1");
         hub.LastSessionId.Should().Be("proposal-1");
         runtime.ExistsCalls.Should().ContainSingle()
             .Which.Should().Be("projection.session.scope:script-evolution-session:session-1:proposal-1");
@@ -120,17 +120,17 @@ public sealed class ScriptEvolutionProjectionPortTests
     {
         public int SubscribeCalls { get; private set; }
 
-        public string? LastScopeId { get; private set; }
+        public string? LastRootActorId { get; private set; }
 
         public string? LastSessionId { get; private set; }
 
         public Task PublishAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             ScriptEvolutionSessionCompletedEvent evt,
             CancellationToken ct = default)
         {
-            _ = scopeId;
+            _ = rootActorId;
             _ = sessionId;
             _ = evt;
             ct.ThrowIfCancellationRequested();
@@ -138,7 +138,7 @@ public sealed class ScriptEvolutionProjectionPortTests
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<ScriptEvolutionSessionCompletedEvent, ValueTask> handler,
             CancellationToken ct = default)
@@ -146,7 +146,7 @@ public sealed class ScriptEvolutionProjectionPortTests
             _ = handler;
             ct.ThrowIfCancellationRequested();
             SubscribeCalls++;
-            LastScopeId = scopeId;
+            LastRootActorId = rootActorId;
             LastSessionId = sessionId;
             return Task.FromResult<IAsyncDisposable>(new RecordingSubscription());
         }

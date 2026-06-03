@@ -98,7 +98,8 @@ public sealed partial class ConversationGAgent
         long OperationGeneration,
         string? PendingAccumulatedText,
         string? PendingFinalizeText,
-        string? PendingFinalizeCommandId)
+        string? PendingFinalizeCommandId,
+        IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory)
     {
         public const string DefaultStreamingElementId = "streaming_main";
 
@@ -115,7 +116,8 @@ public sealed partial class ConversationGAgent
             OperationGeneration: 0,
             PendingAccumulatedText: null,
             PendingFinalizeText: null,
-            PendingFinalizeCommandId: null);
+            PendingFinalizeCommandId: null,
+            PendingAppendedHistory: []);
 
         /// <summary>Phase permits accepting a new chunk (initial or interim).</summary>
         public bool AllowsInterimEdit =>
@@ -146,6 +148,7 @@ public sealed partial class ConversationGAgent
         {
             (LarkCardStreamingPhase.Idle, LarkCardStreamingPhase.Creating) => true,
 
+            (LarkCardStreamingPhase.Creating, LarkCardStreamingPhase.Creating) => true,
             (LarkCardStreamingPhase.Creating, LarkCardStreamingPhase.Streaming) => true,
             (LarkCardStreamingPhase.Creating, LarkCardStreamingPhase.CreationFailed) => true,
             (LarkCardStreamingPhase.Creating, LarkCardStreamingPhase.Terminated) => true,
@@ -185,7 +188,8 @@ public sealed partial class ConversationGAgent
             lifecycle.LarkCardOperationGeneration,
             NormalizeOptional(lifecycle.PendingAccumulatedText),
             NormalizeOptional(lifecycle.PendingFinalizeText),
-            NormalizeOptional(lifecycle.PendingFinalizeCommandId));
+            NormalizeOptional(lifecycle.PendingFinalizeCommandId),
+            lifecycle.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray());
     }
 
     private static bool ShouldSkipLarkCardStreamingForUnavailable(
@@ -224,6 +228,7 @@ public sealed partial class ConversationGAgent
             PendingAccumulatedText = IsTerminalLarkCardStreamingPhase(next) ? null : carried.PendingAccumulatedText,
             PendingFinalizeText = IsTerminalLarkCardStreamingPhase(next) ? null : carried.PendingFinalizeText,
             PendingFinalizeCommandId = IsTerminalLarkCardStreamingPhase(next) ? null : carried.PendingFinalizeCommandId,
+            PendingAppendedHistory = IsTerminalLarkCardStreamingPhase(next) ? [] : carried.PendingAppendedHistory,
             TerminalReason = IsTerminalLarkCardStreamingPhase(next)
                 ? (terminalReason ?? carried.TerminalReason)
                 : carried.TerminalReason,
@@ -307,6 +312,8 @@ public sealed partial class ConversationGAgent
             evt.FinalizeText = updated.PendingFinalizeText ?? string.Empty;
         if (!string.Equals(current.PendingFinalizeCommandId, updated.PendingFinalizeCommandId, StringComparison.Ordinal))
             evt.FinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
+        if (!HistoryEntriesEqual(current.PendingAppendedHistory, updated.PendingAppendedHistory))
+            evt.AppendedHistory.AddRange(updated.PendingAppendedHistory.Select(entry => entry.Clone()));
 
         return evt;
     }
@@ -565,6 +572,7 @@ public sealed partial class ConversationGAgent
         LarkCardStreamingState state,
         string finalText,
         bool finalDiffers,
+        IReadOnlyList<ConversationHistoryEntry> appendedHistory,
         long sequence,
         long generation)
     {
@@ -592,6 +600,7 @@ public sealed partial class ConversationGAgent
                 CardMessageId = cardMessageId,
                 StreamingElementId = streamingElementId,
                 FinalDiffers = finalDiffers,
+                AppendedHistory = { appendedHistory.Select(entry => entry.Clone()) },
             },
             CancellationToken.None);
     }
@@ -607,6 +616,7 @@ public sealed partial class ConversationGAgent
         string finalText,
         string lastFlushedText,
         bool finalDiffers,
+        IReadOnlyList<ConversationHistoryEntry> appendedHistory,
         long sequence,
         long generation,
         ConversationTurnRuntimeContext runtimeContext,
@@ -643,6 +653,7 @@ public sealed partial class ConversationGAgent
                 FinalText = finalText,
                 LastFlushedText = lastFlushedText,
             };
+            signal.AppendedHistory.AddRange(appendedHistory.Select(entry => entry.Clone()));
         }
         catch (Exception ex)
         {
@@ -663,6 +674,7 @@ public sealed partial class ConversationGAgent
                 FinalText = finalText,
                 LastFlushedText = lastFlushedText,
             };
+            signal.AppendedHistory.AddRange(appendedHistory.Select(entry => entry.Clone()));
         }
 
         await DispatchLarkCardContinuationAsync(signal, correlationId, CancellationToken.None)
@@ -734,6 +746,7 @@ public sealed partial class ConversationGAgent
                     step.FinalText,
                     step.LastFlushedText,
                     step.FinalDiffers,
+                    step.AppendedHistory.ToArray(),
                     step.Sequence,
                     step.OperationGeneration,
                     runtimeContext,
@@ -804,7 +817,8 @@ public sealed partial class ConversationGAgent
         LarkCardStreamingState state,
         string? accumulatedText = null,
         string? finalizeText = null,
-        string? finalizeCommandId = null) =>
+        string? finalizeCommandId = null,
+        IEnumerable<ConversationHistoryEntry>? appendedHistory = null) =>
         TransitionLarkCardStreamingPhaseAsync(
             correlationId,
             state,
@@ -814,6 +828,9 @@ public sealed partial class ConversationGAgent
                 PendingAccumulatedText = NormalizeOptional(accumulatedText) ?? s.PendingAccumulatedText,
                 PendingFinalizeText = NormalizeOptional(finalizeText) ?? s.PendingFinalizeText,
                 PendingFinalizeCommandId = NormalizeOptional(finalizeCommandId) ?? s.PendingFinalizeCommandId,
+                PendingAppendedHistory = appendedHistory is null
+                    ? s.PendingAppendedHistory
+                    : appendedHistory.Select(entry => entry.Clone()).ToArray(),
             });
 
     /// <summary>
@@ -950,7 +967,8 @@ public sealed partial class ConversationGAgent
                 correlationId,
                 state,
                 finalizeText: evt.Outbound?.Text ?? string.Empty,
-                finalizeCommandId: commandId);
+                finalizeCommandId: commandId,
+                appendedHistory: evt.AppendedHistory);
             return true;
         }
 
@@ -993,6 +1011,7 @@ public sealed partial class ConversationGAgent
             state,
             finalText,
             finalDiffers,
+            evt.AppendedHistory.ToArray(),
             nextSequence,
             generation);
         return true;
@@ -1061,7 +1080,8 @@ public sealed partial class ConversationGAgent
                     BuildLlmReplyCommandId(evt.Chunk?.CorrelationId ?? correlationId),
                     evt.Chunk?.Activity,
                     terminated.CardMessageId ?? string.Empty,
-                    terminated.LastFlushedText);
+                    terminated.LastFlushedText,
+                    appendedHistory: []);
                 return;
             }
 
@@ -1155,7 +1175,8 @@ public sealed partial class ConversationGAgent
                     BuildLlmReplyCommandId(evt.Chunk?.CorrelationId ?? correlationId),
                     evt.Chunk?.Activity,
                     terminated.CardMessageId ?? string.Empty,
-                    terminated.LastFlushedText);
+                    terminated.LastFlushedText,
+                    appendedHistory: []);
                 return;
             }
 
@@ -1241,7 +1262,8 @@ public sealed partial class ConversationGAgent
             commandId,
             evt.Activity,
             state.CardMessageId ?? evt.CardMessageId ?? string.Empty,
-            visibleText);
+            visibleText,
+            evt.AppendedHistory.ToArray());
     }
 
     private static ConversationCardCreateResult ToCreateResult(LarkCardOperationCompletedEvent evt)
@@ -1372,7 +1394,8 @@ public sealed partial class ConversationGAgent
                     NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
                     evt.Activity,
                     state.CardMessageId ?? evt.CardMessageId ?? string.Empty,
-                    state.LastFlushedText);
+                    state.LastFlushedText,
+                    appendedHistory: []);
                 return;
         }
     }
@@ -1435,6 +1458,7 @@ public sealed partial class ConversationGAgent
                 state,
                 finalText,
                 finalDiffers,
+                state.PendingAppendedHistory,
                 nextSequence,
                 generation);
             return;
@@ -1486,7 +1510,8 @@ public sealed partial class ConversationGAgent
         string commandId,
         ChatActivity? eventActivity,
         string cardMessageId,
-        string outboundText)
+        string outboundText,
+        IReadOnlyList<ConversationHistoryEntry> appendedHistory)
     {
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var completed = new ConversationTurnCompletedEvent
@@ -1502,6 +1527,7 @@ public sealed partial class ConversationGAgent
             CompletedAtUnixMs = nowMs,
             OutboundDelivery = ToOutboundDeliveryReceipt(eventActivity?.OutboundDelivery),
         };
+        completed.AppendedHistory.AddRange(appendedHistory.Select(entry => entry.Clone()));
         var delivered = new LlmReplyDeliveredEvent
         {
             CorrelationId = correlationId,

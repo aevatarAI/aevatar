@@ -141,7 +141,14 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           <Button onClick={onLoad} type="primary">
             {loadLabel}
           </Button>
-          {onReset ? <Button onClick={onReset}>{t("pages.services.servicequerycard.reset", "reset")}</Button> : null}
+          {onReset ? (
+            <Button
+              aria-label={t("pages.services.servicequerycard.reset", "Reset")}
+              onClick={onReset}
+            >
+              {t("pages.services.servicequerycard.reset", "Reset")}
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

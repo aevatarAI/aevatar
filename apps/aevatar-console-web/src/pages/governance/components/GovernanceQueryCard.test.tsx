@@ -95,12 +95,14 @@ describe('GovernanceQueryCard', () => {
             serviceId: 'svc-1',
           },
         ]}
+        onReset={() => {}}
         onChange={() => {}}
         onLoad={() => {}}
       />,
     );
 
     expect(screen.getByText('先选择服务')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重置' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '加载治理信息' })).toBeDisabled();
   });
 });

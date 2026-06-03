@@ -562,7 +562,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
-    public void ApplyObservedPayloadToReport_ShouldFallbackLegacyOnlySecureInputMetadata()
+    public void ApplyObservedPayloadToReport_ShouldIgnoreLegacyOnlySecureInputMetadataReservedKeys()
     {
         var report = new WorkflowRunInsightReportDocument
         {
@@ -597,9 +597,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             x.Stage == "workflow.suspended" &&
             x.StepId == "secure-input");
         suspendedTimeline.Data.Should().ContainKey("source").WhoseValue.Should().Be("legacy-test");
-        suspendedTimeline.Data.Should().ContainKey("variable").WhoseValue.Should().Be("api_key");
-        suspendedTimeline.Data.Should().ContainKey("secure").WhoseValue.Should().Be("true");
-        suspendedTimeline.Data.Should().ContainKey("redacted_output").WhoseValue.Should().Be("[legacy captured]");
+        suspendedTimeline.Data.Should().NotContainKey("variable");
+        suspendedTimeline.Data.Should().NotContainKey("secure");
+        suspendedTimeline.Data.Should().NotContainKey("redacted_output");
         suspendedTimeline.Data.Should().NotContainKey("input_mode");
     }
 
@@ -865,6 +865,33 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_WhenCommittedStateIsRelayedFromChild_ShouldSkipWrite()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 3, 18, 7, 45, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent
+                {
+                    Success = true,
+                    Output = "z\ny",
+                },
+                new WorkflowRunState
+                {
+                    WorkflowName = "child-level2",
+                    Status = "completed",
+                    FinalOutput = "z\ny",
+                },
+                publisherActorId: "child-run-actor"));
+
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
     public void WorkflowRunGraphArtifactMaterializer_ShouldDeriveFromReportAndDeduplicateNodesAndEdges()
     {
         var readModel = new WorkflowRunInsightReportDocument
@@ -1111,6 +1138,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         WorkflowRunState state,
         long version = 1,
         string eventId = "evt-1",
+        string publisherActorId = "root-actor",
         bool includeEnvelopeTimestamp = true)
     {
         return new EventEnvelope
@@ -1119,7 +1147,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             Timestamp = includeEnvelopeTimestamp
                 ? Timestamp.FromDateTime(DateTime.UtcNow)
                 : null,
-            Route = EnvelopeRouteSemantics.CreateObserverPublication("root-actor"),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(publisherActorId),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
                 StateEvent = new StateEvent

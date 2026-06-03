@@ -14,7 +14,7 @@
         <h1>Voice to Agent Demo</h1>
         <p class="lede">
           浏览器采集麦克风音频，按 PCM16 24kHz 发送到当前主网 Host 的 voice endpoint。
-          上游 Realtime 固定通过 NyxID 主网 proxy 访问，浏览器不会接触 OpenAI key。
+          页面只连接当前 Host 的 bootstrap 与 `/ws/voice`，不会接触 provider credential。
         </p>
       </div>
       <div class="status-strip" aria-live="polite">
@@ -60,11 +60,6 @@
         </label>
 
         <label class="field">
-          <span>NyxID upstream</span>
-          <input id="nyxidEndpoint" readonly>
-        </label>
-
-        <label class="field">
           <span>WS URL</span>
           <input id="wsUrl" readonly>
         </label>
@@ -102,58 +97,20 @@
 
     <section class="setup-grid">
       <article class="panel">
-        <h2>1. NyxID 已写死</h2>
-        <p>这个 demo 固定走 NyxID 主网，不需要在页面或本地再填 OpenAI API key。Host 内置的 Realtime proxy endpoint 是：</p>
-        <pre><code>https://nyx.chrono-ai.fun/api/v1/proxy/s/llm-openai</code></pre>
-        <p>NyxID 负责注入真正的 OpenAI credential；demo 只连当前 Mainnet Host 的 `/ws/voice`。</p>
+        <h2>1. Host 负责 provider 配置</h2>
+        <p>这个 demo 只连接当前 Mainnet Host。Voice provider 是否可用由 Host 配置和 voice readmodel 决定，页面不会声明固定上游 endpoint。</p>
       </article>
 
       <article class="panel">
         <h2>2. Agent 要有 voice module</h2>
-        <p>点击“开始说话”时，demo 会自动创建或复用当前用户的 voice demo agent，并挂上 `voice_presence_openai` 模块。Mainnet Host 的上游 URL 已固定为 NyxID proxy；请求里的 NyxID bearer 只用于向 NyxID proxy 鉴权，不会作为 OpenAI key 暴露给浏览器。</p>
-        <p>`/ws/voice` 会按路由策略找到目标 agent；`/ws/voice/{actorId}` 是调试直连入口，需要登录用户具备 `voice:bypass` scope 或 admin/owner 角色。</p>
+        <p>点击“开始说话”时，demo 会自动创建或复用当前用户的 voice demo agent，并挂上 `voice_presence_openai` 模块。请求里的 NyxID bearer 只用于当前 Host 的身份认证，不会作为 provider credential 暴露给浏览器。</p>
+        <p>普通 `/ws/voice` 只从 typed `voice_attach_target` 读取目标 agent；`/ws/voice/{actorId}` 是调试直连入口，需要登录用户具备 `voice:bypass` scope 或 admin/owner 角色。</p>
       </article>
 
       <article class="panel wide">
-        <h2>3. 自动路由</h2>
-        <p>demo 会调用 `POST /api/demo/voice/bootstrap`，在当前 NyxID scope 下登记 demo agent，并追加 `voice-demo` 路由规则。需要临时换目标 agent 时，也可以手动把 voice 请求路由到对应 actor；`scopeId` 使用当前登录用户或所属 scope，`actor_id` 换成目标 agent 的 actorId。</p>
-        <pre><code>curl -X PUT "$MAINNET_HOST/api/scopes/$SCOPE_ID/chat-route-policy" \
-  -H "authorization: Bearer $NYXID_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{
-    "default_target": {
-      "forward_to_model": {
-        "tool_set_ref": { "name": "voice.realtime" },
-        "tool_choice_hint": {
-          "tool_name": "aevatar_invoke_gagent",
-          "prefilled_arguments": {
-            "actor_id": "YOUR_AGENT_ACTOR_ID",
-            "voice_module_name": "voice_presence_openai"
-          }
-        }
-      }
-    },
-    "rules": [
-      {
-        "rule_id": "voice-demo",
-        "priority": 100,
-        "match": { "source_kind": "CHAT_SOURCE_KIND_VOICE" },
-        "action": {
-          "forward_to_model": {
-            "tool_set_ref": { "name": "voice.realtime" },
-            "tool_choice_hint": {
-              "tool_name": "aevatar_invoke_gagent",
-              "prefilled_arguments": {
-                "actor_id": "YOUR_AGENT_ACTOR_ID",
-                "voice_module_name": "voice_presence_openai"
-              }
-            }
-          }
-        },
-        "description": "route browser voice demo to the mainnet agent"
-      }
-    ]
-  }'</code></pre>
+        <h2>3. 调试直连</h2>
+        <p>demo 会调用 `POST /api/demo/voice/bootstrap`，在当前 NyxID scope 下登记 demo agent，并把 voice route 写成 typed `voice_attach_target`。返回的 `actor_id` 与 `voice_module_name` 可用于调试直连；临时换目标 agent 时使用显式 bypass 路径。</p>
+        <pre><code>wss://MAINNET_HOST/ws/voice/YOUR_AGENT_ACTOR_ID?voice_module_name=voice_presence_openai</code></pre>
       </article>
 
       <article class="panel">

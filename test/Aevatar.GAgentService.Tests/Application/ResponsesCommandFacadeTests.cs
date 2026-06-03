@@ -36,11 +36,12 @@ public sealed class ResponsesCommandFacadeTests
             null,
             0.4,
             64,
-            []), "token");
+            []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
         result.Completed.Should().BeNull();
+        result.Accepted!.Admission.Accepted.Should().BeTrue();
         sessions.Registered.Should().ContainSingle().Which.ResponseId.Should().StartWith("resp_");
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
@@ -48,6 +49,70 @@ public sealed class ResponsesCommandFacadeTests
         command.Model.Should().Be("gpt-5");
         command.RoutePreference.Should().Be("route-value");
         command.ScopeId.Should().Be("scope-1");
+        command.BearerToken.Should().Be("token");
+        result.Accepted.Admission.CommandId.Should().NotBeNullOrWhiteSpace();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        toolContext.Request.RequestId.Should().Be(command.ResponseId);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenFallbackRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini"),
+                usedFallback: true));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.4-mini",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.4-mini");
+        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDefaultRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini")));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.4-mini",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.4-mini");
+        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
     }
 
     [Fact]
@@ -71,7 +136,7 @@ public sealed class ResponsesCommandFacadeTests
             null,
             null,
             null,
-            []), "token");
+            []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         sessions.Registered.Should().ContainSingle();
@@ -122,13 +187,64 @@ public sealed class ResponsesCommandFacadeTests
             null,
             null,
             null,
-            []), "token");
+            []), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_gagent");
+        command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
         sessions.RecordedToolCalls.Should().BeEmpty("tool set tools execute locally and are not client-forwarded tools");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithForwardedClientTool_ShouldWriteTypedToolSchema()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            [
+                new ResponsesApplicationToolDeclaration(
+                    "get_weather",
+                    "Get weather",
+                    """{"type":"object","properties":{"city":{"type":"string"}}}""",
+                    "schema-1"),
+            ]), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        var declaration = command.ToolSelection.ForwardedTools.Should().ContainSingle().Subject;
+        declaration.Parameters.Fields["type"].StringValue.Should().Be("object");
+        declaration.Parameters.Fields["properties"].StructValue.Fields["city"].StructValue.Fields["type"]
+            .StringValue.Should().Be("string");
+    }
+
+    [Fact]
+    public void ToRuntimeToolCall_ShouldWriteTypedRuntimeToolArguments()
+    {
+        var method = typeof(ResponsesCommandFacade).GetMethod(
+            "ToRuntimeToolCall",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        var converted = (LlmSessionRuntimeToolCall)method!.Invoke(null,
+        [
+            new ToolCall
+            {
+                Id = "call_1",
+                Name = "get_weather",
+                ArgumentsJson = """{"city":"Singapore"}""",
+            },
+        ])!;
+
+        converted.Arguments.Fields["city"].StringValue.Should().Be("Singapore");
     }
 
     [Fact]
@@ -144,12 +260,58 @@ public sealed class ResponsesCommandFacadeTests
             null,
             null,
             null,
-            []), "token");
+            []), CallerScopeContext("token"));
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             401,
             "authentication_required",
             "access token is invalid"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithPreviousResponseAfterBearerScopeRotation_ShouldRejectBeforeRegistrationOrDispatch()
+    {
+        const string previousResponseId = "resp_previous";
+        var previousSnapshot = BuildSnapshot(previousResponseId, scopeId: "old-scope");
+        var queryPort = new RecordingSessionQueryPort { Snapshot = previousSnapshot };
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var callerScopeResolver = new StaticCallerScopeResolver("new-scope", "owner-1", LlmSessionOriginKind.ApiKey);
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            queryPort: queryPort,
+            callerScopeResolver: callerScopeResolver,
+            dispatchPort: dispatch);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "model",
+            null,
+            [
+                new ResponsesToolResultInput(
+                    "call_1",
+                    """{"ok":true}""",
+                    null),
+            ],
+            false,
+            previousResponseId,
+            null,
+            null,
+            []), CallerScopeContext("rotated-token"));
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            403,
+            "response_scope_mismatch",
+            "response id is not visible to the current caller scope."));
+        result.Accepted.Should().BeNull();
+        result.Completed.Should().BeNull();
+        result.StreamPlan.Should().BeNull();
+        sessions.Registered.Should().BeEmpty();
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.RecordedToolCalls.Should().BeEmpty();
+        sessions.RecordedCompletions.Should().BeEmpty();
+        sessions.UpdatedStatuses.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -162,13 +324,13 @@ public sealed class ResponsesCommandFacadeTests
         var sessionPort = new RecordingSessionPort();
         var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
 
-        var invisible = await facade.CancelAsync("resp_1", "token");
+        var invisible = await facade.CancelAsync("resp_1", CallerScopeContext("token"));
 
         invisible.Error!.Code.Should().Be("response_scope_mismatch");
         sessionPort.UpdatedStatuses.Should().BeEmpty();
 
         queryPort.Snapshot = BuildSnapshot("resp_1", scopeId: "scope-1");
-        var cancelled = await facade.CancelAsync("resp_1", "token");
+        var cancelled = await facade.CancelAsync("resp_1", CallerScopeContext("token"));
 
         cancelled.Error.Should().BeNull();
         cancelled.ResponseId.Should().Be("resp_1");
@@ -185,7 +347,7 @@ public sealed class ResponsesCommandFacadeTests
         var sessionPort = new RecordingSessionPort();
         var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
 
-        var result = await facade.CancelAsync("resp_expired", "token");
+        var result = await facade.CancelAsync("resp_expired", CallerScopeContext("token"));
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             400,
@@ -207,7 +369,7 @@ public sealed class ResponsesCommandFacadeTests
         };
         var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
 
-        var result = await facade.CancelAsync("resp_active", "token");
+        var result = await facade.CancelAsync("resp_active", CallerScopeContext("token"));
 
         result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
             400,
@@ -229,6 +391,35 @@ public sealed class ResponsesCommandFacadeTests
             "authentication_required",
             "NyxID authentication required for provider 'test-provider'. Please sign in."));
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldCarryTypedToolContext_WhenRequestIsStreaming()
+    {
+        var facade = CreateFacade(
+            routeResolver: new StaticResponsesRouteResolver("route-value"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5")));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "hello",
+            [],
+            true,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.StreamPlan.Should().NotBeNull();
+        result.StreamPlan!.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
+        result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.ResponseId);
+        result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        result.StreamPlan.LlmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
 
     [Fact]
@@ -329,11 +520,19 @@ public sealed class ResponsesCommandFacadeTests
                 RequestId = "resp_stream",
                 Model = "model",
                 Messages = [ChatMessage.User("hello")],
+                ToolContext = BuildToolContext("resp_stream"),
             },
-            new Dictionary<string, string>(StringComparer.Ordinal),
+            BuildToolContext("resp_stream"),
             new ResponsesToolClassification([], [], [], []),
             ResponsesToolChoiceHintPlan.Empty,
             DateTimeOffset.UtcNow);
+
+    private static AgentToolExecutionContext BuildToolContext(string responseId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(responseId, null),
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", responseId),
+        };
 
     private static LlmSessionSnapshot BuildSnapshot(
         string responseId,
@@ -358,6 +557,9 @@ public sealed class ResponsesCommandFacadeTests
         ForwardToModel = new ForwardToModel { ModelName = modelName },
     };
 
+    private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
+        new(bearerToken, null, null);
+
     private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
     {
         ForwardToModel = new ForwardToModel
@@ -377,15 +579,22 @@ public sealed class ResponsesCommandFacadeTests
         },
     };
 
-    private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
+    private sealed class StaticCallerScopeResolver(
+        string scopeId = "scope-1",
+        string ownerSubject = "owner-1",
+        LlmSessionOriginKind originKind = LlmSessionOriginKind.ApiKey) : IResponsesCallerScopeResolver
     {
-        public Task<ResponsesCallerScope> ResolveAsync(string nyxIdAccessToken, CancellationToken ct = default) =>
-            Task.FromResult(new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey));
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ResponsesCallerScope(scopeId, ownerSubject, originKind));
     }
 
     private sealed class ThrowingCallerScopeResolver : IResponsesCallerScopeResolver
     {
-        public Task<ResponsesCallerScope> ResolveAsync(string nyxIdAccessToken, CancellationToken ct = default) =>
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default) =>
             throw new ResponsesCallerScopeUnavailableException("access token is invalid");
     }
 
@@ -395,7 +604,10 @@ public sealed class ResponsesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+    private sealed class StaticResponsesChatRouteDecisionPort(
+        ChatRouteAction action,
+        bool usedFallback = false,
+        string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
         public Task<ChatRouteDecision> ResolveAsync(
@@ -407,7 +619,8 @@ public sealed class ResponsesCommandFacadeTests
             => Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
-                UsedFallback = false,
+                UsedFallback = usedFallback,
+                MatchedRuleId = matchedRuleId,
             });
     }
 
@@ -495,7 +708,7 @@ public sealed class ResponsesCommandFacadeTests
         public Task<ResponsesCompletionResult> CollectAsync(
             ILLMProvider provider,
             LLMRequest request,
-            IReadOnlyDictionary<string, string> toolContextMetadata,
+            AgentToolExecutionContext toolContext,
             ResponsesToolClassification toolClassification,
             CancellationToken ct = default)
         {
@@ -509,7 +722,7 @@ public sealed class ResponsesCommandFacadeTests
         public Task<ResponsesCompletionResult> StreamAsync(
             ILLMProvider provider,
             LLMRequest request,
-            IReadOnlyDictionary<string, string> toolContextMetadata,
+            AgentToolExecutionContext toolContext,
             ResponsesToolClassification toolClassification,
             Func<string, CancellationToken, ValueTask> onTextDelta,
             CancellationToken ct = default)
@@ -547,6 +760,10 @@ public sealed class ResponsesCommandFacadeTests
         public List<LlmSessionForwardedToolCall> RecordedToolCalls { get; } = [];
 
         public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
+
+        public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
+
+        public List<(string ActorId, string ResponseId, string CallId)> ResolvedToolResults { get; } = [];
 
         public RecordingSessionQueryPort QueryPort { get; } = new();
 
@@ -595,15 +812,21 @@ public sealed class ResponsesCommandFacadeTests
             string callId,
             string schemaHash,
             string resultJson,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ToolResults.Add((sessionActorId, responseId, callId, schemaHash, resultJson));
+            return Task.CompletedTask;
+        }
 
         public Task ResolveForwardedToolResultAsync(
             string sessionActorId,
             string responseId,
             string callId,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ResolvedToolResults.Add((sessionActorId, responseId, callId));
+            return Task.CompletedTask;
+        }
 
         private static LlmSessionCompletionSnapshot ToSnapshot(LlmSessionCompletion completion) =>
             new(

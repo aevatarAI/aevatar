@@ -52,7 +52,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        foreach (var id in new[] { "parent-1", "child-1", "restored-1", "restored-2", "root-t", "mid-t", "leaf-t", "collector-dedup" })
+        foreach (var id in new[] { "parent-1", "child-1", "child-2", "restored-1", "restored-2", "root-t", "mid-t", "leaf-t", "collector-dedup" })
             await _runtime.DestroyAsync(id);
 
         _serviceProvider.Dispose();
@@ -83,16 +83,48 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
         await _runtime.LinkAsync(parent.Id, child.Id);
 
-        var bindings = await _forwardingRegistry.ListBySourceAsync(parent.Id, CancellationToken.None);
-        var binding = bindings.Should().ContainSingle(x =>
+        var parentBindings = await _forwardingRegistry.ListBySourceAsync(parent.Id, CancellationToken.None);
+        var hierarchyBinding = parentBindings.Should().ContainSingle(x =>
             x.TargetStreamId == child.Id &&
             x.ForwardingMode == StreamForwardingMode.HandleThenForward).Subject;
-        binding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
+        hierarchyBinding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
+
+        var childBindings = await _forwardingRegistry.ListBySourceAsync(child.Id, CancellationToken.None);
+        var committedObservationBinding = childBindings.Should().ContainSingle(x =>
+            x.TargetStreamId == parent.Id &&
+            x.ForwardingMode == StreamForwardingMode.HandleThenForward).Subject;
+        committedObservationBinding.DirectionFilter.SetEquals([TopologyAudience.Unspecified]).Should().BeTrue();
+        committedObservationBinding.EventTypeFilter.Should().ContainSingle()
+            .Which.Should().Be($"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}");
 
         await _runtime.UnlinkAsync(child.Id);
 
         var afterUnlink = await _forwardingRegistry.ListBySourceAsync(parent.Id, CancellationToken.None);
         afterUnlink.Should().BeEmpty();
+        var childAfterUnlink = await _forwardingRegistry.ListBySourceAsync(child.Id, CancellationToken.None);
+        childAfterUnlink.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DestroyAsync_ShouldRemoveCommittedObservationRelayFromChildStreamSource()
+    {
+        var parent = await _runtime.CreateAsync<EchoAgent>("parent-1");
+        var child = await _runtime.CreateAsync<CollectorAgent>("child-1");
+        var grandchild = await _runtime.CreateAsync<CollectorAgent>("child-2");
+        await _runtime.LinkAsync(parent.Id, child.Id);
+        await _runtime.LinkAsync(child.Id, grandchild.Id);
+
+        (await _forwardingRegistry.ListBySourceAsync(child.Id, CancellationToken.None))
+            .Should().Contain(x => x.TargetStreamId == parent.Id)
+            .And.Contain(x => x.TargetStreamId == grandchild.Id);
+        (await _forwardingRegistry.ListBySourceAsync(grandchild.Id, CancellationToken.None))
+            .Should().ContainSingle(x => x.TargetStreamId == child.Id);
+
+        await _runtime.DestroyAsync(child.Id);
+
+        (await _forwardingRegistry.ListBySourceAsync(parent.Id, CancellationToken.None)).Should().BeEmpty();
+        (await _forwardingRegistry.ListBySourceAsync(child.Id, CancellationToken.None)).Should().BeEmpty();
+        (await _forwardingRegistry.ListBySourceAsync(grandchild.Id, CancellationToken.None)).Should().BeEmpty();
     }
 
     [Fact]

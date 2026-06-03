@@ -77,17 +77,17 @@ public sealed class ChatRouteResolverTests
             [
                 new ChatRouteRule
                 {
-                    RuleId = "daily",
+                    RuleId = "summary",
                     Priority = 10,
-                    Match = new ChatRouteMatch { CommandName = "/daily" },
-                    Action = ForwardToModelAction("daily-model"),
+                    Match = new ChatRouteMatch { CommandName = "/summary" },
+                    Action = ForwardToModelAction("summary-model"),
                 },
             ]);
 
-        var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/daily" });
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/summary" });
 
-        decision.MatchedRuleId.Should().Be("daily");
-        decision.Action.ForwardToModel.ModelName.Should().Be("daily-model");
+        decision.MatchedRuleId.Should().Be("summary");
+        decision.Action.ForwardToModel.ModelName.Should().Be("summary-model");
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public sealed class ChatRouteResolverTests
                 ["actor_id"] = "agent-voice",
                 ["voice_module_name"] = "voice_presence_openai",
             },
-            toolSetName: "voice.realtime");
+            toolSetName: "workspace.default");
         var snapshot = new ChatRoutePolicySnapshot(
             ForwardToModelAction("default-model"),
             [
@@ -246,7 +246,7 @@ public sealed class ChatRouteResolverTests
                 ["actor_id"] = "agent-voice",
                 ["voice_module_name"] = "voice_presence_openai",
             },
-            expectedToolSetName: "voice.realtime");
+            expectedToolSetName: "workspace.default");
     }
 
     [Fact]

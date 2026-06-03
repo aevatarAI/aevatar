@@ -51,7 +51,7 @@ public sealed class WorkflowExecutionProjectionPortTests
         await port.DetachLiveSinkAsync(liveSinkLease);
 
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("actor-1");
+        hub.LastRootActorId.Should().Be("actor-1");
         hub.LastSessionId.Should().Be("cmd-1");
         sink.Events.Should().ContainSingle();
         sink.Events[0].Custom.Name.Should().Be("event-1");
@@ -77,7 +77,7 @@ public sealed class WorkflowExecutionProjectionPortTests
         attachment!.ProjectionLease.ActorId.Should().Be("actor-1");
         attachment.ProjectionLease.CommandId.Should().Be("cmd-1");
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("actor-1");
+        hub.LastRootActorId.Should().Be("actor-1");
         hub.LastSessionId.Should().Be("cmd-1");
         runtime.ExistsCalls.Should().ContainSingle()
             .Which.Should().Be("projection.session.scope:workflow-execution-session:actor-1:cmd-1");
@@ -126,6 +126,58 @@ public sealed class WorkflowExecutionProjectionPortTests
         release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
     }
 
+    [Fact]
+    public async Task WorkflowChatRunObservationScopeActivationPort_ShouldActivateWorkflowExecutionSession()
+    {
+        var activation = new RecordingActivationService();
+        var port = new WorkflowChatRunObservationScopeActivationPort(
+            activation,
+            new RecordingReleaseService());
+
+        var result = await port.ActivateAsync("actor-1", "cmd-1", CancellationToken.None);
+
+        result.Should().Be(new WorkflowChatRunObservationScopeActivation("actor-1", "cmd-1"));
+        activation.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = "actor-1",
+                ProjectionKind = "workflow-execution-session",
+                Mode = ProjectionRuntimeMode.SessionObservation,
+                SessionId = "cmd-1",
+            });
+    }
+
+    [Fact]
+    public async Task WorkflowChatRunObservationScopeActivationPort_ShouldReturnNull_WhenActivationFails()
+    {
+        var port = new WorkflowChatRunObservationScopeActivationPort(
+            new RecordingActivationService { Exception = new InvalidOperationException("activation failed") },
+            new RecordingReleaseService());
+
+        var result = await port.ActivateAsync("actor-1", "cmd-1", CancellationToken.None);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowChatRunObservationScopeActivationPort_ShouldReleaseWorkflowExecutionSession()
+    {
+        var release = new RecordingReleaseService();
+        var port = new WorkflowChatRunObservationScopeActivationPort(
+            new RecordingActivationService(),
+            release);
+
+        await port.ReleaseAsync(
+            new WorkflowChatRunObservationScopeActivation("actor-1", "cmd-1"),
+            CancellationToken.None);
+
+        release.Leases.Should().ContainSingle();
+        var lease = release.Leases.Single();
+        lease.ActorId.Should().Be("actor-1");
+        lease.CommandId.Should().Be("cmd-1");
+        lease.Context.ProjectionKind.Should().Be("workflow-execution-session");
+    }
+
     private sealed class RecordingActorRuntime : IActorRuntime
     {
         private readonly HashSet<string> _existingActors = new(StringComparer.Ordinal);
@@ -159,6 +211,31 @@ public sealed class WorkflowExecutionProjectionPortTests
             throw new NotSupportedException();
     }
 
+    private sealed class RecordingActivationService : IProjectionScopeActivationService<WorkflowExecutionRuntimeLease>
+    {
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
+
+        public WorkflowExecutionRuntimeLease LeaseToReturn { get; } = new(new WorkflowExecutionProjectionContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-session",
+            SessionId = "cmd-1",
+        });
+
+        public Exception? Exception { get; set; }
+
+        public Task<WorkflowExecutionRuntimeLease> EnsureAsync(
+            ProjectionScopeStartRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (Exception != null)
+                throw Exception;
+
+            return Task.FromResult(LeaseToReturn);
+        }
+    }
+
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<WorkflowExecutionRuntimeLease>
     {
         public List<WorkflowExecutionRuntimeLease> Leases { get; } = [];
@@ -186,7 +263,7 @@ public sealed class WorkflowExecutionProjectionPortTests
     {
         public int SubscribeCalls { get; private set; }
 
-        public string? LastScopeId { get; private set; }
+        public string? LastRootActorId { get; private set; }
 
         public string? LastSessionId { get; private set; }
 
@@ -195,12 +272,12 @@ public sealed class WorkflowExecutionProjectionPortTests
         public RecordingSubscription? LastSubscription { get; private set; }
 
         public Task PublishAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             WorkflowRunEventEnvelope evt,
             CancellationToken ct = default)
         {
-            _ = scopeId;
+            _ = rootActorId;
             _ = sessionId;
             _ = evt;
             ct.ThrowIfCancellationRequested();
@@ -208,14 +285,14 @@ public sealed class WorkflowExecutionProjectionPortTests
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<WorkflowRunEventEnvelope, ValueTask> handler,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             SubscribeCalls++;
-            LastScopeId = scopeId;
+            LastRootActorId = rootActorId;
             LastSessionId = sessionId;
             Handler = handler;
             LastSubscription = new RecordingSubscription();

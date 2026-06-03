@@ -596,8 +596,8 @@ const DeploymentsScopeCard: React.FC<{
             minHeight: 30,
             minWidth: 0,
             maxWidth: "100%",
+            overflowWrap: "anywhere",
             padding: "0 12px",
-            whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
@@ -722,8 +722,13 @@ const DeploymentsScopeCard: React.FC<{
       </div>
 
       <Space size={8}>
-        <Button size="small" onClick={onReset}>
-          {t("pages.deployments.index.reset", "reset")}</Button>
+        <Button
+          aria-label={t("pages.deployments.index.reset", "Reset")}
+          size="small"
+          onClick={onReset}
+        >
+          {t("pages.deployments.index.reset", "Reset")}
+        </Button>
         <Button
           loading={isLoading}
           size="small"

@@ -4,8 +4,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
@@ -27,7 +25,6 @@ namespace Aevatar.Workflow.Core;
 //                process-local runtime context.
 //   New principle: durable control/security facts live in typed WorkflowRunState;
 //                  runtime context carries only same-turn passthrough metadata.
-// Refactor (iter149/issue1132): Old pattern: workflow role initialization preferred handled-dispatch when available.  New principle: role initialization uses accepted-only IActorDispatchPort and observes completion through workflow events.
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
@@ -39,15 +36,12 @@ public sealed class WorkflowRunGAgent
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
-    private const string WorkflowCommandIdMetadataKey = "workflow.command_id";
-
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
     private readonly WorkflowExecutionRuntimeContext _runtimeContext = new();
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IEventModuleFactory<IWorkflowExecutionContext> _stepExecutorFactory;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
@@ -57,14 +51,12 @@ public sealed class WorkflowRunGAgent
     public WorkflowRunGAgent(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
-        IRoleAgentTypeResolver roleAgentTypeResolver,
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
         IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _stepExecutorFactory = stepExecutorFactory ?? throw new ArgumentNullException(nameof(stepExecutorFactory));
         _ = workflowDefinitionResolver;
 
@@ -236,20 +228,28 @@ public sealed class WorkflowRunGAgent
     }
 
     [EventHandler]
-    public async Task HandleChatRequest(ChatRequestEvent request)
+    public async Task HandleChatRequest(WorkflowChatRequestEvent request)
     {
         if (_compiledWorkflow == null)
         {
-            await PublishAsync(new ChatResponseEvent
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
             {
+                RunId = RunId,
                 Content = "Workflow run is not definition-bound or compiled.",
                 SessionId = request.SessionId,
+                Success = false,
+                Error = "Workflow run is not definition-bound or compiled.",
             }, TopologyAudience.Parent);
             return;
         }
 
-        if (request.Headers.TryGetValue(WorkflowCommandIdMetadataKey, out var commandId) &&
-            !string.IsNullOrWhiteSpace(commandId))
+        // Refactor (iter163/cluster-002-first):
+        //   Old pattern: actor read command id from request.Headers[workflow.command_id],
+        //                making Headers a stable control flow channel.
+        //   New principle: actor reads command id from ActiveInboundEnvelope.Id,
+        //                  the typed envelope identity.
+        var commandId = ActiveInboundEnvelope?.Id;
+        if (!string.IsNullOrWhiteSpace(commandId))
         {
             await PersistDomainEventAsync(
                 new WorkflowCommandObservedEvent
@@ -259,18 +259,17 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        var metadataDelta = WorkflowRunExecutionContextStateAccess.BuildRequestMetadataDelta(request.Metadata);
+        // Refactor (iter169/cluster-issue1551): Old pattern: connector auth was promoted from request.Metadata. New principle: connector auth is carried by WorkflowChatRequestEvent.ConnectorHttpAuthorization.
+        var connectorAuthorizationDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(request.ConnectorHttpAuthorization);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
-        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
-        var toolContextDelta = WorkflowRunExecutionContextStateAccess.BuildToolContextDelta(toolContext);
+        var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
 
         await EnsureAgentTreeAsync();
 
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var executionContextDelta = MergeExecutionContextDeltas(metadataDelta, toolContextDelta);
+        var executionContextDelta = MergeExecutionContextDeltas(connectorAuthorizationDelta, llmControlDelta);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
@@ -296,7 +295,13 @@ public sealed class WorkflowRunGAgent
         if (string.IsNullOrWhiteSpace(yaml))
         {
             Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: empty workflow YAML, ignoring.");
-            await PublishAsync(new ChatResponseEvent { Content = "Dynamic workflow YAML is empty." }, TopologyAudience.Parent);
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = RunId,
+                Success = false,
+                Error = "Dynamic workflow YAML is empty.",
+                Content = "Dynamic workflow YAML is empty.",
+            }, TopologyAudience.Parent);
             return;
         }
 
@@ -307,7 +312,13 @@ public sealed class WorkflowRunGAgent
                 ? "Dynamic workflow YAML compilation failed."
                 : $"Dynamic workflow YAML compilation failed: {replaceResult.CompilationError}";
             Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: YAML compilation failed. Error={Error}", replaceResult.CompilationError);
-            await PublishAsync(new ChatResponseEvent { Content = reason }, TopologyAudience.Parent);
+            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+            {
+                RunId = RunId,
+                Success = false,
+                Error = reason,
+                Content = reason,
+            }, TopologyAudience.Parent);
             return;
         }
 
@@ -476,9 +487,12 @@ public sealed class WorkflowRunGAgent
                 (evt.Output ?? string.Empty).Length);
         }
 
-        await PublishAsync(new TextMessageEndEvent
+        await PublishAsync(new WorkflowLlmInvocationCompletedEvent
         {
+            RunId = evt.RunId,
+            Success = evt.Success,
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
+            Error = evt.Success ? string.Empty : evt.Error,
         }, TopologyAudience.Parent);
     }
 
@@ -617,14 +631,8 @@ public sealed class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(role.AgentKind))
             return await _runtime.CreateByKindAsync(role.AgentKind.Trim(), childActorId);
 
-        var roleAgentType = _roleAgentTypeResolver.ResolveRoleAgentType();
-        if (!typeof(IRoleAgent).IsAssignableFrom(roleAgentType))
-        {
-            throw new InvalidOperationException(
-                $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
-        }
-
-        return await _runtime.CreateAsync(roleAgentType, childActorId);
+        throw new InvalidOperationException(
+            $"Role '{role.Id}' must declare agent_kind because Workflow.Core no longer depends on AI role implementations.");
     }
 
     private string BuildChildActorId(string roleId)
@@ -848,10 +856,11 @@ public sealed class WorkflowRunGAgent
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
-                NyxidAccessToken = delta.Llm.NyxidAccessToken?.Trim() ?? string.Empty,
                 ModelOverride = delta.Llm.ModelOverride?.Trim() ?? string.Empty,
-                NyxidRoutePreference = delta.Llm.NyxidRoutePreference?.Trim() ?? string.Empty,
+                UserMemoryPrompt = delta.Llm.UserMemoryPrompt?.Trim() ?? string.Empty,
             };
+            if (delta.Llm.HasMaxToolRoundsOverride)
+                state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
         if (delta.Connector != null)
@@ -1010,9 +1019,12 @@ public sealed class WorkflowRunGAgent
             runId,
             string.IsNullOrWhiteSpace(reason) ? "(none)" : reason);
 
-        await PublishAsync(new TextMessageEndEvent
+        await PublishAsync(new WorkflowLlmInvocationCompletedEvent
         {
+            RunId = runId,
+            Success = false,
             Content = BuildStoppedMessage(reason),
+            Error = BuildStoppedMessage(reason),
         }, TopologyAudience.Parent);
     }
 

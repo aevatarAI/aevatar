@@ -5,6 +5,9 @@ namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 /// <summary>
 /// Tunables for the spec-driven retired-actor cleanup hosted service.
 /// </summary>
+// Refactor (issue1287-first):
+//   Old pattern: options exposed marker lease timeout and polling controls.
+//   New principle: options only gate idempotent cleanup actions; no lease timing remains.
 public sealed class RetiredActorCleanupOptions
 {
     public const string SectionName = "Aevatar:RetiredActorCleanup";
@@ -14,10 +17,6 @@ public sealed class RetiredActorCleanupOptions
     public bool ResetEventStreams { get; init; } = true;
 
     public bool CleanupReadModels { get; init; } = true;
-
-    public int InProgressTimeoutSeconds { get; init; } = 300;
-
-    public int WaitPollMilliseconds { get; init; } = 1000;
 
     public static RetiredActorCleanupOptions FromConfiguration(IConfiguration configuration)
     {
@@ -29,14 +28,6 @@ public sealed class RetiredActorCleanupOptions
             Enabled = ResolveBool(section, nameof(Enabled), fallback: true),
             ResetEventStreams = ResolveBool(section, nameof(ResetEventStreams), fallback: true),
             CleanupReadModels = ResolveBool(section, nameof(CleanupReadModels), fallback: true),
-            InProgressTimeoutSeconds = ResolvePositiveInt(
-                section,
-                nameof(InProgressTimeoutSeconds),
-                fallback: 300),
-            WaitPollMilliseconds = ResolvePositiveInt(
-                section,
-                nameof(WaitPollMilliseconds),
-                fallback: 1000),
         };
     }
 
@@ -44,11 +35,5 @@ public sealed class RetiredActorCleanupOptions
     {
         var raw = section[key];
         return bool.TryParse(raw, out var value) ? value : fallback;
-    }
-
-    private static int ResolvePositiveInt(IConfiguration section, string key, int fallback)
-    {
-        var raw = section[key];
-        return int.TryParse(raw, out var value) && value > 0 ? value : fallback;
     }
 }

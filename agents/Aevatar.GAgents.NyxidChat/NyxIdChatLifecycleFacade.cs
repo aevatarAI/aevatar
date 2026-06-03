@@ -209,21 +209,8 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                 NyxIdChatLifecycleCommandStartError.RouteRejected);
 
-        if (ChatRouteActionTargets.TryGetGAgentActorTarget(decision, out var forwardedTarget))
-        {
-            var forwardedActorId = forwardedTarget.ActorId.Trim();
-            var forwardedActor = await _actorRuntime.GetAsync(forwardedActorId.Trim());
-            if (forwardedActor is null)
-                return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
-                    NyxIdChatLifecycleCommandStartError.TargetNotFound);
-
-            command.CreatedLocally = false;
-            return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Success(
-                new NyxIdChatConversationCreateCommandTarget(
-                    forwardedActor,
-                    createdLocally: false,
-                    NyxIdChatConversationCreateStatus.Accepted));
-        }
+        // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill only,
+        // so conversation creation never treats hint arguments as actor addressing.
 
         var actorId = NyxIdChatServiceDefaults.GenerateActorId();
         var createdActor = await _actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);

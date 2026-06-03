@@ -2675,7 +2675,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             >
               <EditOutlined />
               {' '}
-              {t("pages.studio.studiofilesdetailpane.open.scripts.studio", "Open Scripts Studio")}</button>
+              {t("pages.studio.studiofilesdetailpane.open.script.build", "Open Script Build")}
+            </button>
           </div>
 
           <section aria-label={t("pages.studio.studiofilesdetailpane.script.source.preview", "Script source preview")}>

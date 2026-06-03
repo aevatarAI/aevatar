@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Application.Internal;
@@ -27,14 +28,13 @@ public sealed class MessagesCommandFacade(
     IResponsesDirectToolPlanService directToolPlanService,
     ILogger<MessagesCommandFacade> logger) : IMessagesCommandFacade
 {
-    private const string RegistrationScopeMetadataKey = "scope_id";
-
     public async Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(callerScopeContext);
 
         var normalizedResult = MessagesRequestNormalizer.Normalize(request);
         if (!normalizedResult.Succeeded)
@@ -46,7 +46,7 @@ public sealed class MessagesCommandFacade(
         }
 
         var normalized = normalizedResult.Request!;
-        var callerScopeResult = await ResolveCallerScopeAsync(bearerToken, ct);
+        var callerScopeResult = await ResolveCallerScopeAsync(callerScopeContext, ct);
         if (callerScopeResult.Error is not null)
             return MessagesCreateCommandResult.FromError(
                 callerScopeResult.Error.StatusCode,
@@ -72,7 +72,7 @@ public sealed class MessagesCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
-            bearerToken,
+            callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             ct);
 
@@ -123,11 +123,13 @@ public sealed class MessagesCommandFacade(
         }
     }
 
-    private async Task<CallerScopeResult> ResolveCallerScopeAsync(string bearerToken, CancellationToken ct)
+    private async Task<CallerScopeResult> ResolveCallerScopeAsync(
+        ResponsesCallerScopeResolutionContext callerScopeContext,
+        CancellationToken ct)
     {
         try
         {
-            var callerScope = await callerScopeResolver.ResolveAsync(bearerToken, ct);
+            var callerScope = await callerScopeResolver.ResolveAsync(callerScopeContext, ct);
             return new CallerScopeResult(callerScope, null);
         }
         catch (ResponsesCallerScopeUnavailableException ex)
@@ -159,7 +161,7 @@ public sealed class MessagesCommandFacade(
         }
 
         var action = routeDecision.Action.Clone();
-        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
+        var routedModel = ShouldUseRouteModel(routeDecision, normalized.Model)
             ? action.ForwardToModel.ModelName.Trim()
             : normalized.Model;
         if (action.ForwardToModel is null)
@@ -169,6 +171,21 @@ public sealed class MessagesCommandFacade(
 
         action.ForwardToModel.ModelName = routedModel;
         return RouteTargetResult.FromModel(routedModel, action);
+    }
+
+    private static bool ShouldUseRouteModel(ChatRouteDecision routeDecision, string requestModel)
+    {
+        var routeModel = routeDecision.Action.ForwardToModel?.ModelName;
+        if (string.IsNullOrWhiteSpace(routeModel))
+            return false;
+
+        if (!routeDecision.UsedFallback)
+        {
+            return !string.IsNullOrWhiteSpace(routeDecision.MatchedRuleId) ||
+                   ResponsesModelRouteParser.Parse(requestModel).RouteSlug is null;
+        }
+
+        return ResponsesModelRouteParser.Parse(requestModel).RouteSlug is null;
     }
 
     private async Task<SessionRegistrationResult> RegisterSessionAsync(
@@ -215,13 +232,21 @@ public sealed class MessagesCommandFacade(
             toolPlan.AdditionalToolProviders,
             ct: ct);
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
+        var toolContext = toolProviderContext.ToolContext with
+        {
+            Routing = toolProviderContext.ToolContext.Routing with
+            {
+                NyxIdRoutePreference = resolvedRouteValue,
+            },
+        };
         var llmRequest = BuildLlmRequest(
             normalized,
             callerScope,
             bearerToken,
             effectiveModel,
             resolvedRouteValue,
-            toolClassification);
+            toolClassification,
+            toolContext);
         if (normalized.DroppedImageContent)
         {
             logger.LogWarning(
@@ -233,7 +258,7 @@ public sealed class MessagesCommandFacade(
             normalized,
             session,
             llmRequest,
-            toolProviderContext.ToolContextMetadata,
+            toolContext,
             toolClassification,
             toolPlan.ToolChoiceHintPlan));
     }
@@ -318,24 +343,21 @@ public sealed class MessagesCommandFacade(
         string bearerToken,
         string effectiveModel,
         string? resolvedRouteValue,
-        ResponsesToolClassification toolClassification)
+        ResponsesToolClassification toolClassification,
+        AgentToolExecutionContext toolContext)
     {
-        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.MessageId,
-            [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-        };
         return new LLMRequest
         {
             Messages = [.. normalized.ChatMessages],
             RequestId = normalized.MessageId,
-            Metadata = llmMetadata,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
             CallerContext = new LLMRequestCallerContext(
                 callerScope.ScopeId,
                 callerScope.OwnerSubject,
                 normalized.MessageId,
                 new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
+            ToolContext = toolContext,
             LlmControl = new LLMControlContext(
                 NyxIdAccessToken: null,
                 NyxIdOrgToken: null,
@@ -350,26 +372,35 @@ public sealed class MessagesCommandFacade(
         };
     }
 
+    // Refactor (issue1416-first):
+    //   Old pattern: Messages downgraded request identity, caller scope, and bearer credentials into ToolContextMetadata.
+    //   New principle: Messages reuses AgentToolExecutionContext as the typed tool execution authority.
     private static ResponsesToolProviderContext BuildToolProviderContext(
         ResponsesCallerScope callerScope,
         string responseId,
-        string bearerToken)
-    {
-        return new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
+        string bearerToken) =>
+        new(BuildToolContext(callerScope, responseId, bearerToken, routePreference: null));
+
+    private static AgentToolExecutionContext BuildToolContext(
+        ResponsesCallerScope callerScope,
+        string responseId,
+        string bearerToken,
+        string? routePreference) =>
+        new(
+            new AgentToolRequestIdentity(responseId, null),
+            new AgentToolCredentials(bearerToken, null, null),
+            new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+            new AgentToolChannelContext(
+                callerScope.OriginKind.ToString(),
+                null,
                 callerScope.ScopeId,
-                callerScope.OwnerSubject,
-                callerScope.OriginKind.ToString()),
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = responseId,
-                [LLMRequestMetadataKeys.ResponseId] = responseId,
-                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
-                [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
-            });
-    }
+                null,
+                null),
+            AgentToolSenderBindingContext.Empty,
+            new LLMRequestRoutingContext(null, routePreference, null, null),
+            AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
     private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         ResponsesCallerScope callerScope,
@@ -461,6 +492,7 @@ public sealed class MessagesCommandFacade(
             ScopeId = request.CallerContext?.ScopeId ?? string.Empty,
             OwnerSubject = request.CallerContext?.OwnerSubject ?? string.Empty,
             BearerToken = request.CallerContext?.Credentials?.NyxIdBearer ?? string.Empty,
+            ToolContext = (request.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload(),
             RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
         if (request.Temperature is not null)
@@ -487,10 +519,14 @@ public sealed class MessagesCommandFacade(
                 CallId = call.Id,
                 ToolName = call.Name,
                 ArgumentsJson = call.ArgumentsJson,
+                Arguments = ResponsesProtoPayloads.ParseStruct(call.ArgumentsJson),
             }));
         return result;
     }
 
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: Messages LlmRunRequested persisted tool schemas and hints as JSON strings.
+    //   New principle: typed Struct fields carry new writes; JSON strings remain legacy fallback.
     private static LlmSessionRuntimeToolSelection ToToolSelection(
         ResponsesToolClassification classification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan)
@@ -504,6 +540,7 @@ public sealed class MessagesCommandFacade(
         {
             selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
             selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
+            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
         }
 
         selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
@@ -512,6 +549,7 @@ public sealed class MessagesCommandFacade(
                 ToolName = tool.Name,
                 Description = tool.Description,
                 ParametersJson = tool.ParametersJson,
+                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
                 SchemaHash = tool.SchemaHash,
             }));
         return selection;

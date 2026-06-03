@@ -52,6 +52,9 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type StudioMemberBindPanelProps = {
+  // Refactor (iter1/cluster-1618): Old flow let Studio bind completion pass
+  //   post-bind Team entry actions through this panel. New flow keeps Team
+  //   entry mutation and testing owned by the Team detail/inventory surface.
   readonly buildWorkflowYamls?: (() => Promise<string[]>) | null;
   readonly initialEndpointId?: string;
   readonly memberId?: string;
@@ -59,12 +62,6 @@ type StudioMemberBindPanelProps = {
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
   readonly onBindPendingCandidate?: (() => Promise<PendingBindNotice | void>) | null;
-  readonly postBindEntryActions?: {
-    readonly busy?: boolean;
-    readonly isEntryMember?: boolean;
-    readonly memberId: string;
-    readonly onSetEntryAndTest: () => void;
-  } | null;
   readonly onSelectionChange?: (selection: {
     serviceId: string;
     endpointId: string;
@@ -519,40 +516,6 @@ function describeEndpointPurpose(endpoint: ServiceEndpointSnapshot): string {
   return t("pages.studio.bind.studiomemberbindpanel.used.for.api.sdk", "Used for API/SDK calling scenarios that require a fixed input format.");
 }
 
-function renderPostBindEntryAction(
-  postBindEntryActions: NonNullable<StudioMemberBindPanelProps['postBindEntryActions']>,
-) {
-  return (
-    <Space direction="vertical" size={8} style={{ width: '100%' }}>
-      {postBindEntryActions.isEntryMember ? (
-        <>
-          <Typography.Text>
-            {t("pages.studio.bind.studiomemberbindpanel.the.current.member.is", "The current member is already a team member. You can return directly to the team page to test the complete link.")}</Typography.Text>
-          <Button
-            loading={postBindEntryActions.busy}
-            onClick={postBindEntryActions.onSetEntryAndTest}
-            size="small"
-            type="primary"
-          >
-            {t("pages.studio.bind.studiomemberbindpanel.test.team", "Test team")}</Button>
-        </>
-      ) : (
-        <>
-          <Typography.Text>
-            {t("pages.studio.bind.studiomemberbindpanel.bind.is.complete.the", "Bind is complete. The next step is to set it as a team portal and return to the team page to test the complete link.")}</Typography.Text>
-          <Button
-            loading={postBindEntryActions.busy}
-            onClick={postBindEntryActions.onSetEntryAndTest}
-            size="small"
-            type="primary"
-          >
-            {t("pages.studio.bind.studiomemberbindpanel.set.as.portal.and", "Set as portal and test team")}</Button>
-        </>
-      )}
-    </Space>
-  );
-}
-
 const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   buildWorkflowYamls,
   scopeId,
@@ -565,7 +528,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   onSelectionChange,
   onContinueToInvoke,
   onBindPendingCandidate,
-  postBindEntryActions,
   pendingBindingCandidate,
   authSession,
   servicesLoading,
@@ -1043,24 +1005,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   type={currentBindingRunNotice.type}
                 />
               ) : null}
-              {postBindEntryActions ? (
-                <Alert
-                  showIcon
-                  type="success"
-                  message={
-                    postBindEntryActions.isEntryMember
-                      ? t(
-                          "pages.studio.bind.studiomemberbindpanel.member.is.team.entry",
-                          "This member is the Team entry."
-                        )
-                      : t(
-                          "pages.studio.bind.studiomemberbindpanel.member.can.be.team.entry",
-                          "This member can be the Team entry."
-                        )
-                  }
-                  description={renderPostBindEntryAction(postBindEntryActions)}
-                />
-              ) : null}
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                 <Button
                   loading={pendingBindBusy}
@@ -1115,24 +1059,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             </Space>
           }
         >
-          {postBindEntryActions ? (
-            <Alert
-              showIcon
-              type="success"
-              message={
-                postBindEntryActions.isEntryMember
-                  ? t(
-                      "pages.studio.bind.studiomemberbindpanel.member.is.team.entry",
-                      "This member is the Team entry."
-                    )
-                  : t(
-                      "pages.studio.bind.studiomemberbindpanel.member.can.be.team.entry",
-                      "This member can be the Team entry."
-                    )
-              }
-              description={renderPostBindEntryAction(postBindEntryActions)}
-            />
-          ) : null}
           <div style={sourcePanelStyle}>
             <div style={sourceSummaryStyle}>
               <div style={sourceStatusStyle}>

@@ -22,6 +22,7 @@ public sealed partial record ScriptBehaviorDispatchRequest(
 
 public sealed partial record ScriptBehaviorDispatchRequest
 {
+    // Refactor (issue1289): dispatch requests expose current state inputs, not precomputed projection payloads.
     // Refactor (iter76/cluster-076-scripting-domain-fact-derived-readmodel-payloads):
     //   Old pattern: ScriptDomainFactCommitted persisted derived readmodel/native_document/native_graph payloads inside the domain event
     //   New principle: domain event keeps only committed facts; projection materializer derives readmodel/native_document/(optional)native_graph from fact + state_root

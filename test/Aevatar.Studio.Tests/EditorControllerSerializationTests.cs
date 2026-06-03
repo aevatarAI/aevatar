@@ -1,0 +1,227 @@
+using System.Net;
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Net.Http.Json;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Domain.Studio.Compatibility;
+using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.Studio.Domain.Studio.Services;
+using Aevatar.Studio.Hosting.Controllers;
+using Aevatar.Studio.Infrastructure.Serialization;
+using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
+namespace Aevatar.Studio.Tests;
+
+public sealed class EditorControllerSerializationTests
+{
+    [Fact]
+    public void EditorWorkflowHttpRequests_ShouldUseScopedWorkflowDocumentInputConverter()
+    {
+        typeof(SerializeYamlHttpRequest).GetProperty(nameof(SerializeYamlHttpRequest.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
+        typeof(ValidateWorkflowHttpRequest).GetProperty(nameof(ValidateWorkflowHttpRequest.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
+        typeof(NormalizeWorkflowHttpRequest).GetProperty(nameof(NormalizeWorkflowHttpRequest.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
+
+        typeof(SerializeYamlHttpRequest).Assembly
+            .GetType("Aevatar.Studio.Hosting.Controllers.EditorWorkflowDocumentDto")
+            .Should()
+            .BeNull("the Host boundary should not duplicate the WorkflowDocument DTO graph");
+    }
+
+    [Fact]
+    public async Task SerializeYaml_ShouldAcceptPlainJsonStepParameters()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+
+        using var response = await client.PostAsJsonAsync("/api/editor/serialize-yaml", BuildPlainParameterRequest());
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("target: result");
+        body.Should().Contain("value: $input");
+        body.Should().Contain("enabled: true");
+        body.Should().Contain("limit: 3");
+        body.Should().Contain("empty:");
+        body.Should().Contain("items:");
+        body.Should().Contain("- one");
+        body.Should().Contain("nested:");
+        body.Should().Contain("inner: value");
+    }
+
+    [Theory]
+    [InlineData("/api/editor/validate")]
+    [InlineData("/api/editor/normalize")]
+    public async Task DocumentEditorEndpoints_ShouldAcceptPlainJsonStepParameters(string path)
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+
+        using var response = await client.PostAsJsonAsync(path, BuildPlainParameterRequest());
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().NotContain("could not be converted");
+        body.Should().NotContain("StudioStepParameterValue");
+    }
+
+    [Fact]
+    public void SerializeYamlHttpRequest_ShouldSerializeWithoutConverterWriteFailure()
+    {
+        var request = new SerializeYamlHttpRequest(new WorkflowDocument
+        {
+            Name = "draft",
+            Steps =
+            [
+                new StepModel
+                {
+                    Id = "assign",
+                    Type = "assign",
+                    Parameters = new StudioStepParameters
+                    {
+                        ["target"] = StudioStepParameterValue.FromScalar("result"),
+                    },
+                },
+            ],
+        });
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var json = JsonSerializer.Serialize(request, options);
+
+        json.Should().Contain("\"document\"");
+        json.Should().Contain("\"parameters\":{\"target\":\"result\"}");
+    }
+
+    [Fact]
+    public async Task SerializeYaml_ShouldNotAcceptSnakeCaseJsonStepAliases()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+        using var content = new StringContent(
+            """
+            {
+              "document": {
+                "name": "draft",
+                "description": "",
+                "configuration": { "closedWorldMode": false },
+                "roles": [],
+                "steps": [
+                  {
+                    "id": "assign",
+                    "type": "assign",
+                    "originalType": "assign",
+                    "target_role": "writer",
+                    "parameters": { "target": "result", "value": "$input" },
+                    "branches": {}
+                  }
+                ]
+              },
+              "availableWorkflowNames": [ "draft" ],
+              "availableStepTypes": [ "assign" ]
+            }
+            """,
+            Encoding.UTF8,
+            "application/json");
+
+        using var response = await client.PostAsync("/api/editor/serialize-yaml", content);
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().NotContain("target_role: writer");
+    }
+
+    private static object BuildPlainParameterRequest() => new
+    {
+        document = new
+        {
+            name = "draft",
+            description = "",
+            configuration = new { closedWorldMode = false },
+            roles = Array.Empty<object>(),
+            steps = new[]
+            {
+                new
+                {
+                    id = "assign",
+                    type = "assign",
+                    originalType = "assign",
+                    targetRole = (string?)null,
+                    parameters = new
+                    {
+                        target = "result",
+                        value = "$input",
+                        enabled = true,
+                        limit = 3,
+                        empty = (string?)null,
+                        items = new object?[] { "one", 2, null },
+                        nested = new { inner = "value" },
+                    },
+                    next = (string?)null,
+                    branches = new Dictionary<string, string>(),
+                },
+            },
+        },
+        availableWorkflowNames = new[] { "draft" },
+        availableStepTypes = new[] { "assign" },
+    };
+
+    private static async Task<IHost> StartHostAsync()
+    {
+        var builder = new HostBuilder()
+            .ConfigureWebHost(webHost =>
+            {
+                webHost.UseTestServer();
+                webHost.ConfigureServices(services =>
+                {
+                    var profile = WorkflowCompatibilityProfile.AevatarV1;
+                    services
+                        .AddRouting()
+                        .AddSingleton(profile)
+                        .AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>()
+                        .AddSingleton<WorkflowDocumentNormalizer>()
+                        .AddSingleton<WorkflowValidator>()
+                        .AddSingleton<WorkflowGraphMapper>()
+                        .AddSingleton<TextDiffService>()
+                        .AddSingleton<WorkflowEditorService>();
+                    services.AddControllers()
+                        .AddApplicationPart(typeof(EditorController).Assembly)
+                        .AddJsonOptions(json =>
+                        {
+                            json.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+                            json.JsonSerializerOptions.DefaultIgnoreCondition =
+                                System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
+                        });
+                });
+                webHost.Configure(app =>
+                {
+                    app.UseRouting();
+                    app.UseEndpoints(endpoints => endpoints.MapControllers());
+                });
+            });
+
+        var host = await builder.StartAsync();
+        return host;
+    }
+}
+
+internal static class EditorWorkflowHttpContractAssertions
+{
+    public static void ShouldUseWorkflowDocumentInputConverter(this PropertyInfo property)
+    {
+        property.PropertyType.Should().Be(typeof(WorkflowDocument));
+        var converterAttribute = property.GetCustomAttribute<JsonConverterAttribute>();
+        converterAttribute.Should().NotBeNull();
+        converterAttribute!.ConverterType.Should().NotBeNull();
+        converterAttribute.ConverterType!.Name.Should().Be("EditorWorkflowDocumentJsonInputConverter");
+    }
+}

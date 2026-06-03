@@ -121,6 +121,61 @@ public sealed class UserConfigServiceTests
             config.PreferredLlmRoute == ChronoLlm.RouteValue);
     }
 
+    [Fact]
+    public async Task Preset_UseExistingService_WhenCatalogDoesNotContainService_ShouldRejectInsteadOfFabricatingReadyUserService()
+    {
+        var commandService = new RecordingUserConfigCommandService();
+        var missingPreset = new UserLlmPreset(
+            "chrono-shared",
+            "Use chrono",
+            "Use shared service",
+            new UseExistingService(
+                "missing-chrono-service",
+                "/api/v1/proxy/s/missing-chrono",
+                "gpt-5.4"));
+        var service = CreateService(
+            commandService: commandService,
+            catalogResult: new NyxIdLlmServicesResult(
+                [ChronoLlm],
+                new UserLlmSetupHint("https://nyxid.example/services", [missingPreset])));
+
+        var act = async () => await service.SaveLlmPreferenceAsync(
+            "bearer",
+            new SaveUserLlmPreferenceCommand(PresetId: "chrono-shared"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("LLM preset service 'missing-chrono-service' is not routable for this user.");
+        commandService.Saved.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Preset_UseExistingService_WhenCatalogContainsSelectableService_ShouldWriteCatalogRouteAndModel()
+    {
+        var commandService = new RecordingUserConfigCommandService();
+        var preset = new UserLlmPreset(
+            "chrono-shared",
+            "Use chrono",
+            "Use shared service",
+            new UseExistingService(
+                "chrono-llm-service",
+                "/api/v1/proxy/s/chrono-llm",
+                "gpt-5.5"));
+        var service = CreateService(
+            commandService: commandService,
+            catalogResult: new NyxIdLlmServicesResult(
+                [ChronoLlm],
+                new UserLlmSetupHint("https://nyxid.example/services", [preset])));
+
+        var receipt = await service.SaveLlmPreferenceAsync(
+            "bearer",
+            new SaveUserLlmPreferenceCommand(PresetId: "chrono-shared"));
+
+        receipt.AckStage.Should().Be(UserConfigCommandAckStage.Accepted);
+        commandService.Saved.Should().ContainSingle().Which.Should().Match<UserConfig>(config =>
+            config.PreferredLlmRoute == ChronoLlm.RouteValue &&
+            config.DefaultModel == "gpt-5.5");
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("cloud")]
@@ -167,11 +222,12 @@ public sealed class UserConfigServiceTests
 
     private static UserConfigService CreateService(
         UserConfig? current = null,
-        RecordingUserConfigCommandService? commandService = null)
+        RecordingUserConfigCommandService? commandService = null,
+        NyxIdLlmServicesResult? catalogResult = null)
     {
         var queryPort = new StubUserConfigQueryPort(current ?? new UserConfig(DefaultModel: string.Empty));
         commandService ??= new RecordingUserConfigCommandService();
-        var catalogPort = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult([ChronoLlm], null));
+        var catalogPort = new StubUserLlmCatalogPort(catalogResult ?? new NyxIdLlmServicesResult([ChronoLlm], null));
         var writer = new UserLlmPreferenceWriter(queryPort, commandService, catalogPort);
         return new UserConfigService(queryPort, commandService, writer);
     }

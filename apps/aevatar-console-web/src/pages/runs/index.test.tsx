@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { Grid } from "antd";
 import React from "react";
 import { setLocale } from "@umijs/max";
 import {
@@ -8,6 +9,7 @@ import {
   saveObservedRunSessionPayload,
 } from "@/shared/runs/draftRunSession";
 import { saveRecentRun } from "@/shared/runs/recentRuns";
+import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
@@ -297,10 +299,14 @@ describe("RunsPage", () => {
     signal: jest.Mock;
     stop: jest.Mock;
   };
+  const mockedRuntimeActorsApi = runtimeActorsApi as unknown as {
+    getActorSnapshot: jest.Mock;
+  };
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
     setLocale("en-US");
+    jest.restoreAllMocks();
     window.history.replaceState({}, "", "/runtime/runs");
     window.sessionStorage.clear();
     window.localStorage.clear();
@@ -315,6 +321,14 @@ describe("RunsPage", () => {
     mockSession.pendingHumanInput = undefined;
     mockSession.runId = "";
     mockSession.error = undefined;
+    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+      xs: false,
+      sm: false,
+      md: true,
+      lg: true,
+      xl: true,
+      xxl: false,
+    });
     mockedRuntimeRunsApi.invokeEndpoint.mockResolvedValue({
       requestId: "cmd-1",
       targetActorId: "actor-1",
@@ -325,6 +339,22 @@ describe("RunsPage", () => {
       body: {},
     });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
+    mockedRuntimeActorsApi.getActorSnapshot.mockResolvedValue({
+      actorId: "actor-1",
+      workflowName: "default",
+      lastCommandId: "cmd-1",
+      completionStatusValue: 0,
+      stateVersion: 1,
+      lastEventId: "evt-1",
+      lastUpdatedAt: "2026-01-01T00:00:00Z",
+      lastSuccess: null,
+      lastOutput: "",
+      lastError: "",
+      totalSteps: 0,
+      requestedSteps: 0,
+      completedSteps: 0,
+      roleReplyCount: 0,
+    });
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
     mockedParseBackendSSEStream.mockImplementation(
       () => (async function* () {})()
@@ -359,6 +389,25 @@ describe("RunsPage", () => {
     expect(container.textContent).toContain("Run setup");
     expect(container.textContent).toContain("Conversation");
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("stacks the chat setup and conversation panes on compact screens", async () => {
+    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+      xs: true,
+      sm: true,
+      md: false,
+      lg: false,
+      xl: false,
+      xxl: false,
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    expect(await screen.findByTestId("runs-chat-layout")).toHaveStyle({
+      gridTemplateColumns: "minmax(0, 1fr)",
+      overflowY: "auto",
+    });
+    expect(screen.getByPlaceholderText("Describe the task to run.")).toBeTruthy();
   });
 
   it("navigates back to the team advanced tab from the runs console", async () => {

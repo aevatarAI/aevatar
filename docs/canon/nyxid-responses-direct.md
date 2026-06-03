@@ -48,6 +48,10 @@ Authorization: Bearer nyx_...
 
 Aevatar endpoint 本身标记为 anonymous，不是因为免鉴权，而是因为 NyxID API key 是 opaque token，不是 Host 的 JWT。handler 会手动取出 bearer token，并通过 NyxID 当前用户接口解析调用者。
 
+如果 NyxID proxy 同时转发 `X-NyxID-Identity-Token`，Aevatar 会先在 Host 内用 NyxID JWKS 校验该 RS256 identity assertion。校验通过时，caller identity 直接取 token 的 `sub`，不会再调用 NyxID `/me`。该 header 一旦存在但签名、issuer、audience、有效期、`sub`、`jti` 或配置的 service id 校验失败，请求 fail closed，不回退 `/me`。只有 `X-NyxID-Identity-Token` 缺失时，才保留 bearer `/me` fallback。
+
+`X-NyxID-Delegation-Token` 只是传给下游 NyxID/LLM/工具调用的 delegated credential，永远不作为 caller identity 输入；delegation-only 请求仍按 bearer `/me` fallback 解析调用者。
+
 解析结果会落到 Responses caller scope：
 
 - `scopeId`：NyxID user id
@@ -122,9 +126,10 @@ llm-anthropic/claude-haiku-4-5
 | 工具名 | 说明 |
 |---|---|
 | `TodoWrite` | 持久化 agent-scoped todo state |
-| `Task` / `task` | 记录 sub-agent task topology trace |
 | `WebFetch` / `web_fetch` | 通过 Aevatar 抓取 URL，记录 trace/cache |
 | `WebSearch` / `web_search` | 通过 Aevatar 执行 web search，记录 trace/cache |
+
+旧 `Task` / `task` trace 契约暂留为 dead surface，当前 Mainnet 不再注册 fake Task substitute。需要执行 GAgent、team 或 workflow 时使用下方 workspace additive tools。
 
 当前 additive tools 包括：
 

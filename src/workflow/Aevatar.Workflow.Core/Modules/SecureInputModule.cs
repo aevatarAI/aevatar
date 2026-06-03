@@ -90,9 +90,9 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 requestVariableName,
                 timeoutSeconds);
 
-            // Refactor (iter79/cluster-079-secure-input-suspension-metadata-bag):
-            //   Old pattern: WorkflowSuspendedEvent.Metadata string bag for secure/input_mode/redacted_output/variable
-            //   New principle (delete framing): typed bool secure + string redacted_output + reuse variable_name; Metadata open extension only; reserved keys read-only fallback
+            // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
+            //   Old pattern: reserved secure input values could be recovered from WorkflowSuspendedEvent.Metadata.
+            //   New principle: publish typed suspension fields; Metadata remains open extension data only.
             var suspended = new WorkflowSuspendedEvent
             {
                 RunId = runId,

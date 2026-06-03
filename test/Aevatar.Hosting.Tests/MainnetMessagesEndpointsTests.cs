@@ -68,6 +68,8 @@ public sealed class MainnetMessagesEndpointsTests
             """),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdIdentityTokenHeader, "messages-identity-token");
+        request.Headers.Add(ResponsesApiEndpoints.NyxIdDelegationTokenHeader, "messages-delegation-token");
 
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
@@ -108,6 +110,61 @@ public sealed class MainnetMessagesEndpointsTests
         // Bearer goes on the typed CallerContext, not Metadata, per PR #625 round-2 fix.
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("anthropic-bearer");
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var callerScopeResolver = app.Services.GetRequiredService<IResponsesCallerScopeResolver>()
+            .Should()
+            .BeOfType<MessagesStubCallerScopeResolver>()
+            .Subject;
+        callerScopeResolver.LastContext.Should().Be(new ResponsesCallerScopeResolutionContext(
+            "anthropic-bearer",
+            "messages-identity-token",
+            "messages-delegation-token"));
+    }
+
+    [Fact]
+    public async Task PostMessages_WhenCompletionReadModelLags_ShouldWaitAndReturnAnthropicMessageEnvelope()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "Eventually visible",
+                    IsLast = true,
+                },
+            ],
+        };
+        var sessions = new MessagesRecordingSessionStore
+        {
+            CompletionObservationLagReads = 1,
+        };
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 256,
+              "messages": [
+                {"role": "user", "content": "Hello"}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("content")[0]
+            .GetProperty("text")
+            .GetString()
+            .Should()
+            .Be("Eventually visible");
     }
 
     [Fact]
@@ -766,14 +823,14 @@ public sealed class MainnetMessagesEndpointsTests
     {
         public async Task<MessagesCreateCommandResult> CreateAsync(
             MessagesCommandRequest request,
-            string bearerToken,
+            ResponsesCallerScopeResolutionContext callerScopeContext,
             CancellationToken ct = default)
         {
             if (request.Stream == true)
-                return await inner.CreateAsync(request, bearerToken, ct);
+                return await inner.CreateAsync(request, callerScopeContext, ct);
 
             var planRequest = request with { Stream = true };
-            var result = await inner.CreateAsync(planRequest, bearerToken, ct);
+            var result = await inner.CreateAsync(planRequest, callerScopeContext, ct);
             if (result.Error is not null || result.StreamPlan is null)
                 return result;
 
@@ -786,7 +843,7 @@ public sealed class MainnetMessagesEndpointsTests
                 var completion = await completionService.CollectAsync(
                     providerFactory.GetDefault(),
                     plan.LlmRequest,
-                    plan.ToolContextMetadata,
+                    plan.ToolContext,
                     plan.ToolClassification,
                     ct);
                 var snapshot = BuildCompletionSnapshot(completion);
@@ -807,7 +864,7 @@ public sealed class MainnetMessagesEndpointsTests
                 var completion = await completionService.StreamAsync(
                     providerFactory.GetDefault(),
                     plan.LlmRequest,
-                    plan.ToolContextMetadata,
+                    plan.ToolContext,
                     plan.ToolClassification,
                     onTextDelta,
                     ct);
@@ -916,10 +973,15 @@ public sealed class MainnetMessagesEndpointsTests
 
     private sealed class MessagesStubCallerScopeResolver : IResponsesCallerScopeResolver
     {
+        public ResponsesCallerScopeResolutionContext? LastContext { get; private set; }
+
         public Task<ResponsesCallerScope> ResolveAsync(
-            string nyxIdAccessToken,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey));
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default)
+        {
+            LastContext = context;
+            return Task.FromResult(new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey));
+        }
     }
 
     private sealed class MessagesNoopRouteResolver : IResponsesRouteResolver
@@ -997,10 +1059,13 @@ public sealed class MainnetMessagesEndpointsTests
         ILlmSessionQueryPort
     {
         private readonly Dictionary<string, LlmSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _completionObservationLagReads = new(StringComparer.Ordinal);
 
         public List<LlmSessionRecord> Registered { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
+
+        public int CompletionObservationLagReads { get; init; }
 
         public Task<LlmSessionRegistrationResult> RegisterAsync(
             LlmSessionRecord record,
@@ -1077,6 +1142,10 @@ public sealed class MainnetMessagesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
+            if (CompletionObservationLagReads > 0)
+            {
+                _completionObservationLagReads[responseId] = CompletionObservationLagReads;
+            }
 
             return Task.CompletedTask;
         }
@@ -1097,8 +1166,19 @@ public sealed class MainnetMessagesEndpointsTests
 
         public Task<LlmSessionSnapshot?> GetByResponseIdAsync(
             string responseId,
-            CancellationToken ct = default) =>
-            Task.FromResult(_snapshots.GetValueOrDefault(responseId));
+            CancellationToken ct = default)
+        {
+            var snapshot = _snapshots.GetValueOrDefault(responseId);
+            if (snapshot?.Completion is not null &&
+                _completionObservationLagReads.TryGetValue(responseId, out var remaining) &&
+                remaining > 0)
+            {
+                _completionObservationLagReads[responseId] = remaining - 1;
+                return Task.FromResult<LlmSessionSnapshot?>(snapshot with { Completion = null });
+            }
+
+            return Task.FromResult(snapshot);
+        }
     }
 
     private sealed class MessagesRecordingResponsesToolProvider : IResponsesToolProvider

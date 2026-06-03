@@ -129,6 +129,9 @@ public sealed class NyxIdRelayTransport
                 NyxPlatformMessageId = platformMessageId,
                 NyxLarkUnionId = ExtractLarkUnionId(platform, payload, isCardAction),
                 NyxLarkChatId = ExtractLarkChatId(platform, payload, isCardAction),
+                NyxLarkOperatorUserId = ExtractLarkOperatorId(platform, payload, "user_id"),
+                NyxLarkOperatorOpenId = ExtractLarkOperatorId(platform, payload, "open_id"),
+                NyxLarkOperatorUnionId = ExtractLarkOperatorId(platform, payload, "union_id"),
             },
         };
 
@@ -509,6 +512,20 @@ public sealed class NyxIdRelayTransport
             return string.Empty;
 
         return ReadStringProperty(message, "chat_id");
+    }
+
+    private static string ExtractLarkOperatorId(string platform, NyxIdRelayCallbackPayload payload, string propertyName)
+    {
+        if (!IsLark(platform) || payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
+            return string.Empty;
+
+        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
+            return string.Empty;
+
+        if (!evt.TryGetProperty("operator", out var op) || op.ValueKind != JsonValueKind.Object)
+            return string.Empty;
+
+        return ReadStringProperty(op, propertyName);
     }
 
     private static bool IsLark(string platform) =>

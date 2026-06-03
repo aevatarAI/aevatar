@@ -48,7 +48,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     internal static readonly TimeSpan TerminalCleanupDelay = TimeSpan.FromMinutes(5);
     private const string TerminalCleanupCallbackPrefix = "agent-run-terminal-cleanup";
     private const string GenerationTimeoutCallbackPrefix = "agent-run-generation-timeout";
-    internal static readonly TimeSpan OutputDispatchTimeout = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
     internal static readonly TimeSpan DropNotificationRetryDelay = TimeSpan.FromSeconds(5);
@@ -529,7 +528,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.OutboundIntent?.Clone(),
             hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
             hasReplyText ? string.Empty : "empty_reply",
-            hasReplyText ? string.Empty : "Reply generator returned an empty response.");
+            hasReplyText ? string.Empty : "Reply generator returned an empty response.",
+            stepState.AppendedHistory.ToArray());
     }
 
     private static bool ShouldCompleteAfterLlmStep(AgentRunReplyStepState stepState, bool isCompletedLlmStep)
@@ -537,8 +537,12 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (stepState.PendingToolCalls.Count > 0)
             return false;
 
+        // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
+        // slash silently consumed.
+        // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
+        // non-slash text path unchanged (owner-LLM chat fallback).
         if (stepState.FinalNoToolsStep)
-            return true;
+            return isCompletedLlmStep;
 
         if (isCompletedLlmStep && string.IsNullOrWhiteSpace(stepState.AccumulatedText))
             return true;
@@ -710,6 +714,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             };
             message.ToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
             next.Messages.Add(message);
+            next.AppendedHistory.Add(AgentRunReplyStepMappers.ToConversationHistoryEntry(message));
         }
 
         return next;
@@ -727,6 +732,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.NextStepIndex = completedStepIndex;
         next.PendingToolCalls.Clear();
         next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
+        next.AppendedHistory.AddRange(
+            result.ResultMessages.Select(AgentRunReplyStepMappers.ToConversationHistoryEntry));
         if (result.AdvanceRound)
             next.Round++;
         return next;
@@ -761,7 +768,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
         string errorCode,
-        string errorSummary)
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory = null)
     {
         await PersistReplyProducedAsync(
             request,
@@ -770,9 +778,18 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             outboundIntent,
             terminalState,
             errorCode,
-            errorSummary);
+            errorSummary,
+            appendedHistory);
 
-        await DispatchReadyEventAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        await DispatchReadyEventAsync(
+            request,
+            runId,
+            replyText,
+            outboundIntent,
+            terminalState,
+            errorCode,
+            errorSummary,
+            appendedHistory);
 
         // Past the point of user-visible delivery. State persistence failures and cleanup
         // scheduling failures MUST NOT propagate out — otherwise HandleStartAsync's outer
@@ -800,7 +817,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             outbound,
             State.ProducedTerminalState,
             State.ErrorCode ?? string.Empty,
-            State.ErrorSummary ?? string.Empty);
+            State.ErrorSummary ?? string.Empty,
+            State.ProducedAppendedHistory.ToArray());
 
         // Past the point of user-visible delivery — swallow persistence/cleanup errors so
         // they don't escalate to a duplicate fallback dispatch. See ProduceAndDispatchAsync
@@ -885,7 +903,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         MessageContent? outbound,
         LlmReplyTerminalState terminalState,
         string errorCode,
-        string errorSummary)
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory)
     {
         var evt = new AgentRunReplyProducedEvent
         {
@@ -900,6 +919,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         };
         if (outbound is not null)
             evt.Outbound = outbound.Clone();
+        evt.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         await PersistDomainEventAsync(evt);
     }
 
@@ -1007,7 +1027,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
         string errorCode,
-        string errorSummary)
+        string errorSummary,
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory = null)
     {
         if (string.IsNullOrWhiteSpace(request.TargetActorId))
             return;
@@ -1030,10 +1051,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
             RunId = runId,
         };
+        ready.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(request.TargetActorId, ready, outputCts.Token);
+            await SendToAsync(request.TargetActorId, ready, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1082,8 +1103,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(targetActorId, dropped, outputCts.Token);
+            await SendToAsync(targetActorId, dropped, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1112,8 +1132,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         try
         {
-            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
-            await SendToAsync(command.TargetActorId, dropped, outputCts.Token);
+            await SendToAsync(command.TargetActorId, dropped, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -1482,10 +1501,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     ///
     /// Action semantics on the relay run-actor path:
     /// <list type="bullet">
-    ///   <item><c>ForwardToModel.tool_choice_hint(aevatar_invoke_gagent).actor_id</c> overrides
-    ///     <see cref="NeedsLlmReplyEvent.TargetActorId"/>. The reply is
-    ///     dispatched to the forwarded actor; <c>EnsureTargetActorAsync</c>
-    ///     creates it as a <c>ConversationGAgent</c> if missing.</item>
+    ///   <item><c>ForwardToModel.tool_choice_hint</c> is preserved as tool
+    ///     prefill only; it never overrides <see cref="NeedsLlmReplyEvent.TargetActorId"/>.</item>
     ///   <item><c>ForwardToModel.model_name</c> is mapped by the generation executor
     ///     this typed route decision into LLM metadata before invoking the
     ///     provider.</item>
@@ -1504,17 +1521,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         switch (targetRef.ActionCase)
         {
             case ChatRouteAction.ActionOneofCase.ForwardToModel:
-                if (ChatRouteActionTargets.TryGetGAgentActorTarget(targetRef, out var target) &&
-                    !string.Equals(target.ActorId, request.TargetActorId, StringComparison.Ordinal))
-                {
-                    _logger.LogInformation(
-                        "Chat-route override: redirecting run target actor {Original} -> {Override} (correlation={CorrelationId})",
-                        NormalizeOptional(request.TargetActorId) ?? "<empty>",
-                        target.ActorId,
-                        request.CorrelationId);
-                    request.TargetActorId = target.ActorId;
-                }
-
+                // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill,
+                // not actor addressing. The run target stays owned by the dispatch command.
                 var routedModel = NormalizeOptional(targetRef.ForwardToModel?.ModelName);
                 if (routedModel is not null)
                 {
@@ -1586,6 +1594,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.ProducedReplyText = evt.ReplyText ?? string.Empty;
         next.ProducedOutbound = evt.Outbound?.Clone();
         next.ProducedTerminalState = evt.TerminalState;
+        next.ProducedAppendedHistory.Clear();
+        next.ProducedAppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
         // Backward-compat: AgentRunReplyProducedEvents persisted by the pre-refactor
         // codepath have no reply_text / outbound / terminal_state fields (proto3 defaults
         // on deserialize). Historically, Status=ReplyProduced was only written *after* the

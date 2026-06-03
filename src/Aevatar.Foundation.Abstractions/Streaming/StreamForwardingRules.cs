@@ -1,5 +1,7 @@
 namespace Aevatar.Foundation.Abstractions.Streaming;
 
+using Google.Protobuf.WellKnownTypes;
+
 /// <summary>
 /// Shared stream-forwarding rules used by local runtime and Orleans runtime.
 /// </summary>
@@ -26,14 +28,56 @@ public static class StreamForwardingRules
         };
     }
 
+    public static StreamForwardingBinding CreateCommittedObservationBinding(
+        string sourceStreamId,
+        string targetStreamId) =>
+        CreateCommittedFactsObserverBinding(sourceStreamId, targetStreamId);
+
+    public static StreamForwardingBinding CreateCommittedFactsObserverBinding(
+        string sourceStreamId,
+        string targetStreamId,
+        StreamForwardingMode forwardingMode = StreamForwardingMode.HandleThenForward)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
+
+        // Refactor (iter164/cluster-002-first):
+        // Old pattern: modules watched presentation completion frames as local workflow facts.
+        // New principle: committed observation forwarding belongs to the runtime relay path.
+        // Child actors publish committed state once, and runtime stream rules fan that fact to parents.
+        return new StreamForwardingBinding
+        {
+            SourceStreamId = sourceStreamId,
+            TargetStreamId = targetStreamId,
+            ForwardingMode = forwardingMode,
+            DirectionFilter =
+            [
+                TopologyAudience.Unspecified,
+            ],
+            EventTypeFilter =
+            [
+                $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}",
+            ],
+        };
+    }
+
     public static bool Matches(StreamForwardingBinding binding, EventEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var direction = envelope.Route.GetTopologyAudience();
+        var isObserverPublication = envelope.Route.IsObserverPublication();
+        var direction = isObserverPublication
+            ? TopologyAudience.Unspecified
+            : envelope.Route.GetTopologyAudience();
         if (binding.DirectionFilter.Count > 0 && !binding.DirectionFilter.Contains(direction))
             return false;
+
+        if (isObserverPublication &&
+            envelope.Route.GetObserverAudience() != ObserverAudience.CommittedFacts)
+        {
+            return false;
+        }
 
         if (binding.EventTypeFilter.Count == 0)
             return true;

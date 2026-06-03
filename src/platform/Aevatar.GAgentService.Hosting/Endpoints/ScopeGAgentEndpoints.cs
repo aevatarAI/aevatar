@@ -312,6 +312,14 @@ public static class ScopeGAgentEndpoints
                         : $"Actor '{actorId}' is not compatible with requested type '{actorTypeName}'.",
                     ct);
                 break;
+            case GAgentDraftRunStartError.ProjectionUnavailable:
+                response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await WriteJsonErrorAsync(
+                    response,
+                    "GAGENT_PROJECTION_UNAVAILABLE",
+                    "GAgent projection is unavailable.",
+                    ct);
+                break;
         }
     }
 

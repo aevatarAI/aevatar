@@ -287,7 +287,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
-    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishMappedAguiEvent_ToCommandSession()
+    public async Task GAgentDraftRunSessionEventProjector_ShouldIgnoreRawTextFrame_WithoutCommittedCompletion()
     {
         var sessionHub = new RecordingProjectionSessionEventHub();
         var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
@@ -310,6 +310,40 @@ public sealed class ScopeServiceEndpointsStreamTests
                 {
                     SessionId = "msg-1",
                     Delta = "hello",
+                }),
+            },
+            CancellationToken.None);
+
+        sessionHub.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishExplicitAguiObservation_ToCommandSession()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+        var context = new GAgentDraftRunProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "cmd-1",
+            ProjectionKind = "service-draft-run-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "cmd-1",
+                },
+                Payload = Any.Pack(new AGUIEvent
+                {
+                    TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    {
+                        MessageId = "msg-1",
+                        Delta = "hello",
+                    },
                 }),
             },
             CancellationToken.None);
@@ -509,7 +543,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
-    public async Task GAgentDraftRunSessionEventProjector_ShouldAppendRunFinished_ForLiveTextMessageEnd()
+    public async Task GAgentDraftRunSessionEventProjector_ShouldIgnoreRawTextMessageEnd_WithoutCommittedCompletion()
     {
         var sessionHub = new RecordingProjectionSessionEventHub();
         var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
@@ -535,12 +569,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             },
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(2);
-        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
-        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("msg-1");
-        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
-        sessionHub.Published[1].Event.RunFinished!.ThreadId.Should().Be("actor-1");
-        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("cmd-1");
+        sessionHub.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -898,6 +927,92 @@ public sealed class ScopeServiceEndpointsStreamTests
         var body = await ReadBodyAsync(http);
         body.Should().Contain("runError");
         body.Should().NotContain("runFinished");
+    }
+
+    [Fact]
+    public async Task HandleGAgentServiceChatStreamAsync_ShouldReturnServiceUnavailableJson_WhenProjectionUnavailableBeforeSseStarts()
+    {
+        var http = CreateHttpContext();
+        var invocationPort = new StubStaticGAgentStreamInvocationPort
+        {
+            ResultFactory = (_, _, _, _) => Task.FromResult(new StaticGAgentStreamInvocationResult(
+                Accepted: null,
+                StartError: GAgentDraftRunStartError.ProjectionUnavailable,
+                CompletionStatus: GAgentDraftRunCompletionStatus.Unknown,
+                CompletionObserved: false)),
+        };
+
+        await InvokeStaticStreamAsync(
+            http,
+            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
+            "hello",
+            "actor-1",
+            null,
+            "scope-a",
+            null,
+            null,
+            invocationPort,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        http.Response.ContentType.Should().StartWith("application/json");
+        var body = await ReadBodyAsync(http);
+        body.Should().Contain("GAGENT_PROJECTION_UNAVAILABLE");
+        body.Should().NotContain("runStarted");
+    }
+
+    [Fact]
+    public async Task HandleGAgentServiceChatStreamAsync_ShouldWriteRunError_WhenProjectionUnavailableAfterSseStarts()
+    {
+        var http = CreateHttpContext();
+        var invocationPort = new StubStaticGAgentStreamInvocationPort
+        {
+            ResultFactory = async (request, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new StaticGAgentStreamAcceptedReceipt(
+                    new ServiceInvocationAcceptedReceipt
+                    {
+                        ServiceKey = "svc-key",
+                        DeploymentId = "dep-1",
+                        TargetActorId = request.Input.PreferredActorId,
+                        EndpointId = request.EndpointId,
+                        CommandId = "cmd-static-1",
+                        CorrelationId = "corr-static-1",
+                    },
+                    new GAgentDraftRunAcceptedReceipt(
+                        request.Input.PreferredActorId ?? "actor-1",
+                        typeof(StreamTestAgent).AssemblyQualifiedName!,
+                        "cmd-static-1",
+                        "corr-static-1"));
+
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                return new StaticGAgentStreamInvocationResult(
+                    receipt,
+                    GAgentDraftRunStartError.ProjectionUnavailable,
+                    GAgentDraftRunCompletionStatus.Unknown,
+                    CompletionObserved: false);
+            },
+        };
+
+        await InvokeStaticStreamAsync(
+            http,
+            CreateStaticTarget(typeof(StreamTestAgent).AssemblyQualifiedName!, primaryActorId: "actor-1"),
+            "hello",
+            "actor-1",
+            null,
+            "scope-a",
+            null,
+            null,
+            invocationPort,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        var body = await ReadBodyAsync(http);
+        body.Should().Contain("runStarted");
+        body.Should().Contain("runError");
+        body.Should().Contain("GAGENT_PROJECTION_UNAVAILABLE");
     }
 
     [Fact]

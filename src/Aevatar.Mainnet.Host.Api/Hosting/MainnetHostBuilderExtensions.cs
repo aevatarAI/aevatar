@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
@@ -136,9 +137,15 @@ public static class MainnetHostBuilderExtensions
             });
         });
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
+        builder.Services.Configure<ResponsesNyxIdIdentityAssertionOptions>(
+            builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
+        builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
+        builder.Services.TryAddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
+        builder.Services.TryAddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
+        builder.Services.TryAddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.Services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
@@ -202,6 +209,7 @@ public static class MainnetHostBuilderExtensions
         // actor-owned remote continuation (NyxIdRemoteToolApprovalPort submit/status
         // -> RoleGAgent.HandleRemoteApprovalStatusCheck). See iter23/cluster-001.
         builder.Services.TryAddSingleton<IToolApprovalHandler, YieldApprovalHandler>();
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IToolCallMiddleware, ToolApprovalMiddleware>());
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
@@ -253,11 +261,6 @@ public static class MainnetHostBuilderExtensions
                 [ToolSetNames.WorkspaceDefault],
                 [],
                 "Lark route tool composition with the default workspace tools.");
-            options.AddToolSet(
-                ToolSetNames.VoiceRealtime,
-                [ToolSetNames.WorkspaceDefault],
-                [],
-                "Placeholder realtime voice composition.");
         });
 
         return builder;

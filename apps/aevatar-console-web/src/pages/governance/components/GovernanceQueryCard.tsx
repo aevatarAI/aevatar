@@ -137,12 +137,17 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
       <div
         style={{
           alignItems: 'flex-start',
-          display: 'grid',
+          display: 'flex',
+          flexWrap: 'wrap',
           gap: 12,
-          gridTemplateColumns: 'minmax(0, 1fr) auto',
+          justifyContent: 'space-between',
         }}
       >
-        <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+        <Space
+          orientation="vertical"
+          size={4}
+          style={{ flex: '1 1 160px', minWidth: 160 }}
+        >
           <span
             style={{
               color: 'var(--ant-color-primary)',
@@ -171,11 +176,13 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
             borderRadius: 999,
             color: 'var(--ant-color-primary)',
             display: 'inline-flex',
+            flex: '0 1 auto',
             fontSize: 12,
             fontWeight: 600,
+            maxWidth: '100%',
             minHeight: 30,
+            overflowWrap: 'anywhere',
             padding: '0 12px',
-            whiteSpace: 'nowrap',
           }}
         >
           {selectedScopeSegments.length > 0
@@ -378,7 +385,14 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
           {loadDisabledReason}
         </span>
         <Space size={10}>
-          {onReset ? <Button onClick={onReset}>{t("pages.governance.governancequerycard.reset", "reset")}</Button> : null}
+          {onReset ? (
+            <Button
+              aria-label={t("pages.governance.governancequerycard.reset", "Reset")}
+              onClick={onReset}
+            >
+              {t("pages.governance.governancequerycard.reset", "Reset")}
+            </Button>
+          ) : null}
           <Button
             aria-disabled={loadDisabled}
             disabled={loadDisabled}

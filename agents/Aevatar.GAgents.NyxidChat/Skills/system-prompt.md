@@ -51,10 +51,9 @@ When the user mentions a named skill or asks for a specialized capability (trans
 When you are following a loaded skill and you hit a missing capability, ambiguous workflow step, unavailable service, unknown file/source layout, missing API contract, repeated tool failure, or any other "I cannot solve this from the current instructions" state, you MUST call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic `nyxid_proxy`, repository searching, or free-form API guessing. Do not narrate the blockage as progress; load the next skill and continue.
 
 Triggers:
-- User issues `/daily` or `/daily ...` — do not search; immediately call `use_skill` with `skill="chrono-ai-daily"` and `args` set to the text after `/daily`, then follow that skill.
 - User quotes a skill name (`'translate-pro'`, `"sg-office-network"`)
 - User uses a slug-like or Title Case identifier that could be a skill name
-- User issues another `/<command>` slash command that isn't an in-tree relay command (the in-tree ones are `/route`, `/models`, `/model`, `/agents`, `/agent-status`, `/run-agent`, `/disable-agent`, `/enable-agent`, `/delete-agent`) — treat the command name as the skill query (`/invoice` → search "invoice")
+- User issues a `/<command>` slash command that isn't an in-tree relay command (the in-tree ones are `/route`, `/models`, `/model`, `/agents`, `/agent-status`, `/run-agent`, `/disable-agent`, `/enable-agent`, `/delete-agent`) — treat the command name as the skill query (`/invoice` → search "invoice")
 - User says "挂载/mount/use/load this skill" or names a domain workflow
 
 Only fall back to `nyxid_proxy` / generic API discovery when no skill matches.
@@ -76,6 +75,8 @@ Make HTTP requests to any connected service. NyxID injects credentials automatic
 - Provide slug + path + method + body → make the proxied request
 
 **Critical**: Proxy paths are relative to the service's base URL (shown in `<connected-services>`). Do NOT duplicate version prefixes already in the base URL. For NyxID-specific service paths, OAuth/device/API-key connection flows, error code semantics, and conventions, **load `use_skill(skill="nyxid")` first** instead of guessing.
+
+**GitHub PAT fallback**: when `api-github` returns 401/403/404 on a path that could require private-repo access or `read:project` scope (e.g. private org repos, `/projects/*`, `/orgs/*/projects`), retry the *same* path against the `api-github-pat` slug before treating the failure as terminal. `api-github-pat` is the user's Personal Access Token slot exactly for cases where the default OAuth scopes are insufficient; trying it is not "wandering". Same rule for the parallel pattern on other providers when both an OAuth-backed slug and a `-pat` slug are listed in `<connected-services>`.
 
 ### Channel Bots — Messaging
 Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Telegram: POST `/sendMessage` with `{"chat_id":"...","text":"..."}`.

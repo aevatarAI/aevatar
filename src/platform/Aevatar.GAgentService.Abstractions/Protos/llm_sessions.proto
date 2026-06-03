@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgentService.Abstractions";
 import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
+import "ai_messages.proto";
 
 enum LlmSessionOriginKind {
   LLM_SESSION_ORIGIN_KIND_UNSPECIFIED = 0;
@@ -188,6 +189,7 @@ message LlmSessionRuntimeToolCall {
   string call_id = 1;
   string tool_name = 2;
   string arguments_json = 3;
+  google.protobuf.Struct arguments = 4;
 }
 
 message LlmSessionRuntimeToolDeclaration {
@@ -195,6 +197,7 @@ message LlmSessionRuntimeToolDeclaration {
   string description = 2;
   string parameters_json = 3;
   string schema_hash = 4;
+  google.protobuf.Struct parameters = 5;
 }
 
 message LlmSessionRuntimeToolSelection {
@@ -203,6 +206,7 @@ message LlmSessionRuntimeToolSelection {
   repeated string additive_tool_names = 3;
   string tool_choice_hint_name = 4;
   string tool_choice_hint_arguments_json = 5;
+  google.protobuf.Struct tool_choice_hint_arguments = 6;
 }
 
 message LlmRunRequested {
@@ -218,6 +222,7 @@ message LlmRunRequested {
   string bearer_token = 10;
   LlmSessionRuntimeToolSelection tool_selection = 11;
   google.protobuf.Timestamp requested_at = 12;
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 13;
 }
 
 message LlmStreamChunkObserved {
@@ -238,6 +243,7 @@ message LlmToolCallObserved {
   bool forwarded = 5;
   string local_result_json = 6;
   google.protobuf.Timestamp observed_at = 7;
+  google.protobuf.Value local_result = 8;
 }
 
 message LlmRunCompleted {
@@ -263,212 +269,11 @@ message LlmRunCancelled {
   google.protobuf.Timestamp cancelled_at = 3;
 }
 
-enum ChatRunSubRunTargetKind {
-  CHAT_RUN_SUB_RUN_TARGET_KIND_UNSPECIFIED = 0;
-  CHAT_RUN_SUB_RUN_TARGET_KIND_GAGENT = 1;
-  CHAT_RUN_SUB_RUN_TARGET_KIND_TEAM = 2;
-  CHAT_RUN_SUB_RUN_TARGET_KIND_WORKFLOW = 3;
-}
-
 enum ChatRunSubRunWaitMode {
   CHAT_RUN_SUB_RUN_WAIT_MODE_UNSPECIFIED = 0;
   CHAT_RUN_SUB_RUN_WAIT_MODE_ACK = 1;
   CHAT_RUN_SUB_RUN_WAIT_MODE_STREAM = 2;
   CHAT_RUN_SUB_RUN_WAIT_MODE_COMPLETE = 3;
-}
-
-message ChatRunMessageRecord {
-  string role = 1;
-  string content = 2;
-  repeated ChatRunContentPart content_parts = 3;
-  string tool_call_id = 4;
-  repeated ChatRunToolCallRecord assistant_tool_calls = 5;
-}
-
-message ChatRunContentPart {
-  string kind = 1;
-  string text = 2;
-  string data_base64 = 3;
-  string media_type = 4;
-  string uri = 5;
-  string name = 6;
-}
-
-message ChatRunToolCallRecord {
-  string tool_call_id = 1;
-  string tool_name = 2;
-  google.protobuf.Struct arguments = 3;
-  string result_json = 4;
-  int32 llm_round = 5;
-  string run_id = 6;
-  google.protobuf.Timestamp observed_at = 7;
-}
-
-message ChatRunSubRunSubscription {
-  string run_id = 1;
-  google.protobuf.Timestamp started_at = 2;
-  ChatRunSubRunTargetKind target_kind = 3;
-  string target_id = 4;
-  ChatRunSubRunWaitMode wait_mode = 5;
-  string stream_topic = 6;
-  string caller_tool_call_id = 7;
-  string tool_name = 8;
-  string actor_id = 9;
-  string service_id = 10;
-  string endpoint_id = 11;
-  int32 llm_round = 12;
-}
-
-message ChatRunState {
-  string response_id = 1;
-  string model_name = 2;
-  repeated ChatRunMessageRecord messages = 3;
-  string assistant_content_draft = 4;
-  repeated ChatRunToolCallRecord tool_call_history = 5;
-  repeated ChatRunSubRunSubscription active_sub_run_subscriptions = 6;
-  int32 current_llm_round = 7;
-  google.protobuf.Timestamp initialized_at = 8;
-  google.protobuf.Timestamp last_activity_at = 9;
-  google.protobuf.Duration idle_ttl = 10;
-  bool terminated = 11;
-}
-
-message StartChatRunRequested {
-  string response_id = 1;
-  string model_name = 2;
-  repeated ChatRunMessageRecord messages = 3;
-  google.protobuf.Duration idle_ttl = 4;
-  google.protobuf.Timestamp started_at = 5;
-}
-
-message ChatRunStartedEvent {
-  string response_id = 1;
-  string model_name = 2;
-  repeated ChatRunMessageRecord messages = 3;
-  google.protobuf.Duration idle_ttl = 4;
-  google.protobuf.Timestamp started_at = 5;
-}
-
-message RecordChatRunAssistantDraftRequested {
-  string content = 1;
-  int32 llm_round = 2;
-  google.protobuf.Timestamp observed_at = 3;
-}
-
-message ChatRunAssistantDraftRecordedEvent {
-  string content = 1;
-  int32 llm_round = 2;
-  google.protobuf.Timestamp observed_at = 3;
-}
-
-message SubmitChatRunToolCallRequested {
-  string tool_call_id = 1;
-  string tool_name = 2;
-  google.protobuf.Struct arguments = 3;
-  string result_json = 4;
-  string run_id = 5;
-  ChatRunSubRunTargetKind target_kind = 6;
-  string target_id = 7;
-  ChatRunSubRunWaitMode wait_mode = 8;
-  string stream_topic = 9;
-  string actor_id = 10;
-  string service_id = 11;
-  string endpoint_id = 12;
-  int32 llm_round = 13;
-  google.protobuf.Timestamp observed_at = 14;
-}
-
-message ChatRunToolCallSubmittedEvent {
-  string tool_call_id = 1;
-  string tool_name = 2;
-  google.protobuf.Struct arguments = 3;
-  string result_json = 4;
-  string run_id = 5;
-  ChatRunSubRunTargetKind target_kind = 6;
-  string target_id = 7;
-  ChatRunSubRunWaitMode wait_mode = 8;
-  string stream_topic = 9;
-  string actor_id = 10;
-  string service_id = 11;
-  string endpoint_id = 12;
-  int32 llm_round = 13;
-  google.protobuf.Timestamp observed_at = 14;
-}
-
-message PrepareChatRunSubRunObservationRequested {
-  string run_id = 1;
-  string tool_call_id = 2;
-  string tool_name = 3;
-  google.protobuf.Struct arguments = 4;
-  ChatRunSubRunTargetKind target_kind = 5;
-  string target_id = 6;
-  ChatRunSubRunWaitMode wait_mode = 7;
-  string stream_topic = 8;
-  string actor_id = 9;
-  string service_id = 10;
-  string endpoint_id = 11;
-  int32 llm_round = 12;
-  google.protobuf.Timestamp observed_at = 13;
-}
-
-message ChatRunSubRunObservationStartedEvent {
-  string run_id = 1;
-  string tool_call_id = 2;
-  string tool_name = 3;
-  google.protobuf.Struct arguments = 4;
-  ChatRunSubRunTargetKind target_kind = 5;
-  string target_id = 6;
-  ChatRunSubRunWaitMode wait_mode = 7;
-  string stream_topic = 8;
-  string actor_id = 9;
-  string service_id = 10;
-  string endpoint_id = 11;
-  int32 llm_round = 12;
-  google.protobuf.Timestamp observed_at = 13;
-}
-
-message ChatRunSubRunTerminalObserved {
-  string run_id = 1;
-  string status = 2;
-  string result_json = 3;
-  string actor_id = 4;
-  string service_id = 5;
-  string endpoint_id = 6;
-  google.protobuf.Timestamp observed_at = 7;
-}
-
-message ChatRunSubRunTerminalFoldedEvent {
-  string run_id = 1;
-  string caller_tool_call_id = 2;
-  string tool_name = 3;
-  string result_json = 4;
-  int32 llm_round = 5;
-  google.protobuf.Timestamp observed_at = 6;
-}
-
-message ChatRunToolResultReady {
-  string response_id = 1;
-  string run_id = 2;
-  string caller_tool_call_id = 3;
-  string tool_name = 4;
-  string result_json = 5;
-  int32 llm_round = 6;
-}
-
-message TerminateChatRunRequested {
-  string reason = 1;
-  google.protobuf.Timestamp observed_at = 2;
-}
-
-message ChatRunTerminatedEvent {
-  string reason = 1;
-  google.protobuf.Timestamp observed_at = 2;
-}
-
-enum ResponsesAgentToolTaskStatus {
-  RESPONSES_AGENT_TOOL_TASK_STATUS_UNSPECIFIED = 0;
-  RESPONSES_AGENT_TOOL_TASK_STATUS_ACCEPTED = 1;
-  RESPONSES_AGENT_TOOL_TASK_STATUS_REJECTED = 2;
 }
 
 message ResponsesAgentToolStateRecord {
@@ -487,18 +292,6 @@ message ResponsesTodoItem {
   google.protobuf.Timestamp updated_at = 6;
 }
 
-message ResponsesTaskTrace {
-  string task_id = 1;
-  string source_response_id = 2;
-  string child_actor_id = 3;
-  string description = 4;
-  ResponsesAgentToolTaskStatus status = 5;
-  google.protobuf.Value arguments = 6;
-  google.protobuf.Value result = 7;
-  google.protobuf.Timestamp created_at = 8;
-  google.protobuf.Timestamp updated_at = 9;
-}
-
 message ResponsesWebTrace {
   string trace_id = 1;
   string source_response_id = 2;
@@ -509,6 +302,7 @@ message ResponsesWebTrace {
   bool cache_hit = 7;
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
+  ResponsesWebToolResult typed_result = 10;
 }
 
 message ResponsesWebCacheEntry {
@@ -520,14 +314,81 @@ message ResponsesWebCacheEntry {
   google.protobuf.Timestamp cached_at = 6;
   google.protobuf.Timestamp last_hit_at = 7;
   int64 hit_count = 8;
+  ResponsesWebToolResult typed_result = 9;
+}
+
+message ResponsesWebFetchToolInput {
+  string url = 1;
+  string extract_hint = 2;
+}
+
+message ResponsesWebSearchToolInput {
+  string query = 1;
+  int32 max_results = 2;
+}
+
+message ResponsesWebSubstituteToolExecutionRequest {
+  string tool_name = 1;
+  string scope_id = 2;
+  string owner_subject = 3;
+  string response_id = 4;
+  string nyx_id_access_token = 5;
+  oneof input {
+    ResponsesWebFetchToolInput fetch = 6;
+    ResponsesWebSearchToolInput search = 7;
+  }
+}
+
+message ResponsesWebFetchToolOutput {
+  string url = 1;
+  int32 status_code = 2;
+  string content_type = 3;
+  string content = 4;
+  string redirect_url = 5;
+}
+
+message ResponsesWebSearchResultItem {
+  string title = 1;
+  string url = 2;
+  string snippet = 3;
+}
+
+message ResponsesWebSearchToolOutput {
+  repeated ResponsesWebSearchResultItem results = 1;
+}
+
+message ResponsesWebToolError {
+  string code = 1;
+  string message = 2;
+}
+
+message ResponsesWebToolResult {
+  oneof result {
+    ResponsesWebFetchToolOutput fetch = 1;
+    ResponsesWebSearchToolOutput search = 2;
+    ResponsesWebToolError error = 3;
+  }
+}
+
+message ResponsesWebSubstituteToolExecutionResult {
+  oneof result {
+    google.protobuf.Value cached = 1;
+    google.protobuf.Value error = 2;
+    ResponsesWebFetchToolOutput fetch = 3;
+    google.protobuf.Value search = 4;
+    ResponsesWebToolResult typed_cached = 5;
+    ResponsesWebToolError typed_error = 6;
+    ResponsesWebSearchToolOutput typed_search = 7;
+  }
 }
 
 message ResponsesAgentToolState {
+  reserved 5;
+  reserved "task_traces";
   ResponsesAgentToolStateRecord record = 1;
   int64 last_applied_event_version = 2;
   string last_event_id = 3;
   repeated ResponsesTodoItem todo_items = 4;
-  repeated ResponsesTaskTrace task_traces = 5;
   repeated ResponsesWebTrace web_traces = 6;
   repeated ResponsesWebCacheEntry web_cache_entries = 7;
 }
@@ -559,21 +420,6 @@ message ResponsesTodoWriteAppliedEvent {
   google.protobuf.Timestamp observed_at = 4;
 }
 
-message RecordResponsesTaskRequested {
-  string source_response_id = 1;
-  string task_id = 2;
-  string child_actor_id = 3;
-  string description = 4;
-  google.protobuf.Value arguments = 5;
-  google.protobuf.Value result = 6;
-  ResponsesAgentToolTaskStatus status = 7;
-  google.protobuf.Timestamp observed_at = 8;
-}
-
-message ResponsesTaskRecordedEvent {
-  ResponsesTaskTrace task = 1;
-}
-
 message RecordResponsesWebTraceRequested {
   string source_response_id = 1;
   string trace_id = 2;
@@ -584,6 +430,7 @@ message RecordResponsesWebTraceRequested {
   bool cache_hit = 7;
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
+  ResponsesWebToolResult typed_result = 10;
 }
 
 message ResponsesWebTraceRecordedEvent {

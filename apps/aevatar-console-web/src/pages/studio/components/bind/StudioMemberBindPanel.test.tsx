@@ -313,6 +313,8 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.queryByRole('button', { name: 'Open Runs' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Activate' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retire' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '设为入口并测试 Team' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '测试 Team' })).toBeNull();
     expect(screen.queryByText('Need auth for a smoke test?')).toBeNull();
     expect(screen.getAllByText('Authorization').length).toBeGreaterThan(0);
     await waitFor(() => {
@@ -341,119 +343,6 @@ describe('StudioMemberBindPanel', () => {
         endpointId: 'chat',
       });
     });
-  });
-
-  it('offers post-bind Team entry actions when provided', async () => {
-    const handleSetEntryAndTest = jest.fn();
-
-    renderWithQueryClient(
-      React.createElement(StudioMemberBindPanel, {
-        authSession: {
-          enabled: true,
-          authenticated: true,
-          scopeId: 'scope-1',
-          scopeSource: 'nyxid',
-        },
-        memberId: 'default',
-        scopeId: 'scope-1',
-        preferredServiceId: 'default',
-        postBindEntryActions: {
-          memberId: 'default',
-          onSetEntryAndTest: handleSetEntryAndTest,
-        },
-        services: [
-          {
-            serviceKey: 'scope-1:default:workspace-demo',
-            tenantId: 'scope-1',
-            appId: 'default',
-            namespace: 'default',
-            serviceId: 'default',
-            displayName: 'workspace-demo',
-            defaultServingRevisionId: 'rev-2',
-            activeServingRevisionId: 'rev-2',
-            deploymentId: 'dep-2',
-            primaryActorId: 'actor-default',
-            deploymentStatus: 'Active',
-            endpoints: [
-              {
-                endpointId: 'chat',
-                displayName: 'Chat',
-                kind: 'chat',
-                requestTypeUrl: '',
-                responseTypeUrl: '',
-                description: 'Chat with the published workflow.',
-              },
-            ],
-            policyIds: [],
-            updatedAt: '2026-03-26T08:00:00Z',
-          },
-        ],
-      }),
-    );
-
-    expect(await screen.findByText('This member can be the Team entry.')).toBeTruthy();
-    expect(
-      screen.queryByRole('button', { name: 'Set as Team entry' }),
-    ).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Set as portal and test team' }));
-
-    expect(handleSetEntryAndTest).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows a direct Team test action when the member is already the Team entry', async () => {
-    const handleSetEntryAndTest = jest.fn();
-
-    renderWithQueryClient(
-      React.createElement(StudioMemberBindPanel, {
-        authSession: {
-          enabled: true,
-          authenticated: true,
-          scopeId: 'scope-1',
-          scopeSource: 'nyxid',
-        },
-        memberId: 'default',
-        scopeId: 'scope-1',
-        preferredServiceId: 'default',
-        postBindEntryActions: {
-          isEntryMember: true,
-          memberId: 'default',
-          onSetEntryAndTest: handleSetEntryAndTest,
-        },
-        services: [
-          {
-            serviceKey: 'scope-1:default:workspace-demo',
-            tenantId: 'scope-1',
-            appId: 'default',
-            namespace: 'default',
-            serviceId: 'default',
-            displayName: 'workspace-demo',
-            defaultServingRevisionId: 'rev-2',
-            activeServingRevisionId: 'rev-2',
-            deploymentId: 'dep-2',
-            primaryActorId: 'actor-default',
-            deploymentStatus: 'Active',
-            endpoints: [
-              {
-                endpointId: 'chat',
-                displayName: 'Chat',
-                kind: 'chat',
-                requestTypeUrl: '',
-                responseTypeUrl: '',
-                description: 'Chat with the published workflow.',
-              },
-            ],
-            policyIds: [],
-            updatedAt: '2026-03-26T08:00:00Z',
-          },
-        ],
-      }),
-    );
-
-    expect(await screen.findByText('This member is the Team entry.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Set as portal and test team' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Test team' }));
-
-    expect(handleSetEntryAndTest).toHaveBeenCalledTimes(1);
   });
 
   it('runs a chat smoke test and offers a continue-to-invoke action', async () => {

@@ -38,7 +38,7 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public async Task ExecuteAsync_ReturnsError_WhenNoNyxTokenIsAvailable()
     {
-        AgentToolRequestContext.CurrentMetadata = null;
+        AgentToolRequestContext.Current = null;
         try
         {
             var tool = CreateTool();
@@ -49,7 +49,7 @@ public sealed class ChannelRegistrationToolTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
         }
     }
 
@@ -314,7 +314,7 @@ public sealed class ChannelRegistrationToolTests
 
     private static IDisposable PushNyxToken(string? scopeId = "scope-1")
     {
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         var next = new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
@@ -322,7 +322,7 @@ public sealed class ChannelRegistrationToolTests
         if (!string.IsNullOrWhiteSpace(scopeId))
             next["scope_id"] = scopeId;
 
-        AgentToolRequestContext.CurrentMetadata = next;
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(next);
 
         return new ResetMetadataScope(previous);
     }
@@ -350,9 +350,9 @@ public sealed class ChannelRegistrationToolTests
         return ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
     }
 
-    private sealed class ResetMetadataScope(IReadOnlyDictionary<string, string>? previous) : IDisposable
+    private sealed class ResetMetadataScope(AgentToolExecutionContext? previous) : IDisposable
     {
-        public void Dispose() => AgentToolRequestContext.CurrentMetadata = previous;
+        public void Dispose() => AgentToolRequestContext.Current = previous;
     }
 
     private static string GetChannelRegistrationToolSourcePath()

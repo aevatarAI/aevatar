@@ -1,4 +1,3 @@
-using System.Runtime.ExceptionServices;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -43,46 +42,40 @@ internal sealed class WorkflowRunObservationLifecycle
                 ct);
 
             if (attachment == null)
-                return await FailProjectionUnavailableAsync(target, sink);
+                return await FailProjectionUnavailableAsync(sink);
 
             target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink);
             return CommandObservationBindingResult<WorkflowChatRunStartError>.Success();
         }
         catch (Exception ex)
         {
-            var rollbackError = await TryRollbackCreatedActorsAsync(target);
-            if (rollbackError == null)
-                throw;
-
-            ExceptionDispatchInfo.Capture(
-                new AggregateException(
-                    "Workflow run target binding failed and rollback also failed.",
-                    ex,
-                    rollbackError)).Throw();
+            await DisposeSinkBeforeRethrowAsync(sink, ex).ConfigureAwait(false);
             throw;
         }
     }
 
-    private static async Task<Exception?> TryRollbackCreatedActorsAsync(WorkflowRunCommandTarget target)
+    private static async Task<CommandObservationBindingResult<WorkflowChatRunStartError>> FailProjectionUnavailableAsync(
+        IEventSink<WorkflowRunEventEnvelope> sink)
+    {
+        await sink.DisposeAsync();
+        return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
+            WorkflowChatRunStartError.ProjectionUnavailable);
+    }
+
+    private static async Task DisposeSinkBeforeRethrowAsync(
+        IEventSink<WorkflowRunEventEnvelope> sink,
+        Exception bindException)
     {
         try
         {
-            await target.RollbackCreatedActorsAsync(CancellationToken.None);
-            return null;
+            await sink.DisposeAsync().ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception disposeException)
         {
-            return ex;
+            throw new AggregateException(
+                "Workflow run observation bind failed and sink disposal also failed.",
+                bindException,
+                disposeException);
         }
-    }
-
-    private static async Task<CommandObservationBindingResult<WorkflowChatRunStartError>> FailProjectionUnavailableAsync(
-        WorkflowRunCommandTarget target,
-        IEventSink<WorkflowRunEventEnvelope> sink)
-    {
-        await target.RollbackCreatedActorsAsync(CancellationToken.None);
-        await sink.DisposeAsync();
-        return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
-            WorkflowChatRunStartError.ProjectionDisabled);
     }
 }

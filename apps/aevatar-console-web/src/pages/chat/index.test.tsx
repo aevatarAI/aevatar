@@ -91,9 +91,9 @@ jest.mock("@/shared/studio/api", () => ({
       })),
       getUserLlmSettings: jest.fn(async () => ({
         savedRoute: "",
-        savedRouteLabel: "NyxID Gateway",
+        savedRouteLabel: "Backend saved gateway",
         effectiveRoute: "",
-        effectiveRouteLabel: "NyxID Gateway",
+        effectiveRouteLabel: "Backend effective gateway",
         routeFallbackActive: false,
         fallbackReason: null,
         catalogStatus: "ready",
@@ -107,7 +107,7 @@ jest.mock("@/shared/studio/api", () => ({
         routeOptions: [
           {
             routeValue: "",
-            label: "NyxID Gateway",
+            label: "Gateway route option",
             source: "gateway_provider",
             status: "ready",
             allowed: true,
@@ -887,14 +887,18 @@ describe("ChatPage", () => {
     expect(
       await screen.findByRole("button", { name: "Conversation model settings" })
     ).toHaveTextContent("Provider default");
-    expect(screen.getAllByText("NyxID Gateway").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Backend effective gateway")).length).toBeGreaterThan(0);
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Conversation model settings" })
     );
-    fireEvent.change(await screen.findByLabelText("Conversation route"), {
+    const routeSelect = await screen.findByLabelText("Conversation route");
+    expect(routeSelect).toHaveTextContent("Gateway route option");
+    expect(routeSelect).toHaveTextContent("OpenAI");
+    fireEvent.change(routeSelect, {
       target: { value: "/api/v1/proxy/s/openai" },
     });
+    expect(await screen.findByText("via OpenAI")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "gpt-5.4-mini" }));
 
     fireEvent.change(await screen.findByPlaceholderText("Send a message..."), {

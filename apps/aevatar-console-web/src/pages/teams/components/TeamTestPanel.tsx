@@ -46,6 +46,8 @@ export type TeamTestLastResult = {
 
 type TeamTestPanelProps = {
   readonly createMemberHref: string;
+  readonly currentMemberId?: string | null;
+  readonly currentMemberLabel?: string;
   readonly disabled?: boolean;
   readonly entryActionBusyMemberId?: string;
   readonly entryMemberId?: string | null;
@@ -148,6 +150,8 @@ function formatLifecycleLabelForTeamTest(
 
 const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
   createMemberHref,
+  currentMemberId,
+  currentMemberLabel,
   disabled = false,
   entryActionBusyMemberId = "",
   entryMemberId,
@@ -171,6 +175,10 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
   const intl = useIntl();
   const { token } = theme.useToken();
   const normalizedEntryMemberId = entryMemberId?.trim() ?? "";
+  const normalizedCurrentMemberId = currentMemberId?.trim() ?? "";
+  const showCurrentMemberContext =
+    normalizedCurrentMemberId.length > 0 &&
+    normalizedCurrentMemberId !== normalizedEntryMemberId;
   const entryMember =
     rosterRows.find((row) => row.memberId === normalizedEntryMemberId) ?? null;
   const readyRows = rosterRows.filter((row) => row.canInvokeAsEntry);
@@ -504,6 +512,14 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           <Typography.Text style={{ fontSize: 13 }} type="secondary">
             {intl.formatMessage({ id: "teams.detail.test.subtitle" })}
           </Typography.Text>
+          {showCurrentMemberContext ? (
+            <Typography.Text style={{ fontSize: 12 }} type="secondary">
+              {intl.formatMessage(
+                { id: "teams.detail.test.currentMemberContext" },
+                { member: currentMemberLabel || normalizedCurrentMemberId },
+              )}
+            </Typography.Text>
+          ) : null}
         </div>
         {lastResult ? (
           <div

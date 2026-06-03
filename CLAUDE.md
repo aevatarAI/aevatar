@@ -19,6 +19,7 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - 删除优先：空转发、重复抽象、无业务价值代码直接删除，不保留兼容空壳。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 - 外部仓库无改动权：本仓库需求禁止依赖 NyxID / chrono-storage / chrono-ornn 等外部仓库新增或修改；现有 surface 不足时，在本仓库内绕开或不做。只有发现外部仓库行为违反其已发布契约时，才可提 issue。
+- 不得对特定 skill / 命令 / 模板名硬编码：skill 接口本身就是泛化协议；生产代码、prompt、路由表、类型名和字段名不得感知具体 skill 名（如 `/daily`、`chrono-ai-daily` 等）。需要个性化行为时，通过 skill metadata / 通用 discovery 接口表达，不允许在分支判断、路由表、类型名里出现具体 skill 名；例外：测试代码可在 testfile 内引用具体 skill 名作 fixture。
 
 ## 架构哲学
 - 单一主干，插件扩展：只保留一条权威业务主链路；新能力以插件/模块挂载，禁止平行"第二系统"。
@@ -125,7 +126,7 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - AI 生成的设计文档默认不保留到 `docs/`；需要保留时必须有 `title/status/owner` frontmatter 并放入对应目录。
 - `docs/canon/` 和 `docs/adr/` 文件必须有 YAML frontmatter（`title/status/owner`）；文档 lint 使用 `tools/docs/lint.sh`，已纳入 CI 门禁。
 - 根目录 `.md` 只保留 `CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`；`docs/README.md` 由工具生成，不手动编辑。
-- 项目结构：`src/` 放生产代码，`test/` 放对应测试，`tools/Aevatar.Tools.Cli` 是 CLI 项目，`workflows/` 放 YAML 工作流。
+- 项目结构：`src/` 放生产代码，`test/` 放对应测试，`tools/` 放开发工具，`workflows/` 放 YAML 工作流。
 - `src/` 按能力与分层组织；保持项目名、命名空间、目录语义一致。
 - `test/` 与 `src/` 对应；测试文件命名 `*Tests.cs`，单文件聚焦一个行为域。
 - `tools/` 放开发工具，`demos/` 放示例程序；工作文档不加入 `aevatar.slnx`。

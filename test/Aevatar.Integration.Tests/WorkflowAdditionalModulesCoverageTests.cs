@@ -1008,11 +1008,12 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             }),
             ctx,
             CancellationToken.None);
-        var llmSessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var llmSessionId = ctx.Sent.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         await llmCall.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = llmSessionId,
+                Success = true,
                 Content = sensitiveLlmOutput,
             }),
             ctx,
@@ -1096,11 +1097,12 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var sessionId = ctx.Sent.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var sessionId = ctx.Sent.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = sessionId,
+                Success = true,
                 Content = sensitiveLlmOutput,
             }),
             ctx,
@@ -1108,7 +1110,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
         messages.Should().Contain(message =>
-            message.Contains("status=completed_non_streaming", StringComparison.Ordinal) &&
+            message.Contains("status=completed", StringComparison.Ordinal) &&
             message.Contains("output_redacted=true", StringComparison.Ordinal) &&
             message.Contains($"output_len={sensitiveLlmOutput.Length}", StringComparison.Ordinal));
         messages.Should().NotContain(message => message.Contains(sensitiveLlmPrompt, StringComparison.Ordinal));
@@ -1901,14 +1903,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var judgeRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+        var judgeRequest = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single();
         var firstSessionId = judgeRequest.SessionId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = firstSessionId,
+                Success = true,
                 Content = "score: 3.5",
             }),
             ctx,
@@ -1932,13 +1935,14 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             }),
             ctx,
             CancellationToken.None);
-        var secondSessionId = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var secondSessionId = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = secondSessionId,
+                Success = true,
                 Content = "5",
             }),
             ctx,
@@ -1971,17 +1975,17 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         ctx.Sent.Should().ContainSingle();
         ctx.Sent[0].targetActorId.Should().Be($"{ctx.AgentId}:telegram_user_bridge");
-        var chatRequest = ctx.Sent[0].evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        chatRequest.Telegram.ChatId.Should().Be("10001");
-        chatRequest.Telegram.RunId.Should().Be("run-target-role");
-        chatRequest.Telegram.StepId.Should().Be("llm-target-role");
-        chatRequest.Metadata.Should().NotContainKey("chat_id");
-        chatRequest.Metadata.Should().NotContainKey("llm_timeout_ms");
+        var chatRequest = ctx.Sent[0].evt.Should().BeOfType<WorkflowLlmExecutionIntent>().Subject;
+        chatRequest.Annotations["chat_id"].Should().Be("10001");
+        chatRequest.RunId.Should().Be("run-target-role");
+        chatRequest.StepId.Should().Be("llm-target-role");
+        chatRequest.Annotations.Should().NotContainKey("llm_timeout_ms");
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = chatRequest.SessionId,
+                Success = true,
                 Content = "telegram-ack",
             }),
             ctx,
@@ -2004,19 +2008,13 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             {
                 ["trace-id"] = " trace-abc ",
             });
-        await WorkflowRequestMetadataRuntimeContextAccess.SetToolContextAsync(
+        await WorkflowRequestMetadataRuntimeContextAccess.SetLlmControlAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
-            AgentToolExecutionContext.Empty with
+            new WorkflowLlmControlContext
             {
-                Credentials = AgentToolCredentials.Empty with
-                {
-                    NyxIdAccessToken = " token-123 ",
-                },
-                Routing = LLMRequestRoutingContext.Empty with
-                {
-                    ModelOverride = " model-main ",
-                    NyxIdRoutePreference = " route-fast ",
-                },
+                ModelOverride = " model-main ",
+                MaxToolRoundsOverride = 3,
+                UserMemoryPrompt = " memory-main ",
             });
 
         await module.HandleAsync(
@@ -2030,11 +2028,11 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var chatRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
-        chatRequest.LlmControl.NyxIdAccessToken.Should().Be("token-123");
-        chatRequest.LlmControl.ModelOverride.Should().Be("model-main");
-        chatRequest.LlmControl.NyxIdRoutePreference.Should().Be("route-fast");
-        chatRequest.Metadata["trace-id"].Should().Be("trace-abc");
+        var intent = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single();
+        intent.Model.Should().Be("model-main");
+        intent.MaxToolRounds.Should().Be(3);
+        intent.UserMemoryPrompt.Should().Be("memory-main");
+        intent.Headers["trace-id"].Should().Be("trace-abc");
     }
 
     [Fact]
@@ -2043,12 +2041,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var connector = new RecordingConnector("runtime-auth");
         var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
         var ctx = CreateContext();
-        await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
+        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(
             (IWorkflowExecutionStateHost)ctx.Agent,
-            new Dictionary<string, string>
-            {
-                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer token-123 ",
-            });
+            " Bearer token-123 ");
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -2067,9 +2062,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         connector.LastRequest.Should().NotBeNull();
-        connector.LastRequest!.Metadata.Should().Contain(
-            ConnectorRequest.HttpAuthorizationMetadataKey,
-            "Bearer token-123");
+        connector.LastRequest!.HttpAuthorization.Should().Be("Bearer token-123");
+        connector.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
@@ -2127,15 +2121,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         await evaluate.HandleAsync(Envelope(evaluateRequest), ctx, CancellationToken.None);
 
         ctx.Sent.Should().ContainSingle(x => x.targetActorId == $"{ctx.AgentId}:judge");
-        var evaluateChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        evaluateChat.Telegram.ChatId.Should().Be("chat-eval");
-        evaluateChat.Headers.Should().NotContainKey("chat_id");
+        var evaluateChat = ctx.Sent.Last().evt.Should().BeOfType<WorkflowLlmExecutionIntent>().Subject;
+        evaluateChat.Annotations["chat_id"].Should().Be("chat-eval");
         ctx.Published.Clear();
 
         await evaluate.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = evaluateChat.SessionId,
+                Success = true,
                 Content = "3",
             }),
             ctx,
@@ -2159,15 +2153,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         await reflect.HandleAsync(Envelope(reflectRequest), ctx, CancellationToken.None);
 
         ctx.Sent.Should().Contain(x => x.targetActorId == $"{ctx.AgentId}:reviewer");
-        var reflectChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        reflectChat.Telegram.ChatId.Should().Be("chat-reflect");
-        reflectChat.Headers.Should().NotContainKey("chat_id");
+        var reflectChat = ctx.Sent.Last().evt.Should().BeOfType<WorkflowLlmExecutionIntent>().Subject;
+        reflectChat.Annotations["chat_id"].Should().Be("chat-reflect");
         ctx.Published.Clear();
 
         await reflect.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = reflectChat.SessionId,
+                Success = true,
                 Content = "PASS",
             }),
             ctx,
@@ -2193,13 +2187,14 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             }),
             ctx,
             CancellationToken.None);
-        var firstCritiqueSession = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var firstCritiqueSession = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = firstCritiqueSession,
+                Success = true,
                 Content = "PASS",
             }),
             ctx,
@@ -2223,35 +2218,38 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             }),
             ctx,
             CancellationToken.None);
-        var critiqueSession0 = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var critiqueSession0 = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = critiqueSession0,
+                Success = true,
                 Content = "Needs improvement",
             }),
             ctx,
             CancellationToken.None);
-        var improveSession = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var improveSession = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new TextMessageEndEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = improveSession,
+                Success = true,
                 Content = "draft-2-better",
             }),
             ctx,
             CancellationToken.None);
-        var critiqueSession1 = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var critiqueSession1 = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = critiqueSession1,
+                Success = true,
                 Content = "still not good",
             }),
             ctx,
@@ -2282,7 +2280,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             }),
             ctx,
             CancellationToken.None);
-        var sessionA = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var sessionA = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -2296,13 +2294,14 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             }),
             ctx,
             CancellationToken.None);
-        var sessionB = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        var sessionB = ctx.Published.Select(x => x.evt).OfType<WorkflowLlmExecutionIntent>().Single().SessionId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = sessionB,
+                Success = true,
                 Content = "PASS",
             }),
             ctx,
@@ -2314,9 +2313,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new ChatResponseEvent
+            Envelope(new WorkflowLlmInvocationCompletedEvent
             {
                 SessionId = sessionA,
+                Success = true,
                 Content = "PASS",
             }),
             ctx,

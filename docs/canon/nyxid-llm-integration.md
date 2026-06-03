@@ -28,7 +28,9 @@ NyxID 验证 Token → 查找该用户的 API Key → 注入 → 转发给上游
 
 ## Responses 直连路由
 
-外部客户端通过 NyxID proxy 调 Aevatar `/v1/responses` 或 `/v1/messages` 时，模型路由采用 OpenRouter 风格：
+外部客户端通过 NyxID proxy 调 Aevatar `/v1/responses`、`/v1/messages` 或 `/v1/chat/completions` 时，调用者身份与下游委托凭据分开处理。`X-NyxID-Identity-Token` 若存在，Host 先用 NyxID JWKS 校验该 RS256 assertion；校验通过后用 `sub` 作为 caller scope，不再调用 `/me`。该 header 存在但校验失败时 fail closed。只有缺失 identity assertion 时，才使用 inbound bearer 调 NyxID `/me` fallback。`X-NyxID-Delegation-Token` 只作为 downstream delegated credential，永远不作为 caller identity 输入。
+
+模型路由采用 OpenRouter 风格：
 
 ```text
 <service-slug>/<model>

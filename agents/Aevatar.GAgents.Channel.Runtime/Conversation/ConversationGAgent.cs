@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -63,6 +64,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     public const int MaxInboundTurnRetryCount = 5;
     private const int RelayReplayClaimsCap = 10000;
     private const int PendingRelayAdmissionsCap = 1000;
+    private const int RetainedHistoryMessagesCap = 100;
+    private const int MaxNyxRelayInterimUpdateRetryCount = 2;
 
     /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still
@@ -277,12 +280,16 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            runCopy.PriorHistory.Clear();
+            runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
             var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
             persistedCopy.Activity = CloneForDurableState(persistedCopy.Activity);
             persistedCopy.TargetRef = null;
             persistedCopy.LlmControl = null;
+            persistedCopy.PriorHistory.Clear();
+            StripRuntimeCredentialsFromToolContext(persistedCopy);
             LlmReplyCredentialMetadataKeys.StripFrom(persistedCopy.Metadata);
             await PersistDomainEventAsync(persistedCopy);
             await DispatchPendingLlmReplyAsync(runCopy, CancellationToken.None);
@@ -337,6 +344,45 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
             activity.Id, result.ErrorCode, result.FailureKind);
     }
+
+    private static void StripRuntimeCredentialsFromToolContext(NeedsLlmReplyEvent request)
+    {
+        if (request.ToolContext is null)
+            return;
+
+        var durableContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            Credentials = AgentToolCredentials.Empty,
+        };
+        request.ToolContext = HasDurableToolContext(durableContext)
+            ? durableContext.ToPayload()
+            : null;
+    }
+
+    private static bool HasDurableToolContext(AgentToolExecutionContext context) =>
+        !string.IsNullOrWhiteSpace(context.Request.RequestId) ||
+        !string.IsNullOrWhiteSpace(context.Request.CallId) ||
+        !string.IsNullOrWhiteSpace(context.Caller.ScopeId) ||
+        !string.IsNullOrWhiteSpace(context.Caller.OwnerSubject) ||
+        !string.IsNullOrWhiteSpace(context.Caller.ResponseId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.Platform) ||
+        !string.IsNullOrWhiteSpace(context.Channel.SenderId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.RegistrationScopeId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.MessageId) ||
+        !string.IsNullOrWhiteSpace(context.Channel.PlatformMessageId) ||
+        !string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) ||
+        !string.IsNullOrWhiteSpace(context.Routing.ModelOverride) ||
+        !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
+        context.Routing.MaxToolRoundsOverride.HasValue ||
+        !string.IsNullOrWhiteSpace(context.Routing.UserMemoryPrompt) ||
+        !string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson) ||
+        context.ExternalMetadata.Count > 0 ||
+        context.SkillRecovery.RequireInitialOrnnSearch ||
+        context.SkillRecovery.RequireOrnnSearchOnBlocker ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.CommandName) ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.OriginalCommand) ||
+        !string.IsNullOrWhiteSpace(context.SkillRecovery.PrimarySkillName) ||
+        context.SkillRecovery.MaxOrnnSearchAttempts > 0;
 
     private async Task<ChatRouteAction> ResolveInboundTargetRefAsync(
         ChatActivity activity,
@@ -713,6 +759,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 CompletedAtUnixMs = nowMs,
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
+            completed.AppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
             // ADR-0021 chain.delivered observable: persist the user-visible delivery ack
             // before the turn-completed summary event so readers do not need to infer
             // delivery status from the channel sink return code, and so existing
@@ -905,6 +952,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     generation),
                 OperationGeneration = generation,
                 PendingAccumulatedText = evt.AccumulatedText,
+                RetryAttempt = 0,
             });
         await ScheduleNyxRelayTextOperationTimeoutAsync(
             correlationId,
@@ -967,7 +1015,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     finalizeText: failureText,
                     finalizeCommandId: commandId,
-                    terminalState: LlmReplyTerminalState.Failed);
+                    terminalState: LlmReplyTerminalState.Failed,
+                    appendedHistory: evt.AppendedHistory);
                 return true;
             }
 
@@ -978,7 +1027,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     finalizeText: evt.Outbound?.Text ?? string.Empty,
                     finalizeCommandId: commandId,
-                    terminalState: LlmReplyTerminalState.Completed);
+                    terminalState: LlmReplyTerminalState.Completed,
+                    appendedHistory: evt.AppendedHistory);
                 return true;
             }
         }
@@ -1015,6 +1065,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                         sequence,
                         generation),
                     OperationGeneration = generation,
+                    RetryAttempt = 0,
                 });
             await ScheduleNyxRelayTextOperationTimeoutAsync(
                 correlationId,
@@ -1088,6 +1139,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                         sequence,
                         generation),
                     OperationGeneration = generation,
+                    RetryAttempt = 0,
                 });
             await ScheduleNyxRelayTextOperationTimeoutAsync(
                 correlationId,
@@ -1130,7 +1182,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         string? accumulatedText = null,
         string? finalizeText = null,
         string? finalizeCommandId = null,
-        LlmReplyTerminalState terminalState = LlmReplyTerminalState.Unspecified) =>
+        LlmReplyTerminalState terminalState = LlmReplyTerminalState.Unspecified,
+        IEnumerable<ConversationHistoryEntry>? appendedHistory = null) =>
         TransitionNyxRelayStreamingPhaseAsync(
             correlationId,
             state,
@@ -1143,6 +1196,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 PendingTerminalState = terminalState == LlmReplyTerminalState.Unspecified
                     ? s.PendingTerminalState
                     : terminalState,
+                PendingAppendedHistory = appendedHistory is null
+                    ? s.PendingAppendedHistory
+                    : appendedHistory.Select(entry => entry.Clone()).ToArray(),
             });
 
     private async Task ScheduleNyxRelayTextOperationTimeoutAsync(
@@ -1379,6 +1435,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             EditUnsupported = result.EditUnsupported,
             RawErrorCode = result.ErrorCode ?? string.Empty,
             RawErrorSummary = result.ErrorSummary ?? string.Empty,
+            FailureKind = result.FailureKind,
+            RetryAfterMs = result.RetryAfter.HasValue ? (long)result.RetryAfter.Value.TotalMilliseconds : 0,
+            HttpStatus = result.HttpStatus,
+            RawErrorKey = result.RawErrorKey ?? string.Empty,
+            RawErrorCodeValue = result.RawErrorCode,
         };
 
     private static NyxRelayTextOperationRawResult ToNyxRelayTextRawFault(Exception ex) =>
@@ -1401,7 +1462,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             evt.State == NyxRelayTextOperationResultState.Faulted
                 ? raw.ExceptionMessage
                 : raw.RawErrorSummary,
-            raw.EditUnsupported);
+            raw.EditUnsupported,
+            raw.FailureKind,
+            raw.RetryAfterMs > 0 ? TimeSpan.FromMilliseconds(raw.RetryAfterMs) : null,
+            raw.HttpStatus,
+            raw.RawErrorKey,
+            raw.RawErrorCodeValue);
     }
 
     private static string BuildNyxRelayTextFaultErrorCode(NyxRelayTextOperationRawResult raw)
@@ -1451,6 +1517,37 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var result = ToStreamChunkResult(evt);
         if (!result.Success)
         {
+            if (ShouldRetryNyxRelayInterimUpdate(result, state))
+            {
+                var retryAttempt = state.RetryAttempt + 1;
+                var retryGeneration = NextNyxRelayTextOperationGeneration(state);
+                await TransitionNyxRelayStreamingPhaseAsync(
+                    correlationId,
+                    state,
+                    state.Phase,
+                    fieldUpdate: s => s with
+                    {
+                        InFlight = new NyxRelayTextOperationInFlight(
+                            NyxRelayTextOperationKind.Interim,
+                            evt.Sequence,
+                            retryGeneration),
+                        OperationGeneration = retryGeneration,
+                        RetryAttempt = retryAttempt,
+                    });
+                await StartNyxRelayTextOperationAsync(
+                    NyxRelayTextOperationKind.Interim,
+                    evt.Chunk?.Clone() ?? new LlmReplyStreamChunkEvent(),
+                    correlationId,
+                    NormalizeOptional(evt.CurrentPlatformMessageId) ?? state.PlatformMessageId,
+                    commandId: string.Empty,
+                    finalText: string.Empty,
+                    lastFlushedText: state.LastFlushedText,
+                    editCount: state.EditCount,
+                    evt.Sequence,
+                    retryGeneration);
+                return;
+            }
+
             if (state.AllowsFinalEdit)
             {
                 Logger.LogInformation(
@@ -1463,7 +1560,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     NyxRelayStreamingPhase.SuppressingInterim,
                     terminalReason: $"interim_edit_failed:{result.ErrorCode}",
-                    fieldUpdate: s => s with { InFlight = null });
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
             }
             else
             {
@@ -1477,7 +1574,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     NyxRelayStreamingPhase.DisabledPreSend,
                     terminalReason: $"first_send_failed:{result.ErrorCode}",
-                    fieldUpdate: s => s with { InFlight = null });
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
             }
             return;
         }
@@ -1501,9 +1598,18 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 EditCount = isFirstChunk ? 0 : s.EditCount + 1,
                 InFlight = null,
                 PendingAccumulatedText = pendingText,
+                RetryAttempt = 0,
             });
         await ContinueNyxRelayTextCoalescedWorkAsync(correlationId, updated, evt.Chunk);
     }
+
+    private static bool ShouldRetryNyxRelayInterimUpdate(
+        ConversationStreamChunkResult result,
+        NyxRelayStreamingState state) =>
+        state.AllowsFinalEdit &&
+        result.FailureKind == FailureKind.TransientAdapterError &&
+        (result.RetryAfter is null || result.RetryAfter <= TimeSpan.Zero) &&
+        state.RetryAttempt < MaxNyxRelayInterimUpdateRetryCount;
 
     private async Task HandleNyxRelayTextFailureSelfHealCompletionAsync(
         string correlationId,
@@ -1525,7 +1631,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 state,
                 NyxRelayStreamingPhase.TerminalSucceeded,
                 terminalReason: "failed_self_heal",
-                fieldUpdate: s => s with { InFlight = null });
+                fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
             await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, failureText, state.EditCount + 1);
             return;
         }
@@ -1540,7 +1646,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             state,
             NyxRelayStreamingPhase.TerminalPartial,
             terminalReason: $"failed_self_heal_edit_failed:{result.ErrorCode}",
-            fieldUpdate: s => s with { InFlight = null });
+            fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
         await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, state.LastFlushedText, state.EditCount);
     }
 
@@ -1565,7 +1671,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 state,
                 NyxRelayStreamingPhase.TerminalPartial,
                 terminalReason: $"final_edit_failed:{result.ErrorCode}",
-                fieldUpdate: s => s with { InFlight = null });
+                fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
             await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, state.LastFlushedText, state.EditCount);
             return;
         }
@@ -1580,6 +1686,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 LastFlushedText = finalText,
                 EditCount = state.EditCount + 1,
                 InFlight = null,
+                RetryAttempt = 0,
             });
         await PersistStreamedCompletionAsync(evt, commandId, platformMessageId, finalText, state.EditCount + 1);
     }
@@ -1606,7 +1713,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                         state,
                         NyxRelayStreamingPhase.SuppressingInterim,
                         terminalReason: "interim_edit_timeout",
-                        fieldUpdate: s => s with { InFlight = null });
+                        fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
                 }
                 else
                 {
@@ -1615,7 +1722,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                         state,
                         NyxRelayStreamingPhase.DisabledPreSend,
                         terminalReason: "first_send_timeout",
-                        fieldUpdate: s => s with { InFlight = null });
+                        fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
                 }
                 return;
             case NyxRelayTextOperationKind.FailureSelfHeal:
@@ -1624,7 +1731,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     NyxRelayStreamingPhase.TerminalPartial,
                     terminalReason: "failed_self_heal_timeout",
-                    fieldUpdate: s => s with { InFlight = null });
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
                 await PersistStreamedCompletionAsync(
                     evt,
                     NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
@@ -1638,7 +1745,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     state,
                     NyxRelayStreamingPhase.TerminalPartial,
                     terminalReason: "final_edit_timeout",
-                    fieldUpdate: s => s with { InFlight = null });
+                    fieldUpdate: s => s with { InFlight = null, RetryAttempt = 0 });
                 await PersistStreamedCompletionAsync(
                     evt,
                     NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
@@ -1672,6 +1779,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     : state.PendingTerminalState,
                 ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+            ready.AppendedHistory.AddRange(state.PendingAppendedHistory.Select(entry => entry.Clone()));
             var runtimeContext = BuildNyxRelayRuntimeContext(
                 correlationId,
                 ready.Activity,
@@ -1757,6 +1865,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CompletedAtUnixMs = nowMs,
             OutboundDelivery = ToOutboundDeliveryReceipt(evt.Activity?.OutboundDelivery),
         };
+        completed.AppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
         // ADR-0021 chain.delivered observable: the streaming path always reaches this
         // function with a user-visible placeholder message id (any partial / full /
         // failure-self-heal text the user actually saw). Persist a Delivered event
@@ -2241,6 +2350,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         {
             next.Conversation = evt.Conversation.Clone();
         }
+        AppendHistoryBounded(next.RetainedHistory, evt.AppendedHistory, RetainedHistoryMessagesCap);
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
         return next;
     }
@@ -2503,6 +2613,13 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             lifecycle.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
         if (evt.HasNyxRelayTerminalState)
             lifecycle.PendingNyxRelayTerminalState = evt.NyxRelayTerminalState;
+        if (evt.HasNyxRelayRetryAttempt)
+            lifecycle.NyxRelayRetryAttempt = evt.NyxRelayRetryAttempt;
+        if (evt.AppendedHistory.Count > 0)
+        {
+            lifecycle.PendingAppendedHistory.Clear();
+            lifecycle.PendingAppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
+        }
 
         if (evt.ChangedAtUnixMs > 0)
             lifecycle.UpdatedAtUnixMs = evt.ChangedAtUnixMs;
@@ -2747,6 +2864,119 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         while (field.Count > cap)
             field.RemoveAt(0);
     }
+
+    private static void AppendHistoryBounded(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        IEnumerable<ConversationHistoryEntry> entries,
+        int cap)
+    {
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Role))
+                continue;
+            field.Add(entry.Clone());
+        }
+
+        NormalizeHistoryWindow(field, cap);
+    }
+
+    private static void NormalizeHistoryWindow(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        int cap)
+    {
+        while (field.Count > cap)
+            RemoveOldestHistoryUnit(field);
+
+        DropOrphanToolResults(field);
+    }
+
+    private static void RemoveOldestHistoryUnit(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field)
+    {
+        if (field.Count == 0)
+            return;
+
+        var first = field[0];
+        if (IsAssistantToolCallMessage(first))
+        {
+            var callIds = first.ToolCalls.Select(static call => call.Id).ToHashSet(StringComparer.Ordinal);
+            field.RemoveAt(0);
+            RemoveToolResults(field, callIds);
+            return;
+        }
+
+        if (IsToolResultMessage(first))
+        {
+            var callId = first.ToolCallId;
+            field.RemoveAt(0);
+            if (!string.IsNullOrWhiteSpace(callId))
+                RemoveAssistantToolCall(field, callId);
+            return;
+        }
+
+        field.RemoveAt(0);
+    }
+
+    private static void RemoveToolResults(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        HashSet<string> callIds)
+    {
+        if (callIds.Count == 0)
+            return;
+
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (IsToolResultMessage(field[i]) && callIds.Contains(field[i].ToolCallId))
+                field.RemoveAt(i);
+        }
+    }
+
+    private static void RemoveAssistantToolCall(
+        Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field,
+        string callId)
+    {
+        for (var i = field.Count - 1; i >= 0; i--)
+        {
+            if (IsAssistantToolCallMessage(field[i]) &&
+                field[i].ToolCalls.Any(call => string.Equals(call.Id, callId, StringComparison.Ordinal)))
+            {
+                field.RemoveAt(i);
+            }
+        }
+    }
+
+    private static void DropOrphanToolResults(Google.Protobuf.Collections.RepeatedField<ConversationHistoryEntry> field)
+    {
+        var openCallIds = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < field.Count; i++)
+        {
+            var entry = field[i];
+            if (IsAssistantToolCallMessage(entry))
+            {
+                foreach (var call in entry.ToolCalls)
+                {
+                    if (!string.IsNullOrWhiteSpace(call.Id))
+                        openCallIds.Add(call.Id);
+                }
+                continue;
+            }
+
+            if (!IsToolResultMessage(entry))
+                continue;
+
+            if (string.IsNullOrWhiteSpace(entry.ToolCallId) || !openCallIds.Remove(entry.ToolCallId))
+            {
+                field.RemoveAt(i);
+                i--;
+            }
+        }
+    }
+
+    private static bool IsAssistantToolCallMessage(ConversationHistoryEntry entry) =>
+        string.Equals(entry.Role, "assistant", StringComparison.Ordinal) && entry.ToolCalls.Count > 0;
+
+    private static bool IsToolResultMessage(ConversationHistoryEntry entry) =>
+        string.Equals(entry.Role, "tool", StringComparison.Ordinal);
 
     private static string? NormalizeOptional(string? value)
     {

@@ -16,10 +16,4 @@ public interface IResponsesToolProvider
 }
 
 public sealed record ResponsesToolProviderContext(
-    ResponsesToolProviderCallerScope CallerScope,
-    IReadOnlyDictionary<string, string> ToolContextMetadata);
-
-public sealed record ResponsesToolProviderCallerScope(
-    string ScopeId,
-    string OwnerSubject,
-    string OriginKind);
+    AgentToolExecutionContext ToolContext);

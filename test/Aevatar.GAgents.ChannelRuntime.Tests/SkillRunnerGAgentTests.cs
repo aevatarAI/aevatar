@@ -3,21 +3,23 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
-using Aevatar.GAgents.Scheduled;
-using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -118,7 +120,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // hallucinated text live before the guard ran, then repost it on each retry.
         // TryCreateStreamingSink must short-circuit so chunked dispatch (which only fires
         // AFTER the guard) is the only path that reaches Lark for fanout-gated runs.
-        AttachNyxIdApiClient(_agent, new RecordingHandler("""{"code":0,"msg":"success"}"""));
+        AttachNyxIdApiClient(_agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}"""));
         var command = CreateInitializeCommand();
         command.RequiresNyxidProxySuccess = true;
         await _agent.HandleInitializeAsync(command);
@@ -418,7 +420,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         };
         await _agent.HandleInitializeAsync(initialize);
 
-        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeSendOutputAsync(_agent, "legacy report body");
@@ -542,7 +544,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // 230002. Second (fallback) attempt: clean success.
         var handler = new SequencedHandler(
             """{"error": true, "status": 400, "body": "{\"code\":230002,\"msg\":\"Bot is not in the chat\"}"}""",
-            """{"code":0,"msg":"success"}""");
+            """{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeSendOutputAsync(_agent, "report");
@@ -556,7 +558,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     [Fact]
     public async Task SendOutputAsync_ShouldThrowCrossTenantHint_When_LarkCodeNestedInHttp400Body()
     {
-        // Same envelope shape as the production /daily failure log: NyxID wraps the Lark
+        // Same envelope shape as the production /summary failure log: NyxID wraps the Lark
         // 99992364 as a string body inside an HTTP-400 Nyx envelope. The cross-tenant
         // recreate-the-agent hint (PR #412) only fires when the parser surfaces the nested
         // Lark code; previously it never did. Pin both the recovery hint and the nested-body
@@ -609,7 +611,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         var handler = new SequencedHandler(
             """{"code":230002,"msg":"Bot is not in the chat"}""",
-            """{"code":0,"msg":"success"}""");
+            """{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeSendOutputAsync(_agent, "report");
@@ -777,7 +779,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         };
         await _agent.HandleInitializeAsync(initialize);
 
-        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeTrySendFailureAsync(_agent, "primary failed");
@@ -808,7 +810,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         };
         await _agent.HandleInitializeAsync(initialize);
 
-        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
         AttachNyxIdApiClient(_agent, handler);
 
         await InvokeTrySendFailureAsync(_agent, "primary failed");
@@ -852,7 +854,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     [Fact]
     public async Task BuildExecutionLlmControl_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig()
     {
-        // Regression for the "/daily failed: Provider 'openai' not connected" report:
+        // Regression for the "/summary failed: Provider 'openai' not connected" report:
         // skill runners must honor the bot owner's pre-configured model + NyxID route + tool
         // cap — same shape AgentRunGAgent applies for nyxid-chat. Without it,
         // every scheduled run falls through to NyxIdLLMProvider's compile-time `gpt-5.4` +
@@ -893,7 +895,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigFieldsAreEmpty()
+    public async Task BuildExecutionLlmControl_ShouldOmitOverrides_WhenOwnerLlmConfigFieldsAreEmpty()
     {
         // Bot owners who haven't saved any LLM preference get OwnerLlmConfig.Empty (or empty
         // strings via the host adapter). The applier must NOT pin empty values onto metadata,
@@ -913,7 +915,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldFallBackQuietly_WhenOwnerLlmConfigSourceThrows()
+    public async Task BuildExecutionLlmControl_ShouldFallBackQuietly_WhenOwnerLlmConfigSourceThrows()
     {
         // The source can throw on transient projection failures. The agent's execution turn
         // must still proceed with provider defaults — the applier catches and logs the
@@ -942,7 +944,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         await agent.HandleInitializeAsync(initialize);
         var handler = new SequencedHandler(
             """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
-            """{"code":0,"msg":"success"}""");
+            """{"code":0,"msg":"success","data":{}}""");
         AttachNyxIdApiClient(agent, handler);
 
         var output = await InvokeExecuteSkillAsync(agent);
@@ -956,11 +958,34 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ExecuteSkillAsync_ShouldKeepOwnedScopeOutOfMetadata_AndCarryTypedToolContext()
+    {
+        var provider = new StubStreamingProviderFactory("done");
+        var agent = CreateAgent("skill-runner-typed-context", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        await InvokeExecuteSkillAsync(agent);
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().ContainKey(ChannelMetadataKeys.ConversationId);
+        request.Metadata.Should().NotContainKey("scope_id");
+        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        request.ToolContext.Should().NotBeNull();
+        request.ToolContext!.Request.RequestId.Should().NotBeNullOrWhiteSpace();
+        request.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        request.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
+        request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("nyx-api-key");
+        request.ToolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.ConversationId);
+        request.ToolContext.ExternalMetadata.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
     public async Task SkillRunnerStreamingRunState_CoalescesInsideThrottleAndDispatchesAfterThrottle()
     {
         var handler = new SequencedHandler(
             """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
-            """{"code":0,"msg":"success"}""");
+            """{"code":0,"msg":"success","data":{}}""");
         var sink = CreateStreamingSink(handler);
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 19, 9, 0, 0, TimeSpan.Zero));
         var runState = CreateStreamingRunState(sink, TimeSpan.FromMilliseconds(300), time);
@@ -1035,13 +1060,16 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         return new SkillRunnerStreamingReplySink(
-            client,
-            "nyx-api-key",
-            "api-lark-bot",
-            new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false),
-            fallbackTarget: null,
+            new LarkOutboundDispatcher(client, NullLogger<LarkOutboundDispatcher>.Instance),
+            new LarkSendNewMessageRequest(
+                "nyx-api-key",
+                "api-lark-bot",
+                MessageType: "text",
+                ContentJson: string.Empty,
+                PrimaryTarget: new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false)),
             (_, detail) => detail,
-            logger: null);
+            logger: null,
+            editClient: client);
     }
 
     private static Task InvokeStreamingRunStateAsync(object runState, string methodName, string text)
@@ -1173,7 +1201,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         {
             Requests.Add(request);
             Bodies.Add(request.Content == null ? null : await request.Content.ReadAsStringAsync(cancellationToken));
-            var body = _responses.Count > 0 ? _responses.Dequeue() : """{"code":0,"msg":"success"}""";
+            var body = _responses.Count > 0 ? _responses.Dequeue() : """{"code":0,"msg":"success","data":{"message_id":"om_success"}}""";
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
@@ -1216,9 +1244,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private static InitializeSkillRunnerCommand CreateInitializeCommand() => new()
     {
-        SkillName = "daily",
-        TemplateName = "daily",
-        SkillContent = "You are a daily report runner.",
+        SkillName = "summary",
+        TemplateName = "summary",
+        SkillContent = "You are a summary report runner.",
         ExecutionPrompt = "Run the report.",
         ScheduleCron = string.Empty,
         ScheduleTimezone = SkillRunnerDefaults.DefaultTimezone,
@@ -1245,11 +1273,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     private sealed class StubStreamingProviderFactory(params string[] deltas) : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "stub";
+        public List<LLMRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            Requests.Add(request);
             foreach (var delta in deltas)
             {
                 ct.ThrowIfCancellationRequested();

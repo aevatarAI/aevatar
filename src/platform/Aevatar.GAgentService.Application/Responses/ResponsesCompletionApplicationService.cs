@@ -64,14 +64,14 @@ public interface IResponsesCompletionApplicationService
     Task<ResponsesCompletionResult> CollectAsync(
         ILLMProvider provider,
         LLMRequest request,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
+        AgentToolExecutionContext toolContext,
         ResponsesToolClassification toolClassification,
         CancellationToken ct = default);
 
     Task<ResponsesCompletionResult> StreamAsync(
         ILLMProvider provider,
         LLMRequest request,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
+        AgentToolExecutionContext toolContext,
         ResponsesToolClassification toolClassification,
         Func<string, CancellationToken, ValueTask> onTextDelta,
         CancellationToken ct = default);
@@ -83,24 +83,17 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
     // local tool calls; eight rounds matches the bound observed in similar
     // multi-round agent loops in this repo (e.g. SkillRunnerGAgent).
     private const int MaxToolRounds = 8;
-    private readonly ChatRunToolCompletionCoordinator? _chatRunToolCompletionCoordinator;
-
-    public ResponsesCompletionApplicationService(
-        ChatRunToolCompletionCoordinator? chatRunToolCompletionCoordinator = null)
-    {
-        _chatRunToolCompletionCoordinator = chatRunToolCompletionCoordinator;
-    }
 
     public async Task<ResponsesCompletionResult> CollectAsync(
         ILLMProvider provider,
         LLMRequest request,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
+        AgentToolExecutionContext toolContext,
         ResponsesToolClassification toolClassification,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(toolContextMetadata);
+        ArgumentNullException.ThrowIfNull(toolContext);
         ArgumentNullException.ThrowIfNull(toolClassification);
 
         var messages = request.Messages.ToList();
@@ -111,7 +104,7 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         {
             var roundRequest = CloneRequestWithMessages(request, messages);
             var (roundText, roundUsage, toolCalls) = await CollectStreamCompletionAsync(
-                provider, roundRequest, toolContextMetadata, ct);
+                provider, roundRequest, toolContext, ct);
             outputText.Append(roundText);
             usage = roundUsage ?? usage;
 
@@ -130,11 +123,10 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
             });
             await ExecuteLocalToolCallsAsync(
                 request,
-                toolContextMetadata,
+                toolContext,
                 localToolCalls,
                 messages,
                 round + 1,
-                _chatRunToolCompletionCoordinator,
                 ct);
         }
 
@@ -144,14 +136,14 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
     public async Task<ResponsesCompletionResult> StreamAsync(
         ILLMProvider provider,
         LLMRequest request,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
+        AgentToolExecutionContext toolContext,
         ResponsesToolClassification toolClassification,
         Func<string, CancellationToken, ValueTask> onTextDelta,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(toolContextMetadata);
+        ArgumentNullException.ThrowIfNull(toolContext);
         ArgumentNullException.ThrowIfNull(toolClassification);
         ArgumentNullException.ThrowIfNull(onTextDelta);
 
@@ -163,7 +155,7 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         {
             var roundRequest = CloneRequestWithMessages(request, messages);
             var toolCalls = new ResponsesToolCallAccumulator();
-            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
+            using (AgentToolContextScope.Push(toolContext))
             {
                 await foreach (var chunk in provider.ChatStreamAsync(roundRequest, ct))
                 {
@@ -203,11 +195,10 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
             });
             await ExecuteLocalToolCallsAsync(
                 request,
-                toolContextMetadata,
+                toolContext,
                 localToolCalls,
                 messages,
                 round + 1,
-                _chatRunToolCompletionCoordinator,
                 ct);
         }
 
@@ -223,6 +214,9 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
             RequestId = request.RequestId,
             Metadata = request.Metadata,
             CallerContext = request.CallerContext,
+            ToolContext = request.ToolContext,
+            RoutingContext = request.RoutingContext,
+            LlmControl = request.LlmControl,
             Tools = request.Tools,
             Model = request.Model,
             Temperature = request.Temperature,
@@ -266,11 +260,10 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
 
     private static async Task ExecuteLocalToolCallsAsync(
         LLMRequest request,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
+        AgentToolExecutionContext toolContext,
         IReadOnlyList<ToolCall> toolCalls,
         List<ChatMessage> messages,
         int llmRound,
-        ChatRunToolCompletionCoordinator? chatRunToolCompletionCoordinator,
         CancellationToken ct)
     {
         if (request.Tools is not { Count: > 0 })
@@ -279,7 +272,7 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         var toolsByName = request.Tools
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-        using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
+        using (AgentToolContextScope.Push(toolContext))
         {
             foreach (var toolCall in toolCalls)
             {
@@ -291,20 +284,10 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 }
                 else if (toolsByName.TryGetValue(toolCall.Name, out var tool))
                 {
-                    var mapped = AgentToolExecutionContextMapper.FromRequestWithCallId(request, toolCall.Id);
-                    var toolContext = mapped with { ExternalMetadata = toolContextMetadata };
-                    using (AgentToolContextScope.Push(toolContext))
+                    var callToolContext = toolContext.WithCallId(toolCall.Id);
+                    using (AgentToolContextScope.Push(callToolContext))
                     {
-                        result = ChatRunToolCompletionCoordinator.IsWaitCompleteInvocationTool(toolCall) &&
-                             chatRunToolCompletionCoordinator != null
-                            ? await chatRunToolCompletionCoordinator.ExecuteAsync(
-                                request,
-                                toolCall,
-                                argumentsJson,
-                                tool.ExecuteAsync,
-                                llmRound,
-                                ct)
-                            : await tool.ExecuteAsync(argumentsJson, ct);
+                        result = await tool.ExecuteAsync(argumentsJson, ct);
                     }
                 }
                 else
@@ -324,14 +307,14 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
     private static async Task<(string Text, TokenUsage? Usage, IReadOnlyList<ToolCall> ToolCalls)> CollectStreamCompletionAsync(
         ILLMProvider provider,
         LLMRequest request,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
+        AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
         var outputText = new StringBuilder();
         var toolCalls = new ResponsesToolCallAccumulator();
         TokenUsage? usage = null;
 
-        using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
+        using (AgentToolContextScope.Push(toolContext))
         {
             await foreach (var chunk in provider.ChatStreamAsync(request, ct))
             {

@@ -35,6 +35,8 @@ message ChatRequestEvent  {
   // Narrow LLM-control carrier. Model routing, NyxID credentials and tool-round limits
   // belong here, not in metadata or tool_context.
   LLMControlContextPayload llm_control = 10;
+  // Refactor (iter169/cluster-issue1551): Old pattern: connector HTTP authorization used Metadata["connector.http.authorization"] as an authority carrier. New principle: connector authorization is a typed command payload field owned by workflow execution.
+  string connector_http_authorization = 11;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
@@ -96,6 +98,16 @@ message AgentToolExecutionContextPayload {
   LLMRequestRoutingContextPayload routing = 6;
   AgentToolConnectedServicesContextPayload connected_services = 7;
   map<string, string> external_metadata = 8;
+  AgentSkillRecoveryContextPayload skill_recovery = 9;
+}
+
+message AgentSkillRecoveryContextPayload {
+  bool require_initial_ornn_search = 1;
+  bool require_ornn_search_on_blocker = 2;
+  string command_name = 3;
+  string original_command = 4;
+  string primary_skill_name = 5;
+  int32 max_ornn_search_attempts = 6;
 }
 
 message AgentToolRequestIdentityPayload {
@@ -258,7 +270,12 @@ message PendingToolApprovalState {
   bool is_destructive = 6;
   string timeout_callback_id = 7;
   // field 8 reserved (was timeout_lease bytes, removed — lease kept in-memory only)
-  map<string, string> metadata = 9;
+  // Refactor (issue1253-first):
+  //   Old pattern: Durable approval continuation restored typed context from metadata.
+  //   New principle: Typed pending approval context is the durable control surface.
+  AgentToolExecutionContextPayload tool_context = 14;
+  reserved 9;
+  reserved "metadata";
   string remote_approval_id = 10;
   reserved 11;
   reserved "remote_status_check_callback_id";

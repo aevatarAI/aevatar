@@ -192,6 +192,9 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         if (string.IsNullOrEmpty(document.BindingCurrentRunId))
             return null;
 
+        // Refactor (iter159/cluster-594-first):
+        //   Old pattern: Studio member binding-run status response 未暴露 StateVersion
+        //   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
         StudioMemberBindingFailureResponse? failure = null;
         if (!string.IsNullOrEmpty(document.BindingFailureCode))
         {
@@ -206,6 +209,7 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             ScopeId: document.ScopeId,
             MemberId: document.MemberId,
             Status: NormalizeBindingRunStatusWire(document.BindingCurrentStatus),
+            StateVersion: document.StateVersion,
             Failure: failure,
             UpdatedAt: document.BindingUpdatedAt?.ToDateTimeOffset());
     }

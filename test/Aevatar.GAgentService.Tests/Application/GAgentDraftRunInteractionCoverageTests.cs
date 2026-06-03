@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -337,7 +338,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldMapMetadataInputPartsAndSessionFallback()
+    public void EnvelopeFactory_ShouldMapHeadersInputPartsAndSessionFallback()
     {
         var factory = new GAgentDraftRunCommandEnvelopeFactory();
 
@@ -380,7 +381,9 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         payload.Prompt.Should().Be("hello");
         payload.ScopeId.Should().Be("scope-a");
         payload.SessionId.Should().Be("corr-1");
-        payload.Metadata["x-trace"].Should().Be("trace-1");
+        payload.Headers["x-trace"].Should().Be("trace-1");
+        payload.Headers.Should().NotContainKey("empty");
+        payload.Metadata.Should().NotContainKey("x-trace");
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
@@ -395,6 +398,35 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         payload.InputParts[1].Uri.Should().Be("https://example.com/image.png");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation.CorrelationId.Should().Be("corr-1");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldSerializeCommandTypedToolControlFields()
+    {
+        var factory = new GAgentDraftRunCommandEnvelopeFactory();
+        var toolContext = NewToolContext();
+        var llmControl = NewLlmControl();
+
+        var envelope = factory.CreateEnvelope(
+            new GAgentDraftRunCommand(
+                ScopeId: "scope-a",
+                ActorTypeName: typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
+                Prompt: "hello",
+                NyxIdAccessToken: " legacy-token ",
+                ModelOverride: " legacy-model ",
+                PreferredLlmRoute: " legacy-route ",
+                ToolContext: toolContext,
+                LlmControl: llmControl),
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>
+            {
+                ["x-trace"] = "trace-1",
+            }));
+
+        var payload = envelope.Payload.Unpack<ChatRequestEvent>();
+        payload.Headers.Should().Contain("x-trace", "trace-1");
+        payload.Metadata.Should().NotContainKey("x-trace");
+        AgentToolExecutionContextMapper.FromPayload(payload.ToolContext).Should().BeEquivalentTo(toolContext);
+        LLMControlContextMapper.FromPayload(payload.LlmControl).Should().BeEquivalentTo(llmControl);
     }
 
     [Fact]
@@ -508,6 +540,24 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         result.Should().Be(CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete);
         terminalQuery.SessionCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.sessionId == "session-1");
     }
+
+    private static AgentToolExecutionContext NewToolContext() =>
+        new(
+            new AgentToolRequestIdentity("request-1", "call-1"),
+            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCallerContext("scope-a", "owner-a", "response-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolSenderBindingContext("binding-1"),
+            new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
+            new AgentToolConnectedServicesContext("connected"),
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["external"] = "value",
+            });
+
+    private static LLMControlContext NewLlmControl() =>
+        new("access-token", "org-token", "sender-token", "model-1", "route-1", 3, "remember");
 
     [Fact]
     public async Task DurableCompletionResolver_ShouldIgnoreSessionFallback_WhenInteractionKindDiffers()

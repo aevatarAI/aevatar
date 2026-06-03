@@ -40,7 +40,7 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
             "../../../../../src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortBase.cs"));
         var source = File.ReadAllText(sourcePath);
 
-        source.Should().Contain("Refactor (iter101/cluster-104):");
+        source.Should().Contain("Refactor (iter367/cluster-issue377):");
         source.Should().NotContain("protected async Task<TLeaseContract?> EnsureProjectionAsync");
         source.Should().NotContain("_activationService");
         source.Should().NotContain("IProjectionScopeActivationService<TRuntimeLease>");
@@ -59,7 +59,7 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
         liveSinkLease.Should().BeSameAs(fixture.SessionEventHub.LastSubscription);
         fixture.Service.ResolveRuntimeLeaseCalls.Should().Be(1);
         fixture.SessionEventHub.SubscribeCalls.Should().Be(1);
-        fixture.SessionEventHub.LastScopeId.Should().Be("actor-1");
+        fixture.SessionEventHub.LastRootActorId.Should().Be("actor-1");
         fixture.SessionEventHub.LastSessionId.Should().Be("session-1");
         sink.PushedEvents.Should().Equal("evt-1");
     }
@@ -188,23 +188,31 @@ internal sealed class TestEventSinkProjectionLifecyclePort
     }
 }
 
+// Refactor (iter367/cluster-issue377): Old pattern: test runtime lease implemented IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: ScopeId aliased RootActorId for subscription routing.
+// Refactor (iter367/cluster-issue377): New principle: test lease carries an IProjectionSessionContext.
+// Refactor (iter367/cluster-issue377): New principle: lifecycle base reads RootActorId + SessionId from Context.
 internal sealed class TestPortRuntimeLease
     : EventSinkProjectionRuntimeLeaseBase<string>,
-      IProjectionPortSessionLease
+      IProjectionContextRuntimeLease<TestPortSessionContext>
 {
     public TestPortRuntimeLease(string rootActorId, string sessionId)
         : base(rootActorId)
     {
-        RootActorId = rootActorId;
-        SessionId = sessionId;
+        Context = new TestPortSessionContext(rootActorId, "test-session", sessionId);
     }
 
-    public string RootActorId { get; }
+    public string RootActorId => Context.RootActorId;
 
-    public string ScopeId => RootActorId;
+    public string SessionId => Context.SessionId;
 
-    public string SessionId { get; }
+    public TestPortSessionContext Context { get; }
 }
+
+internal sealed record TestPortSessionContext(
+    string RootActorId,
+    string ProjectionKind,
+    string SessionId) : IProjectionSessionContext;
 
 internal sealed class TestReleaseService : IProjectionScopeReleaseService<TestPortRuntimeLease>
 {
@@ -224,7 +232,7 @@ internal sealed class TestSessionEventHub : IProjectionSessionEventHub<string>
 {
     public int SubscribeCalls { get; private set; }
 
-    public string? LastScopeId { get; private set; }
+    public string? LastRootActorId { get; private set; }
 
     public string? LastSessionId { get; private set; }
 
@@ -232,9 +240,9 @@ internal sealed class TestSessionEventHub : IProjectionSessionEventHub<string>
 
     public TestSubscription? LastSubscription { get; private set; }
 
-    public Task PublishAsync(string scopeId, string sessionId, string evt, CancellationToken ct = default)
+    public Task PublishAsync(string rootActorId, string sessionId, string evt, CancellationToken ct = default)
     {
-        _ = scopeId;
+        _ = rootActorId;
         _ = sessionId;
         _ = evt;
         ct.ThrowIfCancellationRequested();
@@ -242,14 +250,14 @@ internal sealed class TestSessionEventHub : IProjectionSessionEventHub<string>
     }
 
     public Task<IAsyncDisposable> SubscribeAsync(
-        string scopeId,
+        string rootActorId,
         string sessionId,
         Func<string, ValueTask> handler,
         CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         SubscribeCalls++;
-        LastScopeId = scopeId;
+        LastRootActorId = rootActorId;
         LastSessionId = sessionId;
         PublishHandler = handler;
         LastSubscription = new TestSubscription();

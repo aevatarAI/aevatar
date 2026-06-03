@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -28,7 +27,7 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
         RemoteToolApprovalRequest request,
         CancellationToken ct)
     {
-        var token = ResolveToken(request.Items);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException("NyxID authentication required for remote approval.");
 
@@ -58,7 +57,7 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
         RemoteToolApprovalStatusQuery query,
         CancellationToken ct)
     {
-        var token = ResolveToken(query.Items);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException("NyxID authentication required for remote approval.");
 
@@ -67,13 +66,6 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
             MapStatus(ExtractString(response, "status")),
             ExtractString(response, "reason"),
             ExtractDateTimeOffset(response, "expires_at"));
-    }
-
-    private static string? ResolveToken(IReadOnlyDictionary<string, string> items)
-    {
-        return items.TryGetValue(LLMRequestMetadataKeys.NyxIdAccessToken, out var token)
-            ? token
-            : AgentToolRequestContext.NyxIdAccessToken;
     }
 
     private static RemoteToolApprovalStatus MapStatus(string? status)

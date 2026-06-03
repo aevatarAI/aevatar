@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -250,6 +252,29 @@ public sealed class GAgentDraftRunInteractionPortTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldPreserveTypedToolControlFields()
+    {
+        var interaction = new RecordingInteractionService();
+        var port = CreatePort(
+            new RecordingActorRuntime(_ => null),
+            new RecordingRegistryCommandPort(),
+            new RecordingAdmissionPort(),
+            interaction);
+
+        var toolContext = NewToolContext();
+        var llmControl = NewLlmControl();
+        var result = await port.ExecuteAsync(
+            Request(toolContext: toolContext, llmControl: llmControl),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        interaction.Commands.Should().ContainSingle();
+        interaction.Commands[0].ToolContext.Should().BeEquivalentTo(toolContext);
+        interaction.Commands[0].LlmControl.Should().BeEquivalentTo(llmControl);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldNotRollbackReusedActor_WhenInteractionFails()
     {
         var runtime = new RecordingActorRuntime(id => id == "existing-actor" ? new TestActor(id) : null);
@@ -276,16 +301,94 @@ public sealed class GAgentDraftRunInteractionPortTests
         registry.UnregisteredActors.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotReleaseActivationOrRollback_WhenInnerAcceptsThenReturnsFailure()
+    {
+        var activation = new RecordingActivationPort();
+        var runtime = new RecordingActorRuntime(_ => null);
+        var registry = new RecordingRegistryCommandPort();
+        var interaction = new RecordingInteractionService
+        {
+            ResultFactory = async (command, _, onAcceptedAsync, ct) =>
+            {
+                onAcceptedAsync.Should().NotBeNull();
+                await onAcceptedAsync!(
+                    new GAgentDraftRunAcceptedReceipt(
+                        command.PreferredActorId ?? "actor-1",
+                        command.ActorTypeName,
+                        command.CommandIdSeed ?? "cmd-1",
+                        command.CorrelationIdSeed ?? "corr-1",
+                        command.SessionId ?? string.Empty),
+                    ct);
+
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
+                    .Failure(GAgentDraftRunStartError.ProjectionUnavailable);
+            },
+        };
+        var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction, activation);
+
+        var result = await port.ExecuteAsync(
+            Request(preferredActorId: "draft-actor"),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(GAgentDraftRunStartError.ProjectionUnavailable);
+        activation.Released.Should().BeEmpty();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        registry.UnregisteredActors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotReleaseActivationOrRollback_WhenInnerAcceptsThenThrows()
+    {
+        var activation = new RecordingActivationPort();
+        var runtime = new RecordingActorRuntime(_ => null);
+        var registry = new RecordingRegistryCommandPort();
+        var interaction = new RecordingInteractionService
+        {
+            ResultFactory = async (command, _, onAcceptedAsync, ct) =>
+            {
+                onAcceptedAsync.Should().NotBeNull();
+                await onAcceptedAsync!(
+                    new GAgentDraftRunAcceptedReceipt(
+                        command.PreferredActorId ?? "actor-1",
+                        command.ActorTypeName,
+                        command.CommandIdSeed ?? "cmd-1",
+                        command.CorrelationIdSeed ?? "corr-1",
+                        command.SessionId ?? string.Empty),
+                    ct);
+
+                throw new InvalidOperationException("pump failed");
+            },
+        };
+        var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction, activation);
+
+        var act = () => port.ExecuteAsync(
+            Request(preferredActorId: "draft-actor"),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("pump failed");
+        activation.Released.Should().BeEmpty();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+        registry.UnregisteredActors.Should().BeEmpty();
+    }
+
     private static GAgentDraftRunInteractionService CreatePort(
         RecordingActorRuntime runtime,
         RecordingRegistryCommandPort registry,
         RecordingAdmissionPort admission,
-        RecordingInteractionService interaction) =>
-        new(runtime, registry, admission, interaction);
+        RecordingInteractionService interaction,
+        IGAgentDraftRunObservationScopeActivationPort? activation = null) =>
+        new(runtime, registry, admission, interaction, activation ?? new NoOpActivationPort());
 
     private static GAgentDraftRunInteractionRequest Request(
         string? actorTypeName = null,
-        string? preferredActorId = "draft-actor") =>
+        string? preferredActorId = "draft-actor",
+        AgentToolExecutionContext? toolContext = null,
+        LLMControlContext? llmControl = null) =>
         new(
             "scope-a",
             actorTypeName ?? typeof(TestAgent).AssemblyQualifiedName!,
@@ -294,7 +397,27 @@ public sealed class GAgentDraftRunInteractionPortTests
             "session-1",
             " token ",
             " model ",
-            " route ");
+            " route ",
+            ToolContext: toolContext,
+            LlmControl: llmControl);
+
+    private static AgentToolExecutionContext NewToolContext() =>
+        new(
+            new AgentToolRequestIdentity("request-1", "call-1"),
+            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCallerContext("scope-a", "owner-a", "response-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolSenderBindingContext("binding-1"),
+            new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
+            new AgentToolConnectedServicesContext("connected"),
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["external"] = "value",
+            });
+
+    private static LLMControlContext NewLlmControl() =>
+        new("access-token", "org-token", "sender-token", "model-1", "route-1", 3, "remember");
 
     private static CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus> Success(
         GAgentDraftRunCommand command) =>
@@ -330,6 +453,49 @@ public sealed class GAgentDraftRunInteractionPortTests
             Commands.Add(command);
             return ResultFactory?.Invoke(command, emitAsync, onAcceptedAsync, ct)
                 ?? Task.FromResult(Success(command));
+        }
+    }
+
+    private sealed class NoOpActivationPort : IGAgentDraftRunObservationScopeActivationPort
+    {
+        public Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
+            string actorId,
+            string commandId,
+            string correlationId,
+            CancellationToken ct = default) =>
+            Task.FromResult<GAgentDraftRunObservationScopeActivation?>(new GAgentDraftRunObservationScopeActivation(
+                actorId,
+                commandId,
+                correlationId));
+
+        public Task ReleaseAsync(
+            GAgentDraftRunObservationScopeActivation activation,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingActivationPort : IGAgentDraftRunObservationScopeActivationPort
+    {
+        public List<GAgentDraftRunObservationScopeActivation> Handles { get; } = [];
+        public List<GAgentDraftRunObservationScopeActivation> Released { get; } = [];
+
+        public Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
+            string actorId,
+            string commandId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            var handle = new GAgentDraftRunObservationScopeActivation(actorId, commandId, correlationId);
+            Handles.Add(handle);
+            return Task.FromResult<GAgentDraftRunObservationScopeActivation?>(handle);
+        }
+
+        public Task ReleaseAsync(
+            GAgentDraftRunObservationScopeActivation activation,
+            CancellationToken ct = default)
+        {
+            Released.Add(activation);
+            return Task.CompletedTask;
         }
     }
 

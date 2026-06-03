@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
@@ -60,6 +59,7 @@ public sealed class WebSearchTool : IAgentTool
             return """{"error":"'query' is required"}""";
 
         var maxResults = Math.Clamp(args.Int("max_results") ?? _options.MaxSearchResults, 1, 20);
-        return await _client.SearchAsync(token, query, maxResults, ct);
+        var result = await _client.SearchAsync(token, query, maxResults, ct);
+        return WebToolResultBoundaryJson.ToBoundaryJson(result);
     }
 }

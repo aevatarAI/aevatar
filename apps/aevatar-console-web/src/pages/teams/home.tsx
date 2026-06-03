@@ -150,6 +150,9 @@ function formatMemberLifecycleStageLabel(
   }
 }
 
+// Refactor (v1/issue1444-first):
+//   Old: workflow run status labels leaked raw runtime terms directly into the teams UI.
+//   New: run status mapping keeps UI display labels stable while preserving the underlying status semantics.
 function formatRunStatusLabel(
   formatMessage: TeamsHomeFormatMessage,
   status: string | null | undefined,
@@ -173,8 +176,8 @@ function formatRunStatusLabel(
     case "completed":
       return formatTeamHomeMessage(
         formatMessage,
-        "teams.home.status.stable",
-        t("pages.teams.home.stablize", "Stablize"),
+        "teams.home.status.completed",
+        t("pages.teams.home.completed", "Completed"),
       );
     default:
       return (
