@@ -1,8 +1,8 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core.Compatibility;
+using Aevatar.Foundation.Abstractions.Compatibility;
 using Google.Protobuf;
 
-namespace Aevatar.CQRS.Projection.Core.Orchestration;
+namespace Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 
 public static class CommittedStateEventEnvelope
 {

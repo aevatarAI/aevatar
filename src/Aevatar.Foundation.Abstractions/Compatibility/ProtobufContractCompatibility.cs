@@ -1,11 +1,10 @@
 using System.Collections.Concurrent;
 using System.Reflection;
-using Aevatar.Foundation.Abstractions.Compatibility;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Foundation.Core.Compatibility;
+namespace Aevatar.Foundation.Abstractions.Compatibility;
 
 public static class ProtobufContractCompatibility
 {
