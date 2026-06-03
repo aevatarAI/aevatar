@@ -16,6 +16,7 @@ using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -24,6 +25,7 @@ using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -117,6 +119,23 @@ public class AIFeatureBootstrapCoverageTests
         var skillOptions = provider.GetRequiredService<SkillsOptions>();
         skillOptions.Directories.Should().ContainSingle().Which.Should().Be("./skills-a");
         provider.GetServices<IAgentToolSource>().Should().ContainSingle(x => x is SkillsAgentToolSource);
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_ShouldRegisterWorkflowAssistantRoleAgentKind()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IAgentKindRegistry>();
+
+        var implementation = registry.Resolve(WorkflowRoleGAgent.WorkflowAssistantRoleAgentKind);
+
+        implementation.Metadata.Kind.Should().Be(WorkflowRoleGAgent.WorkflowAssistantRoleAgentKind);
+        implementation.Metadata.ImplementationClrTypeName.Should().Be(typeof(WorkflowRoleGAgent).FullName);
     }
 
     [Fact]
