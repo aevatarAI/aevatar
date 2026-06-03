@@ -2,6 +2,16 @@ ignore:
   - "tools/**"
   - "agents/**"
 
+coverage:
+  status:
+    patch:
+      default:
+        target: auto
+        threshold: 5%
+        flags:
+          - ci
+        only_pulls: true
+
 comment:
   layout: "diff, flags, files"
   behavior: default
