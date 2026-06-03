@@ -5,7 +5,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

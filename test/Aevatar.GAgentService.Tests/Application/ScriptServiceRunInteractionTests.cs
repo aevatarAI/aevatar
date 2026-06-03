@@ -8,7 +8,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Application.Scripts;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;

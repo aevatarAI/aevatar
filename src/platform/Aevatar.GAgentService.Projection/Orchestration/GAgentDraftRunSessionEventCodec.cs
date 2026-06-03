@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;

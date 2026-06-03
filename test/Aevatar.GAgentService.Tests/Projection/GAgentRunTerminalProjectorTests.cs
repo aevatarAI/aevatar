@@ -6,7 +6,7 @@ using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using AiTextMessageEndEvent = Aevatar.AI.Abstractions.TextMessageEndEvent;

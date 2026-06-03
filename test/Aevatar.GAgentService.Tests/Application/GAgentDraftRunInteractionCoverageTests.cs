@@ -12,7 +12,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using System.Runtime.CompilerServices;
 
@@ -462,7 +462,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         receipt.Should().Be(new GAgentDraftRunAcceptedReceipt("actor-1", "actor-type", "cmd-1", "corr-1", string.Empty));
 
         var completionPolicy = new GAgentDraftRunCompletionPolicy();
-        completionPolicy.TryResolve(new AGUIEvent { TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent() }, out var textCompletion)
+        completionPolicy.TryResolve(new AGUIEvent { TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent() }, out var textCompletion)
             .Should().BeTrue();
         textCompletion.Should().Be(GAgentDraftRunCompletionStatus.TextMessageCompleted);
         completionPolicy.TryResolve(new AGUIEvent { RunFinished = new RunFinishedEvent() }, out var finishedCompletion)

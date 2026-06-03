@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package aevatar.presentation.agui;
 
-option csharp_namespace = "Aevatar.Presentation.AGUI";
+option csharp_namespace = "Aevatar.AGUI.Contracts";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/wrappers.proto";
