@@ -5,6 +5,7 @@ import {
 } from '@ant-design/icons';
 import type { PageContainerProps } from '@ant-design/pro-components';
 import { PageContainer } from '@ant-design/pro-components';
+import { useIntl } from '@umijs/max';
 import {
   Badge,
   Button,
@@ -48,11 +49,7 @@ import {
   type MissionThemeToken,
 } from './presentation';
 import TopologyCanvas from './TopologyCanvas';
-
-const pageHeaderProps: PageContainerProps['header'] = {
-  title: 'Mission Control',
-  subTitle: 'Observe, explain, and intervene in critical live runs.',
-};
+import { t } from "@/shared/i18n/messages";
 
 const scrollerStyle: React.CSSProperties = {
   minHeight: 0,
@@ -279,17 +276,17 @@ function MissionHeaderBar({
           </Tag>
           {snapshot.summary.scriptEvolutionStatus ? (
             <Tag color="cyan">
-              Script Governance: {formatMissionLabel(snapshot.summary.scriptEvolutionStatus)}
+              {t("pages.missioncontrol.index.script.governance", "Script Governance:")}{formatMissionLabel(snapshot.summary.scriptEvolutionStatus)}
             </Tag>
           ) : null}
           {ui.interventionRequired ? (
             <Tag color="gold">
-              Current Blocker: {formatInterventionLabel(snapshot.intervention?.kind || 'human_approval')}
+              {t("pages.missioncontrol.index.current.blocker", "Current Blocker:")}{formatInterventionLabel(snapshot.intervention?.kind || 'human_approval')}
             </Tag>
           ) : null}
         </Space>
         <Typography.Text style={{ color: token.colorTextTertiary }}>
-          {snapshot.summary.workflowName} · Scope {snapshot.summary.scopeId} · Run{' '}
+          {snapshot.summary.workflowName} {t("pages.missioncontrol.index.scope", "· Scope")}{snapshot.summary.scopeId} {t("pages.missioncontrol.index.run", "· Run")}{' '}
           {snapshot.summary.runId}
         </Typography.Text>
         {connectionMessage ? (
@@ -301,16 +298,15 @@ function MissionHeaderBar({
       <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
         <Segmented<MissionStageView>
           options={[
-            { label: 'Decision Path', value: 'topology' },
-            { label: 'Execution Flow', value: 'execution_flow' },
+            { label: t("pages.missioncontrol.index.decision.path", "Decision Path"), value: 'topology' },
+            { label: t("pages.missioncontrol.index.execution.flow", "Execution Flow"), value: 'execution_flow' },
           ]}
           value={stageView}
           onChange={(value) => onStageViewChange(value as MissionStageView)}
         />
         {liveMode ? (
           <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh}>
-            Sync now
-          </Button>
+            {t("pages.missioncontrol.index.sync.now", "Sync now")}</Button>
         ) : (
           <>
             {routeContext.scopeId ? (
@@ -324,8 +320,7 @@ function MissionHeaderBar({
                   )
                 }
               >
-                Back to Team
-              </Button>
+                {t("pages.missioncontrol.index.back.to.team", "Back to Team")}</Button>
             ) : null}
             <Button
               type="primary"
@@ -338,14 +333,12 @@ function MissionHeaderBar({
                 )
               }
             >
-              Open Event Stream
-            </Button>
+              {t("pages.missioncontrol.index.open.event.stream", "Open Event Stream")}</Button>
           </>
         )}
         {ui.interventionRequired ? (
           <Button type="primary" onClick={ui.openInterventionPanel}>
-            Handle blocker
-          </Button>
+            {t("pages.missioncontrol.index.handle.blocker", "Handle blocker")}</Button>
         ) : null}
       </Space>
     </div>
@@ -418,10 +411,10 @@ function MissionMetricStrip({ snapshot }: { snapshot: MissionControlSnapshot }) 
               }
             >
               {metric.trend === 'down'
-                ? 'Down'
+                ? t("pages.missioncontrol.index.down", "Down")
                 : metric.trend === 'up'
-                  ? 'Up'
-                  : 'Steady'}
+                  ? t("pages.missioncontrol.index.up", "Up")
+                  : t("pages.missioncontrol.index.steady", "Steady")}
             </Tag>
           </div>
         </Card>
@@ -479,20 +472,28 @@ function MissionStage({
       >
         <div style={{ minWidth: 0 }}>
           <Typography.Title level={5} style={{ color: token.colorTextHeading, margin: 0 }}>
-            {stageView === 'topology' ? 'Decision Path' : 'Execution Flow'}
+            {stageView === 'topology'
+              ? t("pages.missioncontrol.index.decision.path", "Decision Path")
+              : t("pages.missioncontrol.index.execution.flow", "Execution Flow")}
           </Typography.Title>
           <Typography.Text style={{ color: token.colorTextTertiary }}>
             {stageView === 'topology'
-              ? 'Trace the evidence chain from market signal to execution decision, with data flow and freshness intact.'
-              : 'Compress multi-agent execution into an operator-readable event narrative.'}
+              ? t("pages.missioncontrol.index.trace.evidence.chain", "Trace the evidence chain from market signal to execution decision, with data flow and freshness intact.")
+              : t("pages.missioncontrol.index.compress.multi.agent.execution", "Compress multi-agent execution into an operator-readable event narrative.")}
           </Typography.Text>
         </div>
         <Space wrap size={[8, 8]}>
-          <Tag color="processing">Stage: {snapshot.summary.activeStageLabel}</Tag>
-          <Tag color={resolveConnectionTagColor(connectionStatus)}>
-            Connection: {formatConnectionLabel(connectionStatus)}
+          <Tag color="processing">
+            {t("pages.missioncontrol.index.stage.label", "Stage: {stage}", {
+              stage: snapshot.summary.activeStageLabel,
+            })}
           </Tag>
-          <Tag color="blue">{snapshot.nodes.length} nodes</Tag>
+          <Tag color={resolveConnectionTagColor(connectionStatus)}>
+            {t("pages.missioncontrol.index.connection.label", "Connection: {connection}", {
+              connection: formatConnectionLabel(connectionStatus),
+            })}
+          </Tag>
+          <Tag color="blue">{snapshot.nodes.length} {t("pages.missioncontrol.index.nodes", "nodes")}</Tag>
         </Space>
       </div>
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -632,7 +633,7 @@ function MissionDock({
       }}
     >
       <button
-        aria-label="Resize dock"
+        aria-label={t("pages.missioncontrol.index.resize.dock", "Resize dock")}
         className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
         onKeyDown={(event) => {
           if (ui.isDockCollapsed) {
@@ -681,14 +682,14 @@ function MissionDock({
         }}
       >
         <Space wrap size={[8, 8]}>
-          <Tooltip title="Key events">
+          <Tooltip title={t("pages.missioncontrol.index.key.events", "Key events")}>
             <Button
               icon={<ClockCircleOutlined />}
               onClick={() => onTabChange('timeline')}
               type={activeTab === 'timeline' ? 'primary' : 'default'}
             />
           </Tooltip>
-          <Tooltip title="Raw logs">
+          <Tooltip title={t("pages.missioncontrol.index.raw.logs", "Raw logs")}>
             <Button
               icon={<BorderBottomOutlined />}
               onClick={() => onTabChange('logs')}
@@ -696,13 +697,14 @@ function MissionDock({
             />
           </Tooltip>
           <Typography.Text style={{ color: token.colorTextHeading }}>
-            Event Dock
-          </Typography.Text>
+            {t("pages.missioncontrol.index.event.dock", "Event Dock")}</Typography.Text>
         </Space>
         <Space wrap size={[8, 8]}>
-          <Tag color="processing">{snapshot.events.length} events</Tag>
+          <Tag color="processing">{snapshot.events.length} {t("pages.missioncontrol.index.events", "events")}</Tag>
           <Button onClick={() => ui.setDockCollapsed(!ui.isDockCollapsed)}>
-            {ui.isDockCollapsed ? 'Expand Dock' : 'Collapse Dock'}
+            {ui.isDockCollapsed
+              ? t("pages.missioncontrol.index.expand.dock", "Expand Dock")
+              : t("pages.missioncontrol.index.collapse.dock", "Collapse Dock")}
           </Button>
         </Space>
       </div>
@@ -907,9 +909,23 @@ function MissionControlCanvas({
 }
 
 const MissionControlPage: React.FC = () => {
+  const intl = useIntl();
   const { token } = theme.useToken();
   const runtime = useMissionControlRuntime();
   const shellStyle = useMemo(() => buildMissionShellStyle(token), [token]);
+  const pageHeaderProps = useMemo<PageContainerProps['header']>(
+    () => ({
+      title: intl.formatMessage({
+        id: 'pages.missioncontrol.index.mission.control',
+        defaultMessage: 'Mission Control',
+      }),
+      subTitle: intl.formatMessage({
+        id: 'pages.missioncontrol.index.observe.explain.and.intervene',
+        defaultMessage: 'Observe, explain, and intervene in critical live runs.',
+      }),
+    }),
+    [intl],
+  );
 
   return (
     <MissionControlUiProvider intervention={runtime.snapshot.intervention}>

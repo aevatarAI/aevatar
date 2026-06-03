@@ -1,5 +1,6 @@
 import type React from 'react';
 import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
+import { t } from "@/shared/i18n/messages";
 
 export const studioInvokeColors = {
   accent: '#1677ff',
@@ -81,7 +82,7 @@ export function truncateMiddle(value: string, head = 18, tail = 12): string {
 
 export function formatHistoryTimestamp(value: number): string {
   if (!Number.isFinite(value) || value <= 0) {
-    return '刚刚';
+    return t("pages.studio.studioinvokeui.just", "just");
   }
 
   return new Intl.DateTimeFormat(globalThis.navigator?.language, {
@@ -97,15 +98,15 @@ export function getInvokeRunStatusLabel(
 ): string {
   switch (status) {
     case 'running':
-      return '运行中';
+      return t("pages.studio.studioinvokeui.running", "Running");
     case 'success':
-      return '成功';
+      return t("pages.studio.studioinvokeui.success", "success");
     case 'cancelled':
-      return '已停止';
+      return t("pages.studio.studioinvokeui.stopped", "Stopped");
     case 'error':
-      return '失败';
+      return t("pages.studio.studioinvokeui.fail", "fail");
     default:
-      return '空闲';
+      return t("pages.studio.studioinvokeui.idle", "idle");
   }
 }
 

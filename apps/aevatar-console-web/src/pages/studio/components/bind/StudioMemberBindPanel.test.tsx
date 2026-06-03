@@ -292,7 +292,7 @@ describe('StudioMemberBindPanel', () => {
     ).toBeNull();
     expect(
       screen.getByRole('button', {
-        name: 'Chat 默认测试 id · chat Chat with the published workflow.',
+        name: 'Chat Default test id ·chat Chat with the published workflow.',
       }),
     ).toHaveAttribute(
       'aria-pressed',
@@ -300,7 +300,7 @@ describe('StudioMemberBindPanel', () => {
     );
     expect(
       screen.getByText(
-        '普通测试直接输入一句话即可；需要固定格式时再选高级输入。',
+        'For ordinary tests, you can directly enter a sentence; when you need a fixed format, choose advanced input.',
       ),
     ).toBeTruthy();
     fireEvent.click(screen.getByText('Contract details'));

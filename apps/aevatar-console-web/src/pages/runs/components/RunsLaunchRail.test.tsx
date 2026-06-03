@@ -3,20 +3,31 @@ import React from "react";
 import type { ProFormInstance } from "@ant-design/pro-components";
 import type { RecentRunTableRow, RunFormValues, RunPreset } from "../runWorkbenchConfig";
 import RunsLaunchRail from "./RunsLaunchRail";
+import { setLocale } from "@umijs/max";
 
 describe("RunsLaunchRail", () => {
+  beforeEach(() => {
+    setLocale("en-US");
+  });
+
   it("renders preset cards without relying on ProList layout columns", () => {
     const composerFormRef = {
       current: undefined,
     } as React.RefObject<ProFormInstance<RunFormValues> | undefined>;
     const visiblePresets: RunPreset[] = [
       {
-        description: "Baseline direct chat bundle for quick validation of the chat stream.",
         key: "direct",
         prompt: "Summarize what this chat bundle can do.",
         routeName: "direct",
         tags: ["baseline", "llm"],
-        title: "Direct chat",
+        title: {
+          defaultMessage: "Direct chat",
+          id: "test.direct.chat",
+        },
+        description: {
+          defaultMessage: "Baseline direct chat bundle for quick validation of the chat stream.",
+          id: "test.direct.chat.description",
+        },
       },
     ];
     const recentRunRows: RecentRunTableRow[] = [];

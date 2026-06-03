@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { Modal, message } from "antd";
 import React from "react";
+import { setLocale } from "@umijs/max";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
@@ -3113,6 +3114,7 @@ describe("StudioPage", () => {
   });
 
   beforeEach(() => {
+    setLocale("en-US");
     window.history.pushState({}, "", "/studio");
     window.localStorage.clear();
     window.sessionStorage.clear();
@@ -3406,7 +3408,7 @@ describe("StudioPage", () => {
     expect(screen.queryByText("Workflow description")).toBeNull();
     expect(
       screen.queryByText(
-        "Build 阶段先确定当前 member 采用哪种实现方式，然后在同一块 workbench 里直接完成 authoring 和 dry-run。"
+        "The Build phase first determines which implementation method is used for the current member, and then directly completes authoring and dry-run in the same workbench."
       )
     ).toBeNull();
     expect(screen.getByRole("button", { name: /^Workflow/ })).toHaveAttribute(
@@ -3430,7 +3432,7 @@ describe("StudioPage", () => {
     );
     expect(
       await screen.findByText(
-        "Build 阶段先确定当前 member 采用哪种实现方式，然后在同一块 workbench 里直接完成 authoring 和 dry-run。"
+        "The Build phase first determines which implementation method is used for the current member, and then directly completes authoring and dry-run in the same workbench."
       )
     ).toBeTruthy();
     expect(await screen.findByText("Workflow description")).toBeTruthy();
@@ -3541,7 +3543,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("service-alpha");
       expect(window.location.search).toContain("member=member%3Amember-alpha");
@@ -3571,7 +3573,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
     await waitFor(() => {
       expect(window.location.search).toContain("member=member%3Aworkspace-demo");
     });
@@ -3661,7 +3663,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
     await waitFor(() => {
       expect(window.location.search).toContain("member=member%3Amember-alpha");
     });
@@ -3670,7 +3672,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-b&scopeLabel=%E5%9B%A2%E9%98%9F+B&memberId=service-beta&memberLabel=%E6%88%90%E5%91%98+Beta&tab=workflows"
     );
 
-    expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("service-beta");
       expect(window.location.search).toContain("member=member%3Amember-beta");
@@ -3711,7 +3713,7 @@ describe("StudioPage", () => {
       "/studio?draft=new&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3"
     );
 
-    expect(await screen.findByRole("button", { name: "返回团队" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回创建页" })).toBeNull();
     expect(await screen.findByTestId("studio-empty-member-state")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "发布团队入口" })).toBeNull();
@@ -3819,7 +3821,7 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
     expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
-      "GAgent 构建"
+      "GAgent build"
     );
 
     await waitFor(() => {
@@ -4020,7 +4022,7 @@ describe("StudioPage", () => {
 
     await waitFor(() => {
       expect(message.success).toHaveBeenCalledWith(
-        "已保存到 Workspace/workspace-demo.yaml。",
+        "Saved to Workspace/workspace-demo.yaml.",
       );
     });
   });
@@ -4171,7 +4173,7 @@ describe("StudioPage", () => {
       );
     });
     expect(message.info).toHaveBeenCalledWith(
-      "Team entry 变更已提交，正在等待同步确认。",
+      "Team entry changes have been submitted and are waiting for synchronization confirmation.",
     );
   });
 
@@ -4209,7 +4211,9 @@ describe("StudioPage", () => {
     );
 
     const rail = await screen.findByLabelText("Team members");
-    expect(await within(rail).findByText(/Entry member · workspace-demo/)).toBeTruthy();
+    await waitFor(() => {
+      expect(rail).toHaveTextContent(/Entry member ·\s*workspace-demo/);
+    });
     expect(
       within(rail).queryByRole("button", {
         name: "Set workspace-demo as Team entry member",
@@ -4399,7 +4403,7 @@ describe("StudioPage", () => {
   it("returns to canonical Team detail when Studio has Team context", async () => {
     renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "返回团队" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Return to team" }));
 
     expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
     const searchParams = new URLSearchParams(window.location.search);
@@ -4421,7 +4425,7 @@ describe("StudioPage", () => {
       );
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "返回团队" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Return to team" }));
 
     expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
     const searchParams = new URLSearchParams(window.location.search);
@@ -4530,7 +4534,7 @@ describe("StudioPage", () => {
         "Script creates a backend member and opens a stable script draft identity in Build. It becomes callable after Save script is catalog-applied and Bind succeeds.",
       ),
     ).toBeTruthy();
-    expect(screen.getByText(/Script id: refund-handler/)).toBeTruthy();
+    expect(createDialog).toHaveTextContent("Script id:refund-handler");
     fireEvent.click(
       within(createDialog).getByRole("button", { name: "Create member" }),
     );
@@ -5266,7 +5270,7 @@ describe("StudioPage", () => {
       expect(screen.getByText("member:script-alpha")).toBeTruthy();
       expect(screen.getByText("services:none")).toBeTruthy();
       expect(screen.getByText("endpoint:no-endpoint")).toBeTruthy();
-      expect(screen.getByText(/empty:script-alpha 还不能直接调用。/)).toBeTruthy();
+      expect(screen.getByText(/empty:script-alpha cannot be called directly yet\./)).toBeTruthy();
     });
   });
 
@@ -7892,7 +7896,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     expect(screen.getByText("service:no-service")).toBeTruthy();
     expect(screen.getByText("services:none")).toBeTruthy();
-    expect(screen.getByText("empty:请选择要调用的成员。")).toBeTruthy();
+    expect(screen.getByText("empty:Please select a member to call.")).toBeTruthy();
   });
 
   it("opens the Studio invoke surface from the bind surface endpoint action", async () => {

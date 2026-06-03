@@ -5,6 +5,7 @@ import {
   AEVATAR_INTERACTIVE_CHIP_CLASS,
   joinInteractiveClassNames,
 } from "@/shared/ui/interactionStandards";
+import { t } from "@/shared/i18n/messages";
 
 export type AevatarHeaderSelectOption = {
   value: string;
@@ -264,8 +265,7 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
                   marginTop: 4,
                 }}
               >
-                Switch the active service route.
-              </div>
+                {t("shared.ui.aevatarheaderselect.switch.the.active.service.route", "Switch the active service route.")}</div>
             </div>
             <div
               style={{

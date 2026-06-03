@@ -91,6 +91,7 @@ import type {
   StepInfo,
   ToolCallInfo,
 } from "./chatTypes";
+import { t } from "@/shared/i18n/messages";
 
 function readChatQueryValue(
   key: string,
@@ -2043,8 +2044,7 @@ const ChatPage: React.FC = () => {
                   fontWeight: 600,
                 }}
               >
-                Console
-              </div>
+                {t("pages.chat.index.console", "Console")}</div>
               {scopeId && services.length > 0 ? (
                 <ServiceSelector
                   onCreate={handleCreate}
@@ -2079,8 +2079,7 @@ const ChatPage: React.FC = () => {
                 }}
                 type="button"
               >
-                New Chat
-              </button>
+                {t("pages.chat.index.new.chat", "New Chat")}</button>
               <ChatToolsMenu
                 advancedOpen={advancedOpen}
                 eventStreamOpen={showDebug}
@@ -2151,13 +2150,13 @@ const ChatPage: React.FC = () => {
                   ) : !scopeId ? (
                     <Alert
                       showIcon
-                    title="No project scope is currently available."
+                    title={t("pages.chat.index.no.project.scope.is.currently", "No project scope is currently available.")}
                     type="warning"
                   />
                 ) : !selectedService || !selectedServiceId ? (
                   <Alert
                     showIcon
-                    title="No chat-capable services are currently available."
+                    title={t("pages.chat.index.no.chat.capable.services.are", "No chat-capable services are currently available.")}
                     type="info"
                   />
                 ) : messages.length === 0 &&

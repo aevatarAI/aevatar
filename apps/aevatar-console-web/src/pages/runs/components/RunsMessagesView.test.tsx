@@ -1,8 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import React from "react";
+import { setLocale } from "@umijs/max";
 import RunsMessagesView from "./RunsMessagesView";
 
 describe("RunsMessagesView", () => {
+  beforeEach(() => {
+    setLocale("en-US");
+  });
+
   it("renders message cards with role, status, and content", () => {
     render(
       <RunsMessagesView
