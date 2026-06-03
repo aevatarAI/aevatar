@@ -850,6 +850,10 @@ bash "${SCRIPT_DIR}/proto_lint_guard.sh"
 bash "${SCRIPT_DIR}/channel_mega_interface_guard.sh"
 bash "${SCRIPT_DIR}/channel_native_sdk_import_guard.sh"
 bash "${SCRIPT_DIR}/channel_platform_project_reference_guard.sh"
+python3 "${REPO_ROOT}/tools/ci/guards/project_reference_layer_guard.py" \
+  --root "${REPO_ROOT}" \
+  --allowlist "${REPO_ROOT}/tools/ci/project_reference_layer_allowlist.tsv" \
+  --mode report
 bash "${SCRIPT_DIR}/channel_inbox_gagent_guard.sh"
 bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
