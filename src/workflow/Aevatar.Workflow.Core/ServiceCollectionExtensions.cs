@@ -1,7 +1,7 @@
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;

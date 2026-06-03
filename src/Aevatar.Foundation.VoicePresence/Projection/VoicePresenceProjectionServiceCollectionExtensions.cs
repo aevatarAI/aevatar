@@ -3,7 +3,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

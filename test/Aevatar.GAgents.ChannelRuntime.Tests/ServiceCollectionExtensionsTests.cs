@@ -5,7 +5,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;

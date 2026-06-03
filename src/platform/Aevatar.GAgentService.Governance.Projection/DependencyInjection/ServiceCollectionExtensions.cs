@@ -2,7 +2,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Projection.Configuration;
 using Aevatar.GAgentService.Governance.Projection.Contexts;

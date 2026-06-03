@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 
-namespace Aevatar.Foundation.Core.EventSourcing;
+namespace Aevatar.Foundation.Abstractions.EventSourcing;
 
 /// <summary>
 /// Context for one committed state event observer publication.

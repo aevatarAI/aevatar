@@ -1,4 +1,4 @@
-namespace Aevatar.Foundation.Core.EventSourcing;
+namespace Aevatar.Foundation.Abstractions.EventSourcing;
 
 /// <summary>
 /// Hook invoked immediately before a committed state event is published to observers.
