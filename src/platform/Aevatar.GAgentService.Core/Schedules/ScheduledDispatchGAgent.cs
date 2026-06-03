@@ -414,17 +414,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
-        var normalizedTarget = NormalizeTarget(target);
-        if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.ServiceInvocation ||
-                 triggerEnvelope.Payload.TryUnpack<ServiceInvocationRequest>(out _))
-        {
-            _ = NormalizeRequired(targetActorId, nameof(targetActorId));
-        }
-        else
-        {
-            _ = NormalizeRequired(targetActorId, nameof(targetActorId));
-        }
-
+        _ = NormalizeTarget(target);
+        _ = NormalizeRequired(targetActorId, nameof(targetActorId));
         _ = NormalizeRequired(cronExpression, nameof(cronExpression));
 
         if (!ScheduledDispatchCalculator.TryGetNextOccurrence(

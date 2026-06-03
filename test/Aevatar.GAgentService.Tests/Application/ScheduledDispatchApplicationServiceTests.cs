@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Schedules;
+using Aevatar.GAgentService.Infrastructure.Schedules;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -113,6 +114,15 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+    }
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData(" scheduled-dispatch:schedule-1 ", "schedule-1")]
+    [InlineData("external-actor", "external-actor")]
+    public void ScheduledDispatchActorIdUnformat_ShouldReturnUserScheduleId(string actorId, string expected)
+    {
+        ScheduledDispatchActorId.Unformat(actorId).Should().Be(expected);
     }
 
     [Fact]

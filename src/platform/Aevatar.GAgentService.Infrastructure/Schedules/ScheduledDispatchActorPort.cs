@@ -50,11 +50,6 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(dispatch);
         ct.ThrowIfCancellationRequested();
-        var state = await GetScheduleStateAsync(actorId);
-        if (IsConfigured(state))
-            throw new ScheduledDispatchConflictException(
-                configuration.ScheduleId,
-                $"Scheduled dispatch '{configuration.ScheduleId}' already exists.");
 
         var command = new ScheduledDispatchCreateCommand
         {
@@ -84,9 +79,6 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(dispatch);
         ct.ThrowIfCancellationRequested();
-        var state = await GetScheduleStateAsync(actorId);
-        if (!IsConfigured(state))
-            throw new ScheduledDispatchNotFoundException(configuration.ScheduleId);
 
         var command = new ScheduledDispatchUpdateCommand
         {
@@ -112,7 +104,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        await EnsureConfiguredAsync(actorId, ct);
+        ct.ThrowIfCancellationRequested();
         return await DispatchAsync(actorId, new ScheduledDispatchEnableCommand { Reason = reason ?? string.Empty }, ct);
     }
 
@@ -122,7 +114,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        await EnsureConfiguredAsync(actorId, ct);
+        ct.ThrowIfCancellationRequested();
         return await DispatchAsync(actorId, new ScheduledDispatchDisableCommand { Reason = reason ?? string.Empty }, ct);
     }
 
@@ -132,7 +124,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        await EnsureConfiguredAsync(actorId, ct);
+        ct.ThrowIfCancellationRequested();
         return await DispatchAsync(actorId, new ScheduledDispatchFireCommand
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt.ToUniversalTime()),
@@ -159,31 +151,6 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         };
         return _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
-
-    private async Task EnsureConfiguredAsync(string actorId, CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        var state = await GetScheduleStateAsync(actorId);
-        if (!IsConfigured(state))
-            throw new ScheduledDispatchNotFoundException(ScheduledDispatchActorId.Unformat(actorId));
-    }
-
-    private async Task<ScheduledDispatchState?> GetScheduleStateAsync(string actorId)
-    {
-        var actor = await _runtime.GetAsync(actorId);
-        if (actor == null)
-            return null;
-
-        return actor.Agent is IAgent<ScheduledDispatchState> typed
-            ? typed.State
-            : null;
-    }
-
-    private static bool IsConfigured(ScheduledDispatchState? state) =>
-        state != null &&
-        !string.IsNullOrWhiteSpace(state.ScheduleId) &&
-        !string.IsNullOrWhiteSpace(state.CronExpression) &&
-        state.TriggerEnvelope?.Payload != null;
 
     private static ScheduledDispatchTargetState CreateTargetState(ScheduledDispatchTargetDescriptor descriptor)
     {

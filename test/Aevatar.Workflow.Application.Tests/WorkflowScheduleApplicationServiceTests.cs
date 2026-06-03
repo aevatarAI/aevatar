@@ -62,10 +62,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configured.Configuration.Timezone.Should().Be("UTC");
         configured.Configuration.Headers.Should().Contain(
             new KeyValuePair<string, string>("trace", "enabled"));
-        configured.Configuration.Headers.Should().Contain("workflow.schedule.workflow_name", "direct");
+        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.workflow_name");
         configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.prompt");
-        configured.Configuration.Headers.Should().Contain("workflow.schedule.scope_id", "scope-1");
-        configured.Configuration.Headers.Should().Contain("workflow.schedule.source_actor_id", "actor-1");
+        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.scope_id");
+        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.source_actor_id");
         configured.Dispatch.TargetActorId.Should().Be("target:daily-report");
         configured.Dispatch.Descriptor.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
         preparation.Configurations.Should().ContainSingle()
@@ -317,8 +317,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configuration.Target.ServiceInvocation!.Identity.TenantId.Should().Be("tenant-1");
         configuration.Headers.Should().Contain("x", "y");
         configuration.Headers.Should().NotContainKey("empty");
-        configuration.Headers.Should().Contain("workflow.schedule.scope_id", "tenant-1");
-        configuration.Headers.Should().NotContainKey("workflow.schedule.source_actor_id");
+        configuration.Headers.Should().Contain("workflow.schedule.scope_id", "caller-extension");
+        configuration.Headers.Should().Contain("workflow.schedule.source_actor_id", "caller-extension");
     }
 
     [Theory]
@@ -483,13 +483,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var created = actorPort.Created.Single();
         created.Configuration.Headers.Should().Contain(new KeyValuePair<string, string>("caller", "kept"));
-        created.Configuration.Headers.Should().Contain("workflow.schedule.workflow_name", "direct");
-        created.Configuration.Headers.Should().Contain("workflow.schedule.scope_id", "scope-1");
-        created.Configuration.Headers.Should().Contain("workflow.schedule.source_actor_id", "source-1");
+        created.Configuration.Headers.Should().NotContainKey("workflow.schedule.workflow_name");
+        created.Configuration.Headers.Should().NotContainKey("workflow.schedule.scope_id");
+        created.Configuration.Headers.Should().NotContainKey("workflow.schedule.source_actor_id");
         created.Dispatch.Descriptor.ServiceInvocation.Should().NotBeNull();
         var payload = created.Dispatch.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
         payload.Metadata.Should().Contain("caller", "kept");
-        payload.Metadata.Should().Contain("workflow.schedule.workflow_name", "direct");
+        payload.Metadata.Should().NotContainKey("workflow.schedule.workflow_name");
     }
 
     private sealed class FakeWorkflowScheduleActorPort : IScheduledDispatchActorPort
@@ -715,9 +715,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
                 TargetActorId: string.Empty,
                 PayloadTypeUrl: string.Empty,
-                ServiceKey: string.Empty,
-                ServiceId: string.Empty,
-                ServiceEndpointId: string.Empty,
+                ServiceKey: ServiceKeys.Build(
+                    "scope-1",
+                    ScopeServiceIdentityDefaults.ServiceAppId,
+                    ScopeServiceIdentityDefaults.ServiceNamespace,
+                    workflowName),
+                ServiceId: workflowName,
+                ServiceEndpointId: "chat",
                 CronExpression: cronExpression,
                 Timezone: "UTC",
                 Enabled: true,
@@ -731,10 +735,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 LastError: string.Empty,
                 FireCount: 0,
                 FailureCount: 0,
-                Headers: new Dictionary<string, string>
-                {
-                    ["workflow.schedule.workflow_name"] = workflowName,
-                },
+                Headers: new Dictionary<string, string>(),
                 ScheduleActorId: string.Empty),
             []);
 }

@@ -9,11 +9,6 @@ namespace Aevatar.Workflow.Application.Schedules;
 
 public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplicationService
 {
-    private const string WorkflowScheduleHeader = "workflow.schedule";
-    private const string WorkflowNameHeader = WorkflowScheduleHeader + ".workflow_name";
-    private const string ScopeIdHeader = WorkflowScheduleHeader + ".scope_id";
-    private const string SourceActorIdHeader = WorkflowScheduleHeader + ".source_actor_id";
-
     private readonly IScheduledDispatchApplicationService _scheduledDispatches;
 
     public WorkflowScheduleApplicationService(IScheduledDispatchApplicationService scheduledDispatches)
@@ -73,7 +68,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         var result = await _scheduledDispatches.ListAsync(take, cursor, includeTotalCount, ct);
         return new WorkflowScheduleListResult(
             result.Items
-                .Where(static x => IsWorkflowCompatibilitySchedule(x.Headers))
+                .Where(IsWorkflowCompatibilitySchedule)
                 .Select(ToWorkflowSummary)
                 .ToArray(),
             result.NextCursor,
@@ -156,20 +151,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
 
-            var normalizedKey = key.Trim();
-            if (IsWorkflowScheduleHeader(normalizedKey))
-                continue;
-
-            headers[normalizedKey] = value.Trim();
+            headers[key.Trim()] = value.Trim();
         }
-
-        headers[WorkflowNameHeader] = NormalizeRequired(configuration.WorkflowName, nameof(configuration.WorkflowName));
-        var scopeId = NormalizeOptional(FirstNonBlank(configuration.ScopeId, configuration.TenantId), string.Empty);
-        if (!string.IsNullOrWhiteSpace(scopeId))
-            headers[ScopeIdHeader] = scopeId;
-        var sourceActorId = NormalizeOptional(configuration.SourceActorId, string.Empty);
-        if (!string.IsNullOrWhiteSpace(sourceActorId))
-            headers[SourceActorIdHeader] = sourceActorId;
 
         return headers;
     }
@@ -191,7 +174,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         new(
             summary.ScheduleId,
             summary.DisplayName,
-            ResolveHeader(summary.Headers, WorkflowNameHeader, summary.ServiceId),
+            summary.ServiceId,
             summary.CronExpression,
             summary.Timezone,
             summary.Enabled,
@@ -206,26 +189,21 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             summary.FireCount,
             summary.FailureCount,
             summary.Headers,
-            ResolveHeader(summary.Headers, ScopeIdHeader, string.Empty),
-            ResolveHeader(summary.Headers, SourceActorIdHeader, string.Empty),
+            ResolveScopeId(summary.ServiceKey),
+            string.Empty,
             summary.ScheduleActorId,
             summary.TargetActorId);
 
-    private static bool IsWorkflowCompatibilitySchedule(IReadOnlyDictionary<string, string> headers) =>
-        headers.ContainsKey(WorkflowNameHeader);
+    private static bool IsWorkflowCompatibilitySchedule(ScheduledDispatchSummary summary) =>
+        summary.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation &&
+        string.Equals(summary.ServiceEndpointId, "chat", StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(summary.ServiceId);
 
-    private static bool IsWorkflowScheduleHeader(string key) =>
-        string.Equals(key, WorkflowNameHeader, StringComparison.Ordinal) ||
-        string.Equals(key, ScopeIdHeader, StringComparison.Ordinal) ||
-        string.Equals(key, SourceActorIdHeader, StringComparison.Ordinal);
-
-    private static string ResolveHeader(
-        IReadOnlyDictionary<string, string> headers,
-        string key,
-        string fallback) =>
-        headers.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
-            ? value
-            : fallback;
+    private static string ResolveScopeId(string serviceKey)
+    {
+        var parts = serviceKey.Split(':', StringSplitOptions.None);
+        return parts.Length > 0 ? parts[0] : string.Empty;
+    }
 
     private static string NormalizeRequired(string? value, string fieldName)
     {
