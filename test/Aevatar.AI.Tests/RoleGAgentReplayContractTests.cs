@@ -897,6 +897,8 @@ public class RoleGAgentReplayContractTests
             string.Empty,
             Array.Empty<ToolCall>(),
             Array.Empty<ContentPart>(),
+            null, // Usage (added by #1700)
+            null, // Model (added by #1700)
             contentEmitted)!;
     }
 
