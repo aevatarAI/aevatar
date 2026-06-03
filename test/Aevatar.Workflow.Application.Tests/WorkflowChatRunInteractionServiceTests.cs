@@ -26,7 +26,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -64,7 +64,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null, Headers: headers),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct"), Headers: headers),
             static (_, _) => ValueTask.CompletedTask,
             (receipt, _) =>
             {
@@ -118,7 +118,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -156,7 +156,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -194,7 +194,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -234,7 +234,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -271,7 +271,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -312,7 +312,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -347,7 +347,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.CatalogWorkflow("direct")),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -385,7 +385,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "auto", "actor-auto"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto")),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
@@ -395,8 +395,8 @@ public sealed class WorkflowChatRunInteractionServiceTests
         inner.Requests.Should().HaveCount(2);
         inner.Requests[0].TargetSeed!.ActorId.Should().Be("auto-run");
         inner.Requests[1].TargetSeed!.ActorId.Should().Be("direct-run");
-        inner.Requests[1].WorkflowName.Should().Be(WorkflowRunBehaviorOptions.DirectWorkflowName);
-        inner.Requests[1].ActorId.Should().BeNull();
+        inner.Requests[1].Source.WorkflowName.Should().Be(WorkflowRunBehaviorOptions.DirectWorkflowName);
+        inner.Requests[1].Source.ActorId.Should().BeNull();
         inner.Requests[1].CommandIdSeed.Should().Be(inner.Requests[0].CommandIdSeed);
         inner.Requests[1].CorrelationIdSeed.Should().Be(inner.Requests[0].CorrelationIdSeed);
         activationPort.Releases.Should().ContainSingle()
@@ -429,7 +429,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             inner);
 
         var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "auto", "actor-auto"),
+            new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-auto", "auto")),
             static (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
@@ -648,7 +648,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
 
             var receipt = new WorkflowChatRunAcceptedReceipt(
                 command.TargetSeed?.ActorId ?? "run-1",
-                command.TargetSeed?.WorkflowNameForRun ?? command.WorkflowName ?? "direct",
+                command.TargetSeed?.WorkflowNameForRun ?? command.Source.WorkflowName ?? "direct",
                 command.CommandIdSeed ?? "cmd-1",
                 command.CorrelationIdSeed ?? "corr-1");
             if (AcceptBeforeThrowing != null && onAcceptedAsync != null)
@@ -701,19 +701,19 @@ public sealed class WorkflowChatRunInteractionServiceTests
 
     private sealed class NoopCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
     {
-        public bool EnableActorQueryEndpoints => true;
+        public bool WorkflowActorCurrentStateQueryEnabled => true;
 
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
             string actorId,
             CancellationToken ct = default) =>
             Task.FromResult<WorkflowActorSnapshot?>(null);
 
-        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
             int take = 200,
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
 
-        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+        public Task<WorkflowActorProjectionState?> GetWorkflowActorProjectionStateAsync(
             string actorId,
             CancellationToken ct = default) =>
             Task.FromResult<WorkflowActorProjectionState?>(null);

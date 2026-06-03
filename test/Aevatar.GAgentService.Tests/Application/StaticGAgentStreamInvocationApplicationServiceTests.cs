@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -7,7 +9,6 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
-using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
@@ -79,7 +80,9 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
                             Kind = GAgentDraftRunInputPartKind.Text,
                             Text = "part-1",
                         },
-                    ])),
+                    ],
+                    ToolContext: NewToolContext(),
+                    LlmControl: NewLlmControl())),
             (_, _) => ValueTask.CompletedTask,
             (receipt, _) =>
             {
@@ -114,6 +117,8 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         interaction.Requests.Should().ContainSingle();
         var delegated = interaction.Requests[0];
         delegated.ScopeId.Should().Be(identity.TenantId);
+        delegated.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
+        delegated.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
         delegated.Prompt.Should().Be("hello static");
         delegated.PreferredActorId.Should().Be("preferred-actor");
         delegated.SessionId.Should().Be("session-1");
@@ -121,6 +126,8 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         delegated.UseCorrelationIdAsFallbackSessionId.Should().BeFalse();
         delegated.InputParts.Should().ContainSingle()
             .Which.Text.Should().Be("part-1");
+        delegated.ToolContext.Should().BeEquivalentTo(NewToolContext());
+        delegated.LlmControl.Should().BeEquivalentTo(NewLlmControl());
     }
 
     [Fact]
@@ -237,7 +244,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
     }
 
     [Fact]
-    public async Task InvokeAsync_ShouldThrow_WhenStaticPlanHasNoActorType()
+    public async Task InvokeAsync_ShouldUseAgentKind_WhenStaticPlanHasNoActorType()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var interaction = new RecordingGAgentDraftRunInteractionService();
@@ -250,12 +257,36 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             interaction,
             registration);
 
+        var result = await service.InvokeAsync(
+            NewRequest(identity),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        interaction.Requests.Should().ContainSingle()
+            .Which.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenStaticPlanHasNoAgentKindOrActorType()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var interaction = new RecordingGAgentDraftRunInteractionService();
+        var registration = new RecordingServiceRunRegistrationPort();
+        var artifact = CreateArtifact(identity, ServiceImplementationKind.Static);
+        artifact.DeploymentPlan.StaticPlan!.AgentKind = " ";
+        artifact.DeploymentPlan.StaticPlan!.ActorTypeName = " ";
+        var service = await CreateServiceAsync(
+            identity,
+            artifact,
+            interaction,
+            registration);
+
         var act = () => service.InvokeAsync(
             NewRequest(identity),
             (_, _) => ValueTask.CompletedTask);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Static GAgent service has no actor type configured*");
+            .WithMessage("*Static GAgent service has no agent kind configured*");
         interaction.Requests.Should().BeEmpty();
         registration.Records.Should().BeEmpty();
     }
@@ -266,13 +297,13 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         RecordingGAgentDraftRunInteractionService interaction,
         RecordingServiceRunRegistrationPort registration)
     {
-        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
-        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
 
         var resolutionService = new ServiceInvocationResolutionService(
             new CatalogQueryReader(identity),
             new TrafficViewQueryReader(identity),
-            artifactStore);
+            revisionCatalog);
 
         return new StaticGAgentStreamInvocationApplicationService(
             resolutionService,
@@ -288,6 +319,24 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             identity.Clone(),
             "chat",
             input ?? new StaticGAgentStreamInvocationInput("hello"));
+
+    private static AgentToolExecutionContext NewToolContext() =>
+        new(
+            new AgentToolRequestIdentity("request-1", "call-1"),
+            new AgentToolCredentials("access-token", "org-token", "sender-token"),
+            new AgentToolCallerContext("scope-a", "owner-a", "response-1"),
+            new AgentToolChannelContext("telegram", "sender-1", "registration-scope-1", "message-1", "platform-message-1"),
+            new AgentToolSenderBindingContext("binding-1"),
+            new LLMRequestRoutingContext("model-1", "route-1", 3, "remember"),
+            new AgentToolConnectedServicesContext("connected"),
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["external"] = "value",
+            });
+
+    private static LLMControlContext NewLlmControl() =>
+        new("access-token", "org-token", "sender-token", "model-1", "route-1", 3, "remember");
 
     private static PreparedServiceRevisionArtifact CreateArtifact(
         ServiceIdentity identity,

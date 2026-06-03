@@ -1,13 +1,15 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Runtime;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -24,6 +26,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
             typeof(DefaultEventSourcingBehaviorFactory<>));
+        services.AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>();
 
         _serviceProvider = services.BuildServiceProvider();
 
@@ -299,28 +302,29 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             CancellationToken.None);
     }
 
-    [Fact]
-    public async Task HandleRebuildProjection_PersistsRefreshEvent_WithoutMutatingState()
+    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-1",
-            NyxAgentApiKeyId = "key-1",
-        });
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                0,
+                RuntimeCallbackBackend.InMemory));
 
-        var beforeState = _agent.State.Clone();
-        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                0,
+                RuntimeCallbackBackend.InMemory));
 
-        await _agent.HandleRebuildProjection(new ChannelBotRebuildProjectionCommand
-        {
-            Reason = "test-rebuild",
-        });
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
 
-        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
-        _agent.State.Should().BeEquivalentTo(beforeState);
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class InMemoryEventStore : IEventStore

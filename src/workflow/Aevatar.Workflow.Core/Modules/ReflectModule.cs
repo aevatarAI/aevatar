@@ -32,8 +32,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         var payload = envelope.Payload;
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(TextMessageEndEvent.Descriptor) ||
-                payload.Is(ChatResponseEvent.Descriptor));
+                payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -98,29 +97,31 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        string? content = null;
-        string? sessionId = null;
-        if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
-        else if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ChatResponseEvent>();
-            content = evt.Content;
-            sessionId = evt.SessionId;
-        }
+        if (!payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
+            return;
 
-        if (string.IsNullOrWhiteSpace(sessionId))
+        var llmCompleted = payload.Unpack<WorkflowLlmInvocationCompletedEvent>();
+        if (string.IsNullOrWhiteSpace(llmCompleted.SessionId))
             return;
 
         var runtimeStateForCompletion = WorkflowExecutionStateAccess.Load<ReflectModuleState>(ctx, ModuleStateKey);
-        if (!runtimeStateForCompletion.PendingBySessionId.TryGetValue(sessionId, out var pendingState))
+        if (!runtimeStateForCompletion.PendingBySessionId.TryGetValue(llmCompleted.SessionId, out var pendingState))
             return;
 
-        content ??= string.Empty;
+        var content = llmCompleted.Content ?? string.Empty;
+        if (!llmCompleted.Success)
+        {
+            runtimeStateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
+            await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
+            await PublishFailedCompletionAsync(
+                pendingState.StepId,
+                pendingState.RunId,
+                string.IsNullOrWhiteSpace(llmCompleted.Error) ? "reflect LLM call failed." : llmCompleted.Error,
+                ctx,
+                ct);
+            return;
+        }
+
         if (pendingState.Phase == ReflectPhaseState.Critique)
         {
             var passed = content.Contains("PASS", StringComparison.OrdinalIgnoreCase);
@@ -145,12 +146,12 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
                 completed.Annotations["reflect.passed"] = passed.ToString();
                 await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
 
-                runtimeStateForCompletion.PendingBySessionId.Remove(sessionId);
+                runtimeStateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
                 await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
                 return;
             }
 
-            runtimeStateForCompletion.PendingBySessionId.Remove(sessionId);
+            runtimeStateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
             await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
 
             var next = pendingState.Clone();
@@ -168,7 +169,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        runtimeStateForCompletion.PendingBySessionId.Remove(sessionId);
+        runtimeStateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
         await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
 
         var nextCritique = pendingState.Clone();
@@ -204,18 +205,19 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         runtimeState.PendingBySessionId[sessionId] = state;
         await SaveStateAsync(runtimeState, ctx, ct);
 
-        var chatRequest = new ChatRequestEvent
+        var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,
             SessionId = sessionId,
-            Telegram = new TelegramBridgeRequest(),
+            RunId = state.RunId,
+            StepId = state.StepId,
         };
-        CopyParametersToChatRequest(state.ChatMetadataParameters, chatRequest);
+        CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
-            await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
+            await ctx.SendToAsync(state.TargetActorId, intent, ct);
         else
-            await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
+            await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
     }
 
     private async Task SendImproveAsync(
@@ -239,18 +241,19 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         runtimeState.PendingBySessionId[sessionId] = state;
         await SaveStateAsync(runtimeState, ctx, ct);
 
-        var chatRequest = new ChatRequestEvent
+        var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,
             SessionId = sessionId,
-            Telegram = new TelegramBridgeRequest(),
+            RunId = state.RunId,
+            StepId = state.StepId,
         };
-        CopyParametersToChatRequest(state.ChatMetadataParameters, chatRequest);
+        CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
-            await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
+            await ctx.SendToAsync(state.TargetActorId, intent, ct);
         else
-            await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
+            await ctx.PublishAsync(intent, TopologyAudience.Self, ct);
     }
 
     private static Task SaveStateAsync(
@@ -282,9 +285,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             TopologyAudience.Self,
             ct);
 
-    private static void CopyParametersToChatRequest(
+    private static void CopyParametersToIntent(
         MapField<string, string> source,
-        ChatRequestEvent chatRequest)
+        WorkflowLlmExecutionIntent intent)
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
         //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
@@ -296,11 +299,10 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 
             var normalizedKey = key.Trim();
             var normalizedValue = value.Trim();
-            // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
-            if (LLMCallModule.TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue))
+            if (LLMCallModule.IsReservedParameter(normalizedKey))
                 continue;
 
-            chatRequest.Metadata[normalizedKey] = normalizedValue;
+            intent.Annotations[normalizedKey] = normalizedValue;
         }
     }
 
@@ -331,6 +333,6 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 
     private static string CreatePhaseSessionId(string scopeId, string runId, string stepToken) =>
         string.IsNullOrWhiteSpace(runId)
-            ? ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, stepToken)
-            : ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepToken, attempt: 1);
+            ? WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, stepToken)
+            : WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepToken, attempt: 1);
 }

@@ -107,7 +107,7 @@ public sealed class SkillDiscovery
             WhenToUse = parsed.WhenToUse,
             IsModelInvocable = parsed.IsModelInvocable,
             IsUserInvocable = parsed.IsUserInvocable,
-            Workflows = workflows.Count > 0 ? workflows : null,
+            Workflows = workflows,
         };
     }
 }

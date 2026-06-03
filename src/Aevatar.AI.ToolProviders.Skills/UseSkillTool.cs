@@ -8,6 +8,8 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 
 namespace Aevatar.AI.ToolProviders.Skills;
 
@@ -22,11 +24,16 @@ public sealed class UseSkillTool : IAgentTool
 {
     private readonly LocalSkillCatalog _localCatalog;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
+    private readonly IScopeWorkflowCommandPort? _scopeWorkflowCommandPort;
 
-    public UseSkillTool(LocalSkillCatalog localCatalog, IRemoteSkillFetcher? remoteFetcher = null)
+    public UseSkillTool(
+        LocalSkillCatalog localCatalog,
+        IRemoteSkillFetcher? remoteFetcher = null,
+        IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null)
     {
         _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
+        _scopeWorkflowCommandPort = scopeWorkflowCommandPort;
     }
 
     public string Name => "use_skill";
@@ -42,27 +49,23 @@ public sealed class UseSkillTool : IAgentTool
           "type": "object",
           "properties": {
             "skill": { "type": "string", "description": "The skill name to invoke" },
-            "args": { "type": "string", "description": "Optional arguments for the skill" }
+            "args": { "type": "string", "description": "Optional arguments for the skill" },
+            "mount_workflows": { "type": "boolean", "description": "When true, upsert all workflow YAML descriptors from the skill into the current scope workflow command pipeline" }
           },
           "required": ["skill"]
         }
         """;
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public bool? RequiresApproval(string argumentsJson) => ParseArguments(argumentsJson).MountWorkflows;
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        // ─── 解析参数 ───
-        string skillName = "";
-        string args = "";
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("skill", out var s))
-                skillName = s.GetString() ?? "";
-            if (doc.RootElement.TryGetProperty("args", out var a))
-                args = a.GetString() ?? "";
-        }
-        catch { /* use defaults */ }
+        var arguments = ParseArguments(argumentsJson);
+        var skillName = arguments.SkillName;
+        var args = arguments.Args;
+        var mountWorkflows = arguments.MountWorkflows;
 
         if (string.IsNullOrWhiteSpace(skillName))
             return BuildErrorWithAvailableSkills("Error: skill name is required.");
@@ -74,7 +77,7 @@ public sealed class UseSkillTool : IAgentTool
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
         //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
         if (_localCatalog.TryGet(skillName, out skill) && skill != null)
-            return BuildSkillResponse(skill, args);
+            return await BuildSkillResponseAsync(skill, args, mountWorkflows, ct);
 
         if (_remoteFetcher != null)
         {
@@ -84,12 +87,50 @@ public sealed class UseSkillTool : IAgentTool
                 skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
                 if (skill != null)
                 {
-                    return BuildSkillResponse(skill, args);
+                    return await BuildSkillResponseAsync(skill, args, mountWorkflows, ct);
                 }
             }
         }
 
         return BuildErrorWithAvailableSkills($"Skill '{skillName}' not found.");
+    }
+
+    private static UseSkillArguments ParseArguments(string argumentsJson)
+    {
+        string skillName = "";
+        string args = "";
+        var mountWorkflows = false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            if (doc.RootElement.TryGetProperty("skill", out var s))
+                skillName = s.GetString() ?? "";
+            if (doc.RootElement.TryGetProperty("args", out var a))
+                args = a.GetString() ?? "";
+            if (doc.RootElement.TryGetProperty("mount_workflows", out var m) &&
+                (m.ValueKind == JsonValueKind.True || m.ValueKind == JsonValueKind.False))
+            {
+                mountWorkflows = m.GetBoolean();
+            }
+        }
+        catch { /* use defaults */ }
+
+        return new UseSkillArguments(skillName, args, mountWorkflows);
+    }
+
+    private async Task<string> BuildSkillResponseAsync(
+        SkillDefinition skill,
+        string args,
+        bool mountWorkflows,
+        CancellationToken ct)
+    {
+        var response = BuildSkillResponse(skill, args);
+        if (!mountWorkflows)
+            return response;
+
+        var mountedWorkflows = await MountWorkflowsAsync(skill, ct);
+        return response + Environment.NewLine + mountedWorkflows;
     }
 
     private static string BuildSkillResponse(SkillDefinition skill, string args)
@@ -125,38 +166,28 @@ public sealed class UseSkillTool : IAgentTool
         sb.AppendLine(
             "If these instructions leave you blocked by a missing capability, ambiguous workflow step, unavailable service, unknown API contract, repeated tool failure, or any other unsolved dependency, call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic proxy discovery or path guessing. Continue from the newly loaded skill.");
 
-        // 工作流：识别后单独展示，附调用说明
-        if (skill.Workflows is { Count: > 0 } workflows)
+        // Refactor (iter161/cluster-triage-ornn-skill-workflow-tool-signal #1259-first):
+        //   Old pattern: Runnable workflow YAML attachments were rendered only as generic Associated Files, leaving aevatar_start_workflow handoff implicit.
+        //   New principle: Render an explicit handoff section before generic files, preserving workflow_id and workflow_yamls as single-semantics tool fields.
+        if (skill.Workflows.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("## Available Workflows");
+            sb.AppendLine("## aevatar_start_workflow Handoff");
             sb.AppendLine();
-            sb.AppendLine(
-                "This skill ships executable workflows. To run one, call the `aevatar_start_workflow` tool with:");
-            sb.AppendLine("- `workflow_id`: the workflow's `name` (shown below)");
-            sb.AppendLine("- `workflow_yamls`: an array containing the workflow's YAML body verbatim");
-            sb.AppendLine("- `inputs.prompt`: the user's task as a plain string");
-            sb.AppendLine();
-            foreach (var workflow in workflows)
+            sb.AppendLine("Call `aevatar_start_workflow` with this inline workflow bundle before treating workflow YAMLs as ordinary reference files.");
+
+            foreach (var workflow in skill.Workflows)
             {
-                sb.Append("### ");
-                sb.AppendLine(workflow.Name);
-                if (!string.IsNullOrWhiteSpace(workflow.Description))
+                var payload = new
                 {
-                    sb.Append("Description: ");
-                    sb.AppendLine(workflow.Description);
-                }
-                if (!string.IsNullOrWhiteSpace(workflow.WhenToUse))
-                {
-                    sb.Append("When to use: ");
-                    sb.AppendLine(workflow.WhenToUse);
-                }
-                sb.Append("Source: ");
-                sb.AppendLine(workflow.FileName);
-                sb.AppendLine("```yaml");
-                sb.AppendLine(workflow.Yaml.TrimEnd());
-                sb.AppendLine("```");
+                    workflow_id = workflow.WorkflowId,
+                    workflow_yamls = workflow.WorkflowYamls,
+                };
+
                 sb.AppendLine();
+                sb.AppendLine("```json");
+                sb.AppendLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+                sb.AppendLine("```");
             }
         }
 
@@ -178,6 +209,100 @@ public sealed class UseSkillTool : IAgentTool
             }
         }
 
+        return sb.ToString();
+    }
+
+    private async Task<string> MountWorkflowsAsync(SkillDefinition skill, CancellationToken ct)
+    {
+        var scopeId = AgentToolRequestContext.ScopeId;
+        if (string.IsNullOrWhiteSpace(scopeId))
+            return BuildMountedWorkflowsError("scope_id not available in request context");
+
+        if (_scopeWorkflowCommandPort == null)
+            return BuildMountedWorkflowsError("scope workflow command port is not available in this host");
+
+        if (skill.Workflows.Count == 0)
+            return BuildMountedWorkflowsError("skill has no workflow descriptors to mount");
+
+        var mounted = new List<object>(skill.Workflows.Count);
+        foreach (var workflow in skill.Workflows)
+        {
+            if (string.IsNullOrWhiteSpace(workflow.WorkflowId))
+                return BuildMountedWorkflowsError("skill workflow descriptor has no workflow_id");
+
+            var workflowYamls = workflow.WorkflowYamls
+                .Where(yaml => !string.IsNullOrWhiteSpace(yaml))
+                .ToArray();
+            if (workflowYamls.Length == 0)
+                return BuildMountedWorkflowsError($"skill workflow '{workflow.WorkflowId}' has no workflow YAML");
+
+            var result = await _scopeWorkflowCommandPort.UpsertAsync(new ScopeWorkflowUpsertRequest(
+                scopeId.Trim(),
+                workflow.WorkflowId.Trim(),
+                workflowYamls[0],
+                WorkflowName: workflow.WorkflowId.Trim(),
+                DisplayName: workflow.WorkflowId.Trim(),
+                InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls)), ct);
+
+            mounted.Add(ToMountedWorkflowPayload(result));
+        }
+
+        return BuildMountedWorkflowsPayload(mounted);
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildInlineWorkflowYamls(IReadOnlyList<string> workflowYamls)
+    {
+        if (workflowYamls.Count <= 1)
+            return null;
+
+        var inlineWorkflowYamls = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var i = 1; i < workflowYamls.Count; i++)
+            inlineWorkflowYamls[$"workflow_{i}"] = workflowYamls[i];
+        return inlineWorkflowYamls;
+    }
+
+    private static object ToMountedWorkflowPayload(ScopeWorkflowUpsertResult result) => new
+    {
+        success = true,
+        accepted = true,
+        scope_id = result.ScopeId,
+        workflow_id = result.WorkflowId,
+        service_key = result.ServiceKey,
+        revision_id = result.RevisionId,
+        expected_actor_id = result.ExpectedActorId,
+        expected_deployment_id = result.ExpectedDeploymentId,
+        acceptance_stage = result.AcceptanceStage,
+        propagation_stage = result.PropagationStage,
+        read_model_url = result.ReadModelUrl,
+        command_handles = result.CommandHandles,
+    };
+
+    private static string BuildMountedWorkflowsPayload(IReadOnlyList<object> mounted)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Mounted Workflows");
+        sb.AppendLine();
+        sb.AppendLine("Workflow mount commands were accepted for dispatch; read models may still be propagating.");
+        sb.AppendLine();
+        sb.AppendLine("```json");
+        sb.AppendLine(JsonSerializer.Serialize(new { workflows = mounted }, SnakeCaseJson));
+        sb.AppendLine("```");
+        return sb.ToString();
+    }
+
+    private static string BuildMountedWorkflowsError(string message)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Mounted Workflows");
+        sb.AppendLine();
+        sb.AppendLine("```json");
+        sb.AppendLine(JsonSerializer.Serialize(new
+        {
+            success = false,
+            accepted = false,
+            error = message,
+        }, SnakeCaseJson));
+        sb.AppendLine("```");
         return sb.ToString();
     }
 
@@ -209,4 +334,12 @@ public sealed class UseSkillTool : IAgentTool
 
         return sb.ToString();
     }
+
+    private readonly record struct UseSkillArguments(string SkillName, string Args, bool MountWorkflows);
+
+    private static readonly JsonSerializerOptions SnakeCaseJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        WriteIndented = true,
+    };
 }

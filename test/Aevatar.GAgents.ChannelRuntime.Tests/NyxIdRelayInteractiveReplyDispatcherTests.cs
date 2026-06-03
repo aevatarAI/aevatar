@@ -246,7 +246,7 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
             NullLogger<NyxIdRelayInteractiveReplyDispatcher>.Instance);
 
         var intent = new MessageContent();
-        var card = new CardBlock { Title = "Daily Report", Text = "3 PRs merged" };
+        var card = new CardBlock { Title = "Summary Report", Text = "3 PRs merged" };
         card.Fields.Add(new CardField { Title = "Commits", Text = "42" });
         intent.Cards.Add(card);
         intent.Actions.Add(new ActionElement
@@ -266,7 +266,7 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
         result.Succeeded.Should().BeTrue();
         result.FellBackToText.Should().BeTrue();
         handler.LastRequestBody.Should().NotBeNull();
-        handler.LastRequestBody!.Should().Contain("Daily Report");
+        handler.LastRequestBody!.Should().Contain("Summary Report");
         handler.LastRequestBody.Should().Contain("3 PRs merged");
         handler.LastRequestBody.Should().Contain("Commits: 42");
         handler.LastRequestBody.Should().Contain("Open details");

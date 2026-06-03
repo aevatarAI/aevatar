@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -14,13 +16,21 @@ public sealed record ResponsesCallerScope(
     string OwnerSubject,
     LlmSessionOriginKind OriginKind);
 
+// Refactor (iter159/cluster-640-first): Old: ResolveAsync(string bearer)  New: ResolveAsync(ResponsesCallerScopeResolutionContext)
+//   Old pattern: caller-scope resolution received only the inbound bearer string, so NyxID proxy assertions could not travel through the shared admission seam.
+//   New principle: Host adapters carry all inbound caller evidence as typed Application input while the resolver decides the authoritative scope.
+public sealed record ResponsesCallerScopeResolutionContext(
+    string InboundBearerToken,
+    string? NyxIdIdentityToken,
+    string? NyxIdDelegationToken);
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Each endpoint resolved NyxID bearer tokens directly before continuing its inline command flow.
 //   New principle: Token-to-caller-scope resolution is a narrow Application port; Host composes the concrete adapter and command facades consume the typed result.
 public interface IResponsesCallerScopeResolver
 {
     Task<ResponsesCallerScope> ResolveAsync(
-        string nyxIdAccessToken,
+        ResponsesCallerScopeResolutionContext context,
         CancellationToken ct = default);
 }
 
@@ -87,6 +97,19 @@ public sealed record MessagesCommandRequest(
     bool? Stream,
     bool ToolChoiceDisablesTools,
     string? ToolChoiceError);
+
+// Refactor (iter344/cluster-001):
+//   Old pattern: Host handler owns caller resolution, route resolution, session registration, tool planning, direct provider execution, status updates, and protocol rendering in one request stack.
+//   New principle: Host maps HTTP/OpenAI frames only; typed Application facade owns Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt/Observe via the same LlmSessionGAgent run path as Responses/Messages.
+public sealed record ChatCompletionsCommandRequest(
+    string? Model,
+    bool? Stream,
+    bool IncludeUsageInStream,
+    double? Temperature,
+    int? MaxTokens,
+    IReadOnlyList<ChatMessage> ChatMessages,
+    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools,
+    LLMResponseFormat? ResponseFormat);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Normalized Responses fields lived as endpoint locals across routing, continuation, session, and execution branches.
@@ -158,6 +181,37 @@ public readonly record struct MessagesRequestNormalizationResult(
         new(null, code, message);
 }
 
+// Refactor (iter344/cluster-001):
+//   Old pattern: Chat Completions normalized state lived as Host locals across route/session/tool/provider branches.
+//   New principle: Application carries a typed normalized command state through route resolution, envelope construction, and dispatch.
+public sealed record NormalizedChatCompletionsCommand(
+    string CompletionId,
+    string Model,
+    bool Stream,
+    bool IncludeUsageInStream,
+    double? Temperature,
+    int? MaxTokens,
+    IReadOnlyList<ChatMessage> ChatMessages,
+    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools,
+    LLMResponseFormat? ResponseFormat);
+
+// Refactor (iter344/cluster-001):
+//   Old pattern: Chat Completions validation failures returned HTTP results from endpoint branches.
+//   New principle: Application normalization returns typed success/failure data for Host protocol rendering.
+public readonly record struct ChatCompletionsRequestNormalizationResult(
+    NormalizedChatCompletionsCommand? Request,
+    string? ErrorCode,
+    string? ErrorMessage)
+{
+    public bool Succeeded => Request != null && ErrorCode == null;
+
+    public static ChatCompletionsRequestNormalizationResult Success(NormalizedChatCompletionsCommand request) =>
+        new(request, null, null);
+
+    public static ChatCompletionsRequestNormalizationResult Failed(string code, string message) =>
+        new(null, code, message);
+}
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Error status/code/message triples were repeatedly assembled in Host branches.
 //   New principle: Application command results carry typed errors; Host performs only protocol rendering.
@@ -174,7 +228,7 @@ public sealed record ResponsesCreateCommandPlan(
     LlmSessionRegistrationResult Session,
     LlmSessionSnapshot? PreviousSnapshot,
     LLMRequest LlmRequest,
-    IReadOnlyDictionary<string, string> ToolContextMetadata,
+    AgentToolExecutionContext ToolContext,
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
     DateTimeOffset CreatedAt);
@@ -185,16 +239,20 @@ public sealed record ResponsesCreateCommandPlan(
 public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
     ResponsesCreateCommandPlan? StreamPlan,
-    ResponsesCreateCompletedCommandResult? Completed)
+    ResponsesCreateCompletedCommandResult? Completed,
+    ResponsesCreateAcceptedCommandResult? Accepted)
 {
     public static ResponsesCreateCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null, null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null, null);
 
     public static ResponsesCreateCommandResult FromStreamPlan(ResponsesCreateCommandPlan plan) =>
-        new(null, plan, null);
+        new(null, plan, null, null);
 
     public static ResponsesCreateCommandResult FromCompleted(ResponsesCreateCompletedCommandResult completed) =>
-        new(null, null, completed);
+        new(null, null, completed, null);
+
+    public static ResponsesCreateCommandResult FromAccepted(ResponsesCreateAcceptedCommandResult accepted) =>
+        new(null, null, null, accepted);
 }
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -205,20 +263,36 @@ public sealed record ResponsesCreateCompletedCommandResult(
     long CreatedAt,
     LlmSessionCompletionSnapshot Completion);
 
+// Refactor (iter103/cluster-1 r2):
+//   Old pattern: Application facades treated IActorDispatchPort ACK as committed/readmodel-observed completion.
+//   New principle: direct Responses/Messages create returns only the accepted dispatch receipt; terminal completion is observed asynchronously.
+public sealed record ResponsesCreateAcceptedCommandResult(
+    NormalizedResponsesRequest Normalized,
+    long CreatedAt,
+    LlmSessionRegistrationResult Session,
+    DispatchAdmission Admission);
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Streaming completion errors and final data were encoded directly into SSE handler branches.
 //   New principle: Application reports stream execution outcome as typed data; Host renders the appropriate SSE or error frame.
 public sealed record ResponsesStreamCommandResult(
     ResponsesCommandError? Error,
-    LlmSessionCompletionSnapshot? Completion)
+    LlmSessionCompletionSnapshot? Completion,
+    ResponsesStreamAcceptedCommandResult? Accepted)
 {
     public static ResponsesStreamCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null);
 
     public static ResponsesStreamCommandResult FromCompleted(
         LlmSessionCompletionSnapshot completion) =>
-        new(null, completion);
+        new(null, completion, null);
+
+    public static ResponsesStreamCommandResult FromAccepted(ResponsesStreamAcceptedCommandResult accepted) =>
+        new(null, null, accepted);
 }
+
+public sealed record ResponsesStreamAcceptedCommandResult(
+    DispatchAdmission Admission);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Cancel response visibility and status transition lived inside the Host endpoint.
@@ -242,9 +316,20 @@ public sealed record MessagesCreateCommandPlan(
     NormalizedMessagesRequest Normalized,
     LlmSessionRegistrationResult Session,
     LLMRequest LlmRequest,
-    IReadOnlyDictionary<string, string> ToolContextMetadata,
+    AgentToolExecutionContext ToolContext,
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan);
+
+// Refactor (iter344/cluster-001):
+//   Old pattern: Chat Completions streaming held prepared LLMRequest/session/tool state inside the Host SSE helper.
+//   New principle: Application returns a typed run plan; Host only renders OpenAI-compatible event frames around dispatch outcome.
+public sealed record ChatCompletionsCreateCommandPlan(
+    NormalizedChatCompletionsCommand Normalized,
+    LlmSessionRegistrationResult Session,
+    LLMRequest LlmRequest,
+    ResponsesToolClassification ToolClassification,
+    ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
+    DateTimeOffset CreatedAt);
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Messages create execution directly selected HTTP JSON versus SSE in the Host orchestration body.
@@ -252,16 +337,20 @@ public sealed record MessagesCreateCommandPlan(
 public sealed record MessagesCreateCommandResult(
     ResponsesCommandError? Error,
     MessagesCreateCommandPlan? StreamPlan,
-    MessagesCreateCompletedCommandResult? Completed)
+    MessagesCreateCompletedCommandResult? Completed,
+    MessagesCreateAcceptedCommandResult? Accepted)
 {
     public static MessagesCreateCommandResult FromError(int statusCode, string code, string message) =>
-        new(new ResponsesCommandError(statusCode, code, message), null, null);
+        new(new ResponsesCommandError(statusCode, code, message), null, null, null);
 
     public static MessagesCreateCommandResult FromStreamPlan(MessagesCreateCommandPlan plan) =>
-        new(null, plan, null);
+        new(null, plan, null, null);
 
     public static MessagesCreateCommandResult FromCompleted(MessagesCreateCompletedCommandResult completed) =>
-        new(null, null, completed);
+        new(null, null, completed, null);
+
+    public static MessagesCreateCommandResult FromAccepted(MessagesCreateAcceptedCommandResult accepted) =>
+        new(null, null, null, accepted);
 }
 
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
@@ -271,6 +360,38 @@ public sealed record MessagesCreateCompletedCommandResult(
     NormalizedMessagesRequest Normalized,
     LlmSessionCompletionSnapshot Completion);
 
+public sealed record MessagesCreateAcceptedCommandResult(
+    NormalizedMessagesRequest Normalized,
+    LlmSessionRegistrationResult Session,
+    DispatchAdmission Admission);
+
+// Refactor (iter344/cluster-001):
+//   Old pattern: Chat Completions create branched directly in Host between request-local execution and SSE output.
+//   New principle: Application returns one typed union for protocol error, stream plan, or accepted dispatch receipt.
+public sealed record ChatCompletionsCreateCommandResult(
+    ResponsesCommandError? Error,
+    ChatCompletionsCreateCommandPlan? StreamPlan,
+    ChatCompletionsCreateAcceptedCommandResult? Accepted)
+{
+    public static ChatCompletionsCreateCommandResult FromError(int statusCode, string code, string message) =>
+        new(new ResponsesCommandError(statusCode, code, message), null, null);
+
+    public static ChatCompletionsCreateCommandResult FromStreamPlan(ChatCompletionsCreateCommandPlan plan) =>
+        new(null, plan, null);
+
+    public static ChatCompletionsCreateCommandResult FromAccepted(ChatCompletionsCreateAcceptedCommandResult accepted) =>
+        new(null, null, accepted);
+}
+
+// Refactor (iter344/cluster-001):
+//   Old pattern: The synchronous Chat Completions response implied request-local completion from direct provider execution.
+//   New principle: The create response exposes only the accepted actor dispatch receipt; terminal completion is observed asynchronously.
+public sealed record ChatCompletionsCreateAcceptedCommandResult(
+    NormalizedChatCompletionsCommand Normalized,
+    long CreatedAt,
+    LlmSessionRegistrationResult Session,
+    DispatchAdmission Admission);
+
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: /v1/responses endpoints owned command orchestration and called many lower-level collaborators directly.
 //   New principle: Host depends on one typed Application command facade for create/cancel/stream operations.
@@ -278,12 +399,12 @@ public interface IResponsesCommandFacade
 {
     Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default);
 
     Task<ResponsesCancelCommandResult> CancelAsync(
         string responseId,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default);
 
     Task<ResponsesStreamCommandResult> StreamAsync(
@@ -299,11 +420,26 @@ public interface IMessagesCommandFacade
 {
     Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default);
 
     Task<ResponsesStreamCommandResult> StreamAsync(
         MessagesCreateCommandPlan plan,
         Func<string, CancellationToken, ValueTask> onTextDelta,
+        CancellationToken ct = default);
+}
+
+// Refactor (iter344/cluster-001):
+//   Old pattern: /v1/chat/completions endpoint injected route/session/tool/provider collaborators and executed the LLM loop directly.
+//   New principle: Host depends on one Chat Completions Application facade that owns the command lifecycle and actor dispatch.
+public interface IChatCompletionsCommandFacade
+{
+    Task<ChatCompletionsCreateCommandResult> CreateAsync(
+        ChatCompletionsCommandRequest request,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
+        CancellationToken ct = default);
+
+    Task<ResponsesStreamCommandResult> StreamAsync(
+        ChatCompletionsCreateCommandPlan plan,
         CancellationToken ct = default);
 }

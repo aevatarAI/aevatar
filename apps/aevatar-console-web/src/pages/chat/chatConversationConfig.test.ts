@@ -6,9 +6,9 @@ import {
 
 const llmSettings = {
   savedRoute: USER_LLM_ROUTE_GATEWAY,
-  savedRouteLabel: "NyxID Gateway",
+  savedRouteLabel: "Company LLM Gateway",
   effectiveRoute: USER_LLM_ROUTE_GATEWAY,
-  effectiveRouteLabel: "NyxID Gateway",
+  effectiveRouteLabel: "Company LLM Gateway",
   routeFallbackActive: false,
   fallbackReason: null,
   catalogStatus: "ready",
@@ -22,7 +22,7 @@ const llmSettings = {
   routeOptions: [
     {
       routeValue: USER_LLM_ROUTE_GATEWAY,
-      label: "NyxID Gateway",
+      label: "Company LLM Gateway",
       source: "gateway_provider",
       status: "ready",
       allowed: true,
@@ -68,9 +68,40 @@ const llmSettings = {
 describe("buildConversationRouteOptions", () => {
   it("uses backend route options without deriving routes from provider slugs", () => {
     expect(buildConversationRouteOptions(llmSettings).map((option) => option.label)).toEqual([
-      "NyxID Gateway",
+      "Company LLM Gateway",
       "Anthropic Team Service",
     ]);
+  });
+
+  it("uses a generic gateway label when backend sends a blank gateway label", () => {
+    expect(
+      buildConversationRouteOptions({
+        ...llmSettings,
+        routeOptions: [
+          {
+            ...llmSettings.routeOptions[0],
+            label: " ",
+          },
+        ],
+      }).map((option) => option.label)
+    ).toEqual(["Gateway"]);
+  });
+
+  it("does not add saved global or conversation routes when backend omits them", () => {
+    const options = buildConversationRouteOptions({
+      ...llmSettings,
+      routeOptions: [llmSettings.routeOptions[0]],
+    });
+
+    expect(options).toEqual([
+      {
+        label: "Company LLM Gateway",
+        value: USER_LLM_ROUTE_GATEWAY,
+      },
+    ]);
+    expect(options.map((option) => option.value)).not.toContain(
+      "/api/v1/proxy/s/retired-team"
+    );
   });
 });
 
@@ -89,6 +120,19 @@ describe("buildConversationModelGroups", () => {
       buildConversationModelGroups({
         effectiveRoute: "/api/v1/proxy/s/missing",
         settings: llmSettings,
+      })
+    ).toEqual([]);
+  });
+
+  it("does not emit a current group from selected or default models outside backend groups", () => {
+    expect(
+      buildConversationModelGroups({
+        effectiveRoute: USER_LLM_ROUTE_GATEWAY,
+        settings: {
+          ...llmSettings,
+          defaultModel: "retired-default-model",
+          modelGroupsByRoute: [],
+        },
       })
     ).toEqual([]);
   });

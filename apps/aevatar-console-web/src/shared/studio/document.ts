@@ -89,8 +89,72 @@ const DEFAULT_PARAMETERS_BY_STEP_TYPE: Record<string, Record<string, unknown>> =
   workflow_yaml_validate: {},
 };
 
+const LLM_CALL_STEP_TYPE = 'llm_call';
+const LLM_PROMPT_PARAMETER = 'prompt';
+const LLM_PROMPT_PREFIX_PARAMETER = 'prompt_prefix';
+
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function normalizeStepType(value: unknown): string {
+  return normalizeString(value).toLowerCase();
+}
+
+export function resolveStepParameterName(
+  stepType: string,
+  parameterName: string,
+): string {
+  const normalizedParameterName = normalizeString(parameterName);
+  if (
+    normalizeStepType(stepType) === LLM_CALL_STEP_TYPE &&
+    normalizedParameterName.toLowerCase() === LLM_PROMPT_PARAMETER
+  ) {
+    return LLM_PROMPT_PREFIX_PARAMETER;
+  }
+
+  return normalizedParameterName;
+}
+
+export function readStepParameterValue(
+  parameters: Record<string, unknown> | null | undefined,
+  stepType: string,
+  parameterName: string,
+): unknown {
+  const resolvedParameterName = resolveStepParameterName(stepType, parameterName);
+  const normalizedParameters =
+    parameters && typeof parameters === 'object' ? parameters : {};
+
+  if (
+    normalizeStepType(stepType) === LLM_CALL_STEP_TYPE &&
+    resolvedParameterName === LLM_PROMPT_PREFIX_PARAMETER
+  ) {
+    return (
+      normalizedParameters[LLM_PROMPT_PREFIX_PARAMETER] ??
+      normalizedParameters[LLM_PROMPT_PARAMETER]
+    );
+  }
+
+  return normalizedParameters[resolvedParameterName];
+}
+
+export function normalizeStepParametersForType(
+  stepType: string,
+  parameters: Record<string, unknown>,
+): Record<string, unknown> {
+  if (normalizeStepType(stepType) !== LLM_CALL_STEP_TYPE) {
+    return parameters;
+  }
+
+  const nextParameters = { ...parameters };
+  if (
+    nextParameters[LLM_PROMPT_PREFIX_PARAMETER] === undefined &&
+    nextParameters[LLM_PROMPT_PARAMETER] !== undefined
+  ) {
+    nextParameters[LLM_PROMPT_PREFIX_PARAMETER] = nextParameters[LLM_PROMPT_PARAMETER];
+  }
+  delete nextParameters[LLM_PROMPT_PARAMETER];
+  return nextParameters;
 }
 
 function cloneRecord<T>(value: T): T {
@@ -279,7 +343,10 @@ export function applyStepInspectorDraft(
   const nextTargetRole = normalizeString(draft.targetRole);
   const nextStepId = normalizeString(draft.next);
   const nextBranches = parseInspectorBranches(draft.branchesText);
-  const nextParameters = parseInspectorParameters(draft.parametersText);
+  const nextParameters = normalizeStepParametersForType(
+    nextType,
+    parseInspectorParameters(draft.parametersText),
+  );
 
   const steps = Array.isArray(document.steps) ? document.steps : [];
   const nextSteps = steps.map((entry) => {

@@ -99,7 +99,7 @@ public sealed class ChannelUserConfigScopeTests
     [Fact]
     public void FromMetadata_BuildsSameScopeAsInboundEvent()
     {
-        // The tool path receives the same fields via AgentToolRequestContext.CurrentMetadata
+        // The tool path receives the same fields via AgentToolRequestContext.Current
         // rather than a ChannelInboundEvent. Both code paths must agree on the scope key
         // — otherwise the form prefill would read one actor and the preference save
         // would write to another.

@@ -7,6 +7,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Presentation.AGUI;
@@ -82,24 +83,31 @@ public sealed class AevatarInvocationDispatcher
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
     }
 
-    public async Task<string> InvokeGAgentAsync(string argumentsJson, CancellationToken ct = default)
+    public async Task<string> InvokeGAgentAsync(string argumentsJson, CancellationToken ct = default) =>
+        (await InvokeGAgentForChatRunAsync(null, argumentsJson, ct)).ToolExecutionResultJson;
+
+    // Refactor (iter290/cluster001): Old pattern: GAgent dispatch control was encoded only in ResultJson. New principle: GAgent dispatch returns typed run, target, wait, and stream fields for chat-run observation.
+    public async Task<ChatRunToolCompletionRequest> InvokeGAgentForChatRunAsync(
+        ChatRunToolCompletionRequest? chatRunRequest,
+        string argumentsJson,
+        CancellationToken ct = default)
     {
         var parsed = ProtoToolArguments.Parse<InvokeGAgentToolRequest>(argumentsJson);
         if (parsed.Error != null)
-            return AevatarInvocationJson.Error(parsed.Error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(parsed.Error), parsed.Error);
 
         var request = parsed.Value!;
         var error = ProtoToolArguments.RequirePayload(request.Payload, "payload");
         if (error != null)
-            return AevatarInvocationJson.Error(error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
         var scope = ResolveCallerScope();
         if (scope.Error != null)
-            return AevatarInvocationJson.Error(scope.Error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
         var target = await ResolveGAgentActorIdAsync(request, scope.Value!, ct);
         if (target.Error != null)
-            return AevatarInvocationJson.Error(target.Error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(target.Error), target.Error);
 
         var wait = ResolveWait(request.Wait);
         var commandId = ResolveCommandId();
@@ -122,12 +130,13 @@ public sealed class AevatarInvocationDispatcher
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return AevatarInvocationJson.Error(Error(
+            var dispatchError = Error(
                 "dispatch_failed",
-                $"GAgent dispatch failed: {ex.Message}"));
+                $"GAgent dispatch failed: {ex.Message}");
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(dispatchError), dispatchError);
         }
 
-        return AevatarInvocationJson.Serialize(new InvocationToolResult
+        return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
             RunId = commandId,
             Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
@@ -138,25 +147,32 @@ public sealed class AevatarInvocationDispatcher
             CommandId = commandId,
             CorrelationId = commandId,
             Wait = wait,
-        });
+        }, scope.Value!.ScopeId);
     }
 
-    public async Task<string> InvokeTeamAsync(string argumentsJson, CancellationToken ct = default)
+    public async Task<string> InvokeTeamAsync(string argumentsJson, CancellationToken ct = default) =>
+        (await InvokeTeamForChatRunAsync(null, argumentsJson, ct)).ToolExecutionResultJson;
+
+    // Refactor (iter290/cluster001): Old pattern: team dispatch control was encoded only in ResultJson. New principle: team dispatch returns typed run, service, endpoint, wait, and completion fields for chat-run observation.
+    public async Task<ChatRunToolCompletionRequest> InvokeTeamForChatRunAsync(
+        ChatRunToolCompletionRequest? chatRunRequest,
+        string argumentsJson,
+        CancellationToken ct = default)
     {
         var parsed = ProtoToolArguments.Parse<InvokeTeamToolRequest>(argumentsJson);
         if (parsed.Error != null)
-            return AevatarInvocationJson.Error(parsed.Error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(parsed.Error), parsed.Error);
 
         var request = parsed.Value!;
         var error = ProtoToolArguments.Require(request.TeamId, "team_id", "team_id is required.") ??
                     ProtoToolArguments.Require(request.EndpointId, "endpoint_id", "endpoint_id is required.") ??
                     ProtoToolArguments.RequirePayload(request.Payload, "payload");
         if (error != null)
-            return AevatarInvocationJson.Error(error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
         var scope = ResolveCallerScope();
         if (scope.Error != null)
-            return AevatarInvocationJson.Error(scope.Error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
         var wait = ResolveWait(request.Wait);
         try
@@ -165,67 +181,85 @@ public sealed class AevatarInvocationDispatcher
                 scope.Value!.ScopeId,
                 request.TeamId.Trim(),
                 ct);
-            var invocation = BuildStaticInvocationRequest(resolution, request, scope.Value!);
-            return wait == InvocationWaitMode.Complete
-                ? await InvokeTeamToCompletionAsync(invocation, resolution, request.EndpointId, wait, ct)
-                : await InvokeTeamToAcceptanceAsync(invocation, resolution, request.EndpointId, wait, ct);
+            var invocation = BuildStaticInvocationRequest(resolution, request);
+            // Refactor (v1/issue1470-first): InvokeTeam wait=complete must return the dispatch receipt only;
+            // terminal completion is observed through the service-run readmodel instead of folding live AGUI frames.
+            return await InvokeTeamToAcceptanceAsync(chatRunRequest, invocation, resolution, request.EndpointId, wait, ct);
         }
         catch (TeamEntryMemberResolutionException ex)
         {
-            return AevatarInvocationJson.Error(Error(ex.Code, ex.Message));
+            var resolutionError = Error(ex.Code, ex.Message);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(resolutionError), resolutionError);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return AevatarInvocationJson.Error(Error(
+            var dispatchError = Error(
                 "dispatch_failed",
-                $"Team invocation failed: {ex.Message}"));
+                $"Team invocation failed: {ex.Message}");
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(dispatchError), dispatchError);
         }
     }
 
-    public async Task<string> StartWorkflowAsync(string argumentsJson, CancellationToken ct = default)
+    public async Task<string> StartWorkflowAsync(string argumentsJson, CancellationToken ct = default) =>
+        (await StartWorkflowForChatRunAsync(null, argumentsJson, ct)).ToolExecutionResultJson;
+
+    // Refactor (iter290/cluster001): Old pattern: workflow dispatch control was encoded only in ResultJson. New principle: workflow dispatch returns typed actor, run, wait, and completion fields for chat-run observation.
+    public async Task<ChatRunToolCompletionRequest> StartWorkflowForChatRunAsync(
+        ChatRunToolCompletionRequest? chatRunRequest,
+        string argumentsJson,
+        CancellationToken ct = default)
     {
         var parsed = ProtoToolArguments.Parse<StartWorkflowToolRequest>(argumentsJson);
         if (parsed.Error != null)
-            return AevatarInvocationJson.Error(parsed.Error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(parsed.Error), parsed.Error);
 
         var request = parsed.Value!;
         var wait = ResolveWait(request.Wait);
         var error = ProtoToolArguments.Require(request.WorkflowId, "workflow_id", "workflow_id is required.") ??
                     ProtoToolArguments.RequirePayload(request.Inputs, "inputs");
         if (error != null)
-            return AevatarInvocationJson.Error(error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
         var scope = ResolveCallerScope();
         if (scope.Error != null)
-            return AevatarInvocationJson.Error(scope.Error);
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
-        var metadata = BuildLegacyMetadata(scope.Value!, request.Inputs.Headers);
-        metadata[WorkflowRunCommandMetadataKeys.ScopeId] = scope.Value!.ScopeId;
+        // Refactor (iter1353/cluster-001): Old pattern: workflow dispatch stamped trusted caller/control facts into Metadata.
+        // New principle: Metadata carries only filtered payload headers; ScopeId, ToolContext, and LlmControl carry trusted facts.
+        var metadata = BuildPayloadHeaders(request.Inputs.Headers);
+        var workflowYamls = request.WorkflowYamls.Count == 0
+            ? null
+            : request.WorkflowYamls
+                .Where(static item => !string.IsNullOrWhiteSpace(item))
+                .Select(static item => item.Trim())
+                .ToArray();
+        var workflowName = request.WorkflowId.Trim();
+        var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
+        var source = workflowYamls is { Length: > 0 }
+            ? WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId)
+            : string.IsNullOrWhiteSpace(actorId)
+                ? WorkflowChatSource.CatalogWorkflow(workflowName)
+                : WorkflowChatSource.DefinitionActor(actorId, workflowName);
         var command = new WorkflowChatRunRequest(
             Prompt: request.Inputs.Prompt,
-            WorkflowName: request.WorkflowId.Trim(),
-            ActorId: string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim(),
+            Source: source,
             SessionId: ResolveSessionId(),
             InputParts: ToWorkflowInputParts(request.Inputs),
-            WorkflowYamls: request.WorkflowYamls.Count == 0
-                ? null
-                : request.WorkflowYamls
-                    .Where(static item => !string.IsNullOrWhiteSpace(item))
-                    .Select(static item => item.Trim())
-                    .ToArray(),
             Metadata: metadata,
-            ScopeId: scope.Value.ScopeId);
+            ScopeId: scope.Value!.ScopeId,
+            LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current));
 
         var result = await _workflowDispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded || result.Receipt == null)
         {
-            return AevatarInvocationJson.Error(Error(
+            var startError = Error(
                 result.Error.ToString(),
-                $"Workflow start failed: {result.Error}"));
+                $"Workflow start failed: {result.Error}");
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(startError), startError);
         }
 
         var receipt = result.Receipt;
-        return AevatarInvocationJson.Serialize(new InvocationToolResult
+        return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
             RunId = receipt.CommandId,
             Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
@@ -236,7 +270,7 @@ public sealed class AevatarInvocationDispatcher
             CommandId = receipt.CommandId,
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
-        });
+        }, scope.Value!.ScopeId);
     }
 
     public async Task<string> ObserveRunAsync(string argumentsJson, CancellationToken ct = default)
@@ -273,7 +307,7 @@ public sealed class AevatarInvocationDispatcher
             if (terminal != null)
                 return AevatarInvocationJson.Serialize(MapTerminal(terminal, runId));
 
-            var workflow = await _workflowQueryService.GetActorSnapshotAsync(actorId!, ct);
+            var workflow = await _workflowQueryService.GetWorkflowActorCurrentStateAsync(actorId!, ct);
             if (workflow != null &&
                 (string.IsNullOrWhiteSpace(workflow.LastCommandId) ||
                  string.Equals(workflow.LastCommandId, runId, StringComparison.Ordinal)))
@@ -323,7 +357,8 @@ public sealed class AevatarInvocationDispatcher
         };
     }
 
-    private async Task<string> InvokeTeamToAcceptanceAsync(
+    private async Task<ChatRunToolCompletionRequest> InvokeTeamToAcceptanceAsync(
+        ChatRunToolCompletionRequest? chatRunRequest,
         StaticGAgentStreamInvocationRequest invocation,
         TeamEntryMemberResolution resolution,
         string endpointId,
@@ -350,73 +385,38 @@ public sealed class AevatarInvocationDispatcher
         if (acceptedSource.Task.Status == TaskStatus.RanToCompletion)
         {
             var signaledAcceptedReceipt = await acceptedSource.Task.WaitAsync(ct);
-            return AevatarInvocationJson.Serialize(BuildTeamAcceptedResult(
+            return ToChatRunRequest(chatRunRequest, BuildTeamAcceptedResult(
                 resolution,
                 endpointId,
                 signaledAcceptedReceipt,
-                wait));
+                wait), resolution.ScopeId);
         }
 
         var result = await invocationTask;
         if (acceptedSource.Task.Status == TaskStatus.RanToCompletion)
         {
             var completedAcceptedReceipt = await acceptedSource.Task.WaitAsync(ct);
-            return AevatarInvocationJson.Serialize(BuildTeamAcceptedResult(
+            return ToChatRunRequest(chatRunRequest, BuildTeamAcceptedResult(
                 resolution,
                 endpointId,
                 completedAcceptedReceipt,
-                wait));
+                wait), resolution.ScopeId);
         }
 
         if (!result.Succeeded || result.Accepted == null)
         {
-            return AevatarInvocationJson.Error(Error(
+            var startError = Error(
                 result.StartError.ToString(),
-                $"Team invocation was not accepted: {result.StartError}"));
+                $"Team invocation was not accepted: {result.StartError}");
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(startError), startError);
         }
 
         var resultAcceptedReceipt = result.Accepted;
-        return AevatarInvocationJson.Serialize(BuildTeamAcceptedResult(
+        return ToChatRunRequest(chatRunRequest, BuildTeamAcceptedResult(
             resolution,
             endpointId,
             resultAcceptedReceipt,
-            wait));
-    }
-
-    private async Task<string> InvokeTeamToCompletionAsync(
-        StaticGAgentStreamInvocationRequest invocation,
-        TeamEntryMemberResolution resolution,
-        string endpointId,
-        InvocationWaitMode wait,
-        CancellationToken ct)
-    {
-        var frames = new List<AGUIEvent>();
-        var result = await _teamInvocationPort.InvokeAsync(
-            invocation,
-            (frame, _) =>
-            {
-                frames.Add(frame.Clone());
-                return ValueTask.CompletedTask;
-            },
-            null,
-            ct);
-
-        if (!result.Succeeded || result.Accepted == null)
-        {
-            return AevatarInvocationJson.Error(Error(
-                result.StartError.ToString(),
-                $"Team invocation was not accepted: {result.StartError}"));
-        }
-
-        var accepted = BuildTeamAcceptedResult(resolution, endpointId, result.Accepted, wait);
-        accepted.Status = result.CompletionObserved ? result.CompletionStatus.ToString() : "accepted";
-        accepted.ResultJson = AevatarInvocationJson.ToJson(new
-        {
-            completion_status = result.CompletionStatus.ToString(),
-            completion_observed = result.CompletionObserved,
-            events = frames.Select(static frame => AevatarInvocationToolSchemas.ParseObject(ProtoJsonFormatter.Format(frame))).ToArray(),
-        });
-        return AevatarInvocationJson.Serialize(accepted);
+            wait), resolution.ScopeId);
     }
 
     private InvocationToolResult BuildTeamAcceptedResult(
@@ -429,7 +429,7 @@ public sealed class AevatarInvocationDispatcher
         return new InvocationToolResult
         {
             RunId = runId,
-            Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
+            Status = wait == InvocationWaitMode.Stream ? "streaming" : "accepted",
             StreamTopic = wait == InvocationWaitMode.Stream
                 ? AevatarInvocationStreamTopics.ForServiceRun(resolution.ScopeId, resolution.PublishedServiceId, runId)
                 : string.Empty,
@@ -440,6 +440,79 @@ public sealed class AevatarInvocationDispatcher
             EndpointId = endpointId.Trim(),
             Wait = wait,
         };
+    }
+
+    // Refactor (iter290/cluster001): Old pattern: dispatcher-to-chat-run conversion left control facts inside boundary JSON. New principle: conversion mirrors stable control facts into typed completion fields while preserving boundary JSON.
+    private static ChatRunToolCompletionRequest ToChatRunRequest(
+        ChatRunToolCompletionRequest? request,
+        InvocationToolResult result,
+        string scopeId)
+    {
+        var boundaryJson = AevatarInvocationJson.Serialize(result);
+        var waitMode = ToChatRunWaitMode(result.Wait);
+        var completionObserved = !string.IsNullOrWhiteSpace(result.ResultJson) &&
+                                 IsTerminalDispatchStatus(result.Status);
+        return ToBaseChatRunRequest(request) with
+        {
+            ToolExecutionResultJson = boundaryJson,
+            RunId = result.RunId ?? string.Empty,
+            Status = result.Status ?? string.Empty,
+            StreamTopic = result.StreamTopic ?? string.Empty,
+            ActorId = result.ActorId ?? string.Empty,
+            ServiceId = result.ServiceId ?? string.Empty,
+            EndpointId = result.EndpointId ?? string.Empty,
+            ScopeId = scopeId ?? string.Empty,
+            WaitMode = waitMode,
+            CompletionResultJson = result.ResultJson ?? string.Empty,
+            CompletionObserved = completionObserved,
+            ErrorCode = result.Error?.Code ?? string.Empty,
+        };
+    }
+
+    private static ChatRunToolCompletionRequest ToChatRunRequest(
+        ChatRunToolCompletionRequest? request,
+        string boundaryJson,
+        InvocationToolError error) =>
+        ToBaseChatRunRequest(request) with
+        {
+            ToolExecutionResultJson = boundaryJson,
+            ErrorCode = error.Code ?? string.Empty,
+        };
+
+    private static ChatRunToolCompletionRequest ToBaseChatRunRequest(ChatRunToolCompletionRequest? request) =>
+        request ?? new ChatRunToolCompletionRequest(
+            ResponseId: string.Empty,
+            ModelName: null,
+            Messages: [],
+            ToolCall: new ToolCall
+            {
+                Id = string.Empty,
+                Name = string.Empty,
+                ArgumentsJson = string.Empty,
+            },
+            ArgumentsJson: string.Empty,
+            ToolExecutionResultJson: string.Empty,
+            LlmRound: 0);
+
+    private static ChatRunSubRunWaitMode ToChatRunWaitMode(InvocationWaitMode wait) =>
+        wait switch
+        {
+            InvocationWaitMode.Ack => ChatRunSubRunWaitMode.Ack,
+            InvocationWaitMode.Complete => ChatRunSubRunWaitMode.Complete,
+            InvocationWaitMode.Stream => ChatRunSubRunWaitMode.Stream,
+            _ => ChatRunSubRunWaitMode.Unspecified,
+        };
+
+    private static bool IsTerminalDispatchStatus(string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+            return false;
+
+        return !status.Equals("accepted", StringComparison.OrdinalIgnoreCase) &&
+               !status.Equals("streaming", StringComparison.OrdinalIgnoreCase) &&
+               !status.Equals("running", StringComparison.OrdinalIgnoreCase) &&
+               !status.Equals("in_progress", StringComparison.OrdinalIgnoreCase) &&
+               !status.Equals("unknown", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task ObserveDetachedInvocationAsync(Task invocationTask)
@@ -460,10 +533,11 @@ public sealed class AevatarInvocationDispatcher
 
     private StaticGAgentStreamInvocationRequest BuildStaticInvocationRequest(
         TeamEntryMemberResolution resolution,
-        InvokeTeamToolRequest request,
-        InvocationCallerScope scope)
+        InvokeTeamToolRequest request)
     {
-        var headers = BuildLegacyMetadata(scope, request.Payload.Headers);
+        // Refactor (issue1495/first-slice): Old pattern: static team dispatch accepted trusted caller/control facts through legacy Headers.
+        // New principle: static team Headers carry only filtered payload headers; service identity and caller fields remain the admission boundary.
+        var headers = BuildPayloadHeaders(request.Payload.Headers);
         var identity = new ServiceIdentity
         {
             TenantId = resolution.ScopeId,
@@ -482,7 +556,9 @@ public sealed class AevatarInvocationDispatcher
                 TenantId = resolution.ScopeId,
                 AppId = ScopeServiceIdentityDefaults.ServiceAppId,
                 ServiceKey = string.Empty,
-            });
+            },
+            ToolContext: AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty,
+            LlmControl: ToLlmControlContext(AgentToolRequestContext.Current));
         return new StaticGAgentStreamInvocationRequest(identity, request.EndpointId.Trim(), input);
     }
 
@@ -640,7 +716,7 @@ public sealed class AevatarInvocationDispatcher
             });
         }
 
-        var snapshot = await _workflowQueryService.GetActorSnapshotAsync(query.ActorId.Trim(), ct);
+        var snapshot = await _workflowQueryService.GetWorkflowActorCurrentStateAsync(query.ActorId.Trim(), ct);
         return AevatarInvocationJson.Serialize(new QueryReadModelResult
         {
             ReadmodelName = AevatarInvocationReadModels.WorkflowActorCurrentState,
@@ -745,81 +821,45 @@ public sealed class AevatarInvocationDispatcher
         string commandId,
         InvocationCallerScope scope)
     {
-        var metadata = BuildLegacyMetadata(scope, payload.Headers);
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        var headers = BuildPayloadHeaders(payload.Headers);
         var request = new ChatRequestEvent
         {
             Prompt = payload.Prompt,
             SessionId = commandId,
             ScopeId = scope.ScopeId,
             ToolContext = ToPayload(AgentToolRequestContext.Current),
+            LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
         };
-        request.Headers[LLMRequestMetadataKeys.RequestId] = commandId;
-        AppendMetadata(request.Headers, metadata);
-        AppendMetadata(request.Metadata, metadata);
+        AppendMetadata(request.Headers, headers);
+        AppendMetadata(request.Metadata, headers);
         request.InputParts.Add(ToChatInputParts(payload));
         return request;
     }
 
-    private static Dictionary<string, string> BuildLegacyMetadata(
-        InvocationCallerScope scope,
-        Google.Protobuf.Collections.MapField<string, string>? headers = null)
+    private static Dictionary<string, string> BuildPayloadHeaders(
+        Google.Protobuf.Collections.MapField<string, string>? headers)
     {
-        var metadata = AgentToolRequestContext.Current?.ToLegacyMetadata() is { } current
-            ? new Dictionary<string, string>(current, StringComparer.Ordinal)
-            : new Dictionary<string, string>(StringComparer.Ordinal);
-        RemoveProtectedCallerMetadata(metadata);
-        if (headers != null)
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        var filteredHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (headers == null)
+            return filteredHeaders;
+
+        foreach (var (key, value) in headers)
         {
-            foreach (var (key, value) in headers)
-            {
-                var normalizedKey = Normalize(key);
-                if (normalizedKey != null && !IsProtectedCallerMetadataKey(normalizedKey))
-                    metadata[normalizedKey] = value ?? string.Empty;
-            }
+            var normalizedKey = Normalize(key);
+            if (normalizedKey != null && !IsProtectedCallerMetadataKey(normalizedKey))
+                filteredHeaders[normalizedKey] = value ?? string.Empty;
         }
 
-        StampTrustedCallerMetadata(metadata, scope);
-        return metadata;
-    }
-
-    private static void RemoveProtectedCallerMetadata(IDictionary<string, string> metadata)
-    {
-        foreach (var key in ProtectedCallerMetadataKeys)
-            metadata.Remove(key);
+        return filteredHeaders;
     }
 
     private static bool IsProtectedCallerMetadataKey(string key) =>
         ProtectedCallerMetadataKeys.Any(protectedKey =>
             string.Equals(protectedKey, key, StringComparison.Ordinal));
-
-    private static void StampTrustedCallerMetadata(
-        IDictionary<string, string> metadata,
-        InvocationCallerScope scope)
-    {
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.ScopeId, scope.ScopeId);
-        SetTrustedMetadata(metadata, "scope_id", scope.ScopeId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.OwnerSubject, scope.OwnerSubject);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.ResponseId, scope.ResponseId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.RequestId, AgentToolRequestContext.RequestId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.CallId, AgentToolRequestContext.CallId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.NyxIdAccessToken, AgentToolRequestContext.NyxIdAccessToken);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.NyxIdOrgToken, AgentToolRequestContext.NyxIdOrgToken);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.SenderNyxIdAccessToken, AgentToolRequestContext.SenderNyxIdAccessToken);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.SenderBindingId, AgentToolRequestContext.SenderBindingId);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.ModelOverride, AgentToolRequestContext.ModelOverride);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.NyxIdRoutePreference, AgentToolRequestContext.NyxIdRoutePreference);
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.MaxToolRoundsOverride, AgentToolRequestContext.MaxToolRoundsOverride?.ToString());
-        SetTrustedMetadata(metadata, LLMRequestMetadataKeys.ConnectedServicesContext, AgentToolRequestContext.ConnectedServicesContext);
-    }
-
-    private static void SetTrustedMetadata(
-        IDictionary<string, string> metadata,
-        string key,
-        string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-            metadata[key] = value.Trim();
-    }
 
     private static void AppendMetadata(
         Google.Protobuf.Collections.MapField<string, string> destination,
@@ -834,6 +874,8 @@ public sealed class AevatarInvocationDispatcher
 
     private static AgentToolExecutionContextPayload ToPayload(AgentToolExecutionContext? context)
     {
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         var payload = new AgentToolExecutionContextPayload
         {
@@ -882,6 +924,37 @@ public sealed class AevatarInvocationDispatcher
         foreach (var (key, value) in context.ExternalMetadata)
             payload.ExternalMetadata[key] = value;
         return payload;
+    }
+
+    private static LLMControlContextPayload ToLlmControlPayload(AgentToolExecutionContext? context)
+    {
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        return ToLlmControlContext(context).ToPayload();
+    }
+
+    private static LLMControlContext ToLlmControlContext(AgentToolExecutionContext? context)
+    {
+        // Refactor (iter1353/cluster-001): Old pattern: stamp trusted caller/control to Headers/Metadata.
+        // New principle: typed ScopeId/ToolContext/LlmControl are authority.
+        context ??= AgentToolExecutionContext.Empty;
+        return new LLMControlContext(
+            context.Credentials.NyxIdAccessToken,
+            context.Credentials.NyxIdOrgToken,
+            context.Credentials.SenderNyxIdAccessToken,
+            context.Routing.ModelOverride,
+            context.Routing.NyxIdRoutePreference,
+            context.Routing.MaxToolRoundsOverride,
+            context.Routing.UserMemoryPrompt);
+    }
+
+    private static WorkflowLlmControl ToWorkflowLlmControl(AgentToolExecutionContext? context)
+    {
+        context ??= AgentToolExecutionContext.Empty;
+        return new WorkflowLlmControl(
+            context.Routing.ModelOverride,
+            context.Routing.MaxToolRoundsOverride,
+            context.Routing.UserMemoryPrompt);
     }
 
     private CallerScopeResolution ResolveCallerScope(bool requireOwner = true)

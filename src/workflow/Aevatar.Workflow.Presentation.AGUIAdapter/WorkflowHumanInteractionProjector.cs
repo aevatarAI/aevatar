@@ -32,12 +32,15 @@ public sealed class WorkflowHumanInteractionProjector
             return;
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
+        if (evt.SuspensionType == "tool_approval")
+            return;
+
         if (string.IsNullOrWhiteSpace(evt.DeliveryTargetId))
             return;
 
-        // Refactor (iter79/cluster-079-secure-input-suspension-metadata-bag):
-        //   Old pattern: WorkflowSuspendedEvent.Metadata string bag for secure/input_mode/redacted_output/variable
-        //   New principle (delete framing): typed bool secure + string redacted_output + reuse variable_name; Metadata open extension only; reserved keys read-only fallback
+        // Refactor (iter163/cluster-003-workflow-suspension-legacy-metadata):
+        //   Old pattern: WorkflowSuspendedEvent.Metadata fallback for variable/secure/redacted_output reserved keys.
+        //   New principle: typed suspension fields are the single source; Metadata is open extension data only.
         var annotations = BuildAnnotations(evt);
 
         var request = new HumanInteractionRequest
@@ -71,9 +74,9 @@ public sealed class WorkflowHumanInteractionProjector
     private static Dictionary<string, string> BuildAnnotations(WorkflowSuspendedEvent evt)
     {
         var annotations = WorkflowSuspendedSecureInputMetadata.FilterOpenExtensionMetadata(evt.Metadata);
-        var variableName = WorkflowSuspendedSecureInputMetadata.ResolveVariableName(evt.VariableName, evt.Metadata);
-        var secure = WorkflowSuspendedSecureInputMetadata.ResolveSecure(evt.Secure, evt.Metadata);
-        var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveRedactedOutput(evt.RedactedOutput, evt.Metadata);
+        var variableName = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.VariableName);
+        var secure = evt.Secure;
+        var redactedOutput = WorkflowSuspendedSecureInputMetadata.ResolveTypedString(evt.RedactedOutput);
 
         if (!string.IsNullOrWhiteSpace(variableName))
             annotations["variable"] = variableName;

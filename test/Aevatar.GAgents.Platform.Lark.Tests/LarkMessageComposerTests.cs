@@ -94,6 +94,17 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void BuildCloseStreamingSettingsJson_ShouldUseNestedCardKitSettingsShape()
+    {
+        var json = LarkStreamingCardShell.BuildCloseStreamingSettingsJson();
+
+        json.ShouldBe("""{"config":{"streaming_mode":false}}""");
+        using var document = JsonDocument.Parse(json);
+        document.RootElement.TryGetProperty("streaming_mode", out _).ShouldBeFalse();
+        document.RootElement.GetProperty("config").GetProperty("streaming_mode").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
     public void Compose_WhenTextExceedsConfiguredLimit_AppendsTruncationMarker()
     {
         var payload = CreateComposer().Compose(
@@ -182,7 +193,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         {
             BlockId = "agents_list",
             Title = "Your Agents (1)",
-            Text = "1. `daily` · running",
+            Text = "1. `summary` · running",
         });
         intent.Actions.Add(new ActionElement
         {
@@ -214,7 +225,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var cardMarkdown = bodyElements[0].GetProperty("content").GetString();
         cardMarkdown.ShouldNotBeNull();
         cardMarkdown.ShouldNotContain("**Your Agents (1)**");
-        cardMarkdown.ShouldContain("daily");
+        cardMarkdown.ShouldContain("summary");
     }
 
     [Fact]

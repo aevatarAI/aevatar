@@ -1,14 +1,13 @@
-using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -16,21 +15,49 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class MessagesCommandFacadeTests
 {
     [Fact]
-    public async Task CreateAsync_ShouldRegisterSession_AndExecuteAnthropicDefaultRoute()
+    public async Task CreateAsync_ShouldRegisterSession_AndReturnAcceptedDispatchReceipt()
     {
-        var completion = new RecordingCompletionService(new ResponsesCompletionResult("hello", null, []));
         var sessions = new RecordingSessionPort();
-        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
-        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
+        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
-        result.Completed!.Completion.OutputText.Should().Be("hello");
+        result.Accepted.Should().NotBeNull();
+        result.Completed.Should().BeNull();
+        result.Accepted!.Admission.Accepted.Should().BeTrue();
         sessions.Registered.Should().ContainSingle().Which.PreviousResponseId.Should().BeEmpty();
-        sessions.RecordedCompletions.Should().ContainSingle().Which.OutputText.Should().Be("hello");
-        sessions.UpdatedStatuses.Should().BeEmpty();
-        completion.LastRequest!.Model.Should().Be("claude-sonnet");
-        completion.LastRequest.Messages.Should().ContainSingle(message => message.Role == "user" && message.Content == "hello");
+        sessions.RecordedCompletions.Should().BeEmpty();
+        var call = dispatch.Calls.Should().ContainSingle().Subject;
+        call.ActorId.Should().Be(result.Accepted.Admission.ActorId);
+        var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ResponseId.Should().Be(result.Accepted.Session.ResponseId);
+        command.RunId.Should().Be($"{result.Accepted.Session.ResponseId}:llm-run");
+        command.Model.Should().Be("claude-sonnet");
+        command.ScopeId.Should().Be("scope-1");
+        command.BearerToken.Should().Be("token");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        toolContext.Request.RequestId.Should().Be(command.ResponseId);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDispatchAccepted_ShouldNotReadCompletionReadModel()
+    {
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(sessionPort: sessions);
+
+        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), CallerScopeContext("token"));
+
+        sessions.RecordedCompletions.Should().BeEmpty();
+        result.Completed.Should().BeNull();
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
     }
 
     [Fact]
@@ -39,155 +66,115 @@ public sealed class MessagesCommandFacadeTests
         var sessions = new RecordingSessionPort();
         var facade = CreateFacade(sessionPort: sessions);
 
-        var result = await facade.CreateAsync(BuildRequest("anthropic/claude", stream: true), "token");
+        var result = await facade.CreateAsync(BuildRequest("anthropic/claude", stream: true), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         result.StreamPlan.Should().NotBeNull();
         result.Completed.Should().BeNull();
         result.StreamPlan!.LlmRequest.Model.Should().Be("claude");
+        result.StreamPlan.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
+        result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.MessageId);
+        result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
+        result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        result.StreamPlan.LlmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
         sessions.Registered.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task CreateAsync_WhenFallbackRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    public async Task StreamAsync_ShouldReturnAcceptedDispatchReceipt()
     {
-        var completion = new RecordingCompletionService(new ResponsesCompletionResult("hello", null, []));
-        var facade = CreateFacade(
-            completionService: completion,
-            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
-                ForwardToModelAction("gpt-5.4-mini"),
-                usedFallback: true));
-
-        var result = await facade.CreateAsync(BuildRequest("chrono-llm/gpt-5.4-mini"), "token");
-
-        result.Error.Should().BeNull();
-        completion.LastRequest.Should().NotBeNull();
-        completion.LastRequest!.Model.Should().Be("gpt-5.4-mini");
-        completion.LastRequest.LlmControl!.NyxIdRoutePreference.Should().Be("route-value");
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenDefaultRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
-    {
-        var completion = new RecordingCompletionService(new ResponsesCompletionResult("hello", null, []));
-        var facade = CreateFacade(
-            completionService: completion,
-            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
-                ForwardToModelAction("gpt-5.4-mini")));
-
-        var result = await facade.CreateAsync(BuildRequest("chrono-llm/gpt-5.4-mini"), "token");
-
-        result.Error.Should().BeNull();
-        completion.LastRequest.Should().NotBeNull();
-        completion.LastRequest!.Model.Should().Be("gpt-5.4-mini");
-        completion.LastRequest.LlmControl!.NyxIdRoutePreference.Should().Be("route-value");
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenRouteCarriesToolSet_ShouldAddRouteTools()
-    {
-        var completion = new RecordingCompletionService(new ResponsesCompletionResult("ok", null, []));
-        var facade = CreateFacade(
-            completionService: completion,
-            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ToolSetRouteAction("workspace.default")),
-            toolSetRegistry: new StaticToolSetRegistry([
-                new StubAgentTool("use_skill", "Use a skill"),
-                new StubAgentTool("ornn_search_skills", "Search skills"),
-            ]));
-
-        var result = await facade.CreateAsync(BuildRequest("claude-sonnet"), "token");
-
-        result.Error.Should().BeNull();
-        completion.LastRequest.Should().NotBeNull();
-        completion.LastRequest!.Tools!.Select(static tool => tool.Name)
-            .Should().Contain(["use_skill", "ornn_search_skills"]);
-    }
-
-    [Fact]
-    public async Task StreamAsync_ShouldReturnAuthenticationError_AndMarkSessionFailed()
-    {
-        var completion = new RecordingCompletionService(
-            new ResponsesCompletionResult("unused", null, []),
-            streamExceptionFactory: _ => new NyxIdAuthenticationRequiredException("test-provider"));
         var sessions = new RecordingSessionPort();
-        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
         var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
 
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            401,
-            "authentication_error",
-            "NyxID authentication required for provider 'test-provider'. Please sign in."));
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        result.Completion.Should().BeNull();
+        sessions.RecordedCompletions.Should().BeEmpty();
+        sessions.UpdatedStatuses.Should().BeEmpty();
+        var call = dispatch.Calls.Should().ContainSingle().Subject;
+        call.ActorId.Should().Be("actor-msg_stream");
+        var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ResponseId.Should().Be("msg_stream");
+        command.RunId.Should().Be("msg_stream:llm-run");
+        command.Model.Should().Be("claude-sonnet");
     }
 
     [Fact]
-    public async Task StreamAsync_ShouldReturnUpstreamError_AndMarkSessionFailed()
+    public async Task CreateAsync_WithToolPayloads_ShouldWriteTypedToolArgumentsSchemaAndChoiceHint()
     {
-        var completion = new RecordingCompletionService(
-            new ResponsesCompletionResult("unused", null, []),
-            streamExceptionFactory: _ => new NyxIdUpstreamException(
-                NyxIdUpstreamFailureKind.ServiceUnavailable,
-                503,
-                "route-a",
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(GAgentToolHintAction("member-1")),
+            toolClassificationService: new StaticResponsesToolClassificationService(
+                new ResponsesToolClassification(
+                    [
+                        new ResponsesApplicationToolDeclaration(
+                            "get_weather",
+                            "Get weather",
+                            """{"type":"object","properties":{"city":{"type":"string"}}}""",
+                            "schema-1"),
+                    ],
+                    [],
+                    [],
+                    [])));
+
+        var result = await facade.CreateAsync(
+            BuildRequest(
                 "claude-sonnet",
-                "service unavailable"));
-        var sessions = new RecordingSessionPort();
-        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+                chatMessages:
+                [
+                    new ChatMessage
+                    {
+                        Role = "assistant",
+                        ToolCalls =
+                        [
+                            new ToolCall
+                            {
+                                Id = "call-1",
+                                Name = "get_weather",
+                                ArgumentsJson = """{"city":"Paris"}""",
+                            },
+                        ],
+                    },
+                ],
+                declaredTools:
+                [
+                    new ResponsesApplicationToolDeclaration(
+                        "get_weather",
+                        "Get weather",
+                        """{"type":"object","properties":{"city":{"type":"string"}}}""",
+                        "schema-1"),
+                ]),
+            CallerScopeContext("token"));
 
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            503,
-            "serviceunavailable",
-            "service unavailable"));
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Messages.Should().ContainSingle().Which.ToolCalls.Should().ContainSingle()
+            .Which.Arguments.Fields["city"].StringValue.Should().Be("Paris");
+        command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
+        var declaration = command.ToolSelection.ForwardedTools.Should().ContainSingle().Subject;
+        declaration.Parameters.Fields["type"].StringValue.Should().Be("object");
+        declaration.Parameters.Fields["properties"].StructValue.Fields["city"].StructValue.Fields["type"]
+            .StringValue.Should().Be("string");
     }
 
-    [Fact]
-    public async Task StreamAsync_ShouldReturnClientClosedRequest_AndMarkSessionCancelled()
-    {
-        var completion = new RecordingCompletionService(
-            new ResponsesCompletionResult("unused", null, []),
-            streamExceptionFactory: ct => new OperationCanceledException(ct));
-        var sessions = new RecordingSessionPort();
-        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
-        using var cts = new CancellationTokenSource();
-        await cts.CancelAsync();
-
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask, cts.Token);
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            499,
-            "client_closed_request",
-            "Client closed request."));
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
-    }
-
-    [Fact]
-    public async Task StreamAsync_ShouldReturnApiError_AndMarkSessionFailed()
-    {
-        var completion = new RecordingCompletionService(
-            new ResponsesCompletionResult("unused", null, []),
-            streamExceptionFactory: _ => new InvalidOperationException("provider crashed"));
-        var sessions = new RecordingSessionPort();
-        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
-
-        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
-
-        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
-            500,
-            "api_error",
-            "Internal server error."));
-        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
-    }
-
-    private static MessagesCommandRequest BuildRequest(string model, bool stream = false) =>
+    private static MessagesCommandRequest BuildRequest(
+        string model,
+        bool stream = false,
+        IReadOnlyList<ChatMessage>? chatMessages = null,
+        IReadOnlyList<ResponsesApplicationToolDeclaration>? declaredTools = null) =>
         new(
             model,
             100,
-            [ChatMessage.User("hello")],
-            [],
+            chatMessages ?? [ChatMessage.User("hello")],
+            declaredTools ?? [],
             false,
             null,
             null,
@@ -198,10 +185,10 @@ public sealed class MessagesCommandFacadeTests
             null);
 
     private static MessagesCommandFacade CreateFacade(
-        IResponsesCompletionApplicationService? completionService = null,
         ILlmSessionRegistrationPort? sessionPort = null,
         IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null,
-        IToolSetRegistry? toolSetRegistry = null)
+        RecordingActorDispatchPort? dispatchPort = null,
+        IResponsesToolClassificationService? toolClassificationService = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         return new MessagesCommandFacade(
@@ -209,13 +196,14 @@ public sealed class MessagesCommandFacadeTests
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             new StaticResponsesRouteResolver("route-value"),
             effectiveSessionPort,
-            (effectiveSessionPort as RecordingSessionPort)?.QueryPort ?? new RecordingSessionQueryPort(),
-            completionService ?? new RecordingCompletionService(new ResponsesCompletionResult("ok", null, [])),
-            new ResponsesToolClassificationService([], NullLogger<ResponsesToolClassificationService>.Instance),
-            new ResponsesDirectToolPlanService(toolSetRegistry ?? new EmptyToolSetRegistry()),
-            new StaticLlmProviderFactory(),
+            dispatchPort ?? new RecordingActorDispatchPort(),
+            toolClassificationService ?? new StaticResponsesToolClassificationService(),
+            new StaticResponsesDirectToolPlanService(),
             NullLogger<MessagesCommandFacade>.Instance);
     }
+
+    private static ResponsesCallerScopeResolutionContext CallerScopeContext(string bearerToken) =>
+        new(bearerToken, null, null);
 
     private static MessagesCreateCommandPlan BuildStreamPlan() =>
         new(
@@ -234,28 +222,48 @@ public sealed class MessagesCommandFacadeTests
                 RequestId = "msg_stream",
                 Model = "claude-sonnet",
                 Messages = [ChatMessage.User("hello")],
+                ToolContext = BuildToolContext("msg_stream"),
             },
-            new Dictionary<string, string>(StringComparer.Ordinal),
+            BuildToolContext("msg_stream"),
             new ResponsesToolClassification([], [], [], []),
             ResponsesToolChoiceHintPlan.Empty);
+
+    private static AgentToolExecutionContext BuildToolContext(string responseId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(responseId, null),
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", responseId),
+        };
 
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
         ForwardToModel = new ForwardToModel { ModelName = modelName },
     };
 
-    private static ChatRouteAction ToolSetRouteAction(string toolSetName) => new()
+    private static ChatRouteAction GAgentToolHintAction(string actorId) => new()
     {
         ForwardToModel = new ForwardToModel
         {
-            ModelName = string.Empty,
-            ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName },
+            ModelName = "claude-sonnet",
+            ToolChoiceHint = new ChatRouteToolChoiceHint
+            {
+                ToolName = "aevatar_invoke_gagent",
+                PrefilledArguments = new Struct
+                {
+                    Fields =
+                    {
+                        ["actor_id"] = Google.Protobuf.WellKnownTypes.Value.ForString(actorId),
+                    },
+                },
+            },
         },
     };
 
     private sealed class StaticCallerScopeResolver : IResponsesCallerScopeResolver
     {
-        public Task<ResponsesCallerScope> ResolveAsync(string nyxIdAccessToken, CancellationToken ct = default) =>
+        public Task<ResponsesCallerScope> ResolveAsync(
+            ResponsesCallerScopeResolutionContext context,
+            CancellationToken ct = default) =>
             Task.FromResult(new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey));
     }
 
@@ -285,99 +293,35 @@ public sealed class MessagesCommandFacadeTests
             });
     }
 
-    private sealed class EmptyToolSetRegistry : IToolSetRegistry
+    private sealed class StaticResponsesToolClassificationService(
+        ResponsesToolClassification? classification = null) : IResponsesToolClassificationService
     {
-        public IReadOnlyList<string> GetRegisteredNames() => [];
-
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
-            ToolSetResolveResult.Failure(new ToolSetResolveError(
-                ToolSetResolveError.UnknownNameCode,
-                toolSetRef?.Name ?? string.Empty,
-                $"Tool set '{toolSetRef?.Name}' is not registered.",
-                []));
+        public ValueTask<ResponsesToolClassification> ClassifyAsync(
+            IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+            ResponsesToolProviderContext context,
+            IEnumerable<IResponsesToolProvider>? additionalProviders = null,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(classification ?? new ResponsesToolClassification([], [], [], []));
     }
 
-    private sealed class StaticToolSetRegistry(IReadOnlyList<IAgentTool> tools) : IToolSetRegistry
+    private sealed class StaticResponsesDirectToolPlanService : IResponsesDirectToolPlanService
     {
-        public IReadOnlyList<string> GetRegisteredNames() => ["workspace.default"];
-
-        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
-            ToolSetResolveResult.Success(
-                toolSetRef?.Name ?? "workspace.default",
-                [new StaticAgentToolSource(tools)]);
+        public ResponsesDirectToolPlan Build(ChatRouteAction? routeAction) =>
+            ResponsesDirectToolPlan.Success(
+                [],
+                ResponsesToolChoiceHints.Create(
+                    routeAction?.ForwardToModel?.ToolChoiceHint?.ToolName,
+                    routeAction?.ForwardToModel?.ToolChoiceHint?.PrefilledArguments));
     }
 
-    private sealed class StaticAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
-        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
-            Task.FromResult(tools);
-    }
+        public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
 
-    private sealed class StubAgentTool(string name, string description) : IAgentTool
-    {
-        public string Name { get; } = name;
-
-        public string Description { get; } = description;
-
-        public string ParametersSchema { get; } = """{"type":"object","properties":{}}""";
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("""{"ok":true}""");
-    }
-
-    private sealed class StaticLlmProviderFactory : ILLMProviderFactory
-    {
-        private readonly ILLMProvider _provider = new StaticLlmProvider();
-
-        public ILLMProvider GetProvider(string name) => _provider;
-
-        public ILLMProvider GetDefault() => _provider;
-
-        public IReadOnlyList<string> GetAvailableProviders() => [_provider.Name];
-    }
-
-    private sealed class StaticLlmProvider : ILLMProvider
-    {
-        public string Name => "test";
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [EnumeratorCancellation] CancellationToken ct = default)
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            await Task.Yield();
-            yield return new LLMStreamChunk { DeltaContent = "unused", IsLast = true };
-        }
-    }
-
-    private sealed class RecordingCompletionService(
-        ResponsesCompletionResult result,
-        Func<CancellationToken, Exception>? streamExceptionFactory = null) : IResponsesCompletionApplicationService
-    {
-        public LLMRequest? LastRequest { get; private set; }
-
-        public Task<ResponsesCompletionResult> CollectAsync(
-            ILLMProvider provider,
-            LLMRequest request,
-            IReadOnlyDictionary<string, string> toolContextMetadata,
-            ResponsesToolClassification toolClassification,
-            CancellationToken ct = default)
-        {
-            LastRequest = request;
-            return Task.FromResult(result);
-        }
-
-        public Task<ResponsesCompletionResult> StreamAsync(
-            ILLMProvider provider,
-            LLMRequest request,
-            IReadOnlyDictionary<string, string> toolContextMetadata,
-            ResponsesToolClassification toolClassification,
-            Func<string, CancellationToken, ValueTask> onTextDelta,
-            CancellationToken ct = default)
-        {
-            LastRequest = request;
-            if (streamExceptionFactory?.Invoke(ct) is { } ex)
-                throw ex;
-            return Task.FromResult(result);
+            Calls.Add((actorId, envelope));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -389,12 +333,11 @@ public sealed class MessagesCommandFacadeTests
 
         public List<LlmSessionCompletion> RecordedCompletions { get; } = [];
 
-        public RecordingSessionQueryPort QueryPort { get; } = new();
-
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
         {
             Registered.Add(record);
-            return Task.FromResult(new LlmSessionRegistrationResult("actor-" + record.ResponseId, record.ResponseId));
+            var actorId = "actor-" + record.ResponseId;
+            return Task.FromResult(new LlmSessionRegistrationResult(actorId, record.ResponseId));
         }
 
         public Task UpdateStatusAsync(string sessionActorId, string responseId, LlmSessionStatus status, CancellationToken ct = default)
@@ -417,9 +360,6 @@ public sealed class MessagesCommandFacadeTests
             CancellationToken ct = default)
         {
             RecordedCompletions.Add(completion.Clone());
-            QueryPort.Snapshot = QueryPort.Snapshot is null
-                ? BuildSnapshot(responseId, completion)
-                : QueryPort.Snapshot with { Completion = ToSnapshot(completion) };
             return Task.CompletedTask;
         }
 
@@ -438,48 +378,5 @@ public sealed class MessagesCommandFacadeTests
             string callId,
             CancellationToken ct = default) =>
             Task.CompletedTask;
-
-        private static LlmSessionSnapshot BuildSnapshot(string responseId, LlmSessionCompletion completion) =>
-            new(
-                responseId,
-                "scope-1",
-                "owner-1",
-                LlmSessionOriginKind.ApiKey,
-                null,
-                LlmSessionStatus.Completed,
-                DateTimeOffset.UtcNow,
-                TimeSpan.FromHours(1),
-                null,
-                "actor-" + responseId,
-                1,
-                "event-1",
-                Completion: ToSnapshot(completion));
-
-        private static LlmSessionCompletionSnapshot ToSnapshot(LlmSessionCompletion completion) =>
-            new(
-                completion.OutputText,
-                completion.ToolCalls
-                    .Select(static tool => new LlmSessionCompletedToolCallSnapshot(
-                        tool.CallId,
-                        tool.ToolName,
-                        ResponsesJsonValues.ToBoundaryJson(tool.Result)))
-                    .ToArray(),
-                completion.CompletedAt?.ToDateTimeOffset(),
-                string.IsNullOrWhiteSpace(completion.FailureCode) ? null : completion.FailureCode,
-                string.IsNullOrWhiteSpace(completion.FailureMessage) ? null : completion.FailureMessage,
-                completion.Usage is null
-                    ? null
-                    : new TokenUsage(
-                        completion.Usage.PromptTokens,
-                        completion.Usage.CompletionTokens,
-                        completion.Usage.TotalTokens));
-    }
-
-    private sealed class RecordingSessionQueryPort : ILlmSessionQueryPort
-    {
-        public LlmSessionSnapshot? Snapshot { get; set; }
-
-        public Task<LlmSessionSnapshot?> GetByResponseIdAsync(string responseId, CancellationToken ct = default) =>
-            Task.FromResult(Snapshot);
     }
 }

@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -106,13 +107,13 @@ public sealed class NyxIdApiClientCoverageTests
 
         (await client.UpdateChannelRelayReplyAsync(" ", "om_upstream", new ChannelRelayReplyBody("hi"), CancellationToken.None))
             .Should()
-            .BeEquivalentTo(new NyxIdChannelRelayReplyResult(false, Detail: "missing_access_token"));
+            .BeEquivalentTo(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_access_token"));
         (await client.UpdateChannelRelayReplyAsync("token", " ", new ChannelRelayReplyBody("hi"), CancellationToken.None))
             .Should()
-            .BeEquivalentTo(new NyxIdChannelRelayReplyResult(false, Detail: "missing_platform_message_id"));
+            .BeEquivalentTo(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_platform_message_id"));
         (await client.UpdateChannelRelayReplyAsync("token", "om_upstream", new ChannelRelayReplyBody(null), CancellationToken.None))
             .Should()
-            .BeEquivalentTo(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_payload"));
+            .BeEquivalentTo(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_reply_payload"));
     }
 
     [Fact]
@@ -153,6 +154,9 @@ public sealed class NyxIdApiClientCoverageTests
 
         result.Succeeded.Should().BeFalse();
         result.EditUnsupported.Should().BeTrue();
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.HttpStatus.Should().Be(501);
+        result.RawErrorKey.Should().Be("edit_unsupported");
         result.Detail.Should().Contain("nyx_status=501");
     }
 
@@ -165,7 +169,76 @@ public sealed class NyxIdApiClientCoverageTests
 
         result.Succeeded.Should().BeFalse();
         result.EditUnsupported.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.HttpStatus.Should().Be(500);
         result.Detail.Should().Contain("nyx_status=500");
+    }
+
+    [Fact]
+    public async Task UpdateChannelRelayReplyAsync_ShouldClassifyRateLimitedWithRetryAfter()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Content = new StringContent(
+                """{"error":"rate_limited","error_code":1005,"message":"too many requests"}""",
+                Encoding.UTF8,
+                "application/json"),
+            Headers = { RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(7)) },
+        });
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "hi", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.TransientAdapterError);
+        result.RetryAfter.Should().Be(TimeSpan.FromSeconds(7));
+        result.HttpStatus.Should().Be(429);
+        result.RawErrorKey.Should().Be("rate_limited");
+        result.RawErrorCode.Should().Be(1005);
+    }
+
+    [Fact]
+    public async Task UpdateChannelRelayReplyAsync_ShouldClassifyValidationErrorAsPermanent()
+    {
+        var client = CreateClient(
+            """{"error":true,"status":400,"body":"{\"error\":\"validation_error\",\"error_code\":1008,\"message\":\"invalid\"}"}""");
+
+        var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "hi", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.RawErrorKey.Should().Be("validation_error");
+        result.RawErrorCode.Should().Be(1008);
+    }
+
+    [Fact]
+    public async Task UpdateChannelRelayReplyAsync_ShouldClassifyPlatformUnavailable()
+    {
+        var client = CreateClient(
+            """{"error":true,"status":503,"body":"{\"error\":\"platform_unavailable\",\"error_code\":1012,\"message\":\"platform offline\"}"}""");
+
+        var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "hi", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.PlatformUnavailable);
+        result.HttpStatus.Should().Be(503);
+        result.RawErrorKey.Should().Be("platform_unavailable");
+        result.RawErrorCode.Should().Be(1012);
+    }
+
+    [Fact]
+    public async Task UpdateChannelRelayReplyAsync_ShouldClassifyMalformedEnvelopeAsPermanentDiagnostic()
+    {
+        var client = CreateClient("not-json");
+
+        var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "hi", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(FailureKind.PermanentAdapterError);
+        result.RawErrorKey.Should().Be("invalid_error_envelope");
     }
 
     [Fact]
@@ -175,7 +248,7 @@ public sealed class NyxIdApiClientCoverageTests
 
         var result = await client.UpdateChannelRelayTextReplyAsync("token", "om_abc", "   ", CancellationToken.None);
 
-        result.Should().BeEquivalentTo(new NyxIdChannelRelayReplyResult(false, Detail: "missing_reply_text"));
+        result.Should().BeEquivalentTo(NyxIdChannelRelayReplyResult.FailedUpdateValidation("missing_reply_text"));
     }
 
     [Fact]
@@ -185,7 +258,7 @@ public sealed class NyxIdApiClientCoverageTests
         // with a 403 "Request forbidden by administrative rules". .NET's `HttpClient` doesn't
         // send one by default, and NyxID proxies whatever the .NET client sends — so without
         // this default, every agent-builder GitHub call lands as a spurious 403 (root cause of
-        // production /daily failures captured under PR #420 diagnostic logs).
+        // production /summary failures captured under PR #420 diagnostic logs).
         var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("{}", Encoding.UTF8, "application/json"),
@@ -297,10 +370,10 @@ public sealed class NyxIdApiClientCoverageTests
     [Fact]
     public async Task NyxIdLlmStatusTool_ShouldUseServicesEndpointAndRequireToken()
     {
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = null;
+            AgentToolRequestContext.Current = null;
             var missingTokenTool = new NyxIdLlmStatusTool(CreateClient("""{"services":[]}"""));
             var missingToken = await missingTokenTool.ExecuteAsync("{}", CancellationToken.None);
             missingToken.Should().Contain("No NyxID access token");
@@ -314,10 +387,10 @@ public sealed class NyxIdApiClientCoverageTests
                 new HttpClient(handler),
                 NullLogger<NyxIdApiClient>.Instance);
             var tool = new NyxIdLlmStatusTool(client);
-            AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-1",
-            };
+            });
 
             var response = await tool.ExecuteAsync("{}", CancellationToken.None);
 
@@ -327,7 +400,7 @@ public sealed class NyxIdApiClientCoverageTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
     }
 

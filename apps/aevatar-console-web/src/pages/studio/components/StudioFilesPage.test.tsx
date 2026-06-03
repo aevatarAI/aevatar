@@ -388,7 +388,7 @@ describe('StudioFilesPage', () => {
       );
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Scripts Studio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Script Build' }));
     expect(props.onOpenScriptInStudio).toHaveBeenCalledWith('script-alpha');
   });
 

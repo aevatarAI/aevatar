@@ -158,8 +158,9 @@ public class WorkflowDefinitionToolsTests
         var source = new WorkflowAgentToolSource(null!, options, definitionCommand: adapter);
         var tools = await source.DiscoverToolsAsync();
 
-        // 3 base tools (status, actor_inspect, event_query) + 4 def tools (list, read, create, update) = 7
-        tools.Should().HaveCount(7);
+        // 4 base tools (status, workflow_artifact_query, workflow_actor_current_state, event_query) + 4 def tools (list, read, create, update) = 8
+        tools.Should().HaveCount(8);
+        tools.Should().Contain(t => t is WorkflowArtifactQueryTool);
         tools.Should().Contain(t => t is WorkflowListDefsTool);
         tools.Should().Contain(t => t is WorkflowReadDefTool);
         tools.Should().Contain(t => t is WorkflowCreateDefTool);
@@ -174,8 +175,9 @@ public class WorkflowDefinitionToolsTests
         var source = new WorkflowAgentToolSource(null!, options);
         var tools = await source.DiscoverToolsAsync();
 
-        // Only the 3 base tools
-        tools.Should().HaveCount(3);
+        // Only the 4 base tools
+        tools.Should().HaveCount(4);
+        tools.Should().Contain(t => t is WorkflowArtifactQueryTool);
         tools.Should().NotContain(t => t is WorkflowListDefsTool);
         tools.Should().NotContain(t => t is WorkflowCreateDefTool);
     }

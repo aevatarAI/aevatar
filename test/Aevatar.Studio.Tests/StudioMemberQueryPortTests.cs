@@ -36,6 +36,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
             includeImplementationRef: true,
             includeLastBinding: true,
             includeBindingStatus: true);
+        document.StateVersion = 7;
 
         var reader = new StubDocumentReader([document]);
         var port = new ProjectionStudioMemberQueryPort(reader);
@@ -55,6 +56,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.CurrentBindingRun.Should().NotBeNull();
         detail.CurrentBindingRun!.BindingRunId.Should().Be("bind-1");
         detail.CurrentBindingRun.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
+        detail.CurrentBindingRun.StateVersion.Should().Be(7);
     }
 
     [Fact]
@@ -168,6 +170,25 @@ public sealed class ProjectionStudioMemberQueryPortTests
 
         roster.ScopeId.Should().Be(ScopeId);
         roster.Members.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldOnlyReadStudioMemberCurrentStateDocuments()
+    {
+        var reader = new StubDocumentReader([NewDocument(scopeId: ScopeId, memberId: "workflow-1")]);
+        var port = new ProjectionStudioMemberQueryPort(reader);
+
+        var roster = await port.ListAsync(ScopeId);
+
+        roster.Members.Should().ContainSingle(m => m.MemberId == "workflow-1");
+        reader.GetCallCount.Should().Be(0);
+        reader.QueryCallCount.Should().Be(1);
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Filters.Any(f =>
+            string.Equals(f.FieldPath, "scope_id", StringComparison.Ordinal) &&
+            f.Value.RawValue is string value &&
+            string.Equals(value, ScopeId, StringComparison.Ordinal))
+            .Should().BeTrue();
     }
 
     [Fact]
@@ -373,6 +394,8 @@ public sealed class ProjectionStudioMemberQueryPortTests
         private readonly Dictionary<string, StudioMemberCurrentStateDocument> _byId;
         public ProjectionDocumentQuery? LastQuery { get; private set; }
         public string? NextCursor { get; init; }
+        public int GetCallCount { get; private set; }
+        public int QueryCallCount { get; private set; }
 
         public StubDocumentReader(IReadOnlyList<StudioMemberCurrentStateDocument> documents)
         {
@@ -382,12 +405,14 @@ public sealed class ProjectionStudioMemberQueryPortTests
         public Task<StudioMemberCurrentStateDocument?> GetAsync(
             string key, CancellationToken ct = default)
         {
+            GetCallCount++;
             return Task.FromResult(_byId.TryGetValue(key, out var doc) ? doc : null);
         }
 
         public Task<ProjectionDocumentQueryResult<StudioMemberCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query, CancellationToken ct = default)
         {
+            QueryCallCount++;
             LastQuery = query;
 
             // Honor the readmodel filters before pagination, matching store

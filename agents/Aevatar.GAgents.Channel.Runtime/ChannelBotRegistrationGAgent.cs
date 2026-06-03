@@ -26,7 +26,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         StateTransitionMatcher
             .Match(current, evt)
             .On<ChannelBotRegisteredEvent>(ApplyRegistered)
-            .On<ChannelBotProjectionRebuildRequestedEvent>(static (state, _) => state)
             .On<ChannelBotRegistrationRejectedEvent>(static (state, _) => state)
             .On<ChannelBotScopeIdRepairedEvent>(ApplyScopeIdRepaired)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
@@ -115,20 +114,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             TombstoneStateVersion = NextCommittedVersion(),
         });
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
-    }
-
-    [EventHandler]
-    public async Task HandleRebuildProjection(ChannelBotRebuildProjectionCommand cmd)
-    {
-        await PersistDomainEventAsync(new ChannelBotProjectionRebuildRequestedEvent
-        {
-            Reason = cmd.Reason ?? string.Empty,
-            RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
-        Logger.LogInformation(
-            "Requested channel bot registration projection rebuild: actorId={ActorId}, reason={Reason}",
-            Id,
-            string.IsNullOrWhiteSpace(cmd.Reason) ? "unspecified" : cmd.Reason);
     }
 
     [EventHandler]

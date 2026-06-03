@@ -26,6 +26,7 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
+    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly IClock _clock;
     private readonly ITimeZoneResolver _timeZoneResolver;
@@ -48,7 +49,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         IToolApprovalHandler? approvalHandler = null,
         IClock? clock = null,
-        ITimeZoneResolver? timeZoneResolver = null)
+        ITimeZoneResolver? timeZoneResolver = null,
+        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -60,7 +62,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ownerLlmConfigSource,
             approvalHandler,
             clock,
-            timeZoneResolver)
+            timeZoneResolver,
+            larkOutboundDispatcher)
     {
     }
 
@@ -75,7 +78,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IOwnerLlmConfigSource? ownerLlmConfigSource,
         IToolApprovalHandler? approvalHandler,
         IClock? clock,
-        ITimeZoneResolver? timeZoneResolver)
+        ITimeZoneResolver? timeZoneResolver,
+        ILarkOutboundDispatcher? larkOutboundDispatcher)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -86,6 +90,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             approvalHandler)
     {
         _nyxIdApiClient = nyxIdApiClient;
+        _larkOutboundDispatcher = larkOutboundDispatcher;
         _ownerLlmConfigSource = ownerLlmConfigSource;
         _clock = clock ?? new SystemClock();
         _timeZoneResolver = timeZoneResolver ?? new TimeZoneResolver();
@@ -320,8 +325,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = await BuildExecutionMetadataAsync(ct);
         var llmControl = await BuildExecutionLlmControlAsync(ct);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromMetadata(metadata));
         var requestId = Guid.NewGuid().ToString("N");
+        var toolContext = llmControl.ToToolContext(BuildExecutionToolContext(requestId, metadata));
         var content = new StringBuilder();
 
         var sink = TryCreateStreamingSink();
@@ -343,7 +348,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 content.Append(chunk.DeltaContent);
                 if (streamingState is not null)
                     // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
-                    // turn. Acceptable for daily-sized output (≤30 KB capped, and the
+                    // turn. Acceptable for bounded skill output (≤30 KB capped, and the
                     // actor-owned streaming state dedupes against `_lastEmittedText` so most allocations don't even
                     // make it onto the wire). If a future skill produces materially longer
                     // output, switch the sink contract to `(StringBuilder, Range)` snapshots
@@ -433,7 +438,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// configured. The sink writes the first non-empty delta as a Lark
     /// <c>POST /open-apis/im/v1/messages</c> (capturing the returned <c>message_id</c>) and edits
     /// the same message via <c>PUT /open-apis/im/v1/messages/{id}</c> for every later delta —
-    /// so the user sees the daily report land and grow in place rather than receiving one wall of
+    /// so the user sees the skill output land and grow in place rather than receiving one wall of
     /// text after the LLM finishes. PUT is the correct verb for editing text/post messages;
     /// <c>PATCH</c> on the same path is reserved for editing interactive cards (see
     /// <c>SkillRunnerStreamingReplySink.EditAsync</c> for the verb-split rationale).
@@ -443,7 +448,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // Issue #439: when the run
         // is gated by EnsureToolStatusAllowsCompletion (RequiresNyxidProxySuccess set),
         // streaming each delta would POST/PUT the partial text to Lark live — i.e. a
-        // hallucinated daily report would already be visible in the user's DM by the
+        // hallucinated report would already be visible in the user's DM by the
         // time the guard fires, and each retry would repost it. Disable live streaming
         // for those skills so the message only POSTs through the chunked-dispatch path
         // AFTER the guard has confirmed at least one nyxid_proxy success. Trade-off: the
@@ -480,20 +485,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             State.OutboundConfig.LarkReceiveIdType,
             State.OutboundConfig.ConversationId);
 
-        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
-        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
-        LarkReceiveTarget? fallback = null;
-        if (!string.IsNullOrEmpty(fallbackId) && !string.IsNullOrEmpty(fallbackType))
-            fallback = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-
         return new SkillRunnerStreamingReplySink(
-            client,
-            State.OutboundConfig.NyxApiKey,
-            State.OutboundConfig.NyxProviderSlug,
-            primary,
-            fallback,
+            ResolveLarkOutboundDispatcher(client),
+            new LarkSendNewMessageRequest(
+                State.OutboundConfig.NyxApiKey,
+                State.OutboundConfig.NyxProviderSlug,
+                MessageType: "text",
+                ContentJson: string.Empty,
+                PrimaryTarget: primary,
+                FallbackTarget: ResolveFallbackTarget()),
             BuildLarkRejectionMessage,
-            Logger);
+            Logger,
+            client);
     }
 
     /// <summary>
@@ -588,7 +591,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     ///   <item><description>
     ///     <b>never-called</b> (<paramref name="requiresNyxidProxySuccess"/> == true,
     ///     <paramref name="successCount"/> == 0): the LLM bypassed tools entirely and produced
-    ///     text from prior context. For fetch-and-summarize skills like daily this is
+    ///     text from prior context. For fetch-and-summarize skills this is
     ///     exactly the original #439 symptom (52 commits in 24h reported as "No meaningful
     ///     public GitHub activity"). Skills that don't depend on tool data (e.g. pure LLM
     ///     transformations) leave the flag false and pass through.
@@ -617,10 +620,26 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             throw new InvalidOperationException(
                 "Skill requires at least one successful nyxid_proxy tool call but completed with zero. " +
-                "The LLM produced output without fetching source data (e.g. hallucinated a daily report from prior context). " +
+                "The LLM produced output without fetching source data (e.g. hallucinated a report from prior context). " +
                 "Refusing to record this run as a successful execution.");
         }
     }
+
+    private AgentToolExecutionContext BuildExecutionToolContext(
+        string requestId,
+        IReadOnlyDictionary<string, string>? metadata) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Caller = new AgentToolCallerContext(State.ScopeId, State.ScopeId, requestId),
+            Channel = new AgentToolChannelContext(
+                null,
+                null,
+                State.ScopeId,
+                null,
+                null),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
 
     private Task SendOutputAsync(string output, CancellationToken ct) =>
         SendOutputAsync(output, providerSlugOverride: null, ct);
@@ -670,7 +689,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 deliveryTarget.ReceiveIdType);
         }
 
-        var outcome = await TrySendWithFallbackAsync(client, output, slug, deliveryTarget, ct);
+        var outcome = await ResolveLarkOutboundDispatcher(client).SendNewMessageAsync(
+            new LarkSendNewMessageRequest(
+                State.OutboundConfig.NyxApiKey,
+                slug,
+                MessageType: "text",
+                ContentJson: JsonSerializer.Serialize(new { text = output }),
+                PrimaryTarget: deliveryTarget,
+                FallbackTarget: ResolveFallbackTarget()),
+            ct);
 
         if (!outcome.Succeeded)
         {
@@ -685,76 +712,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
-    private readonly record struct SendOutcome(bool Succeeded, int? LarkCode, string Detail)
+    private LarkReceiveTarget? ResolveFallbackTarget()
     {
-        public static SendOutcome Success() => new(true, null, string.Empty);
-        public static SendOutcome Failed(int? larkCode, string detail) => new(false, larkCode, detail);
-    }
-
-    /// <summary>
-    /// Sends the outbound text via the typed primary delivery target, then on a Lark
-    /// <c>230002 bot not in chat</c> rejection retries once with the fallback target if one
-    /// was captured at agent-create time. The fallback covers cross-app same-tenant
-    /// deployments where the outbound app is not a member of the inbound DM chat — without
-    /// it, the chat_id-first priority would regress those deployments. Returns success vs.
-    /// failure (with Lark code+detail) so the caller can throw cleanly without re-parsing
-    /// the response.
-    /// </summary>
-    private async Task<SendOutcome> TrySendWithFallbackAsync(
-        NyxIdApiClient client,
-        string output,
-        string slug,
-        LarkReceiveTarget primary,
-        CancellationToken ct)
-    {
-        var primaryResponse = await SendOutboundAsync(client, output, slug, primary, ct);
-        if (!LarkProxyResponse.TryGetError(primaryResponse, out var larkCode, out var detail))
-            return SendOutcome.Success();
-
-        // Only Lark `bot not in chat` triggers the fallback. Nyx envelope errors (no Lark
-        // code) and other Lark business errors propagate directly so the user sees actionable
-        // recovery guidance for the actual failure mode.
-        if (larkCode != LarkBotErrorCodes.BotNotInChat)
-            return SendOutcome.Failed(larkCode, detail);
-
         var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
         var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
-        if (string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType))
-            return SendOutcome.Failed(larkCode, detail);
-
-        Logger.LogInformation(
-            "Skill runner {ActorId} primary delivery target rejected as `bot not in chat` (code 230002); retrying with fallback typed pair (receive_id_type={FallbackType})",
-            Id,
-            fallbackType);
-
-        var fallbackTarget = new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-        var fallbackResponse = await SendOutboundAsync(client, output, slug, fallbackTarget, ct);
-        if (!LarkProxyResponse.TryGetError(fallbackResponse, out var fallbackCode, out var fallbackDetail))
-            return SendOutcome.Success();
-
-        return SendOutcome.Failed(fallbackCode, fallbackDetail);
+        return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
+            ? null
+            : new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
     }
 
-    private async Task<string> SendOutboundAsync(
-        NyxIdApiClient client,
-        string output,
-        string slug,
-        LarkReceiveTarget target,
-        CancellationToken ct)
-    {
-        var body = JsonSerializer.Serialize(new
-        {
-            receive_id = target.ReceiveId,
-            msg_type = "text",
-            content = JsonSerializer.Serialize(new { text = output }),
-        });
-
-        return await client.ProxyRequestAsync(
-            State.OutboundConfig.NyxApiKey,
-            slug,
-            $"open-apis/im/v1/messages?receive_id_type={target.ReceiveIdType}",
-            "POST", body, null, ct);
-    }
+    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher(NyxIdApiClient client) =>
+        _larkOutboundDispatcher ?? Services.GetService<ILarkOutboundDispatcher>() ?? new LarkOutboundDispatcher(client, Logger);
 
     private static string BuildLarkRejectionMessage(int? larkCode, string detail)
     {
@@ -849,8 +817,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
-        if (!string.IsNullOrWhiteSpace(State.ScopeId))
-            metadata["scope_id"] = State.ScopeId;
 
         return metadata;
     }
@@ -1039,8 +1005,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// </summary>
     internal static bool RequiresProxySuccessByTemplate(string? templateName) =>
         // Reserved for future fetch-and-summarize templates that need the runner-layer
-        // safety net (issue #439). Currently empty: the in-tree daily template was
-        // removed in favor of the Ornn-hosted skill, and no other template needs the
+        // safety net (issue #439). Currently empty: no in-tree template needs the
         // legacy proto-field-16-default backfill. Keep the method so tests + the apply
         // path don't need to special-case "no templates" — just add new entries here.
         templateName is not null && false;

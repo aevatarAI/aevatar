@@ -19,13 +19,13 @@ public sealed class ServiceInvokeAgentToolSource : IAgentToolSource
         ServiceInvokeOptions options,
         IServiceCatalogQueryReader catalogReader,
         IServiceInvocationPort invocationPort,
-        IServiceRevisionArtifactStore? artifactStore = null,
+        IServiceRevisionCatalogQueryReader? revisionCatalogReader = null,
         ILogger<ServiceInvokeAgentToolSource>? logger = null)
     {
         _options = options;
         _catalogReader = catalogReader;
         _invocationPort = invocationPort;
-        _schemaProvider = artifactStore != null ? new EndpointSchemaProvider(artifactStore) : null;
+        _schemaProvider = revisionCatalogReader != null ? new EndpointSchemaProvider(revisionCatalogReader) : null;
         _logger = logger ?? NullLogger<ServiceInvokeAgentToolSource>.Instance;
     }
 

@@ -5,8 +5,7 @@ namespace Aevatar.GAgents.Device;
 
 internal sealed class DeviceRegistrationStartupService : IHostedService
 {
-    private const int MaxRetries = 5;
-    private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(2);
+    // Refactor (iter165/cluster-001): Old pattern: startup owned a Task.Delay retry loop for projection activation. New principle: startup dispatches one bootstrap activation attempt; retry/backoff belongs to actor/runtime scheduling infrastructure, not this hosted service.
 
     private readonly DeviceRegistrationProjectionBootstrapActivator _projectionActivator;
     private readonly ILogger<DeviceRegistrationStartupService> _logger;
@@ -21,40 +20,22 @@ internal sealed class DeviceRegistrationStartupService : IHostedService
 
     public async Task StartAsync(CancellationToken ct)
     {
-        var delay = InitialDelay;
-        for (var attempt = 1; attempt <= MaxRetries; attempt++)
+        try
         {
-            try
-            {
-                await _projectionActivator.ActivateWellKnownRegistryAsync(ct);
-                _logger.LogInformation(
-                    "Device registration projection scope activated for {ActorId} (attempt {Attempt})",
-                    DeviceRegistrationGAgent.WellKnownId,
-                    attempt);
-                return;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Failed to activate device registration projection scope (attempt {Attempt}/{MaxRetries})",
-                    attempt,
-                    MaxRetries);
-
-                if (attempt < MaxRetries)
-                    await Task.Delay(delay, ct);
-
-                delay *= 2;
-            }
+            await _projectionActivator.ActivateWellKnownRegistryAsync(ct);
+            _logger.LogInformation(
+                "Device registration projection scope activated for {ActorId}",
+                DeviceRegistrationGAgent.WellKnownId);
         }
-
-        _logger.LogError(
-            "Device registration projection scope activation failed after {MaxRetries} attempts",
-            MaxRetries);
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Device registration projection scope activation failed; the host will continue in degraded mode");
+        }
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

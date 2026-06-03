@@ -42,7 +42,10 @@ owner: eanzhao
 {
   "prompt": "用户输入，必填",
   "workflow": "可选：已注册 workflow 名称（内建 + 文件加载）",
-  "agentId": "可选：复用已有 Workflow Actor",
+  "source": {
+    "kind": "definition_actor",
+    "definitionActor": { "actorId": "可选：显式 Workflow Actor 地址" }
+  },
   "workflowYamls": ["可选：inline YAML bundle（数组）"]
 }
 ```
@@ -51,13 +54,14 @@ owner: eanzhao
 
 1. `workflowYamls`（inline bundle，首项为入口 workflow）
 2. `workflow`（已注册 workflow 名称 lookup）
-3. 当 `workflow/workflowYamls` 都为空且未提供 `agentId` 时，外部 API 边界默认路由到 `auto`
-4. 当只提供 `agentId` 且 `workflow/workflowYamls` 为空时，保持 workflow 未指定，复用 actor 已绑定 workflow
+3. 当 source/workflow/workflowYamls 都为空时，外部 API 边界默认路由到 `auto`
+4. 复用已绑定 workflow 的 Actor 时，使用 typed `source.definitionActor.actorId`
 
 契约约束：
 
 - `workflow` 只表示“按名称查找已注册 workflow”（内建 + 文件加载）。
 - `workflowYamls` 只表示“inline YAML bundle”，不承担名称查找语义。
+- `actorId` 只由 typed source 子消息承载：`source.definitionActor.actorId` 或 `source.inlineBundle.actorId`。
 - 若同时传 `workflow` 与 `workflowYamls`，以 `workflowYamls` 为准。
 - `direct/auto/auto_review` 可显式传入，按注册表解析，不要求存在同名文件。
 
@@ -130,7 +134,7 @@ POST /api/workflows/signal
 
 ## 5. 输出事件（SSE/WS）
 
-统一输出 `WorkflowOutputFrame`，核心事件类型包括：
+统一输出 `WorkflowRunEventEnvelope` proto；JSON 仅作为 SSE/WS external wire adapter 表达。核心事件类型包括：
 
 - `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR`
 - `STEP_STARTED` / `STEP_FINISHED`
@@ -169,7 +173,7 @@ POST /api/workflows/signal
 服务端回包类型：
 
 - `command.ack`：返回 `commandId/actorId/workflow`
-- `agui.event`：逐帧业务事件（payload 即 `WorkflowOutputFrame`）
+- `agui.event`：逐帧业务事件（payload 即 `WorkflowRunEventEnvelope` 的 JSON wire 表达）
 - `command.error`：输入或启动阶段错误
 
 `command.ack` 使用约束：

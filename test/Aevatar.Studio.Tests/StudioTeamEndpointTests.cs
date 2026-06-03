@@ -97,7 +97,7 @@ public sealed class StudioTeamEndpointTests
     }
 
     [Fact]
-    public async Task HandlePatchAsync_ShouldReturn200_WhenUpdateSucceeds()
+    public async Task HandlePatchAsync_ShouldReturn202WithReceipt_WhenUpdateSucceeds()
     {
         var service = new InMemoryTeamService(NewSummary());
         var body = new StudioTeamEndpoints.StudioTeamPatchBody
@@ -113,7 +113,10 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        var accepted = result.Should().BeOfType<Accepted<StudioTeamCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/teams/{TeamId}");
+        accepted.Value!.Status.Should().Be(StudioTeamCommandStatusNames.Accepted);
+        accepted.Value.CommandId.Should().Be("cmd-1");
     }
 
     [Fact]
@@ -213,7 +216,7 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        GetStatusCode(result).Should().Be(StatusCodes.Status202Accepted);
     }
 
     [Fact]
@@ -233,11 +236,11 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        GetStatusCode(result).Should().Be(StatusCodes.Status202Accepted);
     }
 
     [Fact]
-    public async Task HandleArchiveAsync_ShouldReturn200_WhenSuccessful()
+    public async Task HandleArchiveAsync_ShouldReturn202WithReceipt_WhenSuccessful()
     {
         var service = new InMemoryTeamService(NewSummary());
         var result = await InvokeTeamHandle(
@@ -248,7 +251,10 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        var accepted = result.Should().BeOfType<Accepted<StudioTeamCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/teams/{TeamId}");
+        accepted.Value!.Status.Should().Be(StudioTeamCommandStatusNames.Accepted);
+        accepted.Value.CommandId.Should().Be("cmd-1");
     }
 
     [Fact]
@@ -546,13 +552,13 @@ public sealed class StudioTeamEndpointTests
             return Task.FromResult(_summary);
         }
 
-        public Task<StudioTeamSummaryResponse> UpdateAsync(
+        public Task<StudioTeamCommandResponse> UpdateAsync(
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default) =>
-            Task.FromResult(_summary);
+            Task.FromResult(NewAccepted(scopeId, teamId));
 
-        public Task<StudioTeamSummaryResponse> ArchiveAsync(
+        public Task<StudioTeamCommandResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) =>
-            Task.FromResult(_summary);
+            Task.FromResult(NewAccepted(scopeId, teamId));
 
         public Task SetEntryMemberAsync(
             string scopeId,
@@ -572,6 +578,15 @@ public sealed class StudioTeamEndpointTests
             ClearEntryCalls++;
             return Task.CompletedTask;
         }
+
+        private static StudioTeamCommandResponse NewAccepted(string scopeId, string teamId) =>
+            new(
+                StudioTeamCommandStatusNames.Accepted,
+                scopeId,
+                teamId,
+                "cmd-1",
+                "corr-1",
+                DateTimeOffset.UtcNow);
     }
 
     private sealed class ThrowingTeamService : IStudioTeamService
@@ -585,9 +600,9 @@ public sealed class StudioTeamEndpointTests
             string scopeId, StudioTeamRosterPageRequest? page = null, CancellationToken ct = default) => throw _ex;
         public Task<StudioTeamSummaryResponse> GetAsync(
             string scopeId, string teamId, CancellationToken ct = default) => throw _ex;
-        public Task<StudioTeamSummaryResponse> UpdateAsync(
+        public Task<StudioTeamCommandResponse> UpdateAsync(
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default) => throw _ex;
-        public Task<StudioTeamSummaryResponse> ArchiveAsync(
+        public Task<StudioTeamCommandResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) => throw _ex;
         public Task SetEntryMemberAsync(
             string scopeId,

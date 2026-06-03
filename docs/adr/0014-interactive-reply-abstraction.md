@@ -155,7 +155,7 @@ behaviour without redeploying.
   finalize path is prepared to dispatch an interactive reply but the bridge has no hook
   to populate the collector. A follow-up can surface an interactive reply API on
   `INyxRelayDayOneBridge`.
-- **`AgentBuilderCardFlow` migration.** The agent-builder flow (daily report / social
+- **`AgentBuilderCardFlow` migration.** The agent-builder flow (summary report / social
   media / list-agents cards) still builds Lark 2.0 card JSON inline. It's an
   independent card surface (user-driven agent creation UI, not workflow human
   interaction) and migrating it is a self-contained second pass. The CI guard

@@ -57,7 +57,7 @@ public sealed class ToolCallLoop
         // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
         //   Old pattern: ToolCallLoop pushed raw request Metadata into AsyncLocal.
         //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
-        var toolContext = baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest);
+        var toolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
         using var _ = AgentToolContextScope.Push(toolContext);
         return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
     }
@@ -276,7 +276,12 @@ public sealed class ToolCallLoop
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct)
     {
-        using var _ = AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(metadata));
+        // Refactor (issue1574): Old pattern: standalone tool execution promoted Metadata into tool control.
+        // New principle: core tool execution receives typed control; Metadata only supplies scrubbed annotations.
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        });
         await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
     }
 
@@ -350,7 +355,7 @@ public sealed class ToolCallLoop
         }
     }
 
-    internal static ChatMessage BuildToolResultMessage(string callId, string toolResult)
+    public static ChatMessage BuildToolResultMessage(string callId, string toolResult)
     {
         if (!TryExtractToolContentParts(toolResult, out var text, out var parts))
             return ChatMessage.Tool(callId, toolResult);

@@ -2,6 +2,7 @@ using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Callbacks;
@@ -15,6 +16,8 @@ namespace Aevatar.GAgentService.Tests.TestSupport;
 
 internal static class GAgentServiceTestKit
 {
+    public const string TestStaticServiceAgentKind = "tests.static-service-agent";
+
     private static readonly MethodInfo SetIdMethod = typeof(GAgentBase)
         .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("GAgentBase.SetId was not found.");
@@ -71,6 +74,7 @@ internal static class GAgentServiceTestKit
         ServiceIdentity? identity = null,
         string revisionId = "r1",
         string? actorTypeName = null,
+        string? agentKind = null,
         params ServiceEndpointDescriptor[] endpoints)
     {
         var spec = new ServiceRevisionSpec
@@ -81,6 +85,7 @@ internal static class GAgentServiceTestKit
             StaticSpec = new StaticServiceRevisionSpec
             {
                 ActorTypeName = actorTypeName ?? typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                AgentKind = agentKind ?? TestStaticServiceAgentKind,
                 PreferredActorId = $"static:{revisionId}",
             },
         };
@@ -105,6 +110,7 @@ internal static class GAgentServiceTestKit
                 StaticPlan = new StaticServiceDeploymentPlan
                 {
                     ActorTypeName = typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                    AgentKind = TestStaticServiceAgentKind,
                     PreferredActorId = $"static:{revisionId}",
                 },
             },
@@ -118,20 +124,22 @@ internal static class GAgentServiceTestKit
     public static TAgent CreateStatefulAgent<TAgent, TState>(
         InMemoryEventStore eventStore,
         string actorId,
-        Func<TAgent> factory)
+        Func<TAgent> factory,
+        Action<IServiceCollection>? configureServices = null)
         where TAgent : GAgentBase<TState>
         where TState : class, IMessage<TState>, new()
     {
         var agent = factory();
         AssignActorId(agent, actorId);
         agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<TState>(eventStore);
-        agent.Services = new ServiceCollection()
+        var services = new ServiceCollection()
             .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
             .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
             .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                 sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
-            .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>())
-            .BuildServiceProvider();
+            .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>());
+        configureServices?.Invoke(services);
+        agent.Services = services.BuildServiceProvider();
         return agent;
     }
 
@@ -143,6 +151,7 @@ internal static class GAgentServiceTestKit
     }
 }
 
+[GAgent(GAgentServiceTestKit.TestStaticServiceAgentKind)]
 internal sealed class TestStaticServiceAgent : IAgent
 {
     public string Id { get; private set; } = Guid.NewGuid().ToString("N");

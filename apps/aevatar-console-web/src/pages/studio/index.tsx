@@ -16,6 +16,10 @@ import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
 import {
+  normalizeAsyncOperationState,
+  probeAsyncOperation,
+} from '@/shared/asyncOperations';
+import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
   extractRunFinishedOutput,
@@ -62,6 +66,7 @@ import {
   cloneStudioWorkflowDocument,
   connectStepToTarget,
   insertStepByType,
+  normalizeStepParametersForType,
   removeStep,
   removeSteps,
   suggestBranchLabelForStep,
@@ -109,7 +114,6 @@ import type {
   StudioMemberRoster,
   StudioMemberBindingRevision,
   StudioMemberSummary,
-  StudioTeamSummary,
   StudioValidationFinding,
   StudioWorkflowDocument,
   StudioWorkflowFile,
@@ -117,6 +121,7 @@ import type {
 } from '@/shared/studio/models';
 import {
   formatStudioMemberLifecycleStage,
+  normalizeStudioMemberLifecycleStage,
   normalizeStudioMemberBindingImplementationKind,
 } from '@/shared/studio/models';
 import {
@@ -176,7 +181,7 @@ type StudioBuildFocusState = {
   value: string;
 };
 
-type StudioRouteMemberKind = 'workflow' | 'script' | 'member' | 'none';
+type StudioRouteMemberKind = 'workflow' | 'member' | 'none';
 type StudioRouteMemberState = {
   key: string;
   kind: StudioRouteMemberKind;
@@ -209,15 +214,6 @@ type StudioNotice = {
   readonly message: string;
 };
 
-type StudioTeamEntryCandidate = {
-  readonly memberId: string;
-  readonly scopeId: string;
-  readonly teamId: string;
-};
-
-const studioTeamEntryVisibilityAttempts = 5;
-const studioTeamEntryVisibilityRetryDelayMs = 100;
-
 type StudioBindingRunOutcome =
   | {
       readonly kind: 'succeeded';
@@ -228,53 +224,80 @@ type StudioBindingRunOutcome =
       readonly run: StudioMemberBindingRunStatusResponse | null;
     };
 
-const MEMBER_BINDING_RUN_POLL_INTERVAL_MS = 900;
 const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
 
-function waitForStudioMemberBindingRunTick(): Promise<void> {
+// Refactor (iter160/cluster-1200): member binding run waiting uses shared
+//   probeAsyncOperation normalized states instead of duplicated page-local
+//   status mapping. The fixed timeout remains pre-refactor page-local pacing;
+//   the shared helper accepts an injectable scheduler for deterministic tests.
+function waitForAsyncOperationProbeTick(): Promise<void> {
   return new Promise((resolve) => {
-    window.setTimeout(resolve, MEMBER_BINDING_RUN_POLL_INTERVAL_MS);
+    window.setTimeout(resolve, 900);
   });
 }
 
-function isStudioMemberBindingRunTerminal(
-  run: StudioMemberBindingRunStatusResponse,
-): boolean {
-  return ['succeeded', 'failed', 'rejected'].includes(run.status);
+function normalizeStudioMemberBindingRunState(
+  run: StudioMemberBindingRunStatusResponse | null,
+) {
+  return normalizeAsyncOperationState({
+    accepted: true,
+    observation: run,
+    observationStatus:
+      run?.status === 'succeeded'
+        ? 'succeeded'
+        : run?.status === 'failed'
+          ? 'failed'
+          : run?.status === 'rejected'
+            ? 'rejected'
+            : run
+              ? 'pending'
+              : null,
+    stateVersion: run?.stateVersion ?? null,
+    message:
+      run?.failure?.message ||
+      (run?.status === 'rejected'
+        ? 'Binding request was rejected by the member authority.'
+        : run?.status === 'failed'
+          ? 'Binding failed while publishing the member contract.'
+          : ''),
+  });
 }
 
 function buildStudioMemberBindingFailureMessage(
   run: StudioMemberBindingRunStatusResponse,
 ): string {
-  return (
-    run.failure?.message ||
-    (run.status === 'rejected'
-      ? 'Binding request was rejected by the member authority.'
-      : 'Binding failed while publishing the member contract.')
-  );
+  return normalizeStudioMemberBindingRunState(run).message;
 }
 
 function resolveStudioMemberBindingRunOutcome(
   run: StudioMemberBindingRunStatusResponse | null,
 ): StudioBindingRunOutcome {
-  if (run?.status === 'failed' || run?.status === 'rejected') {
+  const state = normalizeStudioMemberBindingRunState(run);
+  if (state.status === 'failed' && run) {
     throw new Error(buildStudioMemberBindingFailureMessage(run));
   }
 
-  if (run?.status === 'succeeded') {
+  if (state.status === 'observed' && run) {
     return { kind: 'succeeded', run };
   }
 
   return { kind: 'pending', run };
 }
 
-function buildStudioMemberBindingPendingNotice(
+export function buildStudioMemberBindingPendingNotice(
   displayName: string,
   run: StudioMemberBindingRunStatusResponse | null,
 ): StudioNotice {
+  const state = normalizeStudioMemberBindingRunState(run);
   const status = run?.status ? ` Current status: ${run.status}.` : '';
+  const freshness =
+    state.freshness === 'observed' && state.stateVersion != null
+      ? ` Read model observed v${state.stateVersion}.`
+      : state.freshness === 'accepted-only'
+        ? ' Read model has not materialized this run yet.'
+        : ' Status read model is still catching up.';
   return {
-    message: `${displayName} binding request was accepted and is still running.${status} Studio will keep refreshing the status before treating it as bound.`,
+    message: `${displayName} binding request was accepted and is still running.${status}${freshness} Studio will keep refreshing the status before treating it as bound.`,
     type: 'info',
   };
 }
@@ -625,21 +648,8 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, ms);
-  });
-}
-
 function normalizeComparableText(value: string | null | undefined): string {
   return trimOptional(value).toLowerCase();
-}
-
-function hasTeamEntryMember(
-  summary: StudioTeamSummary | null | undefined,
-  memberId: string,
-): boolean {
-  return trimOptional(summary?.entryMemberId) === trimOptional(memberId);
 }
 
 function findWorkflowSummaryByLookupValue(
@@ -914,20 +924,6 @@ function parseStudioRouteMember(
       : { key: '', kind: 'none', value: '', memberId: '', serviceId: '', legacyServiceId: '' };
   }
 
-  if (normalizedValue.startsWith('script:')) {
-    const scriptId = readScriptIdFromMemberKey(normalizedValue);
-    return scriptId
-      ? {
-          key: `script:${scriptId}`,
-          kind: 'script',
-          value: scriptId,
-          memberId: '',
-          serviceId: '',
-          legacyServiceId: '',
-        }
-      : { key: '', kind: 'none', value: '', memberId: '', serviceId: '', legacyServiceId: '' };
-  }
-
   if (normalizedValue.startsWith('member:')) {
     const memberId = readMemberIdFromMemberKey(normalizedValue);
     return memberId
@@ -955,7 +951,16 @@ function parseStudioRouteMember(
 function readStudioBuildFocusFromParams(
   params: URLSearchParams,
 ): StudioBuildFocusState {
-  return parseStudioBuildFocus(params.get('focus'));
+  const explicitFocus = parseStudioBuildFocus(params.get('focus'));
+  if (explicitFocus.key) {
+    return explicitFocus;
+  }
+
+  const legacyMember = trimOptional(params.get('member'));
+  const legacyScriptId = readScriptIdFromMemberKey(legacyMember);
+  return legacyScriptId
+    ? parseStudioBuildFocus(`script:${legacyScriptId}`)
+    : explicitFocus;
 }
 
 function readStudioRouteMemberFromParams(
@@ -1210,6 +1215,23 @@ function upsertStudioMemberRosterMember(
   };
 }
 
+function primeStudioMemberRoster(
+  queryClient: ReturnType<typeof useQueryClient>,
+  queryKey: readonly unknown[],
+  scopeId: string,
+  member: StudioMemberSummary,
+): void {
+  queryClient.setQueryData<StudioMemberRoster>(
+    queryKey,
+    (current) =>
+      upsertStudioMemberRosterMember(
+        current,
+        scopeId,
+        member,
+      ),
+  );
+}
+
 function readStoredScriptDrafts(): Record<string, StudioPendingScriptDraft> {
   if (typeof window === 'undefined') {
     return {};
@@ -1409,11 +1431,9 @@ function readInitialBuildSurface(state: StudioRouteState): BuildSurface {
   }
 
   const buildFocus = parseStudioBuildFocus(state.focusKey);
-  const routeMember = parseStudioRouteMember(state.memberKey);
   if (
     state.tab === 'scripts' ||
-    buildFocus.kind === 'script' ||
-    routeMember.kind === 'script'
+    buildFocus.kind === 'script'
   ) {
     return 'scripts';
   }
@@ -1508,6 +1528,35 @@ function resolveLifecycleWorkflowId(
   }
 
   return '';
+}
+
+function resolveWorkflowIdForMemberSummary(
+  memberSummary: StudioMemberSummary | null | undefined,
+  workflows: ReadonlyArray<{
+    readonly workflowId: string;
+    readonly name: string;
+    readonly fileName: string;
+    readonly description?: string;
+  }>,
+  workflowFile?: Pick<StudioWorkflowFile, 'workflowId' | 'name' | 'fileName'> | null,
+): string {
+  if (
+    normalizeStudioMemberBindingImplementationKind(
+      memberSummary?.implementationKind,
+    ) !== 'workflow'
+  ) {
+    return '';
+  }
+
+  const implementationRef = trimOptional(memberSummary?.displayName);
+  if (!implementationRef) {
+    return '';
+  }
+
+  return resolveWorkflowIdFromRouteValue(implementationRef, workflows, {
+    allowDirectIdFallback: true,
+    workflowFile,
+  });
 }
 
 function resolveLifecycleBuildSurface(input: {
@@ -2713,9 +2762,7 @@ const StudioPage: React.FC = () => {
     () =>
       initialBuildFocus.kind === 'script'
         ? initialBuildFocus.value
-        : initialSelectedMember.kind === 'script'
-          ? initialSelectedMember.value
-          : '',
+        : '',
   );
   const [scriptBuildState, setScriptBuildState] =
     useState<StudioScriptBuildState | null>(null);
@@ -2726,9 +2773,7 @@ const StudioPage: React.FC = () => {
       const initialScriptId =
         initialBuildFocus.kind === 'script'
           ? initialBuildFocus.value
-          : initialSelectedMember.kind === 'script'
-            ? initialSelectedMember.value
-            : '';
+          : '';
       return initialScriptId
         ? loadStoredScriptDraft(initialRouteState.scopeId || undefined, initialScriptId)
         : null;
@@ -2774,9 +2819,6 @@ const StudioPage: React.FC = () => {
   const [logsPopoutMode] = useState(() => readStudioRouteState().logsMode);
   const [recentlyBoundMemberKey, setRecentlyBoundMemberKey] = useState('');
   const [recentlyBoundServiceId, setRecentlyBoundServiceId] = useState('');
-  const [teamEntryActionBusy, setTeamEntryActionBusy] = useState(false);
-  const [teamEntryCandidate, setTeamEntryCandidate] =
-    useState<StudioTeamEntryCandidate | null>(null);
   const recentlyBoundServiceRef = useRef<ServiceCatalogSnapshot | null>(null);
   const legacyRouteServiceIdRef = useRef(
     trimOptional(initialRouteState.legacyServiceId),
@@ -2882,14 +2924,11 @@ const StudioPage: React.FC = () => {
           ? currentScriptId
           : routeBuildFocus.value,
       );
-    } else if (routeSelectedMember.kind === 'script') {
-      setSelectedScriptId((currentScriptId) =>
-        trimOptional(currentScriptId) === routeSelectedMember.value
-          ? currentScriptId
-          : routeSelectedMember.value,
+    }
+    if (routeBuildFocus.kind === 'workflow' || routeSelectedMember.kind === 'workflow') {
+      setBuildSurface((currentSurface) =>
+        currentSurface === 'editor' ? currentSurface : 'editor',
       );
-      setSelectedWorkflowId('');
-      setTemplateWorkflow('');
     }
     setSelectedExecutionId((currentExecutionId) =>
       trimOptional(currentExecutionId) === routeState.executionId
@@ -4190,8 +4229,126 @@ const StudioPage: React.FC = () => {
     [availableStepTypes, draftWorkflowName, workflowNames],
   );
 
-  const buildWorkflowYamlBundle = useCallback(async (): Promise<string[]> => {
-    const rootYaml = draftYaml.trim();
+  const normalizeWorkflowYamlForRuntime = useCallback(
+    async (
+      yaml: string,
+      document: StudioWorkflowDocument | null | undefined,
+      availableWorkflowNames: string[],
+    ): Promise<{
+      readonly yaml: string;
+      readonly document: StudioWorkflowDocument | null;
+    }> => {
+      const sourceYaml = yaml.trim();
+      if (!sourceYaml) {
+        return {
+          yaml: sourceYaml,
+          document: document ?? null,
+        };
+      }
+
+      let sourceDocument = cloneStudioWorkflowDocument(document);
+      if (!sourceDocument) {
+        sourceDocument =
+          cloneStudioWorkflowDocument(
+            (
+              await studioApi.parseYaml({
+                yaml: sourceYaml,
+                availableWorkflowNames,
+                availableStepTypes,
+              })
+            ).document,
+          ) ?? null;
+      }
+
+      if (!sourceDocument?.steps?.length) {
+        return {
+          yaml: sourceYaml,
+          document: sourceDocument,
+        };
+      }
+
+      const normalizedDocument: StudioWorkflowDocument = {
+        ...sourceDocument,
+        steps: sourceDocument.steps.map((step) => ({
+          ...step,
+          parameters: normalizeStepParametersForType(
+            trimOptional(step.type ?? step.originalType),
+            step.parameters && typeof step.parameters === 'object'
+              ? step.parameters
+              : {},
+          ),
+        })),
+      };
+
+      const serialized = await studioApi.serializeYaml({
+        document: normalizedDocument,
+        availableWorkflowNames,
+        availableStepTypes,
+      });
+
+      return {
+        yaml: serialized.yaml.trim() || sourceYaml,
+        document:
+          cloneStudioWorkflowDocument(serialized.document) ??
+          normalizedDocument,
+      };
+    },
+    [availableStepTypes],
+  );
+
+  const buildWorkflowYamlBundle = useCallback(async (
+    pendingStepDraft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ): Promise<string[]> => {
+    let rootYaml = draftYaml.trim();
+    let rootDocument: StudioWorkflowDocument | null | undefined =
+      activeWorkflowDocument;
+    let rootRuntimeYamlReady = false;
+
+    if (pendingStepDraft) {
+      const currentStepId = pendingStepDraft.stepId.trim();
+      if (!currentStepId) {
+        throw new Error('Select a workflow step before running its draft changes.');
+      }
+
+      const document =
+        cloneStudioWorkflowDocument(
+          activeWorkflowDocument ||
+            parsedWorkflowDocument ||
+            activeWorkflowFile?.document ||
+            null,
+        ) ||
+        cloneStudioWorkflowDocument(
+          (
+            await studioApi.parseYaml({
+              yaml: rootYaml,
+              availableWorkflowNames: workflowNames,
+              availableStepTypes,
+            })
+          ).document as StudioWorkflowDocument | null,
+        );
+      if (!document) {
+        throw new Error('Load a workflow draft before running its draft changes.');
+      }
+
+      const result = applyStepInspectorDraft(
+        document,
+        currentStepId,
+        pendingStepDraft.draft,
+      );
+      const serialized = await studioApi.serializeYaml({
+        document: result.document,
+        availableWorkflowNames: workflowNames,
+        availableStepTypes,
+      });
+
+      rootYaml = serialized.yaml.trim();
+      rootDocument = result.document;
+      rootRuntimeYamlReady = true;
+    }
+
     if (!rootYaml) {
       throw new Error('Workflow YAML is required.');
     }
@@ -4207,11 +4364,13 @@ const StudioPage: React.FC = () => {
       workflowName: string;
       yaml: string;
       document: StudioWorkflowDocument | null | undefined;
+      runtimeYamlReady?: boolean;
     }> = [
       {
         workflowName: activeWorkflowName.trim() || draftWorkflowName.trim(),
         yaml: rootYaml,
-        document: activeWorkflowDocument,
+        document: rootDocument,
+        runtimeYamlReady: rootRuntimeYamlReady,
       },
     ];
 
@@ -4229,9 +4388,29 @@ const StudioPage: React.FC = () => {
       if (normalizedWorkflowName) {
         seen.add(normalizedWorkflowName);
       }
-      bundle.push(current.yaml);
+      const normalizedCurrent = current.runtimeYamlReady
+        ? {
+            yaml: current.yaml,
+            document:
+              cloneStudioWorkflowDocument(current.document) ??
+              cloneStudioWorkflowDocument(
+                (
+                  await studioApi.parseYaml({
+                    yaml: current.yaml,
+                    availableWorkflowNames,
+                    availableStepTypes,
+                  })
+                ).document as StudioWorkflowDocument | null,
+              ),
+          }
+        : await normalizeWorkflowYamlForRuntime(
+            current.yaml,
+            current.document,
+            availableWorkflowNames,
+          );
+      bundle.push(normalizedCurrent.yaml);
 
-      for (const targetWorkflow of readWorkflowCallTargets(current.document)) {
+      for (const targetWorkflow of readWorkflowCallTargets(normalizedCurrent.document)) {
         if (seen.has(targetWorkflow)) {
           continue;
         }
@@ -4269,12 +4448,16 @@ const StudioPage: React.FC = () => {
     return bundle;
   }, [
     activeWorkflowDocument,
+    activeWorkflowFile?.document,
     activeWorkflowName,
     availableStepTypes,
     draftWorkflowName,
     draftYaml,
+    normalizeWorkflowYamlForRuntime,
+    parsedWorkflowDocument,
     resolvedStudioScopeId,
     visibleWorkflowSummaries,
+    workflowNames,
   ]);
   const recentPromptHistory = useMemo(
     () => promptHistory.slice(0, 3),
@@ -4608,39 +4791,29 @@ const StudioPage: React.FC = () => {
     selectedWorkflowId,
     studioScopeMembers,
   ]);
-  const waitForMemberBindingRun = useCallback(
+  const observeMemberBindingRunOnce = useCallback(
     async (
       receipt: StudioMemberBindingAcceptedResponse,
     ): Promise<StudioMemberBindingRunStatusResponse | null> => {
-      let latestRun: StudioMemberBindingRunStatusResponse | null = null;
-
-      for (let attempt = 0; attempt < MEMBER_BINDING_RUN_POLL_ATTEMPTS; attempt += 1) {
-        if (attempt > 0) {
-          await waitForStudioMemberBindingRunTick();
-        }
-
-        try {
-          latestRun = await studioApi.getMemberBindingRun(
+      const result = await probeAsyncOperation({
+        maxAttempts: MEMBER_BINDING_RUN_POLL_ATTEMPTS,
+        read: () =>
+          studioApi.getMemberBindingRun(
             receipt.scopeId,
             receipt.memberId,
             receipt.bindingRunId,
-          );
-        } catch (error) {
+          ),
+        isTerminal: (run) =>
+          normalizeStudioMemberBindingRunState(run).terminal,
+        canRetryError: (error) => {
           // The run status is read-model backed, so the first request can
           // legitimately arrive before projection catches up to the accepted ACK.
-          if (isStudioApiStatus(error, 404)) {
-            continue;
-          }
+          return isStudioApiStatus(error, 404);
+        },
+        waitForNextAttempt: waitForAsyncOperationProbeTick,
+      });
 
-          throw error;
-        }
-
-        if (isStudioMemberBindingRunTerminal(latestRun)) {
-          return latestRun;
-        }
-      }
-
-      return latestRun;
+      return result.observation;
     },
     [],
   );
@@ -4673,7 +4846,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -4714,7 +4887,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -4757,7 +4930,7 @@ const StudioPage: React.FC = () => {
           ],
         });
         memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
-          await waitForMemberBindingRun(receipt),
+          await observeMemberBindingRunOnce(receipt),
         );
         await queryClient.invalidateQueries({
           queryKey: [
@@ -4908,17 +5081,6 @@ const StudioPage: React.FC = () => {
           studioScopeMembers,
         ) ||
         trimOptional(routeMemberSummary?.memberId);
-      if (
-        resolvedStudioTeamId &&
-        resolvedBoundMemberId &&
-        resolvedStudioScopeId
-      ) {
-        setTeamEntryCandidate({
-          memberId: resolvedBoundMemberId,
-          scopeId: resolvedStudioScopeId,
-          teamId: resolvedStudioTeamId,
-        });
-      }
       const routedBoundMemberKey =
         buildBackendMemberKey(resolvedBoundMemberId) || boundMemberKey;
       setRecentlyBoundMemberKey(routedBoundMemberKey);
@@ -4968,7 +5130,7 @@ const StudioPage: React.FC = () => {
     scopeServicesQuery,
     studioMembersQueryKey,
     studioScopeMembers,
-    waitForMemberBindingRun,
+    observeMemberBindingRunOnce,
   ]);
 
   const openWorkspaceWorkflow = useCallback((workflowId: string) => {
@@ -5091,35 +5253,53 @@ const StudioPage: React.FC = () => {
     async (
       savedWorkflow: StudioWorkflowFile,
       options?: {
+        readonly document?: StudioWorkflowDocument | null;
         readonly layout?: unknown;
+        readonly selectedNodeId?: string;
+        readonly yaml?: string;
       },
     ) => {
+      const hasDocumentOverride = options?.document !== undefined;
+      const nextWorkflow: StudioWorkflowFile = {
+        ...savedWorkflow,
+        document: hasDocumentOverride ? options.document ?? null : savedWorkflow.document,
+        yaml: options?.yaml ?? savedWorkflow.yaml,
+      };
+
       queryClient.setQueryData(
-        ['studio-workflow', workflowWorkspaceContextKey, savedWorkflow.workflowId],
-        savedWorkflow,
+        ['studio-workflow', workflowWorkspaceContextKey, nextWorkflow.workflowId],
+        nextWorkflow,
       );
       await queryClient.invalidateQueries({
         queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
       });
 
-      setSelectedWorkflowId(savedWorkflow.workflowId);
+      setSelectedWorkflowId(nextWorkflow.workflowId);
       setSelectedScriptId('');
       setTemplateWorkflow('');
       setBuildSurface('editor');
       setStudioSurface('build');
       setDraftSourceKey(
-        `workflow:${workflowWorkspaceContextKey}:${savedWorkflow.workflowId}`,
+        `workflow:${workflowWorkspaceContextKey}:${nextWorkflow.workflowId}`,
       );
-      setDraftYaml(savedWorkflow.yaml);
-      setDraftWorkflowName(savedWorkflow.name);
-      setDraftFileName(savedWorkflow.fileName);
-      setDraftDirectoryId(savedWorkflow.directoryId);
+      setDraftYaml(nextWorkflow.yaml);
+      setDraftWorkflowName(nextWorkflow.name);
+      setDraftFileName(nextWorkflow.fileName);
+      setDraftDirectoryId(nextWorkflow.directoryId);
       setDraftWorkflowLayout(
-        savedWorkflow.layout ||
+        nextWorkflow.layout ||
           options?.layout ||
           draftWorkflowLayout ||
-          buildStudioWorkflowLayout(savedWorkflow.name, workflowGraph.nodes),
+          buildStudioWorkflowLayout(nextWorkflow.name, workflowGraph.nodes),
       );
+      if (hasDocumentOverride) {
+        setEditableWorkflowDocument(
+          cloneStudioWorkflowDocument(options.document ?? null),
+        );
+      }
+      if (options?.selectedNodeId !== undefined) {
+        setSelectedGraphNodeId(options.selectedNodeId);
+      }
       setSaveNotice(null);
       setRunNotice(null);
     },
@@ -5139,7 +5319,86 @@ const StudioPage: React.FC = () => {
     return leaveGuard ? await leaveGuard() : true;
   }, [isBuildScriptsSurface]);
 
-  const handleSaveDraft = async () => {
+  const resolveWorkflowSavePayload = useCallback(
+    async (
+      pendingStepDraft?: {
+        readonly stepId: string;
+        readonly draft: StudioStepInspectorDraft;
+      } | null,
+    ): Promise<{
+      readonly document?: StudioWorkflowDocument | null;
+      readonly yaml: string;
+      readonly layout: unknown;
+      readonly selectedNodeId?: string;
+    } | null> => {
+      if (!pendingStepDraft) {
+        return {
+          yaml: draftYaml,
+          layout:
+            draftWorkflowLayout ||
+            activeWorkflowFile?.layout ||
+            buildStudioWorkflowLayout(activeWorkflowName, workflowGraph.nodes),
+        };
+      }
+
+      const currentStepId = pendingStepDraft.stepId.trim();
+      if (!currentStepId) {
+        setSaveNotice({
+          type: 'error',
+          message: 'Select a workflow step before saving its draft changes.',
+        });
+        return null;
+      }
+
+      const document = await resolveEditableWorkflowDocument();
+      if (!document) {
+        return null;
+      }
+
+      const result = applyStepInspectorDraft(
+        document,
+        currentStepId,
+        pendingStepDraft.draft,
+      );
+      const serialized = await studioApi.serializeYaml({
+        document: result.document,
+        availableWorkflowNames: workflowNames,
+        availableStepTypes,
+      });
+      const nextLayout =
+        draftWorkflowLayout ||
+        activeWorkflowFile?.layout ||
+        buildStudioWorkflowLayout(activeWorkflowName, workflowGraph.nodes);
+
+      setDraftYaml(serialized.yaml);
+      setEditableWorkflowDocument(cloneStudioWorkflowDocument(serialized.document));
+      setSelectedGraphNodeId(result.nodeId);
+
+      return {
+        document: serialized.document,
+        yaml: serialized.yaml,
+        layout: nextLayout,
+        selectedNodeId: result.nodeId,
+      };
+    },
+    [
+      activeWorkflowFile?.layout,
+      activeWorkflowName,
+      availableStepTypes,
+      draftWorkflowLayout,
+      draftYaml,
+      resolveEditableWorkflowDocument,
+      workflowGraph.nodes,
+      workflowNames,
+    ],
+  );
+
+  const handleSaveDraft = async (
+    pendingStepDraft?: {
+      readonly stepId: string;
+      readonly draft: StudioStepInspectorDraft;
+    } | null,
+  ) => {
     const directoryId = resolvedDraftDirectoryId;
     if (!directoryId) {
       setSaveNotice({
@@ -5162,6 +5421,11 @@ const StudioPage: React.FC = () => {
     setSaveNotice(null);
 
     try {
+      const savePayload = await resolveWorkflowSavePayload(pendingStepDraft);
+      if (!savePayload) {
+        return;
+      }
+
       const savedWorkflow = await studioApi.saveWorkflow({
         workflowId: activeWorkflowFile?.workflowId || undefined,
         draftExists: activeWorkflowFile?.draftExists,
@@ -5169,16 +5433,37 @@ const StudioPage: React.FC = () => {
         directoryId,
         workflowName,
         fileName: draftFileName,
-        yaml: draftYaml,
-        layout:
-          draftWorkflowLayout ||
-          activeWorkflowFile?.layout ||
-          buildStudioWorkflowLayout(activeWorkflowName, workflowGraph.nodes),
+        yaml: savePayload.yaml,
+        layout: savePayload.layout,
       });
 
       await applySavedWorkflowSelection(savedWorkflow, {
-        layout: draftWorkflowLayout,
+        document: savePayload.document,
+        layout: savePayload.layout,
+        selectedNodeId: savePayload.selectedNodeId,
+        yaml: savePayload.yaml,
       });
+      const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
+        routeSelectedBackendMemberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      );
+      const routeMemberWorkflowId = resolveWorkflowIdForMemberSummary(
+        routeMemberSummary,
+        [savedWorkflow, ...visibleWorkflowSummaries],
+        savedWorkflow,
+      );
+      if (routeMemberWorkflowId === savedWorkflow.workflowId) {
+        history.replace(buildStudioRoute({
+          scopeId: resolvedStudioScopeId || undefined,
+          teamId: routeState.teamId || undefined,
+          returnTo: routeState.returnTo || undefined,
+          memberKey: routeSelectedBackendMemberKey,
+          focus: buildWorkflowMemberKeyFromSummary(savedWorkflow) || undefined,
+          step: 'build',
+          tab: 'studio',
+        }));
+      }
       void message.success(
         `已保存到 ${describeSavedWorkflowLocation(savedWorkflow)}。`,
       );
@@ -5543,15 +5828,49 @@ const StudioPage: React.FC = () => {
       }
 
       try {
-        await studioApi.createMember({
+        const createdWorkflowMember = await studioApi.createMember({
           scopeId: resolvedStudioScopeId,
           displayName: workflowName,
           implementationKind: 'workflow',
           ...(createMemberTeamId ? { teamId: createMemberTeamId } : {}),
         });
-        await queryClient.invalidateQueries({
+        const workflowMemberForRoster =
+          createMemberTeamId && !trimOptional(createdWorkflowMember.teamId)
+            ? {
+                ...createdWorkflowMember,
+                teamId: createMemberTeamId,
+              }
+            : createdWorkflowMember;
+        setOptimisticStudioMembers((current) =>
+          upsertStudioMemberSummary(current, workflowMemberForRoster),
+        );
+        primeStudioMemberRoster(
+          queryClient,
+          studioMembersQueryKey,
+          resolvedStudioScopeId,
+          workflowMemberForRoster,
+        );
+        void queryClient.invalidateQueries({
           queryKey: studioMembersQueryKey,
         });
+        const createdWorkflowMemberId = trimOptional(
+          workflowMemberForRoster.memberId,
+        );
+        if (createdWorkflowMemberId) {
+          pinnedRouteBackendMemberIdRef.current = createdWorkflowMemberId;
+          setPinnedRouteBackendMemberId(createdWorkflowMemberId);
+        }
+        history.push(buildStudioRoute({
+          scopeId: resolvedStudioScopeId,
+          teamId: createMemberTeamId || undefined,
+          returnTo: routeState.returnTo || undefined,
+          memberKey: createdWorkflowMemberId
+            ? buildBackendMemberKey(createdWorkflowMemberId)
+            : undefined,
+          focus: buildWorkflowMemberKeyFromSummary(savedWorkflow) || undefined,
+          step: 'build',
+          tab: 'studio',
+        }));
         void message.success(
           `Created member ${workflowName} and opened its workflow draft.`,
         );
@@ -6468,11 +6787,21 @@ const StudioPage: React.FC = () => {
       const nextRouteMemberKey =
         explicitRouteMemberKey || normalizedRouteMemberKey;
       if (nextRouteMemberKey && nextStudioSurface !== 'build') {
+        const workflowBindFocus =
+          activeBuildFocusKey ||
+          selectedWorkflowMemberKey ||
+          (routeBuildFocus.kind === 'workflow'
+            ? (`workflow:${routeBuildFocus.value}` as StudioBuildFocus)
+            : '');
         history.replace(buildStudioRoute({
           scopeId: resolvedStudioScopeId || undefined,
           teamId: routeState.teamId || undefined,
           returnTo: routeState.returnTo || undefined,
           memberKey: nextRouteMemberKey,
+          focus:
+            nextStudioSurface === 'bind' && resolvedBuildSurface === 'editor'
+              ? workflowBindFocus || undefined
+              : undefined,
           step:
             nextStudioSurface === 'bind'
               ? 'bind'
@@ -6489,11 +6818,15 @@ const StudioPage: React.FC = () => {
       }
     },
     [
+      activeBuildFocusKey,
       buildSurface,
       ensureActiveWorkflowDraftLoaded,
       resolvedStudioScopeId,
+      routeBuildFocus.kind,
+      routeBuildFocus.value,
       routeState.teamId,
       routeState.returnTo,
+      selectedWorkflowMemberKey,
     ],
   );
   const handleBindingSelectionChange = useCallback(
@@ -7070,7 +7403,11 @@ const StudioPage: React.FC = () => {
     const persistedLifecycleFocus =
       studioSurface === 'bind' && routeBuildFocus.kind === 'script'
         ? (`script:${routeBuildFocus.value}` as const)
-        : undefined;
+        : studioSurface === 'bind' &&
+            routeBuildFocus.kind === 'workflow' &&
+            !selectedWorkflowRepresentsPublishedMember
+          ? (`workflow:${routeBuildFocus.value}` as const)
+          : undefined;
     const persistedFocus =
       persistedLifecycleFocus ||
       (persistBuildFocusRoute &&
@@ -7114,6 +7451,7 @@ const StudioPage: React.FC = () => {
     routeState.teamId,
     routeState.returnTo,
     runPrompt,
+    selectedWorkflowRepresentsPublishedMember,
     selectedWorkflowId,
     selectedExecutionId,
     studioSurface,
@@ -7123,12 +7461,16 @@ const StudioPage: React.FC = () => {
   const workbenchMemberKey =
     routeSelectedBackendMemberKey || currentFocusMemberKey;
   const buildSurfaceSelectedMemberKey =
-    studioSurface === 'build' &&
-    (currentFocusMemberKey.startsWith('workflow:') ||
-      currentFocusMemberKey.startsWith('script:'))
-      ? activeBuildPublishedMemberId
-        ? `member:${activeBuildPublishedMemberId}`
-        : currentFocusMemberKey
+    studioSurface === 'build'
+      ? routeSelectedBackendMemberKey ||
+        (
+          currentFocusMemberKey.startsWith('workflow:') ||
+          currentFocusMemberKey.startsWith('script:')
+            ? activeBuildPublishedMemberId
+              ? `member:${activeBuildPublishedMemberId}`
+              : currentFocusMemberKey
+            : ''
+        )
       : '';
   const workbenchPublishedServiceId = useMemo(
     () =>
@@ -7200,6 +7542,107 @@ const StudioPage: React.FC = () => {
       workbenchStudioMemberSummary,
     ],
   );
+  useEffect(() => {
+    if (!isStudioLocation || studioSurface !== 'bind') {
+      return;
+    }
+
+    if (!routeSelectedBackendMemberKey || routeBuildFocus.kind === 'workflow') {
+      return;
+    }
+
+    const memberSummary = workbenchStudioMember ?? workbenchStudioMemberSummary;
+    const memberImplementationRef = workbenchStudioMemberDetailMatchesSelection
+      ? workbenchStudioMemberDetailQuery.data?.implementationRef ?? null
+      : null;
+    if (
+      normalizeStudioMemberBindingImplementationKind(
+        memberImplementationRef?.implementationKind ||
+          memberSummary?.implementationKind,
+      ) !== 'workflow'
+    ) {
+      return;
+    }
+
+    const memberPublishedServiceId =
+      trimOptional(memberSummary?.publishedServiceId) ||
+      trimOptional(workbenchPublishedServiceId);
+    const memberPublishedServiceExists =
+      Boolean(memberPublishedServiceId) &&
+      publishedScopeServices.some(
+        (service) => trimOptional(service.serviceId) === memberPublishedServiceId,
+      );
+    if (memberPublishedServiceExists) {
+      return;
+    }
+
+    const workflowLookupValue =
+      trimOptional(memberImplementationRef?.workflowId) ||
+      trimOptional(memberSummary?.displayName) ||
+      trimOptional(memberSummary?.memberId);
+    const workflowId = resolveWorkflowIdFromRouteValue(
+      workflowLookupValue,
+      visibleWorkflowSummaries,
+      {
+        allowDirectIdFallback: true,
+        workflowFile: activeWorkflowFile,
+      },
+    );
+    if (!workflowId) {
+      return;
+    }
+
+    const memberId =
+      trimOptional(memberSummary?.memberId) ||
+      readMemberIdFromMemberKey(routeSelectedBackendMemberKey);
+    if (!memberId) {
+      return;
+    }
+
+    const selectedWorkflowSummary = visibleWorkflowSummaries.find(
+      (workflow) => trimOptional(workflow.workflowId) === workflowId,
+    );
+    const workflowFocusKey =
+      buildWorkflowMemberKeyFromSummary(selectedWorkflowSummary) ||
+      (`workflow:${workflowId}` as const);
+    const memberRouteKey = buildBackendMemberKey(memberId);
+    pinnedRouteBackendMemberIdRef.current = memberId;
+    setPinnedRouteBackendMemberId(memberId);
+    setSelectedWorkflowId((currentWorkflowId) =>
+      trimOptional(currentWorkflowId) === workflowId
+        ? currentWorkflowId
+        : workflowId,
+    );
+    setSelectedScriptId('');
+    setTemplateWorkflow('');
+    setBuildSurface('editor');
+    history.replace(buildStudioRoute({
+      scopeId: resolvedStudioScopeId || undefined,
+      teamId: routeState.teamId || undefined,
+      returnTo: routeState.returnTo || undefined,
+      memberKey: memberRouteKey,
+      focus: workflowFocusKey,
+      step: 'bind',
+      tab: 'bindings',
+    }));
+  }, [
+    activeWorkflowFile,
+    history,
+    isStudioLocation,
+    publishedScopeServices,
+    resolvedStudioScopeId,
+    routeBuildFocus.kind,
+    routeSelectedBackendMemberKey,
+    routeState.returnTo,
+    routeState.teamId,
+    studioSurface,
+    visibleWorkflowSummaries,
+    workbenchPublishedServiceId,
+    workbenchStudioMember,
+    workbenchStudioMemberDetailMatchesSelection,
+    workbenchStudioMemberDetailQuery.data?.implementationRef,
+    workbenchStudioMemberSummary,
+  ]);
   const workbenchStudioMemberBinding = useMemo(
     () =>
       workbenchStudioMemberDetailMatchesSelection
@@ -7225,152 +7668,6 @@ const StudioPage: React.FC = () => {
       ? currentServiceRevisionByServiceId.get(serviceId) ?? null
       : null;
   }, [currentServiceRevisionByServiceId, workbenchPublishedService?.serviceId]);
-  const workbenchMemberIsTeamEntry = Boolean(
-    workbenchStudioMemberId &&
-      resolvedStudioTeamId &&
-      trimOptional(studioTeamSummaryQuery.data?.entryMemberId) ===
-        trimOptional(workbenchStudioMemberId),
-  );
-  const resolveTeamEntryCandidate = useCallback((): StudioTeamEntryCandidate | null => {
-    const memberId =
-      trimOptional(teamEntryCandidate?.memberId) ||
-      trimOptional(workbenchStudioMemberId) ||
-      trimOptional(workbenchStudioMember?.memberId) ||
-      trimOptional(workbenchStudioMemberSummary?.memberId) ||
-      trimOptional(routeSelectedBackendMemberId);
-    const scope = trimOptional(teamEntryCandidate?.scopeId) || resolvedStudioScopeId;
-    const team = trimOptional(teamEntryCandidate?.teamId) || resolvedStudioTeamId;
-
-    if (!memberId || !scope || !team) {
-      return null;
-    }
-
-    return {
-      memberId,
-      scopeId: scope,
-      teamId: team,
-    };
-  }, [
-    resolvedStudioScopeId,
-    resolvedStudioTeamId,
-    routeSelectedBackendMemberId,
-    teamEntryCandidate,
-    workbenchStudioMember?.memberId,
-    workbenchStudioMemberId,
-    workbenchStudioMemberSummary?.memberId,
-  ]);
-  const waitForTeamEntryVisibility = useCallback(
-    async (candidate: StudioTeamEntryCandidate) => {
-      for (
-        let attempt = 0;
-        attempt < studioTeamEntryVisibilityAttempts;
-        attempt += 1
-      ) {
-        const summary = await queryClient.fetchQuery({
-          queryFn: () => studioApi.getTeam(candidate.scopeId, candidate.teamId),
-          queryKey: [
-            'teams',
-            'team-summary',
-            candidate.scopeId,
-            candidate.teamId,
-          ],
-          staleTime: 0,
-        });
-        if (hasTeamEntryMember(summary, candidate.memberId)) {
-          return true;
-        }
-        if (attempt < studioTeamEntryVisibilityAttempts - 1) {
-          await delay(studioTeamEntryVisibilityRetryDelayMs);
-        }
-      }
-
-      return false;
-    },
-    [queryClient],
-  );
-  const handleSetTeamEntryFromStudio = useCallback(
-    async (options?: { test?: boolean }) => {
-      const candidate = resolveTeamEntryCandidate();
-      if (!candidate) {
-        void message.warning('Resolve a Team member before setting Team entry.');
-        return;
-      }
-
-      setTeamEntryActionBusy(true);
-      try {
-        const alreadyEntry =
-          trimOptional(studioTeamSummaryQuery.data?.entryMemberId) ===
-          trimOptional(candidate.memberId);
-        if (alreadyEntry && options?.test) {
-          history.push(
-            buildTeamDetailHref({
-              memberId: candidate.memberId,
-              scopeId: candidate.scopeId,
-              tab: 'overview',
-              testTeam: true,
-              teamId: candidate.teamId,
-            }),
-          );
-          return;
-        }
-
-        const updatedTeam = await studioApi.setTeamEntryMember(
-          candidate.scopeId,
-          candidate.teamId,
-          candidate.memberId,
-        );
-        if (updatedTeam) {
-          queryClient.setQueryData(
-            ['teams', 'team-summary', candidate.scopeId, candidate.teamId],
-            updatedTeam,
-          );
-        }
-        await Promise.all([
-          queryClient.invalidateQueries({
-            queryKey: ['teams', 'team-summary', candidate.scopeId, candidate.teamId],
-          }),
-          queryClient.invalidateQueries({
-            queryKey: ['teams', 'team-members', candidate.scopeId, candidate.teamId],
-          }),
-          queryClient.invalidateQueries({
-            queryKey: ['teams', 'roster', candidate.scopeId],
-          }),
-        ]);
-        const entryVisible = options?.test
-          ? await waitForTeamEntryVisibility(candidate)
-          : false;
-        const targetHref = buildTeamDetailHref({
-          memberId: candidate.memberId,
-          scopeId: candidate.scopeId,
-          tab: 'overview',
-          testTeam: options?.test && entryVisible,
-          teamId: candidate.teamId,
-        });
-        void message.info('Team entry 变更已提交，正在等待同步确认。');
-        if (options?.test) {
-          if (!entryVisible) {
-            void message.warning(
-              'Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后在 Team Detail 中重试 Test Team。',
-            );
-          }
-          history.push(targetHref);
-        }
-      } catch (error) {
-        void message.error(
-          error instanceof Error ? error.message : String(error),
-        );
-      } finally {
-        setTeamEntryActionBusy(false);
-      }
-    },
-    [
-      history,
-      queryClient,
-      resolveTeamEntryCandidate,
-      studioTeamSummaryQuery.data?.entryMemberId,
-      waitForTeamEntryVisibility,
-    ],
-  );
   useEffect(() => {
     if (studioSurface !== 'build') {
       return;
@@ -7499,8 +7796,16 @@ const StudioPage: React.FC = () => {
             publishedScopeMembers,
             studioScopeMembers,
           );
-          if (lifecycleWorkflowId) {
-            setSelectedWorkflowId(lifecycleWorkflowId);
+          const resolvedLifecycleWorkflowId = resolveWorkflowIdFromRouteValue(
+            lifecycleWorkflowId,
+            visibleWorkflowSummaries,
+            {
+              allowDirectIdFallback: true,
+              workflowFile: activeWorkflowFile,
+            },
+          );
+          if (resolvedLifecycleWorkflowId) {
+            setSelectedWorkflowId(resolvedLifecycleWorkflowId);
             setSelectedScriptId('');
             setTemplateWorkflow('');
           }
@@ -7525,6 +7830,7 @@ const StudioPage: React.FC = () => {
     },
     [
       applyStudioTarget,
+      activeWorkflowFile,
       buildSurface,
       confirmScriptsStudioLeave,
       currentFocusMemberKey,
@@ -7533,6 +7839,7 @@ const StudioPage: React.FC = () => {
       selectedScriptId,
       studioSurface,
       studioScopeMembers,
+      visibleWorkflowSummaries,
       workbenchPublishedServiceRevision?.scriptId,
       workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
     ],
@@ -8296,10 +8603,22 @@ const StudioPage: React.FC = () => {
   const selectedInventoryIsEntryMember =
     Boolean(selectedInventoryEntryMemberId) &&
     selectedInventoryEntryMemberId === studioTeamEntryMemberId;
+  const selectedInventoryEntryMemberSummary =
+    workbenchStudioMember?.memberId === selectedInventoryEntryMemberId
+      ? workbenchStudioMember
+      : workbenchStudioMemberSummary?.memberId === selectedInventoryEntryMemberId
+        ? workbenchStudioMemberSummary
+        : null;
+  const selectedInventoryEntryMemberReady =
+    normalizeStudioMemberLifecycleStage(
+      selectedInventoryEntryMemberSummary?.lifecycleStage,
+    ) === 'bind_ready' &&
+    Boolean(trimOptional(selectedInventoryEntryMemberSummary?.publishedServiceId));
   const canSetSelectedInventoryEntryMember = Boolean(
     resolvedStudioScopeId &&
       resolvedStudioTeamId &&
-      selectedInventoryEntryMemberId,
+      selectedInventoryEntryMemberId &&
+      selectedInventoryEntryMemberReady,
   );
   const handleSetSelectedInventoryEntryMember = useCallback(async () => {
     if (
@@ -8347,6 +8666,7 @@ const StudioPage: React.FC = () => {
     resolvedStudioScopeId,
     resolvedStudioTeamId,
     selectedInventoryEntryMemberId,
+    selectedInventoryEntryMemberReady,
     selectedInventoryIsEntryMember,
     studioTeamSummaryQueryKey,
   ]);
@@ -8496,6 +8816,10 @@ const StudioPage: React.FC = () => {
       }
 
       if (normalizedMemberKey.startsWith('script:')) {
+        // Refactor (iter1/cluster-studio-member-routing):
+        // Old: script rail items reused member=script:<id>, which made a
+        // script artifact look like a lifecycle member target. New: scripts are
+        // Build focus only; Bind still requires a real backend member:<id>.
         pinnedRouteBackendMemberIdRef.current = '';
         setPinnedRouteBackendMemberId('');
         const scriptId = normalizedMemberKey.slice('script:'.length);
@@ -8520,7 +8844,7 @@ const StudioPage: React.FC = () => {
               scopeId: resolvedStudioScopeId || undefined,
               teamId: routeState.teamId || undefined,
               returnTo: routeState.returnTo || undefined,
-              memberKey: normalizedMemberKey,
+              focus: `script:${scriptId}`,
               step: currentLifecycleStep,
             }),
           );
@@ -8532,7 +8856,7 @@ const StudioPage: React.FC = () => {
             scopeId: resolvedStudioScopeId || undefined,
             teamId: routeState.teamId || undefined,
             returnTo: routeState.returnTo || undefined,
-            memberKey: normalizedMemberKey,
+            focus: `script:${scriptId}`,
             tab: 'scripts',
           }),
         );
@@ -8541,6 +8865,12 @@ const StudioPage: React.FC = () => {
       }
 
       if (normalizedMemberKey.startsWith('member:')) {
+        // Refactor (iter1/cluster-studio-member-routing):
+        // Old: Team rail clicks treated the member implementation kind as the
+        // lifecycle destination, so Workflow members jumped to Build while
+        // GAgent members jumped to Bind. New: the current lifecycle step stays
+        // authoritative; member clicks only swap the selected backend member and
+        // the matching Build focus when Build is already active.
         const selectedMemberSummary = resolveStudioMemberSummaryFromMemberKey(
           normalizedMemberKey,
           publishedScopeMembers,
@@ -8581,22 +8911,38 @@ const StudioPage: React.FC = () => {
               },
             );
             if (workflowId) {
+              const selectedWorkflowSummary = visibleWorkflowSummaries.find(
+                (workflow) => trimOptional(workflow.workflowId) === workflowId,
+              );
               const workflowMemberKey =
-                buildWorkflowMemberKeyFromSummary(
-                  visibleWorkflowSummaries.find(
-                    (workflow) => trimOptional(workflow.workflowId) === workflowId,
-                  ),
-                ) || normalizedMemberKey;
+                buildWorkflowMemberKeyFromSummary(selectedWorkflowSummary) ||
+                (`workflow:${workflowId}` as const);
+              const memberRouteKey =
+                selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey;
+              pinnedRouteBackendMemberIdRef.current =
+                selectedMemberId || readMemberIdFromMemberKey(normalizedMemberKey);
+              setPinnedRouteBackendMemberId(
+                selectedMemberId || readMemberIdFromMemberKey(normalizedMemberKey),
+              );
+              setSelectedWorkflowId(workflowId);
+              setSelectedScriptId('');
+              setTemplateWorkflow('');
+              setBuildSurface('editor');
+              const shouldOpenWorkflowBuild = studioSurface === 'build';
+              if (shouldOpenWorkflowBuild) {
+                setStudioSurface('build');
+              }
               history.push(
                 buildStudioRoute({
                   scopeId: resolvedStudioScopeId || undefined,
                   teamId: routeState.teamId || undefined,
                   returnTo: routeState.returnTo || undefined,
-                  memberKey: workflowMemberKey,
-                  tab: 'studio',
+                  memberKey: memberRouteKey,
+                  focus: workflowMemberKey,
+                  step: shouldOpenWorkflowBuild ? 'build' : currentLifecycleStep,
+                  tab: shouldOpenWorkflowBuild ? 'studio' : undefined,
                 }),
               );
-              openWorkspaceWorkflow(workflowId);
             } else {
               void message.warning(
                 `Could not find a workflow draft for ${memberImplementationName || 'this member'}.`,
@@ -8650,18 +8996,40 @@ const StudioPage: React.FC = () => {
           if (memberImplementationKind === 'gagent') {
             const memberKey =
               selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey;
+            pinnedRouteBackendMemberIdRef.current =
+              selectedMemberId || readMemberIdFromMemberKey(normalizedMemberKey);
+            setPinnedRouteBackendMemberId(
+              selectedMemberId || readMemberIdFromMemberKey(normalizedMemberKey),
+            );
+            setSelectedWorkflowId('');
+            setSelectedScriptId('');
+            setTemplateWorkflow('');
+            if (studioSurface !== 'build') {
+              if (studioSurface === 'observe') {
+                setSelectedExecutionId('');
+              }
+              history.push(
+                buildStudioRoute({
+                  scopeId: resolvedStudioScopeId || undefined,
+                  teamId: routeState.teamId || undefined,
+                  returnTo: routeState.returnTo || undefined,
+                  memberKey,
+                  step: currentLifecycleStep,
+                }),
+              );
+              return;
+            }
+
             history.push(
               buildStudioRoute({
                 scopeId: resolvedStudioScopeId || undefined,
                 teamId: routeState.teamId || undefined,
+                returnTo: routeState.returnTo || undefined,
                 memberKey,
                 step: 'build',
                 tab: 'gagents',
               }),
             );
-            setSelectedWorkflowId('');
-            setSelectedScriptId('');
-            setTemplateWorkflow('');
             setBuildSurface('gagent');
             setStudioSurface('build');
             return;
@@ -8679,6 +9047,11 @@ const StudioPage: React.FC = () => {
         const selectedScriptIdForMember = trimOptional(
           selectedPublishedMember?.matchedScript?.script?.scriptId,
         );
+        const selectedMemberImplementationKind =
+          normalizeStudioMemberBindingImplementationKind(
+            selectedMemberSummary?.implementationKind ||
+              selectedPublishedMember?.revision?.implementationKind,
+          );
         const selectedMemberOwnerKey =
           selectedWorkflowIdForMember
             ? buildWorkflowMemberKeyFromSummary(selectedPublishedMember?.matchedWorkflow)
@@ -8741,6 +9114,35 @@ const StudioPage: React.FC = () => {
             }),
           );
           openScopeScript(selectedScriptIdForMember);
+          return;
+        }
+
+        if (selectedMemberImplementationKind === 'gagent') {
+          const memberKey =
+            selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey;
+          const actorTypeName = trimOptional(
+            selectedPublishedMember?.revision?.staticActorTypeName,
+          );
+          if (actorTypeName) {
+            setSelectedGAgentTypeName((current) =>
+              trimOptional(current) === actorTypeName ? current : actorTypeName,
+            );
+          }
+          setSelectedWorkflowId('');
+          setSelectedScriptId('');
+          setTemplateWorkflow('');
+          setBuildSurface('gagent');
+          setStudioSurface('build');
+          history.push(
+            buildStudioRoute({
+              scopeId: resolvedStudioScopeId || undefined,
+              teamId: routeState.teamId || undefined,
+              returnTo: routeState.returnTo || undefined,
+              memberKey,
+              step: 'build',
+              tab: 'gagents',
+            }),
+          );
           return;
         }
 
@@ -9017,8 +9419,14 @@ const StudioPage: React.FC = () => {
       }
     }
 
+    const currentMemberIsExplicitBackendRoute =
+      Boolean(resolvedStudioTeamId) &&
+      Boolean(routeSelectedBackendMemberKey) &&
+      selectedRailMemberKey === routeSelectedBackendMemberKey &&
+      selectedRailMemberKey === currentMemberItem.key;
     const currentMemberBelongsToRailScope =
       !resolvedStudioTeamId ||
+      currentMemberIsExplicitBackendRoute ||
       currentMemberDuplicateKeys
         .map((key) => trimOptional(key))
         .filter(Boolean)
@@ -9072,6 +9480,7 @@ const StudioPage: React.FC = () => {
     memberRecencyOrder,
     publishedScopeMembers,
     resolvedStudioTeamId,
+    routeSelectedBackendMemberKey,
     selectedRailMemberKey,
     serviceBackedScriptIds,
     serviceBackedWorkflowIds,
@@ -9724,7 +10133,7 @@ const StudioPage: React.FC = () => {
         setEditableWorkflowDocument(null);
         setSaveNotice(null);
       }}
-      onSaveDraft={() => void handleSaveDraft()}
+      onSaveDraft={(draft) => void handleSaveDraft(draft)}
       savePending={savePending}
       canSaveWorkflow={canSaveWorkflow}
       saveNotice={saveNotice}
@@ -9751,10 +10160,15 @@ const StudioPage: React.FC = () => {
       onAutoLayout={handleAutoLayoutWorkflow}
       onConnectNodes={handleWorkflowConnectNodes}
       onNodeLayoutChange={handleWorkflowNodeLayoutChange}
-      onContinueToBind={() => applyStudioTarget('bind', undefined, lifecycleSurfaceMemberKey)}
+      onContinueToBind={() =>
+        applyStudioTarget('bind', 'editor', lifecycleSurfaceMemberKey)
+      }
     />
   );
 
+  // Refactor (iter2/cluster-1515): Old: the standalone ScriptsWorkbenchPage
+  // carried a separate Scripts Studio editing surface. New: the Studio Scripts
+  // tab is the single Script Build path through the integrated panel below.
   const scriptBuildContent = appContextQuery.data?.features.scripts ? (
     <StudioScriptBuildPanel
       scopeId={resolvedStudioScopeId || undefined}
@@ -9787,7 +10201,6 @@ const StudioPage: React.FC = () => {
         const scriptFocusId =
           trimOptional(selectedScriptId) ||
           (routeBuildFocus.kind === 'script' ? routeBuildFocus.value : '') ||
-          (routeSelectedMember.kind === 'script' ? routeSelectedMember.value : '') ||
           trimOptional(scriptBuildState?.scriptId);
         const memberKeyForBind =
           routeSelectedBackendMemberKey ||
@@ -9797,6 +10210,12 @@ const StudioPage: React.FC = () => {
           (routeSelectedMemberKey.startsWith('member:')
             ? routeSelectedMemberKey
             : '');
+        if (!memberKeyForBind) {
+          void message.warning(
+            'Select or create a member before opening Bind for this Script.',
+          );
+          return;
+        }
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
@@ -9930,17 +10349,6 @@ const StudioPage: React.FC = () => {
         onBindPendingCandidate={handleBindPendingCandidate}
         onContinueToInvoke={handleUseBindingEndpoint}
         onSelectionChange={handleBindingSelectionChange}
-        postBindEntryActions={
-          resolvedStudioTeamId && workbenchStudioMemberId
-            ? {
-                busy: teamEntryActionBusy,
-                isEntryMember: workbenchMemberIsTeamEntry,
-                memberId: workbenchStudioMemberId,
-                onSetEntryAndTest: () =>
-                  void handleSetTeamEntryFromStudio({ test: true }),
-              }
-            : null
-        }
         pendingBindingCandidate={bindPendingCandidate}
         preferredServiceId={bindPendingCandidate ? '' : bindSelectedMemberServiceId}
         scopeId={resolvedStudioScopeId}

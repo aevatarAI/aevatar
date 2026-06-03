@@ -142,6 +142,14 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                 context.Terminate = true;
                 context.TerminationKind = ToolCallTerminationKind.ApprovalPending;
                 context.TerminationReason = result.Reason;
+                context.PendingApproval = new ToolApprovalPendingContext(
+                    request.RequestId,
+                    request.ToolName,
+                    request.ToolCallId,
+                    request.ArgumentsJson,
+                    request.ApprovalMode,
+                    request.IsReadOnly,
+                    request.IsDestructive);
                 context.Result = BuildApprovalPendingResult(request);
                 return;
         }

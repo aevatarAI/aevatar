@@ -77,7 +77,7 @@ message ChatRouteInput {
   // output. Empty for ChatSourceKind=DIRECT / NYX_RESPONSES when caller
   // didn't supply a hint.
   string channel = 3;
-  // Optional command name (slash command / template name like "/daily").
+  // Optional command name (slash command / template name like "/invoice").
   // Empty when message is free-form.
   string command_name = 4;
   // Bounded content classifier output (e.g. detected intent label,
@@ -93,8 +93,8 @@ message ChatRouteInput {
 
 // ─── Decision actions (oneof) ───
 message ChatRouteToolSetRef {
-  // Name of the registered tool set (e.g. "workspace.default",
-  // "lark.self_notify", "voice.realtime"). The registry resolves this to a
+  // Name of the registered tool set (e.g. "workspace.default" or
+  // "lark.self_notify"). The registry resolves this to a
   // concrete IAgentToolSource list at the boundary.
   string name = 1;
 }
@@ -106,6 +106,15 @@ message ChatRouteToolChoiceHint {
   // LLM-supplied arguments that conflict on the same key; the prefilled values
   // are trusted policy input, not model-supplied data.
   google.protobuf.Struct prefilled_arguments = 2;
+  // Typed voice attach target for ChatSourceKind=VOICE. This keeps voice
+  // session attachment out of tool prefill bags while preserving the
+  // ForwardToModel/Reject action set.
+  ChatRouteVoiceAttachTarget voice_attach_target = 3;
+}
+
+message ChatRouteVoiceAttachTarget {
+  string actor_id = 1;
+  string voice_module_name = 2;
 }
 
 message ForwardToModel {

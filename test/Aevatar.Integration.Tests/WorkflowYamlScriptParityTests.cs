@@ -1,7 +1,7 @@
-using Aevatar.AI.Abstractions.Agents;
-using Aevatar.AI.Core.Agents;
+using Aevatar.AI.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
@@ -11,6 +11,7 @@ using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -51,7 +52,7 @@ public class WorkflowYamlScriptParityTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.AddAevatarAgentKindRegistry(RegisterAssistantRoleKind);
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
 
@@ -106,7 +107,7 @@ public class WorkflowYamlScriptParityTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent
+            Payload = Any.Pack(new WorkflowChatRequestEvent
             {
                 Prompt = prompt,
                 SessionId = "parity-session",
@@ -124,6 +125,14 @@ public class WorkflowYamlScriptParityTests
         await runtime.DestroyAsync(definitionActor.Id);
         return completed.Output ?? string.Empty;
     }
+
+    private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
+        builder.Register(new AgentRegistration(
+            "workflow.assistant-role",
+            typeof(WorkflowRoleGAgent),
+            typeof(RoleGAgentState),
+            [],
+            []));
 
     private static async Task<string> RunScriptUppercaseAsync(string prompt)
     {
@@ -188,6 +197,7 @@ public class WorkflowYamlScriptParityTests
         roles:
           - id: transformer
             name: Transformer
+            agent_kind: workflow.assistant-role
             system_prompt: "deterministic transform only"
         steps:
           - id: to_upper

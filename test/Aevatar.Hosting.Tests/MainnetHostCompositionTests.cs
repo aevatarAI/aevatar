@@ -159,7 +159,6 @@ public sealed class MainnetHostCompositionTests
 
         registry.GetRegisteredNames().Should().Equal(
             ToolSetNames.LarkSelfNotify,
-            ToolSetNames.VoiceRealtime,
             ToolSetNames.WorkspaceDefault);
 
         var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
@@ -189,10 +188,9 @@ public sealed class MainnetHostCompositionTests
         larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is QueryReadModelToolSource);
 
-        var voice = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.VoiceRealtime });
-        voice.IsSuccess.Should().BeTrue(voice.Error?.Message);
-        voice.Sources.Select(static source => source.GetType()).Should()
-            .Equal(workspace.Sources.Select(static source => source.GetType()));
+        var voice = registry.Resolve(new ChatRouteToolSetRef { Name = "voice.realtime" });
+        voice.IsSuccess.Should().BeFalse();
+        voice.Error!.Code.Should().Be(ToolSetResolveError.UnknownNameCode);
 
         var unknown = registry.Resolve(new ChatRouteToolSetRef { Name = "missing.set" });
         unknown.IsSuccess.Should().BeFalse();
@@ -220,7 +218,7 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
-    public void AddAevatarMainnetHost_ShouldRunRetiredActorCleanup_BeforeProjectionStartupServices()
+    public void AddAevatarMainnetHost_ShouldRegisterRetiredActorCleanupHostedService()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
@@ -231,11 +229,8 @@ public sealed class MainnetHostCompositionTests
             options.EnableCors = false;
         });
 
-        var cleanupIndex = HostedServiceIndex<RetiredActorCleanupHostedService>(builder.Services);
-
-        HostedServiceIndex(builder.Services, "ChannelBotRegistrationStartupService").Should().BeGreaterThan(cleanupIndex);
-        HostedServiceIndex(builder.Services, "DeviceRegistrationStartupService").Should().BeGreaterThan(cleanupIndex);
-        HostedServiceIndex(builder.Services, "UserAgentCatalogStartupService").Should().BeGreaterThan(cleanupIndex);
+        // Refactor (issue1290-first): Old: strict cleanup-before-module-startup invariant.  New: cleanup is best-effort restart-idempotent, not a cross-pod completion barrier.
+        HostedServiceDescriptors<RetiredActorCleanupHostedService>(builder.Services).Should().ContainSingle();
     }
 
     private static WebApplicationBuilder CreateBuilder()
@@ -259,26 +254,11 @@ public sealed class MainnetHostCompositionTests
         return builder;
     }
 
-    private static int HostedServiceIndex<THostedService>(IServiceCollection services)
+    private static IEnumerable<ServiceDescriptor> HostedServiceDescriptors<THostedService>(IServiceCollection services)
         where THostedService : IHostedService
-        => HostedServiceIndex(services, typeof(THostedService).Name);
-
-    private static int HostedServiceIndex(IServiceCollection services, string implementationTypeName)
-    {
-        var index = services
-            .Select((descriptor, position) => new
-            {
-                descriptor,
-                position,
-            })
-            .Where(x => x.descriptor.ServiceType == typeof(IHostedService))
-            .Single(x => string.Equals(
-                x.descriptor.ImplementationType?.Name,
-                implementationTypeName,
-                StringComparison.Ordinal))
-            .position;
-        return index;
-    }
+        => services.Where(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(THostedService));
 
     private sealed class BrokenMainnetService(MissingMainnetDependency dependency)
     {

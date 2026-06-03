@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Reflection;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -106,33 +107,220 @@ public class ToolCallLoopTests
     }
 
     [Fact]
-    public void AgentToolExecutionContextMapper_ShouldPromoteOwnedKeysAndKeepExternalMetadataOnly()
+    public void AgentToolExecutionContextMapper_ShouldIgnoreOwnedKeysAndKeepExternalMetadataOnly()
     {
         var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            [LLMRequestMetadataKeys.RequestId] = "request-a",
+            [LLMRequestMetadataKeys.CallId] = "call-a",
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
             [LLMRequestMetadataKeys.NyxIdOrgToken] = "org-token",
+            [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "sender-token",
             [LLMRequestMetadataKeys.ModelOverride] = "model-a",
             [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/preferred",
             [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
+            [LLMRequestMetadataKeys.UserMemoryPrompt] = "memory-a",
             [LLMRequestMetadataKeys.ConnectedServicesContext] = "{\"services\":[]}",
+            [LLMRequestMetadataKeys.OwnerSubject] = "owner-a",
+            [LLMRequestMetadataKeys.ResponseId] = "response-a",
+            [LLMRequestMetadataKeys.SenderBindingId] = "binding-a",
             ["scope_id"] = "scope-a",
             ["channel.platform"] = "lark",
             ["channel.sender_id"] = "ou_1",
             ["trace-id"] = "trace-1",
         });
 
-        context.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        context.Credentials.NyxIdOrgToken.Should().Be("org-token");
-        context.Caller.ScopeId.Should().Be("scope-a");
-        context.Channel.Platform.Should().Be("lark");
-        context.Channel.SenderId.Should().Be("ou_1");
-        context.Routing.ModelOverride.Should().Be("model-a");
-        context.Routing.NyxIdRoutePreference.Should().Be("/preferred");
-        context.Routing.MaxToolRoundsOverride.Should().Be(7);
-        context.ConnectedServices.ContextJson.Should().Be("{\"services\":[]}");
+        context.Request.RequestId.Should().BeNull();
+        context.Request.CallId.Should().BeNull();
+        context.Credentials.NyxIdAccessToken.Should().BeNull();
+        context.Credentials.NyxIdOrgToken.Should().BeNull();
+        context.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        context.Caller.ScopeId.Should().BeNull();
+        context.Caller.OwnerSubject.Should().BeNull();
+        context.Caller.ResponseId.Should().BeNull();
+        context.Channel.Platform.Should().BeNull();
+        context.Channel.SenderId.Should().BeNull();
+        context.SenderBinding.BindingId.Should().BeNull();
+        context.Routing.ModelOverride.Should().BeNull();
+        context.Routing.NyxIdRoutePreference.Should().BeNull();
+        context.Routing.MaxToolRoundsOverride.Should().BeNull();
+        context.Routing.UserMemoryPrompt.Should().BeNull();
+        context.ConnectedServices.ContextJson.Should().BeNull();
         context.ExternalMetadata.Should().ContainSingle();
         context.ExternalMetadata["trace-id"].Should().Be("trace-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMetadataHasOwnedKeys_ShouldKeepOnlyExternalAnnotationsForToolExecution()
+    {
+        string? capturedToken = null;
+        string? capturedScope = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tool-call-1",
+                        Name = "capture",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("capture", _ =>
+        {
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedScope = AgentToolRequestContext.ScopeId;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
+            capturedCallId = AgentToolRequestContext.CallId;
+            return "{}";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+                [LLMRequestMetadataKeys.ScopeId] = "metadata-scope",
+                [LLMRequestMetadataKeys.CallId] = "metadata-call",
+                ["trace-id"] = "trace-1",
+            },
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        capturedToken.Should().BeNull();
+        capturedScope.Should().BeNull();
+        capturedExternal.Should().Be("trace-1");
+        capturedCallId.Should().Be("tool-call-1");
+        messages.Should().ContainSingle(m => m.Role == "tool" && m.ToolCallId == "tool-call-1");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteToolCallsAsync_WhenMetadataHasOwnedKeys_ShouldPushOnlyExternalAnnotations()
+    {
+        string? capturedToken = null;
+        string? capturedScope = null;
+        string? capturedExternal = null;
+        string? capturedCallId = null;
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("capture", _ =>
+        {
+            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedScope = AgentToolRequestContext.ScopeId;
+            capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
+            capturedCallId = AgentToolRequestContext.CallId;
+            return """{"ok":true}""";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            [LLMRequestMetadataKeys.ScopeId] = "metadata-scope",
+            [LLMRequestMetadataKeys.CallId] = "metadata-call",
+            ["trace-id"] = "trace-standalone",
+        };
+        var method = typeof(ToolCallLoop).GetMethod(
+            "ExecuteToolCallsAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var task = (Task)method!.Invoke(loop,
+        [
+            new List<ToolCall>
+            {
+                new()
+                {
+                    Id = "standalone-tool-call",
+                    Name = "capture",
+                    ArgumentsJson = "{}",
+                },
+            },
+            messages,
+            metadata,
+            CancellationToken.None,
+        ])!;
+
+        await task;
+
+        capturedToken.Should().BeNull();
+        capturedScope.Should().BeNull();
+        capturedExternal.Should().Be("trace-standalone");
+        capturedCallId.Should().Be("standalone-tool-call");
+        messages.Should().ContainSingle(m =>
+            m.Role == "tool" &&
+            m.ToolCallId == "standalone-tool-call" &&
+            m.Content == """{"ok":true}""");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenTypedToolContextExists_ShouldExposeRequestExternalMetadataToToolExecution()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-context",
+                        Name = "capture_context",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        string? observedOperatorUserId = null;
+        string? observedExplicitMetadata = null;
+        string? observedAccessToken = null;
+        tools.Register(new DelegateTool("capture_context", _ =>
+        {
+            observedOperatorUserId = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.operator_user_id");
+            observedExplicitMetadata = AgentToolRequestContext.TryGetExternalMetadata("explicit");
+            observedAccessToken = AgentToolRequestContext.NyxIdAccessToken;
+            return "{}";
+        }));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("approve it") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "session-operator",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.lark.operator_user_id"] = "lark-user-1",
+                ["explicit"] = "from-request",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
+            },
+            ToolContext = AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials("typed-token", null, null),
+                ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["explicit"] = "from-tool-context",
+                },
+            },
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        observedOperatorUserId.Should().Be("lark-user-1");
+        observedExplicitMetadata.Should().Be("from-tool-context");
+        observedAccessToken.Should().Be("typed-token");
+        AgentToolRequestContext.Current.Should().BeNull();
     }
 
     [Fact]

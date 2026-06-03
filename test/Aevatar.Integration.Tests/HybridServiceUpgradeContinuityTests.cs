@@ -1,5 +1,3 @@
-using Aevatar.AI.Abstractions.Agents;
-using Aevatar.AI.Core.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
@@ -26,7 +24,6 @@ public sealed class HybridServiceUpgradeContinuityTests
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
         services.AddScriptCapability();
-        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
@@ -151,12 +148,10 @@ public sealed class HybridServiceUpgradeContinuityTests
         };
 
     private sealed class HybridServiceStateGAgent(
-        IActorRuntime runtime,
-        IActorDispatchPort dispatchPort)
+        IActorRuntime runtime)
         : GAgentBase<HybridServiceSnapshot>
     {
         private readonly IActorRuntime _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        private readonly IActorDispatchPort _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
 
         [EventHandler]
         public Task HandleConfigureRequested(ConfigureHybridServiceRequested evt) =>
@@ -236,17 +231,16 @@ public sealed class HybridServiceUpgradeContinuityTests
             string? inputText,
             CancellationToken ct)
         {
-            await _dispatchPort.DispatchAsync(
-                actorId,
+            var actor = await _runtime.GetAsync(actorId)
+                ?? throw new InvalidOperationException($"Hybrid normalization actor `{actorId}` was not found.");
+
+            await actor.HandleEventAsync(
                 CreateEnvelope(new TextNormalizationRequested
                 {
                     CommandId = commandId,
                     InputText = inputText ?? string.Empty,
                 }),
                 ct);
-
-            var actor = await _runtime.GetAsync(actorId)
-                ?? throw new InvalidOperationException($"Hybrid normalization actor `{actorId}` was not found.");
 
             return actor.Agent switch
             {

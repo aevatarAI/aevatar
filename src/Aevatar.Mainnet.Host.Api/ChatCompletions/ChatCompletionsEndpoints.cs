@@ -1,27 +1,15 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.ChatRouting.Abstractions;
-using Aevatar.ChatRouting.Core;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Responses;
-using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Mainnet.Host.Api.Responses;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.ChatCompletions;
 
-[SuppressMessage(
-    "Maintainability",
-    "CA1506:Avoid excessive class coupling",
-    Justification = "Minimal API adapter composes caller scope, route resolution, session registration, and protocol shaping for one external facade.")]
 internal static class ChatCompletionsApiEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -34,254 +22,68 @@ internal static class ChatCompletionsApiEndpoints
         return app;
     }
 
-    [SuppressMessage(
-        "Maintainability",
-        "CA1506:Avoid excessive class coupling",
-        Justification = "Minimal API adapter for one external compatibility endpoint; mirrors MessagesApiEndpoints.")]
+    // Refactor (iter344/cluster-001):
+    //   Old pattern: Host handler owns caller resolution, route resolution, session registration, tool planning, direct provider execution, status updates, and protocol rendering in one request stack.
+    //   New principle: Host maps HTTP/OpenAI frames only; typed Application facade owns Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt/Observe via the same LlmSessionGAgent run path as Responses/Messages.
     internal static async Task<IResult> HandleCreateChatCompletionAsync(
         HttpContext http,
         ChatCompletionsCreateRequest request,
-        [FromServices] ILLMProviderFactory providerFactory,
-        [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
-        [FromServices] IChatRoutePolicyQueryPort chatRoutePolicyQueryPort,
-        [FromServices] ChatRouteResolver chatRouteResolver,
-        [FromServices] IResponsesRouteResolver routeResolver,
-        [FromServices] ILlmSessionRegistrationPort sessionRegistrationPort,
-        [FromServices] IResponsesCompletionApplicationService completionService,
-        [FromServices] IResponsesToolClassificationService toolClassificationService,
-        [FromServices] IResponsesDirectToolPlanService directToolPlanService,
-        [FromServices] ILoggerFactory loggerFactory,
+        [FromServices] IChatCompletionsCommandFacade commandFacade,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(providerFactory);
-        ArgumentNullException.ThrowIfNull(callerScopeResolver);
-        ArgumentNullException.ThrowIfNull(chatRoutePolicyQueryPort);
-        ArgumentNullException.ThrowIfNull(chatRouteResolver);
-        ArgumentNullException.ThrowIfNull(routeResolver);
-        ArgumentNullException.ThrowIfNull(sessionRegistrationPort);
-        ArgumentNullException.ThrowIfNull(completionService);
-        ArgumentNullException.ThrowIfNull(toolClassificationService);
-        ArgumentNullException.ThrowIfNull(directToolPlanService);
-        ArgumentNullException.ThrowIfNull(loggerFactory);
-        var logger = loggerFactory.CreateLogger("Aevatar.Mainnet.Host.Api.ChatCompletions");
+        ArgumentNullException.ThrowIfNull(commandFacade);
 
         var bearerToken = ExtractBearerToken(http);
         if (string.IsNullOrWhiteSpace(bearerToken))
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_required", "Authorization bearer token is required.");
 
-        var normalizedResult = ChatCompletionsRequestNormalizer.Normalize(request);
-        if (!normalizedResult.Succeeded)
+        var commandRequest = ChatCompletionsProtocolMapper.ToCommandRequest(request);
+        if (!commandRequest.Succeeded)
         {
             return ToErrorResult(
                 StatusCodes.Status400BadRequest,
-                normalizedResult.ErrorCode ?? "invalid_request_error",
-                normalizedResult.ErrorMessage ?? "Invalid request.");
+                commandRequest.ErrorCode ?? "invalid_request_error",
+                commandRequest.ErrorMessage ?? "Invalid request.");
         }
 
-        var normalized = normalizedResult.Request!;
-        ResponsesCallerScope callerScope;
-        try
-        {
-            callerScope = await callerScopeResolver.ResolveAsync(bearerToken, ct);
-        }
-        catch (ResponsesCallerScopeUnavailableException ex)
-        {
-            return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_required", ex.Message);
-        }
+        var callerScopeContext = ResponsesApiEndpoints.BuildCallerScopeResolutionContext(http, bearerToken);
+        var result = await commandFacade.CreateAsync(commandRequest.Request!, callerScopeContext, ct);
+        if (result.Error is not null)
+            return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 
-        var routedModel = normalized.Model;
-        var routeDecision = await ResponsesApiEndpoints.ResolveResponsesChatRouteAsync(
-            chatRoutePolicyQueryPort,
-            chatRouteResolver,
-            callerScope,
-            normalized.Model,
-            ResponsesApiEndpoints.ResolveToolMode(normalized.DeclaredTools.Count, inlineToolResultCount: 0),
-            ResponsesApiEndpoints.BuildContentHint(BuildRouteContentHint(normalized)),
-            ct);
-        ResponsesApiEndpoints.ApplyChatRouteDeprecationHeaders(http.Response, routeDecision);
-        if (routeDecision.Action.Reject is not null)
-        {
-            return ToErrorResult(
-                StatusCodes.Status403Forbidden,
-                "chat_route_rejected",
-                string.IsNullOrWhiteSpace(routeDecision.Action.Reject.Reason)
-                    ? "The chat route policy rejected this request."
-                    : routeDecision.Action.Reject.Reason);
-        }
-
-        var routeAction = routeDecision.Action.Clone();
-        var forwardToModel = routeAction.ForwardToModel;
-        if (forwardToModel is not null)
-        {
-            if (!string.IsNullOrWhiteSpace(forwardToModel.ModelName))
-                routedModel = forwardToModel.ModelName.Trim();
-        }
-        else
-        {
-            routeAction.ForwardToModel = new ForwardToModel();
-        }
-
-        routeAction.ForwardToModel.ModelName = routedModel;
-
-        var createdAt = DateTimeOffset.UtcNow;
-        LlmSessionRegistrationResult session;
-        try
-        {
-            session = await sessionRegistrationPort.RegisterAsync(
-                BuildSessionRecord(normalized, callerScope, createdAt),
-                ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return Results.StatusCode(StatusCodes.Status408RequestTimeout);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogError(ex, "Failed to register llm session for chat completion {CompletionId}", normalized.CompletionId);
-            return ToErrorResult(StatusCodes.Status500InternalServerError, "api_error", "Failed to register session.");
-        }
-
-        var toolProviderContext = ResponsesApiEndpoints.BuildToolProviderContext(
-            callerScope,
-            normalized.CompletionId,
-            bearerToken);
-        var toolPlan = directToolPlanService.Build(routeAction);
-        if (toolPlan.Error is not null)
-        {
-            return ToErrorResult(
-                toolPlan.Error.StatusCode,
-                toolPlan.Error.Code,
-                toolPlan.Error.Message);
-        }
-
-        var toolClassification = await toolClassificationService.ClassifyAsync(
-            normalized.DeclaredTools,
-            toolProviderContext,
-            toolPlan.AdditionalToolProviders,
-            ct: ct);
-
-        var modelRoute = ResponsesModelRouteParser.Parse(routedModel);
-        var effectiveModel = routedModel;
-        string? resolvedRouteValue = null;
-        if (modelRoute.RouteSlug is not null)
-        {
-            resolvedRouteValue = await routeResolver
-                .ResolveRouteValueAsync(modelRoute.RouteSlug, bearerToken, ct)
-                .ConfigureAwait(false);
-            if (resolvedRouteValue is not null)
-                effectiveModel = modelRoute.Model;
-        }
-
-        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.CompletionId,
-            [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
-        };
-        if (resolvedRouteValue is not null)
-            llmMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = resolvedRouteValue;
-
-        var llmRequest = new LLMRequest
-        {
-            Messages = [.. normalized.ChatMessages],
-            RequestId = normalized.CompletionId,
-            Metadata = llmMetadata,
-            CallerContext = new LLMRequestCallerContext(
-                callerScope.ScopeId,
-                callerScope.OwnerSubject,
-                normalized.CompletionId,
-                new LLMRequestCallerCredentials(bearerToken)),
-            Tools = toolClassification.EffectiveTools,
-            Model = effectiveModel,
-            Temperature = normalized.Temperature,
-            MaxTokens = normalized.MaxTokens,
-            ResponseFormat = normalized.ResponseFormat,
-        };
-
-        if (normalized.Stream)
+        if (result.StreamPlan is not null)
         {
             await WriteStreamingChatCompletionAsync(
                 http.Response,
-                providerFactory,
-                completionService,
-                sessionRegistrationPort,
-                logger,
-                session,
-                llmRequest,
-                toolProviderContext.ToolContextMetadata,
-                normalized,
-                toolClassification,
-                toolPlan.ToolChoiceHintPlan,
-                createdAt,
+                commandFacade,
+                result.StreamPlan,
                 ct);
             return Results.Empty;
         }
 
-        try
+        if (result.Accepted is not null)
         {
-            var provider = providerFactory.GetDefault();
-            ResponsesCompletionResult completion;
-            using (ResponsesToolContext.Push(toolPlan.ToolChoiceHintPlan))
-            {
-                completion = await completionService.CollectAsync(
-                    provider,
-                    llmRequest,
-                    toolProviderContext.ToolContextMetadata,
-                    toolClassification,
-                    ct);
-            }
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Completed, ct);
             return Results.Json(
-                BuildCompletedChatCompletion(normalized, completion, createdAt.ToUnixTimeSeconds()),
+                BuildAcceptedChatCompletion(
+                    result.Accepted.Normalized,
+                    result.Accepted.CreatedAt),
                 JsonOptions,
                 statusCode: StatusCodes.Status200OK);
         }
-        catch (NyxIdAuthenticationRequiredException ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_required", ex.Message);
-        }
-        catch (NyxIdUpstreamException ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            return ToErrorResult(ResolveUpstreamStatusCode(ex), ex.Kind.ToString().ToLowerInvariant(), ex.Message);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Cancelled, CancellationToken.None);
-            return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
-        }
-        catch (Exception ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            logger.LogError(ex, "Unexpected error processing /v1/chat/completions {CompletionId}", normalized.CompletionId);
-            return ToErrorResult(StatusCodes.Status500InternalServerError, "api_error", "Internal server error.");
-        }
-    }
 
-    private static string BuildRouteContentHint(NormalizedChatCompletionsRequest normalized) =>
-        normalized.ChatMessages
-            .LastOrDefault(static message => string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase))
-            ?.Content
-        ?? normalized.ChatMessages.LastOrDefault()?.Content
-        ?? string.Empty;
+        throw new InvalidOperationException("Chat Completions command facade returned no result.");
+    }
 
     private static async Task WriteStreamingChatCompletionAsync(
         HttpResponse response,
-        ILLMProviderFactory providerFactory,
-        IResponsesCompletionApplicationService completionService,
-        ILlmSessionRegistrationPort sessionRegistrationPort,
-        ILogger logger,
-        LlmSessionRegistrationResult session,
-        LLMRequest llmRequest,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
-        NormalizedChatCompletionsRequest normalized,
-        ResponsesToolClassification toolClassification,
-        ResponsesToolChoiceHintPlan toolChoiceHintPlan,
-        DateTimeOffset createdAt,
+        IChatCompletionsCommandFacade commandFacade,
+        ChatCompletionsCreateCommandPlan plan,
         CancellationToken ct)
     {
+        var normalized = plan.Normalized;
+        var createdAt = plan.CreatedAt.ToUnixTimeSeconds();
         response.StatusCode = StatusCodes.Status200OK;
         response.ContentType = "text/event-stream; charset=utf-8";
         response.Headers.CacheControl = "no-store";
@@ -289,98 +91,43 @@ internal static class ChatCompletionsApiEndpoints
         response.Headers["X-Accel-Buffering"] = "no";
         await response.StartAsync(ct);
 
-        try
+        var completion = await commandFacade.StreamAsync(plan, ct);
+
+        if (completion.Error is not null)
         {
-            var provider = providerFactory.GetDefault();
-            ResponsesCompletionResult completion;
-            using (ResponsesToolContext.Push(toolChoiceHintPlan))
-            {
-                completion = await completionService.StreamAsync(
-                    provider,
-                    llmRequest,
-                    toolContextMetadata,
-                    toolClassification,
-                    async (delta, token) =>
-                    {
-                        if (string.IsNullOrEmpty(delta))
-                            return;
-
-                        await WriteDataFrameAsync(
-                            response,
-                            BuildStreamingTextChunk(normalized, createdAt.ToUnixTimeSeconds(), delta),
-                            token);
-                    },
-                    ct);
-            }
-
-            foreach (var toolCall in completion.ForwardedToolCalls)
-            {
-                await WriteDataFrameAsync(
-                    response,
-                    BuildStreamingToolCallChunk(normalized, createdAt.ToUnixTimeSeconds(), toolCall),
-                    ct);
-            }
-
             await WriteDataFrameAsync(
                 response,
-                BuildStreamingStopChunk(
-                    normalized,
-                    createdAt.ToUnixTimeSeconds(),
-                    completion.ForwardedToolCalls.Count > 0 ? "tool_calls" : "stop"),
-                ct);
+                BuildStreamingError(completion.Error.Code, completion.Error.Message),
+                CancellationToken.None);
+            await WriteDoneFrameAsync(response, CancellationToken.None);
+            return;
+        }
 
-            if (normalized.IncludeUsageInStream && completion.Usage is not null)
+        if (completion.Accepted is not null)
+        {
+            await WriteDataFrameAsync(
+                response,
+                BuildStreamingStopChunk(normalized, createdAt, finishReason: null),
+                CancellationToken.None);
+            if (normalized.IncludeUsageInStream)
             {
                 await WriteDataFrameAsync(
                     response,
-                    BuildStreamingUsageChunk(normalized, createdAt.ToUnixTimeSeconds(), completion.Usage),
-                    ct);
+                    BuildStreamingUsageChunk(normalized, createdAt, usage: null),
+                    CancellationToken.None);
             }
 
-            await WriteDoneFrameAsync(response, ct);
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Completed, ct);
-        }
-        catch (NyxIdAuthenticationRequiredException ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            await WriteDataFrameAsync(response, BuildStreamingError("authentication_required", ex.Message), CancellationToken.None);
             await WriteDoneFrameAsync(response, CancellationToken.None);
+            return;
         }
-        catch (NyxIdUpstreamException ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            await WriteDataFrameAsync(response, BuildStreamingError(ex.Kind.ToString().ToLowerInvariant(), ex.Message), CancellationToken.None);
-            await WriteDoneFrameAsync(response, CancellationToken.None);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Cancelled, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            logger.LogError(ex, "Streaming /v1/chat/completions {CompletionId} failed", normalized.CompletionId);
-            await WriteDataFrameAsync(response, BuildStreamingError("api_error", "Internal server error."), CancellationToken.None);
-            await WriteDoneFrameAsync(response, CancellationToken.None);
-        }
+
+        throw new InvalidOperationException("Chat Completions stream facade returned no result.");
     }
 
-    private static object BuildCompletedChatCompletion(
-        NormalizedChatCompletionsRequest normalized,
-        ResponsesCompletionResult completion,
-        long createdAt)
-    {
-        var message = new Dictionary<string, object?>(StringComparer.Ordinal)
-        {
-            ["role"] = "assistant",
-            ["content"] = completion.ForwardedToolCalls.Count > 0 && string.IsNullOrEmpty(completion.Text)
-                ? null
-                : completion.Text,
-        };
-        if (completion.ForwardedToolCalls.Count > 0)
-            message["tool_calls"] = completion.ForwardedToolCalls.Select(MapToolCall).ToArray();
-
-        return new
+    private static object BuildAcceptedChatCompletion(
+        NormalizedChatCompletionsCommand normalized,
+        long createdAt) =>
+        new
         {
             id = normalized.CompletionId,
             @object = "chat.completion",
@@ -391,78 +138,21 @@ internal static class ChatCompletionsApiEndpoints
                 new
                 {
                     index = 0,
-                    message,
-                    finish_reason = completion.ForwardedToolCalls.Count > 0 ? "tool_calls" : "stop",
-                },
-            },
-            usage = MapUsage(completion.Usage),
-        };
-    }
-
-    private static object BuildStreamingTextChunk(
-        NormalizedChatCompletionsRequest normalized,
-        long createdAt,
-        string delta) =>
-        new
-        {
-            id = normalized.CompletionId,
-            @object = "chat.completion.chunk",
-            created = createdAt,
-            model = normalized.Model,
-            choices = new[]
-            {
-                new
-                {
-                    index = 0,
-                    delta = new { content = delta },
-                    finish_reason = (string?)null,
-                },
-            },
-        };
-
-    private static object BuildStreamingToolCallChunk(
-        NormalizedChatCompletionsRequest normalized,
-        long createdAt,
-        ToolCall toolCall) =>
-        new
-        {
-            id = normalized.CompletionId,
-            @object = "chat.completion.chunk",
-            created = createdAt,
-            model = normalized.Model,
-            choices = new[]
-            {
-                new
-                {
-                    index = 0,
-                    delta = new
+                    message = new
                     {
-                        tool_calls = new[]
-                        {
-                            new
-                            {
-                                index = 0,
-                                id = toolCall.Id,
-                                type = "function",
-                                function = new
-                                {
-                                    name = toolCall.Name,
-                                    arguments = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson)
-                                        ? "{}"
-                                        : toolCall.ArgumentsJson,
-                                },
-                            },
-                        },
+                        role = "assistant",
+                        content = (string?)null,
                     },
                     finish_reason = (string?)null,
                 },
             },
+            usage = (object?)null,
         };
 
     private static object BuildStreamingStopChunk(
-        NormalizedChatCompletionsRequest normalized,
+        NormalizedChatCompletionsCommand normalized,
         long createdAt,
-        string finishReason) =>
+        string? finishReason) =>
         new
         {
             id = normalized.CompletionId,
@@ -481,9 +171,9 @@ internal static class ChatCompletionsApiEndpoints
         };
 
     private static object BuildStreamingUsageChunk(
-        NormalizedChatCompletionsRequest normalized,
+        NormalizedChatCompletionsCommand normalized,
         long createdAt,
-        TokenUsage usage) =>
+        TokenUsage? usage) =>
         new
         {
             id = normalized.CompletionId,
@@ -506,20 +196,6 @@ internal static class ChatCompletionsApiEndpoints
             },
         };
 
-    private static object MapToolCall(ToolCall toolCall) =>
-        new
-        {
-            id = toolCall.Id,
-            type = "function",
-            function = new
-            {
-                name = toolCall.Name,
-                arguments = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson)
-                    ? "{}"
-                    : toolCall.ArgumentsJson,
-            },
-        };
-
     private static object? MapUsage(TokenUsage? usage) =>
         usage is null
             ? null
@@ -529,52 +205,6 @@ internal static class ChatCompletionsApiEndpoints
                 completion_tokens = usage.CompletionTokens,
                 total_tokens = usage.TotalTokens,
             };
-
-    private static LlmSessionRecord BuildSessionRecord(
-        NormalizedChatCompletionsRequest normalized,
-        ResponsesCallerScope callerScope,
-        DateTimeOffset createdAt) =>
-        new()
-        {
-            ResponseId = normalized.CompletionId,
-            ScopeId = callerScope.ScopeId,
-            OwnerSubject = callerScope.OwnerSubject,
-            OriginKind = callerScope.OriginKind,
-            PreviousResponseId = string.Empty,
-            Status = LlmSessionStatus.Accepted,
-            CreatedAt = Timestamp.FromDateTime(createdAt.UtcDateTime),
-            UpdatedAt = Timestamp.FromDateTime(createdAt.UtcDateTime),
-            Ttl = Duration.FromTimeSpan(TimeSpan.FromHours(24)),
-        };
-
-    private static async Task TryUpdateSessionStatusAsync(
-        ILlmSessionRegistrationPort port,
-        ILogger logger,
-        LlmSessionRegistrationResult session,
-        LlmSessionStatus status,
-        CancellationToken ct)
-    {
-        try
-        {
-            await port.UpdateStatusAsync(session.ActorId, session.ResponseId, status, ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to update llm session {ResponseId} to {Status}", session.ResponseId, status);
-        }
-    }
-
-    private static int ResolveUpstreamStatusCode(NyxIdUpstreamException ex) =>
-        ex.Status switch
-        {
-            400 => StatusCodes.Status400BadRequest,
-            401 => StatusCodes.Status401Unauthorized,
-            403 => StatusCodes.Status403Forbidden,
-            404 => StatusCodes.Status404NotFound,
-            429 => StatusCodes.Status429TooManyRequests,
-            >= 500 => StatusCodes.Status502BadGateway,
-            _ => StatusCodes.Status502BadGateway,
-        };
 
     private static async Task WriteDataFrameAsync(
         HttpResponse response,

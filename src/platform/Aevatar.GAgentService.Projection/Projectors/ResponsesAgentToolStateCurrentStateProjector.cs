@@ -61,18 +61,6 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 CreatedAt = todo.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                 UpdatedAt = todo.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             }).ToList(),
-            Tasks = state.TaskTraces.Select(static task => new ResponsesTaskTraceReadModel
-            {
-                TaskId = task.TaskId,
-                SourceResponseId = task.SourceResponseId,
-                ChildActorId = task.ChildActorId,
-                Description = task.Description,
-                Status = task.Status.ToString(),
-                Arguments = task.Arguments?.Clone(),
-                Result = task.Result?.Clone(),
-                CreatedAt = task.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
-                UpdatedAt = task.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
-            }).ToList(),
             WebTraces = state.WebTraces.Select(static trace => new ResponsesWebTraceReadModel
             {
                 TraceId = trace.TraceId,
@@ -83,6 +71,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 Query = trace.Query,
                 CacheHit = trace.CacheHit,
                 Result = trace.Result?.Clone(),
+                TypedResult = trace.TypedResult?.Clone(),
                 ObservedAt = trace.ObservedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             }).ToList(),
             WebCacheEntries = state.WebCacheEntries.Select(static entry => new ResponsesWebCacheEntryReadModel
@@ -92,6 +81,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 Url = entry.Url,
                 Query = entry.Query,
                 Result = entry.Result?.Clone(),
+                TypedResult = entry.TypedResult?.Clone(),
                 CachedAt = entry.CachedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                 LastHitAt = entry.LastHitAt?.ToDateTimeOffset(),
                 HitCount = entry.HitCount,

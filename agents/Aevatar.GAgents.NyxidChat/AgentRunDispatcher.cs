@@ -31,8 +31,9 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
     public async Task DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var runId = NormalizeRunId(request);
-        var actorId = AgentRunGAgent.BuildActorId(runId);
+        // Refactor (iter98/cluster-002): Old=missing run_id could fall back to correlation_id; New=run_id is required and correlation_id is trace-only.
+        var runId = AgentRunId.Parse(request.RunId, nameof(request.RunId));
+        var actorId = AgentRunActorIds.ForRun(runId);
 
         var actor = await _actorRuntime.CreateAsync<AgentRunGAgent>(actorId, ct);
 
@@ -40,8 +41,9 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
         var command = new AgentRunStartRequested
         {
             Request = request.Clone(),
+            RunId = runId.Value,
         };
-        command.Request.RunId = runId;
+        command.Request.RunId = runId.Value;
         var envelope = new EventEnvelope
         {
             Id = commandId,
@@ -51,7 +53,7 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = string.IsNullOrWhiteSpace(request.CorrelationId)
-                    ? runId
+                    ? runId.Value
                     : request.CorrelationId.Trim(),
             },
             Runtime = new EnvelopeRuntime
@@ -70,21 +72,11 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
 
         _logger.LogInformation(
             "Accepted deferred LLM reply run for actor dispatch: runId={RunId} actorId={ActorId} commandId={CommandId} target={TargetActorId}",
-            runId,
+            runId.Value,
             actor.Id,
             commandId,
             request.TargetActorId);
     }
 
-    private static string BuildStartCommandId(string runId) => $"agent-run-start:{runId}";
-
-    private static string NormalizeRunId(NeedsLlmReplyEvent request)
-    {
-        var runId = request.RunId;
-        if (string.IsNullOrWhiteSpace(runId))
-            runId = request.CorrelationId;
-        if (string.IsNullOrWhiteSpace(runId))
-            throw new InvalidOperationException("Deferred LLM reply request requires run_id for AgentRunGAgent dispatch.");
-        return runId.Trim();
-    }
+    private static string BuildStartCommandId(AgentRunId runId) => $"agent-run-start:{runId.Value}";
 }

@@ -67,6 +67,9 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
         //   Old pattern: Telegram provisioning service owned remote Nyx saga and raw local actor dispatch.
         //   New principle: provisioning only calls existing NyxID REST surfaces; local mirror command enters via facade.
+        // Refactor (iter113/cluster-113-telegram-connector-inmemory-updates):
+        //   Old pattern: Telegram connector keeps inbound updates as in-memory state (process-local queue/dictionary).
+        //   New principle: Delete telegram_user /getUpdates in-memory queue and route inbound Telegram through existing NyxID relay/proxy; no new actor type; no in-memory state on connector side.
         ArgumentNullException.ThrowIfNull(request);
 
         if (string.IsNullOrWhiteSpace(request.AccessToken))

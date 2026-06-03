@@ -4,42 +4,33 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 /// <summary>
-/// Event-sink specialized lifecycle port base with runtime lease resolution hook.
+/// Event-sink specialized attach/release port base with runtime lease resolution hook.
 /// </summary>
+// Refactor (iter367/cluster-issue377): Old pattern: session sink attach required IProjectionPortSessionLease.
+// Refactor (iter367/cluster-issue377): Old pattern: the alias only forwarded RootActorId and SessionId.
+// Refactor (iter367/cluster-issue377): New principle: typed projection session context owns routing identity.
+// Refactor (iter367/cluster-issue377): New principle: lifecycle attach reads RootActorId and SessionId from Context.
 public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>
     : IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
     where TLeaseContract : class
-    where TRuntimeLease : class, IProjectionRuntimeLease, TLeaseContract
+    where TRuntimeLease : class, IProjectionRuntimeLease, IProjectionContextRuntimeLease<IProjectionSessionContext>, TLeaseContract
     where TEvent : class
 {
     private readonly Func<bool> _projectionEnabledAccessor;
-    private readonly IProjectionScopeActivationService<TRuntimeLease> _activationService;
     private readonly IProjectionScopeReleaseService<TRuntimeLease> _releaseService;
     private readonly IProjectionSessionEventHub<TEvent> _sessionEventHub;
 
     protected EventSinkProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
-        IProjectionScopeActivationService<TRuntimeLease> activationService,
         IProjectionScopeReleaseService<TRuntimeLease> releaseService,
         IProjectionSessionEventHub<TEvent> sessionEventHub)
     {
         _projectionEnabledAccessor = projectionEnabledAccessor ?? throw new ArgumentNullException(nameof(projectionEnabledAccessor));
-        _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
         _releaseService = releaseService ?? throw new ArgumentNullException(nameof(releaseService));
         _sessionEventHub = sessionEventHub ?? throw new ArgumentNullException(nameof(sessionEventHub));
     }
 
     public bool ProjectionEnabled => _projectionEnabledAccessor();
-
-    protected async Task<TLeaseContract?> EnsureProjectionAsync(
-        ProjectionScopeStartRequest request,
-        CancellationToken ct = default)
-    {
-        if (!ProjectionEnabled || request == null || string.IsNullOrWhiteSpace(request.RootActorId))
-            return null;
-
-        return await _activationService.EnsureAsync(request, ct);
-    }
 
     public async Task<IAsyncDisposable?> AttachLiveSinkAsync(
         TLeaseContract lease,
@@ -53,17 +44,17 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         if (!ProjectionEnabled)
             return null;
 
+        // Refactor (iter367/cluster-issue377): Old pattern: attach inspected IProjectionPortSessionLease alias properties.
+        // Refactor (iter367/cluster-issue377): Old pattern: alias let leases duplicate RootActorId as ScopeId.
+        // Refactor (iter367/cluster-issue377): New principle: RootActorId + SessionId come from the typed session context.
+        // Refactor (iter367/cluster-issue377): New principle: the runtime lease only carries context, not a routing alias.
         var runtimeLease = ResolveRuntimeLease(lease);
-        if (runtimeLease is not IProjectionPortSessionLease portLease)
-        {
-            throw new InvalidOperationException(
-                $"Runtime lease `{runtimeLease.GetType().FullName}` must implement `{typeof(IProjectionPortSessionLease).FullName}`.");
-        }
+        var sessionContext = runtimeLease.Context;
 
         // Refactor (iter17/cluster-035): Old: ConcurrentDictionary registry. New: explicit IAsyncDisposable lease per attach.
         return await _sessionEventHub.SubscribeAsync(
-            portLease.ScopeId,
-            portLease.SessionId,
+            sessionContext.RootActorId,
+            sessionContext.SessionId,
             evt => sink.PushAsync(evt, CancellationToken.None),
             ct).ConfigureAwait(false);
     }
@@ -91,6 +82,10 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         return _releaseService.ReleaseIfIdleAsync(ResolveRuntimeLease(lease), ct);
     }
 
+    // Refactor (iter367/cluster-issue377): Old pattern: resolved leases needed a second alias interface check.
+    // Refactor (iter367/cluster-issue377): Old pattern: unsupported leases failed after alias casting.
+    // Refactor (iter367/cluster-issue377): New principle: generic constraints guarantee typed context availability.
+    // Refactor (iter367/cluster-issue377): New principle: this method only validates the public lease contract shape.
     protected virtual TRuntimeLease ResolveRuntimeLease(TLeaseContract lease) =>
         lease as TRuntimeLease
         ?? throw new InvalidOperationException(

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
@@ -153,7 +154,8 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] StreamingProxyChatLifecycleFacade chatLifecycleFacade,
+        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -168,11 +170,24 @@ public static class StreamingProxyEndpoints
         if (admissionError != null)
             return admissionError;
 
-        var result = await chatLifecycleFacade.DeleteRoomAsync(scopeId, roomId, ct);
-        if (result == StreamingProxyRoomDeleteLifecycleStatus.Failed)
+        try
+        {
+            await registryCommandPort.UnregisterActorAsync(
+                new GAgentActorRegistration(
+                    scopeId,
+                    StreamingProxyDefaults.GAgentTypeName,
+                    roomId),
+                ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints")
+                .LogWarning(ex, "Failed to delete streaming proxy room {RoomId}", roomId);
             return Results.Json(
                 new { error = "Failed to delete room" },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
 
         return Results.Ok();
     }
@@ -185,7 +200,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         ChatTopicRequest request,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] StreamingProxyChatLifecycleFacade chatLifecycleFacade,
+        [FromServices] ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> interactionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -223,13 +238,10 @@ public static class StreamingProxyEndpoints
             var accessToken = ExtractBearerToken(http);
             var preferredRoute = request.LlmRoute?.Trim();
             var defaultModel = request.LlmModel?.Trim();
-            // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
-            //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
-            //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
-            var result = await chatLifecycleFacade.RunChatAsync(
-                new StreamingProxyChatLifecycleRequest(
-                    scopeId,
+            var result = await interactionService.ExecuteAsync(
+                new StreamingProxyRoomChatCommand(
                     roomId,
+                    scopeId,
                     prompt,
                     sessionId,
                     accessToken,
@@ -239,7 +251,7 @@ public static class StreamingProxyEndpoints
                 {
                     await MapAndWriteRoomSessionEventAsync(frame, writer);
                 },
-                ct);
+                ct: ct);
 
             if (!result.Succeeded)
             {
@@ -331,7 +343,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] StreamingProxyChatLifecycleFacade chatLifecycleFacade,
+        [FromServices] IStreamingProxyRoomSubscriptionObservationPort subscriptionObservationPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -353,17 +365,13 @@ public static class StreamingProxyEndpoints
                 return;
 
             var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
-            var subscription = await chatLifecycleFacade.AttachSubscriptionAsync(roomId, eventChannel, ct);
-            if (subscription.Status != StreamingProxySubscriptionLifecycleStatus.Attached ||
-                subscription.Attachment == null)
+            var attachment = await subscriptionObservationPort.AttachAsync(roomId, eventChannel, ct);
+            if (attachment == null)
             {
                 await eventChannel.DisposeAsync();
-                http.Response.StatusCode = subscription.Status == StreamingProxySubscriptionLifecycleStatus.RoomNotFound
-                    ? StatusCodes.Status404NotFound
-                    : StatusCodes.Status503ServiceUnavailable;
+                http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 return;
             }
-            var attachment = subscription.Attachment;
 
             Task? pumpTask = null;
 
@@ -379,7 +387,7 @@ public static class StreamingProxyEndpoints
             }
             finally
             {
-                await chatLifecycleFacade.DetachSubscriptionAsync(
+                await subscriptionObservationPort.DetachAndDisposeAsync(
                     attachment,
                     eventChannel,
                     CancellationToken.None);
@@ -420,7 +428,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IStreamingProxyRoomParticipantService participantService,
+        [FromServices] IStreamingProxyRoomParticipantsQueryPort participantsQueryPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -439,10 +447,11 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
-            var result = await participantService.ListAsync(
-                new StreamingProxyRoomParticipantListQuery(roomId),
-                ct);
-            return Results.Ok(result.Participants);
+            var snapshot = await participantsQueryPort.GetAsync(roomId, ct);
+            return Results.Ok(snapshot?.Participants.Select(participant => new ParticipantResponse(
+                participant.AgentId,
+                participant.DisplayName,
+                participant.JoinedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue)) ?? []);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -460,7 +469,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         JoinRoomRequest request,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] StreamingProxyChatLifecycleFacade chatLifecycleFacade,
+        [FromServices] IStreamingProxyRoomCommandService roomCommandService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -478,11 +487,10 @@ public static class StreamingProxyEndpoints
         if (admissionError != null)
             return admissionError;
 
-        // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
-        //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
-        //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.
-        var result = await chatLifecycleFacade.JoinAsync(roomId, request.AgentId, request.DisplayName, ct);
-        if (result.Status == StreamingProxyJoinLifecycleStatus.RoomNotFound)
+        var result = await roomCommandService.JoinAsync(
+            new StreamingProxyRoomJoinCommand(roomId, request.AgentId, request.DisplayName),
+            ct);
+        if (result.Status == StreamingProxyRoomJoinStatus.RoomNotFound)
             return Results.NotFound(new { error = "Room not found" });
 
         var agentId = result.AgentId ?? request.AgentId.Trim();
@@ -677,6 +685,7 @@ public static class StreamingProxyEndpoints
         string? LlmModel = null);
     public sealed record PostMessageRequest(string? AgentId, string? AgentName, string? Content, string? SessionId = null);
     public sealed record JoinRoomRequest(string? AgentId, string? DisplayName);
+    private sealed record ParticipantResponse(string AgentId, string DisplayName, DateTimeOffset JoinedAt);
 
     private static string? ExtractBearerToken(HttpContext http)
     {

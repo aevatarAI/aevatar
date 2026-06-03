@@ -16,11 +16,11 @@ public sealed class AevatarWorkflowClientTests
     public async Task RunToCompletionAsync_WhenRunErrorFramePresent_ShouldThrowRunFailedException()
     {
         const string ssePayload = """
-data: {"type":"RUN_STARTED","threadId":"actor-1"}
+data: {"runStarted":{"threadId":"actor-1","runId":"run-1"}}
 
-data: {"type":"RUN_ERROR","code":"EXECUTION_FAILED","message":"Workflow execution failed."}
+data: {"runError":{"code":"EXECUTION_FAILED","message":"Workflow execution failed."}}
 
-data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionCompleted":false}}
+data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowProjectionStateSnapshotPayload","actorId":"actor-1","projectionCompleted":false}}}
 
 """;
 
@@ -152,15 +152,20 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
     }
 
     [Fact]
-    public async Task GetActorSnapshotAsync_WhenNotFound_ShouldReturnNull()
+    public async Task GetWorkflowActorCurrentStateAsync_WhenNotFound_ShouldReturnNull()
     {
-        var client = CreateClient((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+        var client = CreateClient((request, _) =>
+        {
+            request.Method.Should().Be(HttpMethod.Get);
+            request.RequestUri?.PathAndQuery.Should().Be("/api/workflow-actors/missing-actor/current-state");
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
             {
                 Content = new StringContent("""{"error":"missing"}""", Encoding.UTF8, "application/json"),
-            }));
+            });
+        });
 
-        var snapshot = await client.GetActorSnapshotAsync("missing-actor", CancellationToken.None);
+        var snapshot = await client.GetWorkflowActorCurrentStateAsync("missing-actor", CancellationToken.None);
         snapshot.Should().BeNull();
     }
 

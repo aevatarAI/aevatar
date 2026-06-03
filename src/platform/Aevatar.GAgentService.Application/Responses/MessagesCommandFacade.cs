@@ -1,5 +1,8 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -20,21 +23,18 @@ public sealed class MessagesCommandFacade(
     IResponsesChatRouteDecisionPort chatRouteDecisionPort,
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort sessionRegistrationPort,
-    ILlmSessionQueryPort sessionQueryPort,
-    IResponsesCompletionApplicationService completionService,
+    IActorDispatchPort dispatchPort,
     IResponsesToolClassificationService toolClassificationService,
     IResponsesDirectToolPlanService directToolPlanService,
-    ILLMProviderFactory providerFactory,
     ILogger<MessagesCommandFacade> logger) : IMessagesCommandFacade
 {
-    private const string RegistrationScopeMetadataKey = "scope_id";
-
     public async Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
-        string bearerToken,
+        ResponsesCallerScopeResolutionContext callerScopeContext,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(callerScopeContext);
 
         var normalizedResult = MessagesRequestNormalizer.Normalize(request);
         if (!normalizedResult.Succeeded)
@@ -46,7 +46,7 @@ public sealed class MessagesCommandFacade(
         }
 
         var normalized = normalizedResult.Request!;
-        var callerScopeResult = await ResolveCallerScopeAsync(bearerToken, ct);
+        var callerScopeResult = await ResolveCallerScopeAsync(callerScopeContext, ct);
         if (callerScopeResult.Error is not null)
             return MessagesCreateCommandResult.FromError(
                 callerScopeResult.Error.StatusCode,
@@ -72,7 +72,7 @@ public sealed class MessagesCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
-            bearerToken,
+            callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             ct);
 
@@ -97,33 +97,8 @@ public sealed class MessagesCommandFacade(
 
         try
         {
-            var provider = providerFactory.GetDefault();
-            ResponsesCompletionResult completion;
-            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
-            {
-                completion = await completionService.StreamAsync(
-                    provider,
-                    plan.LlmRequest,
-                    plan.ToolContextMetadata,
-                    plan.ToolClassification,
-                    onTextDelta,
-                    ct);
-            }
-            var completionResult = await RecordCompletionAndReadAsync(
-                plan.Session,
-                BuildSessionCompletion(
-                    completion.Text,
-                    completion.ForwardedToolCalls,
-                    completion.Usage,
-                    DateTimeOffset.UtcNow),
-                ct);
-            if (completionResult.Error is not null)
-                return ResponsesStreamCommandResult.FromError(
-                    completionResult.Error.StatusCode,
-                    completionResult.Error.Code,
-                    completionResult.Error.Message);
-
-            return ResponsesStreamCommandResult.FromCompleted(completionResult.Completion!);
+            var admission = await DispatchRunAsync(plan, ct);
+            return ResponsesStreamCommandResult.FromAccepted(new ResponsesStreamAcceptedCommandResult(admission));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -148,11 +123,13 @@ public sealed class MessagesCommandFacade(
         }
     }
 
-    private async Task<CallerScopeResult> ResolveCallerScopeAsync(string bearerToken, CancellationToken ct)
+    private async Task<CallerScopeResult> ResolveCallerScopeAsync(
+        ResponsesCallerScopeResolutionContext callerScopeContext,
+        CancellationToken ct)
     {
         try
         {
-            var callerScope = await callerScopeResolver.ResolveAsync(bearerToken, ct);
+            var callerScope = await callerScopeResolver.ResolveAsync(callerScopeContext, ct);
             return new CallerScopeResult(callerScope, null);
         }
         catch (ResponsesCallerScopeUnavailableException ex)
@@ -255,13 +232,21 @@ public sealed class MessagesCommandFacade(
             toolPlan.AdditionalToolProviders,
             ct: ct);
         var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(routedModel, bearerToken, ct);
+        var toolContext = toolProviderContext.ToolContext with
+        {
+            Routing = toolProviderContext.ToolContext.Routing with
+            {
+                NyxIdRoutePreference = resolvedRouteValue,
+            },
+        };
         var llmRequest = BuildLlmRequest(
             normalized,
             callerScope,
             bearerToken,
             effectiveModel,
             resolvedRouteValue,
-            toolClassification);
+            toolClassification,
+            toolContext);
         if (normalized.DroppedImageContent)
         {
             logger.LogWarning(
@@ -273,7 +258,7 @@ public sealed class MessagesCommandFacade(
             normalized,
             session,
             llmRequest,
-            toolProviderContext.ToolContextMetadata,
+            toolContext,
             toolClassification,
             toolPlan.ToolChoiceHintPlan));
     }
@@ -284,34 +269,11 @@ public sealed class MessagesCommandFacade(
     {
         try
         {
-            var provider = providerFactory.GetDefault();
-            ResponsesCompletionResult completion;
-            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
-            {
-                completion = await completionService.CollectAsync(
-                    provider,
-                    plan.LlmRequest,
-                    plan.ToolContextMetadata,
-                    plan.ToolClassification,
-                    ct);
-            }
-            var completionResult = await RecordCompletionAndReadAsync(
-                plan.Session,
-                BuildSessionCompletion(
-                    completion.Text,
-                    completion.ForwardedToolCalls,
-                    completion.Usage,
-                    DateTimeOffset.UtcNow),
-                ct);
-            if (completionResult.Error is not null)
-                return MessagesCreateCommandResult.FromError(
-                    completionResult.Error.StatusCode,
-                    completionResult.Error.Code,
-                    completionResult.Error.Message);
-
-            return MessagesCreateCommandResult.FromCompleted(new MessagesCreateCompletedCommandResult(
+            var admission = await DispatchRunAsync(plan, ct);
+            return MessagesCreateCommandResult.FromAccepted(new MessagesCreateAcceptedCommandResult(
                 plan.Normalized,
-                completionResult.Completion!));
+                plan.Session,
+                admission));
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -381,24 +343,21 @@ public sealed class MessagesCommandFacade(
         string bearerToken,
         string effectiveModel,
         string? resolvedRouteValue,
-        ResponsesToolClassification toolClassification)
+        ResponsesToolClassification toolClassification,
+        AgentToolExecutionContext toolContext)
     {
-        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.MessageId,
-            [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-        };
         return new LLMRequest
         {
             Messages = [.. normalized.ChatMessages],
             RequestId = normalized.MessageId,
-            Metadata = llmMetadata,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
             CallerContext = new LLMRequestCallerContext(
                 callerScope.ScopeId,
                 callerScope.OwnerSubject,
                 normalized.MessageId,
                 new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
+            ToolContext = toolContext,
             LlmControl = new LLMControlContext(
                 NyxIdAccessToken: null,
                 NyxIdOrgToken: null,
@@ -413,26 +372,35 @@ public sealed class MessagesCommandFacade(
         };
     }
 
+    // Refactor (issue1416-first):
+    //   Old pattern: Messages downgraded request identity, caller scope, and bearer credentials into ToolContextMetadata.
+    //   New principle: Messages reuses AgentToolExecutionContext as the typed tool execution authority.
     private static ResponsesToolProviderContext BuildToolProviderContext(
         ResponsesCallerScope callerScope,
         string responseId,
-        string bearerToken)
-    {
-        return new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
+        string bearerToken) =>
+        new(BuildToolContext(callerScope, responseId, bearerToken, routePreference: null));
+
+    private static AgentToolExecutionContext BuildToolContext(
+        ResponsesCallerScope callerScope,
+        string responseId,
+        string bearerToken,
+        string? routePreference) =>
+        new(
+            new AgentToolRequestIdentity(responseId, null),
+            new AgentToolCredentials(bearerToken, null, null),
+            new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+            new AgentToolChannelContext(
+                callerScope.OriginKind.ToString(),
+                null,
                 callerScope.ScopeId,
-                callerScope.OwnerSubject,
-                callerScope.OriginKind.ToString()),
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = responseId,
-                [LLMRequestMetadataKeys.ResponseId] = responseId,
-                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
-                [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
-            });
-    }
+                null,
+                null),
+            AgentToolSenderBindingContext.Empty,
+            new LLMRequestRoutingContext(null, routePreference, null, null),
+            AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
     private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         ResponsesCallerScope callerScope,
@@ -490,81 +458,101 @@ public sealed class MessagesCommandFacade(
         }
     }
 
-    private async Task<CompletionRecordResult> RecordCompletionAndReadAsync(
-        LlmSessionRegistrationResult session,
-        LlmSessionCompletion completion,
+    // Refactor (iter103/cluster-1 r2):
+    //   Old pattern: dispatch was followed by an immediate readmodel completion read, upgrading accepted ACK into observed completion.
+    //   New principle: this method returns only DispatchAdmission; completion must arrive through an explicit observation/readmodel path.
+    private Task<DispatchAdmission> DispatchRunAsync(
+        MessagesCreateCommandPlan plan,
         CancellationToken ct)
     {
-        try
-        {
-            await sessionRegistrationPort.RecordCompletionAsync(
-                session.ActorId,
-                session.ResponseId,
-                completion,
-                ct);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to record llm session completion for message {MessageId}", session.ResponseId);
-            return CompletionRecordResult.FromError(new ResponsesCommandError(
-                500,
-                "response_completion_record_failed",
-                "Failed to record response completion."));
-        }
-
-        var observedCompletion = await LlmSessionCompletionObserver.WaitForCompletionAsync(
-            sessionQueryPort,
-            session.ResponseId,
-            ct);
-        if (observedCompletion is null)
-        {
-            return CompletionRecordResult.FromError(new ResponsesCommandError(
-                503,
-                "response_completion_not_observed",
-                "Response completion was committed but is not yet visible in the read model."));
-        }
-
-        return CompletionRecordResult.FromCompletion(observedCompletion);
+        var command = BuildRunRequested(
+            plan.Session.ResponseId,
+            plan.LlmRequest,
+            plan.ToolClassification,
+            plan.ToolChoiceHintPlan);
+        var envelope = ServiceCommandEnvelopeFactory.Create(
+            plan.Session.ActorId,
+            command,
+            command.RunId);
+        return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
     }
 
-    private static LlmSessionCompletion BuildSessionCompletion(
-        string outputText,
-        IReadOnlyList<ToolCall> forwardedToolCalls,
-        TokenUsage? usage,
-        DateTimeOffset completedAt)
+    private static LlmRunRequested BuildRunRequested(
+        string responseId,
+        LLMRequest request,
+        ResponsesToolClassification toolClassification,
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
     {
-        var completion = new LlmSessionCompletion
+        var command = new LlmRunRequested
         {
-            OutputText = outputText,
-            CompletedAt = Timestamp.FromDateTimeOffset(completedAt),
+            ResponseId = responseId,
+            RunId = $"{responseId}:llm-run",
+            Model = request.Model ?? string.Empty,
+            RoutePreference = request.LlmControl?.NyxIdRoutePreference ?? string.Empty,
+            ScopeId = request.CallerContext?.ScopeId ?? string.Empty,
+            OwnerSubject = request.CallerContext?.OwnerSubject ?? string.Empty,
+            BearerToken = request.CallerContext?.Credentials?.NyxIdBearer ?? string.Empty,
+            ToolContext = (request.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload(),
+            RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
+        if (request.Temperature is not null)
+            command.Temperature = request.Temperature.Value;
+        if (request.MaxTokens is not null)
+            command.MaxTokens = request.MaxTokens.Value;
+        command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
+        command.ToolSelection = ToToolSelection(toolClassification, toolChoiceHintPlan);
+        return command;
+    }
 
-        if (usage is not null)
+    private static LlmSessionRuntimeChatMessage ToRuntimeMessage(ChatMessage message)
+    {
+        var result = new LlmSessionRuntimeChatMessage
         {
-            completion.Usage = new LlmSessionTokenUsage
+            Role = message.Role,
+            Content = message.Content ?? string.Empty,
+            ReasoningContent = message.ReasoningContent ?? string.Empty,
+            ToolCallId = message.ToolCallId ?? string.Empty,
+        };
+        if (message.ToolCalls is { Count: > 0 })
+            result.ToolCalls.AddRange(message.ToolCalls.Select(static call => new LlmSessionRuntimeToolCall
             {
-                PromptTokens = usage.PromptTokens,
-                CompletionTokens = usage.CompletionTokens,
-                TotalTokens = usage.TotalTokens,
-            };
+                CallId = call.Id,
+                ToolName = call.Name,
+                ArgumentsJson = call.ArgumentsJson,
+                Arguments = ResponsesProtoPayloads.ParseStruct(call.ArgumentsJson),
+            }));
+        return result;
+    }
+
+    // Refactor (iter355/issue1438-first):
+    //   Old pattern: Messages LlmRunRequested persisted tool schemas and hints as JSON strings.
+    //   New principle: typed Struct fields carry new writes; JSON strings remain legacy fallback.
+    private static LlmSessionRuntimeToolSelection ToToolSelection(
+        ResponsesToolClassification classification,
+        ResponsesToolChoiceHintPlan toolChoiceHintPlan)
+    {
+        var selection = new LlmSessionRuntimeToolSelection
+        {
+            SubstitutedToolNames = { classification.SubstitutedToolNames },
+            AdditiveToolNames = { classification.AdditiveToolNames },
+        };
+        if (!toolChoiceHintPlan.IsEmpty)
+        {
+            selection.ToolChoiceHintName = toolChoiceHintPlan.ToolName;
+            selection.ToolChoiceHintArgumentsJson = toolChoiceHintPlan.PrefilledArgumentsJson();
+            selection.ToolChoiceHintArguments = toolChoiceHintPlan.PrefilledArgumentsStruct();
         }
 
-        foreach (var toolCall in forwardedToolCalls)
-        {
-            completion.ToolCalls.Add(new LlmSessionCompletedToolCall
+        selection.ForwardedTools.AddRange(classification.ForwardedTools.Select(static tool =>
+            new LlmSessionRuntimeToolDeclaration
             {
-                CallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                Result = ResponsesJsonValues.ParseBoundaryPayload(
-                    string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson),
-            });
-        }
-
-        return completion;
+                ToolName = tool.Name,
+                Description = tool.Description,
+                ParametersJson = tool.ParametersJson,
+                Parameters = ResponsesProtoPayloads.ParseStruct(tool.ParametersJson),
+                SchemaHash = tool.SchemaHash,
+            }));
+        return selection;
     }
 
     private sealed record CallerScopeResult(
@@ -595,12 +583,4 @@ public sealed class MessagesCommandFacade(
         public static ExecutionPlanResult FromError(ResponsesCommandError error) => new(null, error);
     }
 
-    private sealed record CompletionRecordResult(
-        ResponsesCommandError? Error,
-        LlmSessionCompletionSnapshot? Completion)
-    {
-        public static CompletionRecordResult FromError(ResponsesCommandError error) => new(error, null);
-
-        public static CompletionRecordResult FromCompletion(LlmSessionCompletionSnapshot completion) => new(null, completion);
-    }
 }

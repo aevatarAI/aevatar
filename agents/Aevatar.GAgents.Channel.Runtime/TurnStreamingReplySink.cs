@@ -17,6 +17,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// Refactor (iter20/cluster-004):
 ///   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
 ///   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
+/// Refactor (iter149/issue1132): Old pattern: streaming reply sink waited on handled-dispatch for chunk delivery.  New principle: sink emits accepted-only chunk commands; conversation actor state/projection own completion visibility.
 /// </remarks>
 public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 {

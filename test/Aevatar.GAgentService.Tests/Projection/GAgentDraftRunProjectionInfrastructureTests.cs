@@ -41,7 +41,6 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
     [Fact]
     public async Task ProjectionPort_ShouldAttachDetachAndReleaseExistingDraftRunSession()
     {
-        var activation = new RecordingActivationService();
         var release = new RecordingReleaseService();
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
@@ -52,7 +51,6 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             "cmd-1")));
         var port = new GAgentDraftRunProjectionPort(
             new ServiceProjectionOptions { Enabled = true },
-            activation,
             release,
             hub,
             CreateAttachExistingLookup(runtime));
@@ -70,10 +68,8 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         });
         await port.DetachLiveSinkAsync(attachment.LiveSinkLease, CancellationToken.None);
         await port.ReleaseActorProjectionAsync(lease, CancellationToken.None);
-
-        activation.Requests.Should().BeEmpty();
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("actor-1");
+        hub.LastRootActorId.Should().Be("actor-1");
         hub.LastSessionId.Should().Be("cmd-1");
         sink.Events.Should().ContainSingle();
         release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
@@ -82,7 +78,6 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
     [Fact]
     public async Task ProjectionPort_ShouldAttachExistingDraftRunSession_WhenScopeActorExists()
     {
-        var activation = new RecordingActivationService();
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
         runtime.KnownActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
@@ -92,7 +87,6 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             "cmd-1")));
         var port = new GAgentDraftRunProjectionPort(
             new ServiceProjectionOptions { Enabled = true },
-            activation,
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -105,12 +99,11 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             CancellationToken.None);
 
         attachment.Should().NotBeNull();
-        activation.Requests.Should().BeEmpty();
         var lease = attachment!.ProjectionLease.Should().BeOfType<GAgentDraftRunRuntimeLease>().Subject;
         lease.ActorId.Should().Be("actor-1");
         lease.CommandId.Should().Be("cmd-1");
         hub.SubscribeCalls.Should().Be(1);
-        hub.LastScopeId.Should().Be("actor-1");
+        hub.LastRootActorId.Should().Be("actor-1");
         hub.LastSessionId.Should().Be("cmd-1");
 
         await hub.Handler!(new AGUIEvent
@@ -127,19 +120,16 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
     [Fact]
     public async Task ProjectionPort_ShouldReturnNullForAttachExisting_WhenScopeActorIsMissingOrInvalid()
     {
-        var activation = new RecordingActivationService();
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
         runtime.KnownActorIds.Add("different-scope");
         var disabledPort = new GAgentDraftRunProjectionPort(
             new ServiceProjectionOptions { Enabled = false },
-            activation,
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
         var enabledPort = new GAgentDraftRunProjectionPort(
             new ServiceProjectionOptions { Enabled = true },
-            activation,
             new RecordingReleaseService(),
             hub,
             CreateAttachExistingLookup(runtime));
@@ -164,8 +154,6 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             " ",
             new RecordingEventSink(),
             CancellationToken.None)).Should().BeNull();
-
-        activation.Requests.Should().BeEmpty();
         hub.SubscribeCalls.Should().Be(0);
     }
 
@@ -174,7 +162,6 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
     {
         var create = () => new GAgentDraftRunProjectionPort(
             new ServiceProjectionOptions { Enabled = true },
-            new RecordingActivationService(),
             new RecordingReleaseService(),
             new RecordingSessionEventHub(),
             null!);
@@ -194,26 +181,6 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             },
             static (_, context) => new GAgentDraftRunRuntimeLease(context));
 
-    private sealed class RecordingActivationService : IProjectionScopeActivationService<GAgentDraftRunRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public GAgentDraftRunRuntimeLease LeaseToReturn { get; } = new(new GAgentDraftRunProjectionContext
-        {
-            RootActorId = "actor-1",
-            ProjectionKind = "service-draft-run-session",
-            SessionId = "cmd-1",
-        });
-
-        public Task<GAgentDraftRunRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(LeaseToReturn);
-        }
-    }
-
     private sealed class RecordingReleaseService : IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease>
     {
         public List<GAgentDraftRunRuntimeLease> Leases { get; } = [];
@@ -228,26 +195,26 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
     private sealed class RecordingSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
     {
         public int SubscribeCalls { get; private set; }
-        public string? LastScopeId { get; private set; }
+        public string? LastRootActorId { get; private set; }
         public string? LastSessionId { get; private set; }
         public Func<AGUIEvent, ValueTask>? Handler { get; private set; }
 
-        public Task PublishAsync(string scopeId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
+        public Task PublishAsync(string rootActorId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
         {
-            _ = scopeId;
+            _ = rootActorId;
             _ = sessionId;
             _ = evt;
             return Task.CompletedTask;
         }
 
         public Task<IAsyncDisposable> SubscribeAsync(
-            string scopeId,
+            string rootActorId,
             string sessionId,
             Func<AGUIEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
             SubscribeCalls++;
-            LastScopeId = scopeId;
+            LastRootActorId = rootActorId;
             LastSessionId = sessionId;
             Handler = handler;
             return Task.FromResult<IAsyncDisposable>(new NoopSubscription());

@@ -6,10 +6,11 @@ namespace Aevatar.Foundation.Abstractions.Maintenance;
 /// previously persisted those types, and (optionally) how to discover dynamic
 /// targets and how to delete its read-model documents.
 /// </summary>
+// Refactor (issue1287-first): Old pattern: EventStore marker lease.  New principle: per-target revalidation fence + idempotent cleanup.
 public interface IRetiredActorSpec
 {
     /// <summary>
-    /// Stable, module-scoped identifier (used as the marker stream namespace).
+    /// Stable, module-scoped identifier for logs and operational diagnostics.
     /// </summary>
     string SpecId { get; }
 

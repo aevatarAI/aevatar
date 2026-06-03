@@ -170,6 +170,7 @@ public sealed class StudioMemberServiceBindingTests
                 ScopeId: ScopeId,
                 MemberId: MemberId,
                 Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+                StateVersion: 1,
                 UpdatedAt: DateTimeOffset.UtcNow.AddMinutes(-1)),
         };
         var runQuery = new InMemoryBindingRunQueryPort(new StudioMemberBindingRunStatusResponse(
@@ -177,6 +178,7 @@ public sealed class StudioMemberServiceBindingTests
             ScopeId: ScopeId,
             MemberId: MemberId,
             Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+            StateVersion: 2,
             UpdatedAt: DateTimeOffset.UtcNow)
         {
             PlatformBindingCommandId = "platform-bind-1",
@@ -204,13 +206,15 @@ public sealed class StudioMemberServiceBindingTests
                 BindingRunId: "bind-1",
                 ScopeId: ScopeId,
                 MemberId: MemberId,
-                Status: StudioMemberBindingRunStatusNames.PlatformBindingPending),
+                Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+                StateVersion: 1),
         };
         var runQuery = new InMemoryBindingRunQueryPort(new StudioMemberBindingRunStatusResponse(
             BindingRunId: "bind-1",
             ScopeId: ScopeId,
             MemberId: MemberId,
-            Status: StudioMemberBindingRunStatusNames.PlatformBindingPending)
+            Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+            StateVersion: 2)
         {
             PlatformBindingCommandId = "platform-bind-1",
         });
@@ -235,6 +239,7 @@ public sealed class StudioMemberServiceBindingTests
             ScopeId: ScopeId,
             MemberId: MemberId,
             Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+            StateVersion: 3,
             UpdatedAt: DateTimeOffset.UtcNow)
         {
             PlatformBindingCommandId = "platform-bind-1",
@@ -398,11 +403,11 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
-        public Task ReassignTeamAsync(
-            string scopeId, string memberId, string? fromTeamId, string? toTeamId,
+        public Task PatchTeamAssignmentAsync(
+            string scopeId, string memberId, string? targetTeamId,
             CancellationToken ct = default)
         {
-            OperationsInOrder.Add("ReassignTeam");
+            OperationsInOrder.Add("PatchTeamAssignment");
             return Task.CompletedTask;
         }
     }

@@ -6,6 +6,8 @@ option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
+import "llm_sessions.proto";
+import "service_revision.proto";
 
 // --- ServiceCatalogReadModel ---
 
@@ -79,6 +81,7 @@ message ServiceRevisionEntryReadModel {
   repeated ServiceCatalogEndpointReadModel endpoint_entries = 10;
   string static_actor_type_name = 11;
   string static_preferred_actor_id = 12;
+  string static_agent_kind = 20;
   string scripting_script_id = 13;
   string scripting_revision = 14;
   string scripting_definition_actor_id = 15;
@@ -86,6 +89,7 @@ message ServiceRevisionEntryReadModel {
   string workflow_name = 17;
   string workflow_definition_actor_id = 18;
   int32 workflow_inline_workflow_count = 19;
+  aevatar.gagentservice.PreparedServiceRevisionArtifact prepared_artifact = 21;
 }
 
 // --- ServiceRolloutReadModel ---
@@ -277,6 +281,13 @@ message LlmSessionTokenUsageReadModel {
 // --- ResponsesAgentToolStateCurrentStateReadModel ---
 
 message ResponsesAgentToolStateCurrentStateReadModel {
+  // Refactor (issue1183/first-slice):
+  //   Old pattern: ResponsesTaskTrace dead trace surface — task_substitute / task_trace
+  //                readmodel surface 无 consumer,占用 proto field number。
+  //   New principle: deleted / reserved per Phase 9 r1 consensus (hybrid minimal/
+  //                  structural/delete), proto field number reserved 防重新占用。
+  reserved 10;
+  reserved "task_trace_entries";
   string id = 1;
   string actor_id = 2;
   int64 state_version = 3;
@@ -286,7 +297,6 @@ message ResponsesAgentToolStateCurrentStateReadModel {
   google.protobuf.Timestamp created_at_utc_value = 7;
   google.protobuf.Timestamp updated_at_utc_value = 8;
   repeated ResponsesTodoItemReadModel todo_item_entries = 9;
-  repeated ResponsesTaskTraceReadModel task_trace_entries = 10;
   repeated ResponsesWebTraceReadModel web_trace_entries = 11;
   repeated ResponsesWebCacheEntryReadModel web_cache_entry_entries = 12;
 }
@@ -300,18 +310,6 @@ message ResponsesTodoItemReadModel {
   google.protobuf.Timestamp updated_at_utc_value = 6;
 }
 
-message ResponsesTaskTraceReadModel {
-  string task_id = 1;
-  string source_response_id = 2;
-  string child_actor_id = 3;
-  string description = 4;
-  string status = 5;
-  google.protobuf.Value arguments = 6;
-  google.protobuf.Value result = 7;
-  google.protobuf.Timestamp created_at_utc_value = 8;
-  google.protobuf.Timestamp updated_at_utc_value = 9;
-}
-
 message ResponsesWebTraceReadModel {
   string trace_id = 1;
   string source_response_id = 2;
@@ -320,8 +318,12 @@ message ResponsesWebTraceReadModel {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
+  // Refactor (iter161-cluster-001 #1251-first):
+  //   Old pattern: projected Web result readmodel carried only Value.
+  //   New principle: typed_result mirrors actor-owned typed result; result is legacy fallback only.
   google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at_utc_value = 9;
+  aevatar.gagentservice.ResponsesWebToolResult typed_result = 10;
 }
 
 message ResponsesWebCacheEntryReadModel {
@@ -329,8 +331,12 @@ message ResponsesWebCacheEntryReadModel {
   string tool_name = 2;
   string url = 3;
   string query = 4;
+  // Refactor (iter161-cluster-001 #1251-first):
+  //   Old pattern: projected cache result carried only Value.
+  //   New principle: typed_result is the normal query path; result is legacy fallback only.
   google.protobuf.Value result = 5;
   google.protobuf.Timestamp cached_at_utc_value = 6;
   google.protobuf.Timestamp last_hit_at_utc_value = 7;
   int64 hit_count = 8;
+  aevatar.gagentservice.ResponsesWebToolResult typed_result = 9;
 }

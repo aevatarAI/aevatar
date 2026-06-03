@@ -16,8 +16,7 @@ public sealed class WorkflowChatRunRequestSeedTests
         };
         var request = new WorkflowChatRunRequest(
             Prompt: "hello",
-            WorkflowName: "direct",
-            ActorId: null,
+            Source: WorkflowChatSource.CatalogWorkflow("direct"),
             Headers: headers,
             CommandIdSeed: "cmd-1",
             CorrelationIdSeed: "corr-1");
@@ -34,8 +33,7 @@ public sealed class WorkflowChatRunRequestSeedTests
     {
         var request = new WorkflowChatRunRequest(
             Prompt: "hello",
-            WorkflowName: "direct",
-            ActorId: null,
+            Source: WorkflowChatSource.CatalogWorkflow("direct"),
             TargetSeed: new WorkflowRunTargetSeed(
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",

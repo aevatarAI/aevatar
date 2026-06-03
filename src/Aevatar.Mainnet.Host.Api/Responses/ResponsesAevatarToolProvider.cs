@@ -1,11 +1,9 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.Web;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
@@ -13,20 +11,14 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAgentToolSource
 {
     private readonly IResponsesAgentToolStateCommandPort _commandPort;
-    private readonly IResponsesAgentToolStateQueryPort _queryPort;
-    private readonly IWebApiClient _webClient;
-    private readonly WebToolOptions _webOptions;
+    private readonly ResponsesWebSubstituteToolExecutionService _webExecution;
 
     public ResponsesAevatarToolProvider(
         IResponsesAgentToolStateCommandPort commandPort,
-        IResponsesAgentToolStateQueryPort queryPort,
-        IWebApiClient webClient,
-        WebToolOptions webOptions)
+        ResponsesWebSubstituteToolExecutionService webExecution)
     {
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
-        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
-        _webClient = webClient ?? throw new ArgumentNullException(nameof(webClient));
-        _webOptions = webOptions ?? throw new ArgumentNullException(nameof(webOptions));
+        _webExecution = webExecution ?? throw new ArgumentNullException(nameof(webExecution));
     }
 
     public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
@@ -35,12 +27,13 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
         ValueTask.FromResult<IReadOnlyList<IAgentTool>>(
         [
             new TodoWriteTool(_commandPort),
-            new TaskTool("Task", _commandPort),
-            new TaskTool("task", _commandPort),
-            new WebFetchTool("WebFetch", _commandPort, _queryPort, _webClient),
-            new WebFetchTool("web_fetch", _commandPort, _queryPort, _webClient),
-            new WebSearchTool("WebSearch", _commandPort, _queryPort, _webClient, _webOptions),
-            new WebSearchTool("web_search", _commandPort, _queryPort, _webClient, _webOptions),
+            // Refactor (iter159/cluster-624):
+            //   Old pattern: Host layer owned WebFetch/WebSearch execution, cache lookup, and trace recording
+            //   New principle: Host registers TodoWrite plus WebFetch/WebSearch substitutes and delegates Web orchestration to Application
+            new WebFetchTool("WebFetch", _webExecution),
+            new WebFetchTool("web_fetch", _webExecution),
+            new WebSearchTool("WebSearch", _webExecution),
+            new WebSearchTool("web_search", _webExecution),
         ]);
 
     public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
@@ -51,11 +44,15 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
     public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         var context = new ResponsesToolProviderContext(
-            new ResponsesToolProviderCallerScope(
-                string.Empty,
-                string.Empty,
-                LlmSessionOriginKind.ApiKey.ToString()),
-            new Dictionary<string, string>(StringComparer.Ordinal));
+            AgentToolExecutionContext.Empty with
+            {
+                Channel = new AgentToolChannelContext(
+                    LlmSessionOriginKind.ApiKey.ToString(),
+                    null,
+                    null,
+                    null,
+                    null),
+            });
         var tools = new List<IAgentTool>();
         tools.AddRange(await GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
         tools.AddRange(await GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
@@ -94,24 +91,40 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
             return new ResponsesToolExecutionScope(scopeId.Trim(), ownerSubject.Trim(), responseId.Trim());
         }
 
-        protected static string? GetString(JsonElement element, string propertyName)
+        protected static ResponsesWebSubstituteToolExecutionRequest BuildWebRequest(
+            string toolName,
+            ResponsesWebFetchToolInput input)
         {
-            if (!element.TryGetProperty(propertyName, out var value))
-                return null;
-            return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
+            var scope = ResolveScope();
+            return new ResponsesWebSubstituteToolExecutionRequest
+            {
+                ToolName = toolName,
+                ScopeId = scope.ScopeId,
+                OwnerSubject = scope.OwnerSubject,
+                ResponseId = scope.ResponseId,
+                NyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken ?? string.Empty,
+                Fetch = input,
+            };
         }
 
-        protected static string ComputeCacheKey(string toolName, string value)
+        protected static ResponsesWebSubstituteToolExecutionRequest BuildWebRequest(
+            string toolName,
+            ResponsesWebSearchToolInput input)
         {
-            var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{toolName}\n{value.Trim().ToLowerInvariant()}"));
-            return Convert.ToHexString(hash).ToLowerInvariant();
+            var scope = ResolveScope();
+            return new ResponsesWebSubstituteToolExecutionRequest
+            {
+                ToolName = toolName,
+                ScopeId = scope.ScopeId,
+                OwnerSubject = scope.OwnerSubject,
+                ResponseId = scope.ResponseId,
+                NyxIdAccessToken = AgentToolRequestContext.NyxIdAccessToken ?? string.Empty,
+                Search = input,
+            };
         }
     }
 
-    private sealed record ResponsesToolExecutionScope(
-        string ScopeId,
-        string OwnerSubject,
-        string ResponseId);
+    private sealed record ResponsesToolExecutionScope(string ScopeId, string OwnerSubject, string ResponseId);
 
     private sealed class TodoWriteTool : ResponsesStateTool
     {
@@ -173,63 +186,17 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
         }
     }
 
-    private sealed class TaskTool : ResponsesStateTool
-    {
-        private readonly string _name;
-        private readonly IResponsesAgentToolStateCommandPort _commandPort;
-
-        public TaskTool(string name, IResponsesAgentToolStateCommandPort commandPort)
-        {
-            _name = name;
-            _commandPort = commandPort;
-        }
-
-        public override string Name => _name;
-
-        public override string Description =>
-            "Record an Aevatar sub-agent task dispatch in agent-scoped topology state.";
-
-        public override string ParametersSchema => """
-            {
-              "type": "object",
-              "properties": {
-                "description": { "type": "string" },
-                "prompt": { "type": "string" },
-                "subagent_type": { "type": "string" }
-              }
-            }
-            """;
-
-        public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            var scope = ResolveScope();
-            var result = await _commandPort.RecordTaskAsync(
-                scope.ScopeId,
-                scope.OwnerSubject,
-                scope.ResponseId,
-                argumentsJson,
-                ct);
-            return result.ResultJson;
-        }
-    }
-
     private sealed class WebFetchTool : ResponsesStateTool
     {
         private readonly string _name;
-        private readonly IResponsesAgentToolStateCommandPort _commandPort;
-        private readonly IResponsesAgentToolStateQueryPort _queryPort;
-        private readonly IWebApiClient _webClient;
+        private readonly ResponsesWebSubstituteToolExecutionService _webExecution;
 
         public WebFetchTool(
             string name,
-            IResponsesAgentToolStateCommandPort commandPort,
-            IResponsesAgentToolStateQueryPort queryPort,
-            IWebApiClient webClient)
+            ResponsesWebSubstituteToolExecutionService webExecution)
         {
             _name = name;
-            _commandPort = commandPort;
-            _queryPort = queryPort;
-            _webClient = webClient;
+            _webExecution = webExecution;
         }
 
         public override string Name => _name;
@@ -258,120 +225,24 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
 
         public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
-            var scope = ResolveScope();
-            var validation = WebFetchUrlGuard.Validate(NormalizeUrl(ExtractUrl(argumentsJson)));
-            if (!validation.IsAllowed)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    error = validation.RejectionCode ?? "url_rejected",
-                });
-            }
-
-            var url = validation.NormalizedUrl!;
-            var cacheKey = ComputeCacheKey(Name, url);
-            var cached = await _queryPort.GetWebCacheEntryAsync(
-                scope.ScopeId,
-                scope.OwnerSubject,
-                Name,
-                cacheKey,
-                ct);
-            if (cached != null)
-            {
-                await RecordTraceAsync(scope, cacheKey, url, query: string.Empty, cacheHit: true, cached.ResultJson, ct);
-                return cached.ResultJson;
-            }
-
-            // The URL came from the LLM (and ultimately from upstream prompts/user
-            // input). Forwarding the caller's NyxID bearer to that target would
-            // let a prompt exfiltrate the token to an attacker-controlled host.
-            // WebFetch is unauthenticated by design — anything that needs auth
-            // must route through a typed NyxID-proxied tool.
-            var result = await _webClient.FetchUrlAsync(token: string.Empty, url, ct);
-            var resultJson = JsonSerializer.Serialize(new
-            {
-                url = result.OriginalUrl,
-                status_code = result.StatusCode,
-                content_type = result.ContentType,
-                content = result.Body ?? string.Empty,
-                redirect_url = result.RedirectUrl,
-            });
-            await RecordTraceAsync(scope, cacheKey, url, query: string.Empty, cacheHit: false, resultJson, ct);
-            return resultJson;
-        }
-
-        private Task RecordTraceAsync(
-            ResponsesToolExecutionScope scope,
-            string cacheKey,
-            string url,
-            string query,
-            bool cacheHit,
-            string resultJson,
-            CancellationToken ct) =>
-            _commandPort.RecordWebTraceAsync(
-                scope.ScopeId,
-                scope.OwnerSubject,
-                scope.ResponseId,
-                new ResponsesWebTraceInput(
-                    ResponseAgentToolStateIds.NewWebTraceId(),
-                    Name,
-                    cacheKey,
-                    url,
-                    query,
-                    cacheHit,
-                    resultJson),
-                ct);
-
-        private static string? ExtractUrl(string argumentsJson)
-        {
-            if (string.IsNullOrWhiteSpace(argumentsJson))
-                return null;
-            try
-            {
-                using var document = JsonDocument.Parse(argumentsJson);
-                return document.RootElement.ValueKind == JsonValueKind.Object
-                    ? GetString(document.RootElement, "url")
-                    : null;
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
-        }
-
-        private static string? NormalizeUrl(string? url)
-        {
-            var normalized = url?.Trim();
-            if (string.IsNullOrWhiteSpace(normalized))
-                return null;
-            if (normalized.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
-                return "https://" + normalized[7..];
-            return normalized.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                ? normalized
-                : "https://" + normalized;
+            var input = ResponsesWebSubstituteToolJson.ParseFetchInput(argumentsJson);
+            var result = await _webExecution.ExecuteAsync(BuildWebRequest(Name, input), ct)
+                .ConfigureAwait(false);
+            return ResponsesWebSubstituteToolJson.ToBoundaryJson(result);
         }
     }
 
     private sealed class WebSearchTool : ResponsesStateTool
     {
         private readonly string _name;
-        private readonly IResponsesAgentToolStateCommandPort _commandPort;
-        private readonly IResponsesAgentToolStateQueryPort _queryPort;
-        private readonly IWebApiClient _webClient;
-        private readonly WebToolOptions _webOptions;
+        private readonly ResponsesWebSubstituteToolExecutionService _webExecution;
 
         public WebSearchTool(
             string name,
-            IResponsesAgentToolStateCommandPort commandPort,
-            IResponsesAgentToolStateQueryPort queryPort,
-            IWebApiClient webClient,
-            WebToolOptions webOptions)
+            ResponsesWebSubstituteToolExecutionService webExecution)
         {
             _name = name;
-            _commandPort = commandPort;
-            _queryPort = queryPort;
-            _webClient = webClient;
-            _webOptions = webOptions;
+            _webExecution = webExecution;
         }
 
         public override string Name => _name;
@@ -394,94 +265,10 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
 
         public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
-            var scope = ResolveScope();
-            var query = ExtractQuery(argumentsJson);
-            if (string.IsNullOrWhiteSpace(query))
-                return """{"error":"'query' is required"}""";
-
-            var maxResults = ExtractMaxResults(argumentsJson) ?? _webOptions.MaxSearchResults;
-            maxResults = Math.Clamp(maxResults, 1, 20);
-            var cacheValue = $"{query.Trim()}\n{maxResults}";
-            var cacheKey = ComputeCacheKey(Name, cacheValue);
-            var cached = await _queryPort.GetWebCacheEntryAsync(
-                scope.ScopeId,
-                scope.OwnerSubject,
-                Name,
-                cacheKey,
-                ct);
-            if (cached != null)
-            {
-                await RecordTraceAsync(scope, cacheKey, query, cacheHit: true, cached.ResultJson, ct);
-                return cached.ResultJson;
-            }
-
-            var token = AgentToolRequestContext.NyxIdAccessToken ?? string.Empty;
-            var resultJson = string.IsNullOrWhiteSpace(token)
-                ? """{"error":"No NyxID access token available. User must be authenticated."}"""
-                : await _webClient.SearchAsync(token, query.Trim(), maxResults, ct);
-            await RecordTraceAsync(scope, cacheKey, query, cacheHit: false, resultJson, ct);
-            return resultJson;
-        }
-
-        private Task RecordTraceAsync(
-            ResponsesToolExecutionScope scope,
-            string cacheKey,
-            string query,
-            bool cacheHit,
-            string resultJson,
-            CancellationToken ct) =>
-            _commandPort.RecordWebTraceAsync(
-                scope.ScopeId,
-                scope.OwnerSubject,
-                scope.ResponseId,
-                new ResponsesWebTraceInput(
-                    ResponseAgentToolStateIds.NewWebTraceId(),
-                    Name,
-                    cacheKey,
-                    string.Empty,
-                    query,
-                    cacheHit,
-                    resultJson),
-                ct);
-
-        private static string? ExtractQuery(string argumentsJson)
-        {
-            if (string.IsNullOrWhiteSpace(argumentsJson))
-                return null;
-            try
-            {
-                using var document = JsonDocument.Parse(argumentsJson);
-                return document.RootElement.ValueKind == JsonValueKind.Object
-                    ? GetString(document.RootElement, "query")
-                    : null;
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
-        }
-
-        private static int? ExtractMaxResults(string argumentsJson)
-        {
-            if (string.IsNullOrWhiteSpace(argumentsJson))
-                return null;
-            try
-            {
-                using var document = JsonDocument.Parse(argumentsJson);
-                if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                    !document.RootElement.TryGetProperty("max_results", out var value))
-                {
-                    return null;
-                }
-
-                return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var parsed)
-                    ? parsed
-                    : null;
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
+            var input = ResponsesWebSubstituteToolJson.ParseSearchInput(argumentsJson);
+            var result = await _webExecution.ExecuteAsync(BuildWebRequest(Name, input), ct)
+                .ConfigureAwait(false);
+            return ResponsesWebSubstituteToolJson.ToBoundaryJson(result);
         }
     }
 }

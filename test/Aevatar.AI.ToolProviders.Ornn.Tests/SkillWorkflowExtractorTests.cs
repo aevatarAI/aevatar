@@ -29,11 +29,9 @@ public sealed class SkillWorkflowExtractorTests
 
         result.Workflows.Should().ContainSingle();
         var workflow = result.Workflows[0];
-        workflow.Name.Should().Be("qa_flow");
-        workflow.Description.Should().Be("Answers a question");
-        workflow.WhenToUse.Should().Be("When user asks a factual question");
-        workflow.FileName.Should().Be("workflows/qa.yaml");
-        workflow.Yaml.Should().Contain("steps:");
+        workflow.WorkflowId.Should().Be("qa_flow");
+        workflow.WorkflowYamls.Should().ContainSingle()
+            .Which.Should().Contain("steps:");
         result.RemainingFiles.Should().ContainKey("assets/notes.yaml");
     }
 
@@ -52,8 +50,9 @@ public sealed class SkillWorkflowExtractorTests
 
         var result = new SkillWorkflowExtractor().ExtractFromFiles(files);
 
-        result.Workflows.Should().ContainSingle(w => w.Name == "qa_flow");
-        result.Workflows[0].FileName.Should().Be("assets/qa.yaml");
+        result.Workflows.Should().ContainSingle(w => w.WorkflowId == "qa_flow");
+        result.Workflows[0].WorkflowYamls.Should().ContainSingle()
+            .Which.Should().Contain("name: qa_flow");
         result.RemainingFiles.Should().ContainKey("assets/prompt.txt");
         result.RemainingFiles!.ContainsKey("assets/qa.yaml").Should().BeFalse();
     }
@@ -95,7 +94,7 @@ public sealed class SkillWorkflowExtractorTests
 
         var result = new SkillWorkflowExtractor().ExtractFromFiles(files);
 
-        result.Workflows.Should().ContainSingle(w => w.Name == "draft_workflow");
+        result.Workflows.Should().ContainSingle(w => w.WorkflowId == "draft_workflow");
     }
 
     [Fact]
@@ -113,7 +112,7 @@ public sealed class SkillWorkflowExtractorTests
 
         var result = new SkillWorkflowExtractor().ExtractFromFiles(files);
 
-        result.Workflows.Should().ContainSingle(w => w.FileName == "workflows/qa.yml");
+        result.Workflows.Should().ContainSingle(w => w.WorkflowId == "qa");
         result.RemainingFiles.Should().ContainKey("workflows/README.md");
     }
 
@@ -142,8 +141,9 @@ public sealed class SkillWorkflowExtractorTests
 
         var workflows = new SkillWorkflowExtractor().ExtractFromDirectory(tempDir.Path);
 
-        workflows.Should().ContainSingle(w => w.Name == "qa_local");
-        workflows[0].FileName.Should().Be("workflows/qa.yaml");
+        workflows.Should().ContainSingle(w => w.WorkflowId == "qa_local");
+        workflows[0].WorkflowYamls.Should().ContainSingle()
+            .Which.Should().Contain("name: qa_local");
     }
 
     [Fact]
@@ -165,8 +165,9 @@ public sealed class SkillWorkflowExtractorTests
 
         var workflows = new SkillWorkflowExtractor().ExtractFromDirectory(tempDir.Path);
 
-        workflows.Should().ContainSingle(w => w.Name == "qa_asset");
-        workflows[0].FileName.Should().Be("assets/qa.yaml");
+        workflows.Should().ContainSingle(w => w.WorkflowId == "qa_asset");
+        workflows[0].WorkflowYamls.Should().ContainSingle()
+            .Which.Should().Contain("name: qa_asset");
     }
 
     [Fact]
