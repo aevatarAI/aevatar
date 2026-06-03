@@ -47,6 +47,8 @@ public static class ServiceCollectionExtensions
             new ScriptServiceRunRegistrationInteraction(
                 sp.GetRequiredService<DefaultCommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, AGUIEvent, ScriptServiceRunCompletionStatus>>(),
                 sp.GetRequiredService<Abstractions.Ports.IServiceRunRegistrationPort>()));
+        services.TryAddSingleton<IRealtimeSession<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>(sp =>
+            sp.GetRequiredService<ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>());
         return services;
     }
 }

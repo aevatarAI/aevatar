@@ -157,4 +157,13 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             }
         }
     }
+
+    async Task<RealtimeSessionResult<TReceipt, TError, TCompletion>> IRealtimeSession<TCommand, TReceipt, TError, TFrame, TCompletion>.ExecuteAsync(
+        TCommand inbound,
+        Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        Func<TReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+        CancellationToken ct)
+    {
+        return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
+    }
 }
