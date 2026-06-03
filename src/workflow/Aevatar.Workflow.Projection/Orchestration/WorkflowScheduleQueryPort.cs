@@ -67,6 +67,8 @@ public sealed class WorkflowScheduleQueryPort : IWorkflowScheduleQueryPort
             document.FailureCount,
             document.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             document.ScopeId ?? string.Empty,
+            document.SourceActorId ?? string.Empty,
+            document.ScheduleActorId ?? string.Empty,
             document.TargetActorId ?? string.Empty);
 
     private static WorkflowScheduleFireRecord MapFireRecord(WorkflowScheduleFireRecordDocument document) =>

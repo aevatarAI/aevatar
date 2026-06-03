@@ -110,7 +110,7 @@ public sealed class WorkflowScheduleEndpointsTests
                 Enabled = true,
                 Headers = new Dictionary<string, string> { ["trace"] = "1" },
                 ScopeId = "scope-1",
-                ActorId = "actor-1",
+                SourceActorId = "actor-1",
             },
             service);
 
@@ -262,7 +262,7 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
-    public async Task WorkflowScheduleActorPort_DispatchConfigure_ShouldMapGenericConfiguration()
+    public async Task WorkflowScheduleActorPort_DispatchCreate_ShouldMapGenericConfiguration()
     {
         var scheduledPort = new RecordingScheduledDispatchActorPort();
         var port = new WorkflowScheduleActorPort(scheduledPort);
@@ -274,9 +274,10 @@ public sealed class WorkflowScheduleEndpointsTests
         var dispatch = new ScheduledDispatchPreparation(
             "target-actor",
             triggerEnvelope,
-            Any.Pack(new Empty()).TypeUrl);
+            Any.Pack(new Empty()).TypeUrl,
+            new WorkflowScheduleTargetDescriptor("workflow", "prompt", "scope-1", "source-1"));
 
-        var admission = await port.DispatchConfigureAsync(
+        var admission = await port.DispatchCreateAsync(
             "schedule-actor",
             new WorkflowScheduleConfiguration(
                 "schedule-1",
@@ -290,7 +291,7 @@ public sealed class WorkflowScheduleEndpointsTests
             dispatch);
 
         admission.Accepted.Should().BeTrue();
-        var configured = scheduledPort.Configured.Should().ContainSingle().Subject;
+        var configured = scheduledPort.Created.Should().ContainSingle().Subject;
         configured.ActorId.Should().Be("schedule-actor");
         configured.Configuration.ScheduleId.Should().Be("schedule-1");
         configured.Configuration.DisplayName.Should().Be("Daily");
@@ -301,10 +302,15 @@ public sealed class WorkflowScheduleEndpointsTests
         configured.Configuration.Enabled.Should().BeTrue();
         configured.Configuration.Headers.Should().Contain("trace", "1");
         configured.Configuration.PayloadTypeUrl.Should().Be(Any.Pack(new Empty()).TypeUrl);
+        configured.Configuration.WorkflowTarget.Should().Be(new WorkflowScheduleTargetDescriptor(
+            "workflow",
+            "prompt",
+            "scope-1",
+            "source-1"));
     }
 
     [Fact]
-    public async Task ScheduledDispatchActorPort_ShouldCreateMissingActorAndPackCommands()
+    public async Task ScheduledDispatchActorPort_ShouldCreateMissingActorAndPackCreateCommand()
     {
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
@@ -316,7 +322,7 @@ public sealed class WorkflowScheduleEndpointsTests
         };
 
         var actorId = await port.EnsureScheduleActorAsync("schedule-1");
-        await port.DispatchConfigureAsync(
+        await port.DispatchCreateAsync(
             actorId,
             new ScheduledDispatchConfiguration(
                 "schedule-1",
@@ -328,22 +334,16 @@ public sealed class WorkflowScheduleEndpointsTests
                 true,
                 new Dictionary<string, string> { ["trace"] = "1" },
                 Any.Pack(new Empty()).TypeUrl));
-        await port.DispatchEnableAsync(actorId, "resume");
-        await port.DispatchDisableAsync(actorId, null!);
-        await port.DispatchRunNowAsync(
-            actorId,
-            new DateTimeOffset(2026, 5, 29, 17, 30, 0, TimeSpan.FromHours(8)));
-
         actorId.Should().Be("scheduled-dispatch:schedule-1");
         runtime.Created.Should().ContainSingle()
             .Which.Should().Be((actorId, typeof(ScheduledDispatchGAgent)));
-        dispatch.Envelopes.Should().HaveCount(4);
+        dispatch.Envelopes.Should().ContainSingle();
         dispatch.Envelopes.Select(x => x.ActorId).Should().OnlyContain(x => x == actorId);
         dispatch.Envelopes.Select(x => x.Envelope.Id).Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x));
         dispatch.Envelopes.Select(x => x.Envelope.Propagation?.CorrelationId)
             .Should().OnlyContain(x => !string.IsNullOrWhiteSpace(x));
 
-        var configure = dispatch.Envelopes[0].Envelope.Payload.Unpack<ScheduledDispatchConfigureCommand>();
+        var configure = dispatch.Envelopes[0].Envelope.Payload.Unpack<ScheduledDispatchCreateCommand>();
         configure.ScheduleId.Should().Be("schedule-1");
         configure.DisplayName.Should().Be("Daily");
         configure.TargetActorId.Should().Be("target-actor");
@@ -353,15 +353,60 @@ public sealed class WorkflowScheduleEndpointsTests
         configure.Enabled.Should().BeTrue();
         configure.Headers.Should().Contain("trace", "1");
         configure.PayloadTypeUrl.Should().Be(Any.Pack(new Empty()).TypeUrl);
+    }
 
-        dispatch.Envelopes[1].Envelope.Payload.Unpack<ScheduledDispatchEnableCommand>()
+    [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldPackMutationsOnlyWhenActorStateIsConfigured()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(runtime, dispatch);
+        var actorId = "scheduled-dispatch:schedule-1";
+        runtime.Existing[actorId] = new RecordingStatefulActor(actorId, CreateConfiguredState());
+
+        await port.DispatchEnableAsync(actorId, "resume");
+        await port.DispatchDisableAsync(actorId, null!);
+        await port.DispatchRunNowAsync(
+            actorId,
+            new DateTimeOffset(2026, 5, 29, 17, 30, 0, TimeSpan.FromHours(8)));
+
+        dispatch.Envelopes.Should().HaveCount(3);
+        dispatch.Envelopes.Select(x => x.ActorId).Should().OnlyContain(x => x == actorId);
+
+        dispatch.Envelopes[0].Envelope.Payload.Unpack<ScheduledDispatchEnableCommand>()
             .Reason.Should().Be("resume");
-        dispatch.Envelopes[2].Envelope.Payload.Unpack<ScheduledDispatchDisableCommand>()
+        dispatch.Envelopes[1].Envelope.Payload.Unpack<ScheduledDispatchDisableCommand>()
             .Reason.Should().BeEmpty();
-        var fire = dispatch.Envelopes[3].Envelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        var fire = dispatch.Envelopes[2].Envelope.Payload.Unpack<ScheduledDispatchFireCommand>();
         fire.Manual.Should().BeTrue();
         fire.ScheduledFireAt.ToDateTimeOffset().Should().Be(
             new DateTimeOffset(2026, 5, 29, 9, 30, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldRejectDuplicateCreateAndMissingUpdateFromActorState()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(runtime, dispatch);
+        var actorId = "scheduled-dispatch:schedule-1";
+        runtime.Existing[actorId] = new RecordingStatefulActor(actorId, CreateConfiguredState());
+
+        var duplicateCreate = () => port.DispatchCreateAsync(
+            actorId,
+            CreateScheduledDispatchConfiguration("schedule-1"));
+
+        await duplicateCreate.Should().ThrowAsync<WorkflowScheduleConflictException>();
+
+        runtime.Existing[actorId] = new RecordingStatefulActor(actorId, new ScheduledDispatchState());
+        var missingUpdate = () => port.DispatchUpdateAsync(
+            actorId,
+            CreateScheduledDispatchConfiguration("schedule-1"));
+        var missingEnable = () => port.DispatchEnableAsync(actorId, "resume");
+
+        await missingUpdate.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
+        await missingEnable.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
+        dispatch.Envelopes.Should().BeEmpty();
     }
 
     [Fact]
@@ -530,7 +575,8 @@ public sealed class WorkflowScheduleEndpointsTests
 
     private sealed class RecordingScheduledDispatchActorPort : IScheduledDispatchActorPort
     {
-        public List<(string ActorId, ScheduledDispatchConfiguration Configuration)> Configured { get; } = [];
+        public List<(string ActorId, ScheduledDispatchConfiguration Configuration)> Created { get; } = [];
+        public List<(string ActorId, ScheduledDispatchConfiguration Configuration)> Updated { get; } = [];
 
         public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default) =>
             Task.FromResult($"scheduled-dispatch:{scheduleId}");
@@ -538,12 +584,24 @@ public sealed class WorkflowScheduleEndpointsTests
         public Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default) =>
             Task.FromResult<string?>($"scheduled-dispatch:{scheduleId}");
 
-        public Task<DispatchAdmission> DispatchConfigureAsync(
+        public Task<DispatchAdmission> DispatchCreateAsync(
             string actorId,
             ScheduledDispatchConfiguration configuration,
             CancellationToken ct = default)
         {
-            Configured.Add((actorId, configuration));
+            Created.Add((actorId, configuration));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+            }));
+        }
+
+        public Task<DispatchAdmission> DispatchUpdateAsync(
+            string actorId,
+            ScheduledDispatchConfiguration configuration,
+            CancellationToken ct = default)
+        {
+            Updated.Add((actorId, configuration));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -631,6 +689,57 @@ public sealed class WorkflowScheduleEndpointsTests
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
+
+    private sealed class RecordingStatefulActor(string id, ScheduledDispatchState state) : IActor
+    {
+        public string Id { get; } = id;
+        public IAgent Agent { get; } = new RecordingStatefulAgent(id, state);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingStatefulAgent(string id, ScheduledDispatchState state) : IAgent<ScheduledDispatchState>
+    {
+        public string Id { get; } = id;
+        public ScheduledDispatchState State { get; } = state;
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult(Id);
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private static ScheduledDispatchConfiguration CreateScheduledDispatchConfiguration(string scheduleId) =>
+        new(
+            scheduleId,
+            "Daily",
+            "target-actor",
+            new EventEnvelope
+            {
+                Id = "template",
+                Payload = Any.Pack(new Empty()),
+            },
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>(),
+            Any.Pack(new Empty()).TypeUrl);
+
+    private static ScheduledDispatchState CreateConfiguredState() =>
+        new()
+        {
+            ScheduleId = "schedule-1",
+            CronExpression = "0 9 * * *",
+            TriggerEnvelope = new EventEnvelope
+            {
+                Id = "template",
+                Payload = Any.Pack(new Empty()),
+            },
+        };
 
     private abstract class EmptyWorkflowScheduleApplicationService : IWorkflowScheduleApplicationService
     {

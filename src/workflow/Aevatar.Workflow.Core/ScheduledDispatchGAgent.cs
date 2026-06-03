@@ -1,9 +1,7 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Google.Protobuf;
@@ -17,17 +15,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IWorkflowRunActorResolver? _workflowRunActorResolver;
-    private readonly ICommandEnvelopeFactory<WorkflowChatRunRequest>? _workflowChatEnvelopeFactory;
 
-    public ScheduledDispatchGAgent(
-        IActorDispatchPort dispatchPort,
-        IWorkflowRunActorResolver? workflowRunActorResolver = null,
-        ICommandEnvelopeFactory<WorkflowChatRunRequest>? workflowChatEnvelopeFactory = null)
+    public ScheduledDispatchGAgent(IActorDispatchPort dispatchPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _workflowRunActorResolver = workflowRunActorResolver;
-        _workflowChatEnvelopeFactory = workflowChatEnvelopeFactory;
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -57,31 +48,77 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             .OrCurrent();
 
     [EventHandler]
-    public async Task HandleConfigureAsync(ScheduledDispatchConfigureCommand command)
+    public Task HandleConfigureAsync(ScheduledDispatchCreateCommand command) =>
+        HandleConfigureAsync(
+            command,
+            command.ScheduleId,
+            command.DisplayName,
+            command.TargetActorId,
+            command.TriggerEnvelope,
+            command.CronExpression,
+            command.Timezone,
+            command.Enabled,
+            command.Headers,
+            command.WorkflowTarget,
+            isCreate: true);
+
+    [EventHandler]
+    public Task HandleConfigureAsync(ScheduledDispatchUpdateCommand command) =>
+        HandleConfigureAsync(
+            command,
+            command.ScheduleId,
+            command.DisplayName,
+            command.TargetActorId,
+            command.TriggerEnvelope,
+            command.CronExpression,
+            command.Timezone,
+            command.Enabled,
+            command.Headers,
+            command.WorkflowTarget,
+            isCreate: false);
+
+    private async Task HandleConfigureAsync(
+        IMessage command,
+        string scheduleId,
+        string displayName,
+        string? targetActorId,
+        EventEnvelope triggerEnvelope,
+        string cronExpression,
+        string timezone,
+        bool enabled,
+        IEnumerable<KeyValuePair<string, string>> headers,
+        WorkflowScheduleTargetState? workflowTarget,
+        bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
-        EnsureValidDefinition(command.TargetActorId, command.TriggerEnvelope, command.CronExpression, command.Timezone);
+        if (isCreate && IsConfigured())
+            throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
+        if (!isCreate && !IsConfigured())
+            throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
+        EnsureValidDefinition(targetActorId, workflowTarget, triggerEnvelope, cronExpression, timezone);
 
         var now = DateTimeOffset.UtcNow;
         var configured = new ScheduledDispatchConfiguredEvent
         {
-            ScheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId)),
-            DisplayName = NormalizeOptional(command.DisplayName),
-            TargetActorId = NormalizeRequired(command.TargetActorId, nameof(command.TargetActorId)),
-            TriggerEnvelope = command.TriggerEnvelope.Clone(),
-            CronExpression = NormalizeRequired(command.CronExpression, nameof(command.CronExpression)),
-            Timezone = ScheduledDispatchCalculator.NormalizeTimezone(command.Timezone),
-            Enabled = command.Enabled,
+            ScheduleId = NormalizeRequired(scheduleId, nameof(scheduleId)),
+            DisplayName = NormalizeOptional(displayName),
+            TargetActorId = NormalizeOptional(targetActorId),
+            TriggerEnvelope = triggerEnvelope.Clone(),
+            CronExpression = NormalizeRequired(cronExpression, nameof(cronExpression)),
+            Timezone = ScheduledDispatchCalculator.NormalizeTimezone(timezone),
+            Enabled = enabled,
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
-            PayloadTypeUrl = ResolvePayloadTypeUrl(command.TriggerEnvelope),
+            PayloadTypeUrl = ResolvePayloadTypeUrl(triggerEnvelope),
+            WorkflowTarget = NormalizeWorkflowTarget(workflowTarget),
+            Created = isCreate,
         };
-        foreach (var (key, value) in NormalizeHeaders(command.Headers))
+        foreach (var (key, value) in NormalizeHeaders(headers))
             configured.Headers[key] = value;
 
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         await PersistDomainEventAsync(configured);
 
-        if (command.Enabled)
+        if (enabled)
             await EnsureNextFireScheduledAsync(now, CancellationToken.None);
         else
             await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
@@ -90,14 +127,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     [EventHandler]
     public async Task HandleEnableAsync(ScheduledDispatchEnableCommand command)
     {
-        if (string.IsNullOrWhiteSpace(State.TargetActorId) ||
-            State.TriggerEnvelope == null ||
-            State.TriggerEnvelope.Payload == null ||
-            string.IsNullOrWhiteSpace(State.CronExpression))
-        {
-            Logger.LogWarning("Scheduled dispatch {ActorId} enable ignored because it is not configured.", Id);
-            return;
-        }
+        EnsureConfiguredForWrite("enable");
 
         await PersistDomainEventAsync(new ScheduledDispatchEnabledEvent
         {
@@ -110,6 +140,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     [EventHandler]
     public async Task HandleDisableAsync(ScheduledDispatchDisableCommand command)
     {
+        EnsureConfiguredForWrite("disable");
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         await PersistDomainEventAsync(new ScheduledDispatchDisabledEvent
         {
@@ -129,6 +160,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(command);
+        EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
         if (!command.Manual && !State.Enabled)
         {
             Logger.LogInformation("Scheduled dispatch {ActorId} ignored fire because it is disabled.", Id);
@@ -233,16 +265,22 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException("Scheduled dispatch trigger envelope payload is not configured.");
 
         var headers = BuildFireHeaders(scheduledFireAtUtc, idempotencyKey);
-        if (envelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out var workflowStartRequest))
-            return await BuildWorkflowDispatchEnvelopeAsync(workflowStartRequest, headers, idempotencyKey, ct);
-
         envelope.Id = idempotencyKey;
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-        envelope.Route = EnvelopeRouteSemantics.CreateDirect(ResolveScheduleId(), State.TargetActorId);
+        envelope.Route = EnvelopeRouteSemantics.CreateDirect(ResolveScheduleId(), ResolveDispatchTargetActorId());
         envelope.Runtime = null;
         var propagation = envelope.EnsurePropagation();
         if (string.IsNullOrWhiteSpace(propagation.CorrelationId))
             propagation.CorrelationId = idempotencyKey;
+
+        if (envelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out var workflowStartRequest))
+        {
+            ApplyWorkflowTarget(workflowStartRequest, State.WorkflowTarget);
+            foreach (var (key, value) in headers)
+                workflowStartRequest.Headers[key] = value;
+            envelope.Payload = Any.Pack(workflowStartRequest);
+            return new ScheduledDispatchEnvelope(ResolveDispatchTargetActorId(), envelope);
+        }
 
         if (envelope.Payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
         {
@@ -258,55 +296,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 $"Scheduled dispatch payload type '{envelope.Payload.TypeUrl}' does not support scheduled fire headers.");
         }
 
-        return new ScheduledDispatchEnvelope(State.TargetActorId, envelope);
-    }
-
-    private async Task<ScheduledDispatchEnvelope> BuildWorkflowDispatchEnvelopeAsync(
-        WorkflowScheduledDispatchStartRequest workflowStartRequest,
-        IReadOnlyDictionary<string, string> fireHeaders,
-        string idempotencyKey,
-        CancellationToken ct)
-    {
-        if (_workflowRunActorResolver == null || _workflowChatEnvelopeFactory == null)
-            throw new InvalidOperationException("Workflow scheduled dispatch adapter is not configured.");
-
-        var requestHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in workflowStartRequest.Headers)
-            requestHeaders[key] = value;
-        foreach (var (key, value) in fireHeaders)
-            requestHeaders[key] = value;
-
-        var request = new WorkflowChatRunRequest(
-            Prompt: workflowStartRequest.Prompt,
-            Source: string.IsNullOrWhiteSpace(workflowStartRequest.ActorId)
-                ? WorkflowChatSource.CatalogWorkflow(workflowStartRequest.WorkflowName)
-                : WorkflowChatSource.DefinitionActor(workflowStartRequest.ActorId, workflowStartRequest.WorkflowName),
-            SessionId: idempotencyKey,
-            Metadata: requestHeaders,
-            ScopeId: string.IsNullOrWhiteSpace(workflowStartRequest.ScopeId) ? null : workflowStartRequest.ScopeId);
-
-        var actorResolution = await _workflowRunActorResolver.ResolveOrCreateAsync(request, ct);
-        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
-        {
-            throw new WorkflowScheduleConflictException(
-                ResolveScheduleId(),
-                $"Workflow schedule '{ResolveScheduleId()}' target could not be prepared: {actorResolution.Error}.");
-        }
-
-        var context = new CommandContext(
-            actorResolution.Target.ActorId,
-            idempotencyKey,
-            idempotencyKey,
-            requestHeaders);
-        var envelope = _workflowChatEnvelopeFactory.CreateEnvelope(request, context);
-        envelope.Id = idempotencyKey;
-        envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-        envelope.Route = EnvelopeRouteSemantics.CreateDirect(ResolveScheduleId(), actorResolution.Target.ActorId);
-        envelope.Runtime = null;
-        var propagation = envelope.EnsurePropagation();
-        propagation.CorrelationId = idempotencyKey;
-
-        return new ScheduledDispatchEnvelope(actorResolution.Target.ActorId, envelope);
+        return new ScheduledDispatchEnvelope(ResolveDispatchTargetActorId(), envelope);
     }
 
     private IReadOnlyDictionary<string, string> BuildFireHeaders(
@@ -401,15 +391,44 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private string ResolveScheduleId() =>
         string.IsNullOrWhiteSpace(State.ScheduleId) ? Id : State.ScheduleId;
 
+    private string ResolveDispatchTargetActorId() =>
+        string.IsNullOrWhiteSpace(State.TargetActorId)
+            ? WorkflowScheduledDispatchAdapterConventions.TargetActorId
+            : State.TargetActorId.Trim();
+
+    private bool IsConfigured() =>
+        !string.IsNullOrWhiteSpace(State.ScheduleId) &&
+        !string.IsNullOrWhiteSpace(State.CronExpression) &&
+        State.TriggerEnvelope?.Payload != null;
+
+    private void EnsureConfiguredForWrite(string operation)
+    {
+        if (!IsConfigured())
+            throw new InvalidOperationException(
+                $"Scheduled dispatch '{ResolveScheduleId()}' cannot {operation} because it is not configured.");
+    }
+
     private static void EnsureValidDefinition(
-        string targetActorId,
+        string? targetActorId,
+        WorkflowScheduleTargetState? workflowTarget,
         EventEnvelope? triggerEnvelope,
         string cronExpression,
         string timezone)
     {
-        _ = NormalizeRequired(targetActorId, nameof(targetActorId));
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
+        if (triggerEnvelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out _) ||
+            HasWorkflowTarget(workflowTarget))
+        {
+            var normalizedTarget = NormalizeWorkflowTarget(workflowTarget);
+            _ = NormalizeRequired(normalizedTarget.WorkflowName, "workflowTarget.workflowName");
+            _ = NormalizeRequired(normalizedTarget.Prompt, "workflowTarget.prompt");
+        }
+        else
+        {
+            _ = NormalizeRequired(targetActorId, nameof(targetActorId));
+        }
+
         _ = NormalizeRequired(cronExpression, nameof(cronExpression));
 
         if (!ScheduledDispatchCalculator.TryGetNextOccurrence(
@@ -421,6 +440,38 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             throw new ArgumentException(error ?? "Schedule is invalid.", nameof(cronExpression));
         }
+    }
+
+    private static bool HasWorkflowTarget(WorkflowScheduleTargetState? workflowTarget) =>
+        workflowTarget != null &&
+        (!string.IsNullOrWhiteSpace(workflowTarget.WorkflowName) ||
+         !string.IsNullOrWhiteSpace(workflowTarget.Prompt) ||
+         !string.IsNullOrWhiteSpace(workflowTarget.ScopeId) ||
+         !string.IsNullOrWhiteSpace(workflowTarget.SourceActorId));
+
+    private static WorkflowScheduleTargetState NormalizeWorkflowTarget(WorkflowScheduleTargetState? workflowTarget)
+    {
+        if (workflowTarget == null)
+            return new WorkflowScheduleTargetState();
+
+        return new WorkflowScheduleTargetState
+        {
+            WorkflowName = NormalizeOptional(workflowTarget.WorkflowName),
+            Prompt = NormalizeOptional(workflowTarget.Prompt),
+            ScopeId = NormalizeOptional(workflowTarget.ScopeId),
+            SourceActorId = NormalizeOptional(workflowTarget.SourceActorId),
+        };
+    }
+
+    private static void ApplyWorkflowTarget(
+        WorkflowScheduledDispatchStartRequest request,
+        WorkflowScheduleTargetState? workflowTarget)
+    {
+        var normalized = NormalizeWorkflowTarget(workflowTarget);
+        request.WorkflowName = normalized.WorkflowName;
+        request.Prompt = normalized.Prompt;
+        request.ScopeId = normalized.ScopeId;
+        request.SourceActorId = normalized.SourceActorId;
     }
 
     private ScheduledDispatchState ApplyConfigured(
@@ -448,6 +499,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.Headers.Clear();
         foreach (var (key, value) in NormalizeHeaders(evt.Headers))
             next.Headers[key] = value;
+        next.WorkflowTarget = NormalizeWorkflowTarget(evt.WorkflowTarget);
         if (!next.Enabled)
         {
             next.NextFireAt = null;
@@ -615,4 +667,5 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static string ResolvePayloadTypeUrl(EventEnvelope? envelope) =>
         envelope?.Payload?.TypeUrl ?? string.Empty;
+
 }

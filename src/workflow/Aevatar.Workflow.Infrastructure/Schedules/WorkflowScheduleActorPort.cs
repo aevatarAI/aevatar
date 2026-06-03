@@ -18,7 +18,7 @@ internal sealed class WorkflowScheduleActorPort : IWorkflowScheduleActorPort
     public Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default) =>
         _scheduledDispatchActorPort.ResolveScheduleActorAsync(scheduleId, ct);
 
-    public Task<DispatchAdmission> DispatchConfigureAsync(
+    public Task<DispatchAdmission> DispatchCreateAsync(
         string actorId,
         WorkflowScheduleConfiguration configuration,
         ScheduledDispatchPreparation dispatch,
@@ -27,18 +27,24 @@ internal sealed class WorkflowScheduleActorPort : IWorkflowScheduleActorPort
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(dispatch);
 
-        return _scheduledDispatchActorPort.DispatchConfigureAsync(
+        return _scheduledDispatchActorPort.DispatchCreateAsync(
             actorId,
-            new ScheduledDispatchConfiguration(
-                configuration.ScheduleId,
-                configuration.DisplayName,
-                dispatch.TargetActorId,
-                dispatch.TriggerEnvelope,
-                configuration.CronExpression,
-                configuration.Timezone,
-                configuration.Enabled,
-                configuration.Headers,
-                dispatch.PayloadTypeUrl),
+            CreateScheduledDispatchConfiguration(configuration, dispatch),
+            ct);
+    }
+
+    public Task<DispatchAdmission> DispatchUpdateAsync(
+        string actorId,
+        WorkflowScheduleConfiguration configuration,
+        ScheduledDispatchPreparation dispatch,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(dispatch);
+
+        return _scheduledDispatchActorPort.DispatchUpdateAsync(
+            actorId,
+            CreateScheduledDispatchConfiguration(configuration, dispatch),
             ct);
     }
 
@@ -59,4 +65,23 @@ internal sealed class WorkflowScheduleActorPort : IWorkflowScheduleActorPort
         DateTimeOffset scheduledFireAt,
         CancellationToken ct = default) =>
         _scheduledDispatchActorPort.DispatchRunNowAsync(actorId, scheduledFireAt, ct);
+
+    private static ScheduledDispatchConfiguration CreateScheduledDispatchConfiguration(
+        WorkflowScheduleConfiguration configuration,
+        ScheduledDispatchPreparation dispatch) =>
+        new(
+            configuration.ScheduleId,
+            configuration.DisplayName,
+            dispatch.TargetActorId,
+            dispatch.TriggerEnvelope,
+            configuration.CronExpression,
+            configuration.Timezone,
+            configuration.Enabled,
+            configuration.Headers,
+            dispatch.PayloadTypeUrl,
+            dispatch.WorkflowTarget ?? new WorkflowScheduleTargetDescriptor(
+                configuration.WorkflowName,
+                configuration.Prompt,
+                configuration.ScopeId ?? string.Empty,
+                configuration.SourceActorId ?? string.Empty));
 }

@@ -132,6 +132,8 @@ message WorkflowScheduleDocument {
   string scope_id = 23;
   string target_actor_id = 24;
   repeated WorkflowScheduleFireRecordDocument fire_records = 25;
+  string source_actor_id = 26;
+  string schedule_actor_id = 27;
 }
 
 message WorkflowScheduleFireRecordDocument {

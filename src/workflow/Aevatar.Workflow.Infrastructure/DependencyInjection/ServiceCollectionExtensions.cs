@@ -3,6 +3,8 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Infrastructure.Capabilities;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
@@ -27,6 +29,7 @@ public static class ServiceCollectionExtensions
 
         // Replace the Noop fallback from Application layer with the real file export adapter.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());
+        DecorateWorkflowScheduledDispatchPort(services);
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
         services.TryAddSingleton<IWorkflowScheduleActorPort, WorkflowScheduleActorPort>();
         services.TryAddSingleton<WorkflowRunActorPort>();
@@ -38,6 +41,49 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
         return services;
+    }
+
+    private static void DecorateWorkflowScheduledDispatchPort(IServiceCollection services)
+    {
+        var existing = services.LastOrDefault(static descriptor => descriptor.ServiceType == typeof(IActorDispatchPort));
+        if (existing == null)
+            return;
+
+        services.Remove(existing);
+        services.Add(ServiceDescriptor.Describe(
+            typeof(WorkflowScheduledDispatchInnerActorDispatchPort),
+            sp => new WorkflowScheduledDispatchInnerActorDispatchPort(CreateInnerDispatchPort(existing, sp)),
+            existing.Lifetime));
+        services.Add(ServiceDescriptor.Describe(
+            typeof(IActorDispatchPort),
+            sp => new WorkflowScheduledDispatchAdapterPort(
+                sp.GetRequiredService<WorkflowScheduledDispatchInnerActorDispatchPort>().Inner,
+                sp.GetRequiredService<IWorkflowRunActorResolver>(),
+                sp.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>()),
+            existing.Lifetime));
+    }
+
+    private static IActorDispatchPort CreateInnerDispatchPort(
+        ServiceDescriptor descriptor,
+        IServiceProvider serviceProvider)
+    {
+        if (descriptor.ImplementationInstance is IActorDispatchPort instance)
+            return instance;
+
+        if (descriptor.ImplementationFactory != null)
+            return (IActorDispatchPort)descriptor.ImplementationFactory(serviceProvider)!;
+
+        if (descriptor.ImplementationType != null)
+            return (IActorDispatchPort)ActivatorUtilities.CreateInstance(
+                serviceProvider,
+                descriptor.ImplementationType);
+
+        throw new InvalidOperationException("IActorDispatchPort registration is not supported.");
+    }
+
+    private sealed class WorkflowScheduledDispatchInnerActorDispatchPort(IActorDispatchPort inner)
+    {
+        public IActorDispatchPort Inner { get; } = inner;
     }
 
     public static IServiceCollection AddWorkflowDefinitionFileSource(

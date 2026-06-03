@@ -1,6 +1,5 @@
-using System.Reflection;
 using Aevatar.AI.Abstractions;
-using Aevatar.CQRS.Core.Abstractions.Commands;
+using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -157,7 +156,7 @@ public sealed class ScheduledDispatchGAgentTests
         await agent.ActivateAsync();
         await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
 
-        await agent.HandleConfigureAsync(CreateConfigureCommand(
+        await agent.HandleConfigureAsync(CreateUpdateCommand(
             targetActorId: "target-actor-updated",
             cronExpression: "*/5 * * * *",
             enabled: false));
@@ -171,6 +170,27 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.TargetActorId.Should().Be("target-actor-updated");
         agent.State.NextFireAt.Should().BeNull();
         agent.State.NextFireLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_ShouldRejectDuplicateCreateAndMissingUpdate()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+
+        var duplicateCreate = () => agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+        await duplicateCreate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists*");
+
+        var missingAgent = CreateAgent(new TestEventStore(), dispatch);
+        await missingAgent.ActivateAsync();
+        var missingUpdate = () => missingAgent.HandleConfigureAsync(CreateUpdateCommand(enabled: false));
+        await missingUpdate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*is not configured*");
     }
 
     [Fact]
@@ -225,65 +245,53 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task HandleFireAsync_WithWorkflowStartRequest_ShouldResolveRunActorPerFireAndRebuildCommandEnvelope()
+    public async Task HandleFireAsync_WithWorkflowStartRequest_ShouldDispatchTypedAdapterEnvelope()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
-        var resolver = new RecordingWorkflowRunActorResolver();
-        var envelopeFactory = new RecordingWorkflowChatEnvelopeFactory();
-        var agent = CreateAgent(eventStore, dispatch, workflowRunActorResolver: resolver, workflowChatEnvelopeFactory: envelopeFactory);
+        var agent = CreateAgent(eventStore, dispatch);
         await agent.ActivateAsync();
         await agent.HandleConfigureAsync(CreateConfigureCommand(
-            targetActorId: "workflow-schedule-target",
+            targetActorId: string.Empty,
             triggerEnvelope: CreateTriggerEnvelope("schedule-1", new WorkflowScheduledDispatchStartRequest
             {
                 ScheduleId = "schedule-1",
-                WorkflowName = "daily-workflow",
-                Prompt = "run daily",
-                ScopeId = "scope-1",
-                ActorId = "definition-actor-1",
                 Headers =
                 {
                     ["x-trace"] = "trace-1",
-                    ["workflow.schedule_id"] = "schedule-1",
                 },
             }),
+            workflowTarget: new WorkflowScheduleTargetState
+            {
+                WorkflowName = "daily-workflow",
+                Prompt = "run daily",
+                ScopeId = "scope-1",
+                SourceActorId = "definition-actor-1",
+            },
             enabled: false));
 
         var firstFireAt = new DateTimeOffset(2026, 5, 29, 10, 0, 0, TimeSpan.Zero);
-        var secondFireAt = firstFireAt.AddMinutes(15);
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(firstFireAt),
             Manual = true,
         });
-        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
-        {
-            ScheduledFireAt = Timestamp.FromDateTimeOffset(secondFireAt),
-            Manual = true,
-        });
 
-        resolver.Requests.Should().HaveCount(2);
-        resolver.Requests.Select(x => x.SessionId).Should().OnlyHaveUniqueItems();
-        resolver.Requests[0].SessionId.Should().Be(ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstFireAt));
-        resolver.Requests[1].SessionId.Should().Be(ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", secondFireAt));
-        resolver.Requests[0].Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
-        resolver.Requests[0].Source.ActorId.Should().Be("definition-actor-1");
-        resolver.Requests[0].Metadata![ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        resolver.Requests[0].Metadata![ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(firstFireAt.ToUniversalTime().ToString("O"));
-        resolver.Requests[0].Metadata![ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(resolver.Requests[0].SessionId);
-
-        dispatch.Dispatches.Should().HaveCount(2);
-        dispatch.Dispatches.Select(x => x.ActorId).Should().Equal("run-actor-1", "run-actor-2");
-        dispatch.Dispatches.Select(x => x.Envelope.Id).Should().Equal(resolver.Requests[0].SessionId, resolver.Requests[1].SessionId);
-        dispatch.Dispatches.Select(x => x.Envelope.Propagation?.CorrelationId)
-            .Should().Equal(resolver.Requests[0].SessionId, resolver.Requests[1].SessionId);
-
-        var firstChatRequest = dispatch.Dispatches[0].Envelope.Payload.Unpack<ChatRequestEvent>();
-        firstChatRequest.SessionId.Should().Be(resolver.Requests[0].SessionId);
-        firstChatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId].Should().Be(resolver.Requests[0].SessionId);
-        firstChatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(resolver.Requests[0].SessionId);
-        firstChatRequest.Metadata["x-trace"].Should().Be("trace-1");
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstFireAt);
+        dispatch.Dispatches.Should().ContainSingle();
+        dispatch.Dispatches[0].ActorId.Should().Be(WorkflowScheduledDispatchAdapterConventions.TargetActorId);
+        dispatch.Dispatches[0].Envelope.Route.GetTargetActorId().Should().Be(WorkflowScheduledDispatchAdapterConventions.TargetActorId);
+        dispatch.Dispatches[0].Envelope.Id.Should().Be(idempotencyKey);
+        var startRequest = dispatch.Dispatches[0].Envelope.Payload.Unpack<WorkflowScheduledDispatchStartRequest>();
+        startRequest.ScheduleId.Should().Be("schedule-1");
+        startRequest.WorkflowName.Should().Be("daily-workflow");
+        startRequest.Prompt.Should().Be("run daily");
+        startRequest.ScopeId.Should().Be("scope-1");
+        startRequest.SourceActorId.Should().Be("definition-actor-1");
+        startRequest.Headers["x-trace"].Should().Be("trace-1");
+        startRequest.Headers[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        startRequest.Headers[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(firstFireAt.ToUniversalTime().ToString("O"));
+        startRequest.Headers[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
     }
 
     [Fact]
@@ -591,11 +599,9 @@ public sealed class ScheduledDispatchGAgentTests
     private static ScheduledDispatchGAgent CreateAgent(
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
-        RecordingRuntimeCallbackScheduler? callbackScheduler = null,
-        IWorkflowRunActorResolver? workflowRunActorResolver = null,
-        ICommandEnvelopeFactory<WorkflowChatRunRequest>? workflowChatEnvelopeFactory = null)
+        RecordingRuntimeCallbackScheduler? callbackScheduler = null)
     {
-        var agent = new ScheduledDispatchGAgent(dispatch, workflowRunActorResolver, workflowChatEnvelopeFactory)
+        var agent = new ScheduledDispatchGAgent(dispatch)
         {
             Services = new TestServiceProvider(callbackScheduler),
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(eventStore),
@@ -629,14 +635,15 @@ public sealed class ScheduledDispatchGAgentTests
         setIdMethod!.Invoke(agent, [agentId]);
     }
 
-    private static ScheduledDispatchConfigureCommand CreateConfigureCommand(
+    private static ScheduledDispatchCreateCommand CreateConfigureCommand(
         string scheduleId = "schedule-1",
         string targetActorId = "target-actor-1",
         string cronExpression = "*/15 * * * *",
         bool enabled = false,
-        EventEnvelope? triggerEnvelope = null)
+        EventEnvelope? triggerEnvelope = null,
+        WorkflowScheduleTargetState? workflowTarget = null)
     {
-        return new ScheduledDispatchConfigureCommand
+        return new ScheduledDispatchCreateCommand
         {
             ScheduleId = scheduleId,
             DisplayName = "Test schedule",
@@ -649,6 +656,32 @@ public sealed class ScheduledDispatchGAgentTests
             CronExpression = cronExpression,
             Timezone = "UTC",
             Enabled = enabled,
+            WorkflowTarget = workflowTarget,
+        };
+    }
+
+    private static ScheduledDispatchUpdateCommand CreateUpdateCommand(
+        string scheduleId = "schedule-1",
+        string targetActorId = "target-actor-1",
+        string cronExpression = "*/15 * * * *",
+        bool enabled = false,
+        EventEnvelope? triggerEnvelope = null,
+        WorkflowScheduleTargetState? workflowTarget = null)
+    {
+        return new ScheduledDispatchUpdateCommand
+        {
+            ScheduleId = scheduleId,
+            DisplayName = "Test schedule",
+            TargetActorId = targetActorId,
+            TriggerEnvelope = triggerEnvelope ?? CreateTriggerEnvelope(targetActorId, new ChatRequestEvent
+            {
+                Prompt = "hello",
+                SessionId = "template-session",
+            }),
+            CronExpression = cronExpression,
+            Timezone = "UTC",
+            Enabled = enabled,
+            WorkflowTarget = workflowTarget,
         };
     }
 
@@ -684,62 +717,6 @@ public sealed class ScheduledDispatchGAgentTests
                 throw DispatchException;
 
             return Task.FromResult(AdmissionFactory(actorId, envelope));
-        }
-    }
-
-    private sealed class RecordingWorkflowRunActorResolver : IWorkflowRunActorResolver
-    {
-        public List<WorkflowChatRunRequest> Requests { get; } = [];
-
-        public Task<WorkflowActorResolutionResult> ResolveOrCreateAsync(
-            WorkflowChatRunRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(new WorkflowActorResolutionResult(
-                new WorkflowRunCreationReceipt(
-                    $"run-actor-{Requests.Count}",
-                    request.Source.ActorId ?? string.Empty,
-                    []),
-                request.Source.WorkflowName ?? string.Empty,
-                WorkflowChatRunStartError.None));
-        }
-    }
-
-    private sealed class RecordingWorkflowChatEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
-    {
-        public List<WorkflowChatRunRequest> Commands { get; } = [];
-        public List<CommandContext> Contexts { get; } = [];
-
-        public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
-        {
-            Commands.Add(command);
-            Contexts.Add(context);
-
-            var chatRequest = new ChatRequestEvent
-            {
-                Prompt = command.Prompt,
-                SessionId = command.SessionId ?? context.CorrelationId,
-                ScopeId = command.ScopeId ?? string.Empty,
-            };
-            foreach (var (key, value) in context.Headers)
-                chatRequest.Headers[key] = value;
-            chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = chatRequest.SessionId;
-            foreach (var (key, value) in command.Metadata ?? new Dictionary<string, string>())
-                chatRequest.Metadata[key] = value;
-
-            return new EventEnvelope
-            {
-                Id = context.CommandId,
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Payload = Any.Pack(chatRequest),
-                Route = EnvelopeRouteSemantics.CreateDirect("test", context.TargetId),
-                Propagation = new EnvelopePropagation
-                {
-                    CorrelationId = context.CorrelationId,
-                },
-            };
         }
     }
 

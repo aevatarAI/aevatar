@@ -15,7 +15,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowScheduleProjectionTests
 {
     [Fact]
-    public async Task CurrentStateProjector_ShouldMapScheduledDispatchStateAndStripAdapterHeaders()
+    public async Task CurrentStateProjector_ShouldMapScheduledDispatchStateAndWorkflowTarget()
     {
         var observedAt = DateTimeOffset.Parse("2026-05-29T09:15:00+00:00");
         var createdAt = observedAt.AddHours(-2);
@@ -44,11 +44,14 @@ public sealed class WorkflowScheduleProjectionTests
             LastError = "last error",
             FireCount = 2,
             FailureCount = 1,
+            WorkflowTarget = new WorkflowScheduleTargetState
+            {
+                WorkflowName = "workflow-a",
+                Prompt = "run it",
+                ScopeId = "scope-1",
+                SourceActorId = "definition-actor-1",
+            },
         };
-        state.Headers[WorkflowScheduleAdapterHeaderKeys.WorkflowName] = "workflow-a";
-        state.Headers[WorkflowScheduleAdapterHeaderKeys.Prompt] = "run it";
-        state.Headers[WorkflowScheduleAdapterHeaderKeys.ScopeId] = "scope-1";
-        state.Headers[WorkflowScheduleAdapterHeaderKeys.SourceActorId] = "definition-actor-1";
         state.Headers["caller"] = "kept";
         state.FireRecords["older"] = new ScheduledDispatchFireRecordState
         {
@@ -80,6 +83,7 @@ public sealed class WorkflowScheduleProjectionTests
         var document = dispatcher.Upserts.Single();
         document.Id.Should().Be("scheduled-dispatch:schedule-1");
         document.ActorId.Should().Be("scheduled-dispatch:schedule-1");
+        document.ScheduleActorId.Should().Be("scheduled-dispatch:schedule-1");
         document.ScheduleId.Should().Be("schedule-1");
         document.DisplayName.Should().Be("Daily report");
         document.WorkflowName.Should().Be("workflow-a");
@@ -98,6 +102,7 @@ public sealed class WorkflowScheduleProjectionTests
         document.FireCount.Should().Be(2);
         document.FailureCount.Should().Be(1);
         document.ScopeId.Should().Be("scope-1");
+        document.SourceActorId.Should().Be("definition-actor-1");
         document.TargetActorId.Should().Be("target-actor-1");
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("evt-7");
@@ -150,6 +155,8 @@ public sealed class WorkflowScheduleProjectionTests
         document.LastCorrelationId.Should().BeEmpty();
         document.LastError.Should().BeEmpty();
         document.ScopeId.Should().BeEmpty();
+        document.SourceActorId.Should().BeEmpty();
+        document.ScheduleActorId.Should().Be("scheduled-dispatch:fallback");
         document.TargetActorId.Should().BeEmpty();
         document.LastEventId.Should().BeEmpty();
         document.Headers.Should().BeEmpty();
@@ -213,7 +220,9 @@ public sealed class WorkflowScheduleProjectionTests
         detail.Schedule.LastError.Should().BeEmpty();
         detail.Schedule.Headers.Should().Contain("caller", "kept");
         detail.Schedule.ScopeId.Should().BeEmpty();
-        detail.Schedule.ActorId.Should().BeEmpty();
+        detail.Schedule.SourceActorId.Should().BeEmpty();
+        detail.Schedule.ScheduleActorId.Should().BeEmpty();
+        detail.Schedule.TargetActorId.Should().BeEmpty();
         detail.RecentFires.Select(x => x.IdempotencyKey).Should().Equal("newer", "older");
         detail.RecentFires[0].RunActorId.Should().Be("run-actor");
         detail.RecentFires[0].CommandId.Should().Be("cmd");
@@ -250,6 +259,8 @@ public sealed class WorkflowScheduleProjectionTests
                             ["trace"] = "on",
                         },
                         ScopeId = "scope-1",
+                        SourceActorId = "source-actor",
+                        ScheduleActorId = "schedule-actor",
                         TargetActorId = "target-actor",
                     },
                 ],
@@ -277,7 +288,9 @@ public sealed class WorkflowScheduleProjectionTests
         summary.CronExpression.Should().Be("0 9 * * *");
         summary.Headers.Should().Contain("trace", "on");
         summary.ScopeId.Should().Be("scope-1");
-        summary.ActorId.Should().Be("target-actor");
+        summary.SourceActorId.Should().Be("source-actor");
+        summary.ScheduleActorId.Should().Be("schedule-actor");
+        summary.TargetActorId.Should().Be("target-actor");
     }
 
     [Fact]

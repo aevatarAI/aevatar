@@ -21,18 +21,19 @@ internal sealed class WorkflowScheduledDispatchPreparationService : IWorkflowSch
             WorkflowName = configuration.WorkflowName,
             Prompt = configuration.Prompt,
             ScopeId = string.IsNullOrWhiteSpace(configuration.ScopeId) ? string.Empty : configuration.ScopeId,
-            ActorId = string.IsNullOrWhiteSpace(configuration.ActorId) ? string.Empty : configuration.ActorId,
+            SourceActorId = string.IsNullOrWhiteSpace(configuration.SourceActorId) ? string.Empty : configuration.SourceActorId,
         };
         foreach (var (key, value) in configuration.Headers)
             payload.Headers[key] = value;
-        payload.Headers["workflow.schedule_id"] = configuration.ScheduleId;
 
         var envelope = new EventEnvelope
         {
             Id = commandId,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect("workflow.schedule.adapter", configuration.ScheduleId),
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                WorkflowScheduledDispatchAdapterConventions.TargetActorId,
+                WorkflowScheduledDispatchAdapterConventions.TargetActorId),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = correlationId,
@@ -40,8 +41,13 @@ internal sealed class WorkflowScheduledDispatchPreparationService : IWorkflowSch
         };
 
         return Task.FromResult(new ScheduledDispatchPreparation(
-            configuration.ScheduleId,
+            null,
             envelope,
-            envelope.Payload?.TypeUrl ?? string.Empty));
+            envelope.Payload?.TypeUrl ?? string.Empty,
+            new WorkflowScheduleTargetDescriptor(
+                configuration.WorkflowName,
+                configuration.Prompt,
+                configuration.ScopeId ?? string.Empty,
+                configuration.SourceActorId ?? string.Empty)));
     }
 }

@@ -34,13 +34,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 [" "] = "ignored",
             },
             ScopeId: " scope-1 ",
-            ActorId: " actor-1 "));
+            SourceActorId: " actor-1 "));
 
         receipt.ScheduleId.Should().Be("daily-report");
-        receipt.ActorId.Should().Be("actor:daily-report");
+        receipt.ScheduleActorId.Should().Be("actor:daily-report");
         actorPort.EnsureScheduleIds.Should().Equal("daily-report");
-        actorPort.Configured.Should().ContainSingle();
-        var configured = actorPort.Configured.Single();
+        actorPort.Created.Should().ContainSingle();
+        var configured = actorPort.Created.Single();
         configured.ActorId.Should().Be("actor:daily-report");
         configured.Configuration.ScheduleId.Should().Be("daily-report");
         configured.Configuration.DisplayName.Should().Be("Daily report");
@@ -48,14 +48,19 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configured.Configuration.Prompt.Should().Be("summarize status");
         configured.Configuration.Timezone.Should().Be("UTC");
         configured.Configuration.ScopeId.Should().Be("scope-1");
-        configured.Configuration.ActorId.Should().Be("actor-1");
+        configured.Configuration.SourceActorId.Should().Be("actor-1");
         configured.Configuration.Headers.Should().Contain(
             new KeyValuePair<string, string>("trace", "enabled"));
-        configured.Configuration.Headers[WorkflowScheduleAdapterHeaderKeys.WorkflowName].Should().Be("direct");
-        configured.Configuration.Headers[WorkflowScheduleAdapterHeaderKeys.Prompt].Should().Be("summarize status");
-        configured.Configuration.Headers[WorkflowScheduleAdapterHeaderKeys.ScopeId].Should().Be("scope-1");
-        configured.Configuration.Headers[WorkflowScheduleAdapterHeaderKeys.SourceActorId].Should().Be("actor-1");
+        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.workflow_name");
+        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.prompt");
+        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.scope_id");
+        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.source_actor_id");
         configured.Dispatch.TargetActorId.Should().Be("target:daily-report");
+        configured.Dispatch.WorkflowTarget.Should().Be(new WorkflowScheduleTargetDescriptor(
+            "direct",
+            "summarize status",
+            "scope-1",
+            "actor-1"));
         preparation.Configurations.Should().ContainSingle()
             .Which.ScheduleId.Should().Be("daily-report");
     }
@@ -122,10 +127,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var receipt = await service.RunNowAsync("schedule-1");
 
         receipt.ScheduleId.Should().Be("schedule-1");
-        receipt.ActorId.Should().Be("actor:schedule-1");
+        receipt.ScheduleActorId.Should().Be("actor:schedule-1");
         receipt.Accepted.Should().BeTrue();
         receipt.IdempotencyKey.Should().Be(
-            WorkflowScheduleCalculator.BuildIdempotencyKey("schedule-1", receipt.ScheduledFireAt));
+            ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", receipt.ScheduledFireAt));
         receipt.IdempotencyKey.Should().StartWith("schedule:schedule-1:fire:");
         actorPort.RunNowRequests.Should().ContainSingle()
             .Which.ActorId.Should().Be("actor:schedule-1");
@@ -196,13 +201,16 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var receipt = await service.CreateAsync(CreateConfiguration("schedule-1"));
 
         receipt.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", false));
-        actorPort.Configured.Should().ContainSingle();
+        actorPort.Created.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task DisableAsync_ShouldReturnNotFound_WhenScheduleReadModelDoesNotExist()
+    public async Task DisableAsync_ShouldReturnNotFound_WhenScheduleActorDoesNotExist()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
         var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort());
 
         var act = () => service.DisableAsync("missing", string.Empty);
@@ -210,21 +218,6 @@ public sealed class WorkflowScheduleApplicationServiceTests
         await act.Should().ThrowAsync<WorkflowScheduleNotFoundException>();
         actorPort.EnsureScheduleIds.Should().BeEmpty();
         actorPort.Disabled.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task RunNowAsync_ShouldReturnConflict_WhenScheduleIsUnconfigured()
-    {
-        var actorPort = new FakeWorkflowScheduleActorPort();
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["schedule-1"] = CreateDetail("schedule-1", workflowName: string.Empty);
-        var service = CreateService(actorPort, queryPort);
-
-        var act = () => service.RunNowAsync("schedule-1");
-
-        await act.Should().ThrowAsync<WorkflowScheduleConflictException>();
-        actorPort.EnsureScheduleIds.Should().BeEmpty();
-        actorPort.RunNowRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -241,7 +234,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
-    public async Task EnableDisableAndRunNow_ShouldRejectMissingActorAfterConfiguredReadModel()
+    public async Task EnableDisableAndRunNow_ShouldRejectMissingScheduleActor()
     {
         var actorPort = new FakeWorkflowScheduleActorPort
         {
@@ -300,26 +293,24 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 {
                     [" x "] = " y ",
                     ["empty"] = " ",
-                    [WorkflowScheduleAdapterHeaderKeys.ScopeId] = "spoofed",
-                    [WorkflowScheduleAdapterHeaderKeys.SourceActorId] = "spoofed",
+                    ["workflow.schedule.scope_id"] = "caller-extension",
+                    ["workflow.schedule.source_actor_id"] = "caller-extension",
                 },
                 ScopeId: " ",
-                ActorId: " "));
+                SourceActorId: " "));
 
         receipt.Should().Be(new WorkflowScheduleMutationReceipt("route-schedule", "actor:route-schedule", true));
-        actorPort.Configured.Should().ContainSingle();
-        var configuration = actorPort.Configured.Single().Configuration;
+        actorPort.Updated.Should().ContainSingle();
+        var configuration = actorPort.Updated.Single().Configuration;
         configuration.ScheduleId.Should().Be("route-schedule");
         configuration.DisplayName.Should().BeEmpty();
         configuration.Timezone.Should().Be("UTC");
         configuration.ScopeId.Should().BeNull();
-        configuration.ActorId.Should().BeNull();
+        configuration.SourceActorId.Should().BeNull();
         configuration.Headers.Should().Contain("x", "y");
         configuration.Headers.Should().NotContainKey("empty");
-        configuration.Headers[WorkflowScheduleAdapterHeaderKeys.WorkflowName].Should().Be("direct");
-        configuration.Headers[WorkflowScheduleAdapterHeaderKeys.Prompt].Should().Be("hello");
-        configuration.Headers.Should().NotContainKey(WorkflowScheduleAdapterHeaderKeys.ScopeId);
-        configuration.Headers.Should().NotContainKey(WorkflowScheduleAdapterHeaderKeys.SourceActorId);
+        configuration.Headers.Should().Contain("workflow.schedule.scope_id", "caller-extension");
+        configuration.Headers.Should().Contain("workflow.schedule.source_actor_id", "caller-extension");
     }
 
     [Fact]
@@ -339,29 +330,33 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 ["x-trace"] = "trace-1",
             },
             ScopeId: "scope-1",
-            ActorId: "definition-actor-1");
+            SourceActorId: "definition-actor-1");
 
         var preparation = await service.PrepareAsync(
             configuration,
             "command-1",
             "correlation-1");
 
-        preparation.TargetActorId.Should().Be("schedule-1");
+        preparation.TargetActorId.Should().BeNull();
+        preparation.WorkflowTarget.Should().Be(new WorkflowScheduleTargetDescriptor(
+            "daily-workflow",
+            "run the daily workflow",
+            "scope-1",
+            "definition-actor-1"));
         preparation.PayloadTypeUrl.Should().Be(Any.Pack(new WorkflowScheduledDispatchStartRequest()).TypeUrl);
         preparation.TriggerEnvelope.Id.Should().Be("command-1");
-        preparation.TriggerEnvelope.Route.GetTargetActorId().Should().Be("schedule-1");
+        preparation.TriggerEnvelope.Route.GetTargetActorId().Should().Be(WorkflowScheduledDispatchAdapterConventions.TargetActorId);
         preparation.TriggerEnvelope.Propagation!.CorrelationId.Should().Be("correlation-1");
         preparation.TriggerEnvelope.Timestamp.Should().NotBeNull();
 
         var request = preparation.TriggerEnvelope.Payload.Unpack<WorkflowScheduledDispatchStartRequest>();
         request.Prompt.Should().Be("run the daily workflow");
         request.ScopeId.Should().Be("scope-1");
-        request.ActorId.Should().Be("definition-actor-1");
+        request.SourceActorId.Should().Be("definition-actor-1");
         request.WorkflowName.Should().Be("daily-workflow");
         request.Headers.Should().Contain(
             new KeyValuePair<string, string>("x-trace", "trace-1"));
-        request.Headers.Should().Contain(
-            new KeyValuePair<string, string>("workflow.schedule_id", "schedule-1"));
+        request.Headers.Should().NotContainKey("workflow.schedule_id");
     }
 
     [Fact]
@@ -378,14 +373,14 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Enabled: true,
             Headers: new Dictionary<string, string>(),
             ScopeId: " ",
-            ActorId: " ");
+            SourceActorId: " ");
 
         var preparation = await service.PrepareAsync(configuration, "command-1", "correlation-1");
 
         var request = preparation.TriggerEnvelope.Payload.Unpack<WorkflowScheduledDispatchStartRequest>();
         request.ScopeId.Should().BeEmpty();
         request.WorkflowName.Should().Be("catalog-workflow");
-        request.ActorId.Should().BeEmpty();
+        request.SourceActorId.Should().BeEmpty();
     }
 
     [Theory]
@@ -494,8 +489,6 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         ScheduledDispatchValidationResult.Failed(" ")
             .Error.Should().Be("Schedule is invalid.");
-        WorkflowScheduleValidationResult.Failed(" ")
-            .Error.Should().Be("Schedule is invalid.");
     }
 
     [Fact]
@@ -529,7 +522,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRemoveCallerSuppliedAdapterHeadersBeforeAddingNormalizedValues()
+    public async Task CreateAsync_ShouldKeepHeadersAsDispatchExtensionsOnly()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
         var preparation = new FakeWorkflowScheduledDispatchPreparationService();
@@ -545,26 +538,26 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Enabled: true,
             Headers: new Dictionary<string, string>
             {
-                [WorkflowScheduleAdapterHeaderKeys.WorkflowName] = "spoofed",
-                [WorkflowScheduleAdapterHeaderKeys.Prompt] = "spoofed",
-                [WorkflowScheduleAdapterHeaderKeys.ScopeId] = "spoofed",
-                [WorkflowScheduleAdapterHeaderKeys.SourceActorId] = "spoofed",
                 ["caller"] = "kept",
-            }));
+            },
+            ScopeId: "scope-1",
+            SourceActorId: "source-1"));
 
-        var headers = actorPort.Configured.Single().Configuration.Headers;
-        headers.Should().Contain(new KeyValuePair<string, string>("caller", "kept"));
-        headers[WorkflowScheduleAdapterHeaderKeys.WorkflowName].Should().Be("direct");
-        headers[WorkflowScheduleAdapterHeaderKeys.Prompt].Should().Be("hello");
-        headers.Should().NotContainKey(WorkflowScheduleAdapterHeaderKeys.ScopeId);
-        headers.Should().NotContainKey(WorkflowScheduleAdapterHeaderKeys.SourceActorId);
+        var created = actorPort.Created.Single();
+        created.Configuration.Headers.Should().Contain(new KeyValuePair<string, string>("caller", "kept"));
+        created.Dispatch.WorkflowTarget.Should().Be(new WorkflowScheduleTargetDescriptor(
+            "direct",
+            "hello",
+            "scope-1",
+            "source-1"));
     }
 
     private sealed class FakeWorkflowScheduleActorPort : IWorkflowScheduleActorPort
     {
         public List<string> EnsureScheduleIds { get; } = [];
         public List<string> ResolveScheduleIds { get; } = [];
-        public List<(string ActorId, WorkflowScheduleConfiguration Configuration, ScheduledDispatchPreparation Dispatch)> Configured { get; } = [];
+        public List<(string ActorId, WorkflowScheduleConfiguration Configuration, ScheduledDispatchPreparation Dispatch)> Created { get; } = [];
+        public List<(string ActorId, WorkflowScheduleConfiguration Configuration, ScheduledDispatchPreparation Dispatch)> Updated { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
@@ -584,13 +577,23 @@ public sealed class WorkflowScheduleApplicationServiceTests
             return Task.FromResult<string?>(ResolveActorId ?? $"actor:{scheduleId}");
         }
 
-        public Task<DispatchAdmission> DispatchConfigureAsync(
+        public Task<DispatchAdmission> DispatchCreateAsync(
             string actorId,
             WorkflowScheduleConfiguration configuration,
             ScheduledDispatchPreparation dispatch,
             CancellationToken ct = default)
         {
-            Configured.Add((actorId, configuration, dispatch));
+            Created.Add((actorId, configuration, dispatch));
+            return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
+        }
+
+        public Task<DispatchAdmission> DispatchUpdateAsync(
+            string actorId,
+            WorkflowScheduleConfiguration configuration,
+            ScheduledDispatchPreparation dispatch,
+            CancellationToken ct = default)
+        {
+            Updated.Add((actorId, configuration, dispatch));
             return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
         }
 
@@ -657,7 +660,12 @@ public sealed class WorkflowScheduleApplicationServiceTests
                         CorrelationId = correlationId,
                     },
                 },
-                Any.Pack(new Empty()).TypeUrl));
+                Any.Pack(new Empty()).TypeUrl,
+                new WorkflowScheduleTargetDescriptor(
+                    configuration.WorkflowName,
+                    configuration.Prompt,
+                    configuration.ScopeId ?? string.Empty,
+                    configuration.SourceActorId ?? string.Empty)));
         }
     }
 
@@ -783,6 +791,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 FailureCount: 0,
                 Headers: new Dictionary<string, string>(),
                 ScopeId: string.Empty,
-                ActorId: string.Empty),
+                SourceActorId: string.Empty,
+                ScheduleActorId: string.Empty,
+                TargetActorId: string.Empty),
             []);
 }

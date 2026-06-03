@@ -51,10 +51,11 @@ public sealed class WorkflowScheduleCurrentStateProjector
         {
             Id = context.RootActorId,
             ActorId = context.RootActorId,
+            ScheduleActorId = context.RootActorId,
             ScheduleId = string.IsNullOrWhiteSpace(state.ScheduleId) ? context.RootActorId : state.ScheduleId,
             DisplayName = state.DisplayName ?? string.Empty,
-            WorkflowName = GetHeader(state, WorkflowScheduleAdapterHeaderKeys.WorkflowName),
-            Prompt = GetHeader(state, WorkflowScheduleAdapterHeaderKeys.Prompt),
+            WorkflowName = state.WorkflowTarget?.WorkflowName ?? string.Empty,
+            Prompt = state.WorkflowTarget?.Prompt ?? string.Empty,
             CronExpression = state.CronExpression ?? string.Empty,
             Timezone = state.Timezone ?? string.Empty,
             Enabled = state.Enabled,
@@ -64,7 +65,8 @@ public sealed class WorkflowScheduleCurrentStateProjector
             LastError = state.LastError ?? string.Empty,
             FireCount = state.FireCount,
             FailureCount = state.FailureCount,
-            ScopeId = GetHeader(state, WorkflowScheduleAdapterHeaderKeys.ScopeId),
+            ScopeId = state.WorkflowTarget?.ScopeId ?? string.Empty,
+            SourceActorId = state.WorkflowTarget?.SourceActorId ?? string.Empty,
             TargetActorId = state.TargetActorId ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
@@ -76,14 +78,10 @@ public sealed class WorkflowScheduleCurrentStateProjector
         document.NextFireAt = state.NextFireAt;
         document.LastFireAt = state.LastFireAt;
         document.Headers = state.Headers
-            .Where(static x => !WorkflowScheduleAdapterHeaderKeys.IsAdapterKey(x.Key))
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;
     }
-
-    private static string GetHeader(ScheduledDispatchState state, string key) =>
-        state.Headers.TryGetValue(key, out var value) ? value ?? string.Empty : string.Empty;
 
     private static WorkflowScheduleFireRecordDocument[] CreateFireRecords(ScheduledDispatchState state) =>
         state.FireRecords.Values
