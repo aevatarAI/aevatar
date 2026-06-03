@@ -1,7 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 
 namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
 

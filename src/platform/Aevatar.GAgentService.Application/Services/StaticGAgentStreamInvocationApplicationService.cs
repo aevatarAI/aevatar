@@ -4,7 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Application.Services;

@@ -1,6 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -29,7 +29,7 @@ public static class ScopeGAgentAguiEventMapper
             var ai = payload.Unpack<AiTextStart>();
             return new AGUIEvent
             {
-                TextMessageStart = new Aevatar.Presentation.AGUI.TextMessageStartEvent
+                TextMessageStart = new Aevatar.AGUI.Contracts.TextMessageStartEvent
                 {
                     MessageId = ai.SessionId,
                     Role = "assistant",
@@ -42,7 +42,7 @@ public static class ScopeGAgentAguiEventMapper
             var ai = payload.Unpack<AiTextContent>();
             return new AGUIEvent
             {
-                TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                TextMessageContent = new Aevatar.AGUI.Contracts.TextMessageContentEvent
                 {
                     MessageId = ai.SessionId,
                     Delta = ai.Delta,
@@ -58,7 +58,7 @@ public static class ScopeGAgentAguiEventMapper
                 Custom = new CustomEvent
                 {
                     Name = "TEXT_MESSAGE_REASONING",
-                    Payload = Any.Pack(new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    Payload = Any.Pack(new Aevatar.AGUI.Contracts.TextMessageContentEvent
                     {
                         MessageId = ai.SessionId,
                         Delta = ai.Delta,
@@ -174,7 +174,7 @@ public static class ScopeGAgentAguiEventMapper
 
         return new AGUIEvent
         {
-            TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
+            TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent
             {
                 MessageId = sessionId,
             },
