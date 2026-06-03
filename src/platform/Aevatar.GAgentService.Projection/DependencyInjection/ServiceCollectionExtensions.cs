@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Metadata;
@@ -104,6 +105,13 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new ServiceProjectionRuntimeLease<ResponsesAgentToolStateCurrentStateProjectionContext>(context.RootActorId, context));
+        services.AddServiceProjectionRuntime<ScheduledDispatchProjectionContext, ProjectionMaterializationScopeGAgent<ScheduledDispatchProjectionContext>>(
+            static scopeKey => new ScheduledDispatchProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ServiceProjectionRuntimeLease<ScheduledDispatchProjectionContext>(context.RootActorId, context));
         services.AddEventSinkProjectionRuntimeCore<
             GAgentDraftRunProjectionContext,
             GAgentDraftRunRuntimeLease,
@@ -153,6 +161,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<GAgentRunTerminalReadModel>, GAgentRunTerminalReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<LlmSessionCurrentStateReadModel>, LlmSessionCurrentStateReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ResponsesAgentToolStateCurrentStateReadModel>, ResponsesAgentToolStateCurrentStateReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScheduledDispatchDocument>, ScheduledDispatchDocumentMetadataProvider>();
         services.TryAddSingleton<IServiceCatalogQueryReader, ServiceCatalogQueryReader>();
         services.TryAddSingleton<IServiceDeploymentCatalogQueryReader, ServiceDeploymentCatalogQueryReader>();
         services.TryAddSingleton<IServiceServingSetQueryReader, ServiceServingSetQueryReader>();
@@ -164,6 +173,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IGAgentRunTerminalQueryPort, GAgentRunTerminalQueryReader>();
         services.TryAddSingleton<ILlmSessionQueryPort, LlmSessionQueryReader>();
         services.TryAddSingleton<IResponsesAgentToolStateQueryPort, ResponsesAgentToolStateQueryReader>();
+        services.TryAddSingleton<ScheduledDispatchQueryPort>();
+        services.TryAddSingleton<IScheduledDispatchQueryPort>(sp => sp.GetRequiredService<ScheduledDispatchQueryPort>());
         services.AddProjectionArtifactMaterializer<
             ServiceCatalogProjectionContext,
             ServiceCatalogProjector>();
@@ -197,6 +208,9 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ResponsesAgentToolStateCurrentStateProjectionContext,
             ResponsesAgentToolStateCurrentStateProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScheduledDispatchProjectionContext,
+            ScheduledDispatchCurrentStateProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<GAgentDraftRunProjectionContext>,
             GAgentDraftRunSessionEventProjector>());

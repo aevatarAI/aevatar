@@ -24,8 +24,5 @@
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="workflow_state.proto" GrpcServices="None" />
-    <Protobuf Include="scheduled_dispatch_state.proto"
-              GrpcServices="None"
-              AdditionalImportDirs="..\..\Aevatar.Foundation.Abstractions;..\..\platform\Aevatar.GAgentService.Abstractions\Protos" />
   </ItemGroup>
 </Project>

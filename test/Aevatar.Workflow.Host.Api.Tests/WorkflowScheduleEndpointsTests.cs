@@ -2,11 +2,12 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Core.Schedules;
+using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
-using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.Workflow.Infrastructure.Schedules;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -391,25 +392,13 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
-    public async Task WorkflowScheduledDispatchAdapterPort_ShouldResolveServiceInvocationPortOnlyForInvocationTarget()
+    public async Task ScheduledServiceInvocationDispatchAdapterPort_ShouldResolveServiceInvocationPortOnlyForInvocationTarget()
     {
         var inner = new RecordingActorDispatchPort();
-        var workflowResolverCallCount = 0;
-        var workflowEnvelopeFactoryCallCount = 0;
         var resolverCallCount = 0;
         var invocationPort = new RecordingServiceInvocationPort();
-        var adapter = new WorkflowScheduledDispatchAdapterPort(
+        var adapter = new ScheduledServiceInvocationDispatchAdapterPort(
             inner,
-            () =>
-            {
-                workflowResolverCallCount++;
-                return new ThrowingWorkflowRunActorResolver();
-            },
-            () =>
-            {
-                workflowEnvelopeFactoryCallCount++;
-                return new ThrowingWorkflowChatEnvelopeFactory();
-            },
             () =>
             {
                 resolverCallCount++;
@@ -424,8 +413,6 @@ public sealed class WorkflowScheduleEndpointsTests
 
         await adapter.DispatchAsync("regular-actor", normalEnvelope);
 
-        workflowResolverCallCount.Should().Be(0);
-        workflowEnvelopeFactoryCallCount.Should().Be(0);
         resolverCallCount.Should().Be(0);
         inner.Envelopes.Should().ContainSingle(x => x.ActorId == "regular-actor");
 
@@ -444,8 +431,6 @@ public sealed class WorkflowScheduleEndpointsTests
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
             invocationEnvelope);
 
-        workflowResolverCallCount.Should().Be(0);
-        workflowEnvelopeFactoryCallCount.Should().Be(0);
         resolverCallCount.Should().Be(1);
         invocationPort.Requests.Should().ContainSingle();
         inner.Envelopes.Should().ContainSingle(x => x.ActorId == "regular-actor");

@@ -1,7 +1,7 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules;
 
-namespace Aevatar.Workflow.Application.Schedules;
+namespace Aevatar.GAgentService.Application.Schedules;
 
 public sealed class ScheduledDispatchApplicationService : IScheduledDispatchApplicationService
 {
@@ -170,7 +170,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         {
             ScheduledDispatchTargetKind.Envelope => NormalizeEnvelopeTarget(target),
             ScheduledDispatchTargetKind.ServiceInvocation => NormalizeServiceInvocationTarget(target),
-            ScheduledDispatchTargetKind.Workflow => NormalizeWorkflowTarget(target),
             _ => throw new ArgumentException($"Unsupported scheduled dispatch target kind '{target.Kind}'.", nameof(target)),
         };
     }
@@ -193,7 +192,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ActorId = actorId,
             Envelope = target.Envelope.Clone(),
             ServiceInvocation = null,
-            Workflow = null,
         };
     }
 
@@ -214,7 +212,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         {
             ActorId = null,
             Envelope = null,
-            Workflow = null,
             ServiceInvocation = invocation with
             {
                 EndpointId = NormalizeRequired(invocation.EndpointId, nameof(invocation.EndpointId)),
@@ -223,24 +220,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 Payload = invocation.Payload.Clone(),
                 Caller = invocation.Caller?.Clone(),
             },
-        };
-    }
-
-    private static ScheduledDispatchTargetDescriptor NormalizeWorkflowTarget(ScheduledDispatchTargetDescriptor target)
-    {
-        var workflow = target.Workflow
-            ?? throw new ArgumentException("Workflow scheduled dispatch target is required.", nameof(target));
-
-        return target with
-        {
-            ActorId = null,
-            Envelope = null,
-            ServiceInvocation = null,
-            Workflow = new WorkflowScheduleTargetDescriptor(
-                NormalizeRequired(workflow.WorkflowName, nameof(workflow.WorkflowName)),
-                NormalizeRequired(workflow.Prompt, nameof(workflow.Prompt)),
-                NormalizeOptional(workflow.ScopeId),
-                NormalizeOptional(workflow.SourceActorId)),
         };
     }
 

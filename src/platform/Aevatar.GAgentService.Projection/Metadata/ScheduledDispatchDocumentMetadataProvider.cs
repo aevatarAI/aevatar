@@ -1,6 +1,6 @@
-using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.GAgentService.Projection.ReadModels;
 
-namespace Aevatar.Workflow.Projection.Metadata;
+namespace Aevatar.GAgentService.Projection.Metadata;
 
 public sealed class ScheduledDispatchDocumentMetadataProvider
     : IProjectionDocumentMetadataProvider<ScheduledDispatchDocument>

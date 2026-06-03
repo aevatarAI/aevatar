@@ -1,13 +1,13 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
-namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
+namespace Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 
 public static class ScheduledDispatchEndpoints
 {
@@ -214,7 +214,6 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
     public ScheduledDispatchEnvelopeTargetHttpRequest? Envelope { get; init; }
     public ScheduledDispatchServiceInvocationTargetHttpRequest? ServiceInvocation { get; init; }
-    public ScheduledDispatchWorkflowTargetHttpRequest? Workflow { get; init; }
 
     public ScheduledDispatchConfiguration ToConfiguration(string? fallbackScheduleId) =>
         new(
@@ -229,17 +228,13 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     private ScheduledDispatchTargetDescriptor ResolveTarget()
     {
         var targetCount = (Envelope == null ? 0 : 1) +
-                          (ServiceInvocation == null ? 0 : 1) +
-                          (Workflow == null ? 0 : 1);
+                          (ServiceInvocation == null ? 0 : 1);
         if (targetCount != 1)
             throw new ArgumentException("Exactly one scheduled dispatch target is required.");
 
         if (Envelope != null)
             return Envelope.ToTarget();
-        if (ServiceInvocation != null)
-            return ServiceInvocation.ToTarget();
-
-        return Workflow!.ToTarget();
+        return ServiceInvocation!.ToTarget();
     }
 }
 
@@ -272,23 +267,6 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
                 Payload,
                 RevisionId,
                 Caller));
-}
-
-public sealed record ScheduledDispatchWorkflowTargetHttpRequest
-{
-    public required string WorkflowName { get; init; }
-    public required string Prompt { get; init; }
-    public string? ScopeId { get; init; }
-    public string? SourceActorId { get; init; }
-
-    public ScheduledDispatchTargetDescriptor ToTarget() =>
-        new(
-            ScheduledDispatchTargetKind.Workflow,
-            Workflow: new WorkflowScheduleTargetDescriptor(
-                WorkflowName,
-                Prompt,
-                ScopeId ?? string.Empty,
-                SourceActorId ?? string.Empty));
 }
 
 public sealed record ScheduledDispatchPreviewHttpRequest

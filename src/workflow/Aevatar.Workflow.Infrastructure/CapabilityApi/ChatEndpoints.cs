@@ -24,7 +24,6 @@ public static class WorkflowCapabilityEndpoints
     {
         var group = app.MapGroup("/api").WithTags("Chat");
         ChatQueryEndpoints.Map(group);
-        ScheduledDispatchEndpoints.Map(group);
         WorkflowScheduleEndpoints.Map(group);
 
         return app;

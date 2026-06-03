@@ -2,14 +2,16 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
-using Aevatar.Workflow.Core;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Core.Schedules;
+using Aevatar.GAgentService.Projection.Contexts;
+using Aevatar.GAgentService.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Workflow.Projection.Projectors;
+namespace Aevatar.GAgentService.Projection.Projectors;
 
 public sealed class ScheduledDispatchCurrentStateProjector
-    : ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>
+    : ICurrentStateProjectionMaterializer<ScheduledDispatchProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ScheduledDispatchDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
@@ -23,7 +25,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
     }
 
     public async ValueTask ProjectAsync(
-        WorkflowExecutionMaterializationContext context,
+        ScheduledDispatchProjectionContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
@@ -44,7 +46,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
     }
 
     private ScheduledDispatchDocument CreateDocument(
-        WorkflowExecutionMaterializationContext context,
+        ScheduledDispatchProjectionContext context,
         EventEnvelope envelope,
         StateEvent stateEvent,
         ScheduledDispatchState state)
@@ -60,7 +62,6 @@ public sealed class ScheduledDispatchCurrentStateProjector
             DisplayName = state.DisplayName ?? string.Empty,
             TargetKind = ToApplicationTargetKind(target.Kind).ToString(),
             PayloadTypeUrl = state.PayloadTypeUrl ?? string.Empty,
-            WorkflowName = target.Workflow?.WorkflowName ?? string.Empty,
             CronExpression = state.CronExpression ?? string.Empty,
             Timezone = state.Timezone ?? string.Empty,
             Enabled = state.Enabled,
@@ -111,7 +112,6 @@ public sealed class ScheduledDispatchCurrentStateProjector
         stateKind switch
         {
             ScheduledDispatchTargetKindState.ServiceInvocation => ScheduledDispatchTargetKind.ServiceInvocation,
-            ScheduledDispatchTargetKindState.Workflow => ScheduledDispatchTargetKind.Workflow,
             _ => ScheduledDispatchTargetKind.Envelope,
         };
 

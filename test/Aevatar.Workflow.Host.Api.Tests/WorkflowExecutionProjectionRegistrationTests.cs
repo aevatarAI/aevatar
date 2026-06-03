@@ -61,10 +61,9 @@ public class WorkflowExecutionProjectionRegistrationTests
         currentStateDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
-        currentStateMaterializers.Should().HaveCount(2);
+        currentStateMaterializers.Should().ContainSingle();
         artifactMaterializers.Should().ContainSingle();
         provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
-        provider.GetRequiredService<ScheduledDispatchCurrentStateProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
@@ -132,11 +131,6 @@ public class WorkflowExecutionProjectionRegistrationTests
             keyFormatter: key => key,
             defaultSortSelector: report => report.CreatedAt,
             queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<ScheduledDispatchDocument, string>(
-            keySelector: document => document.ScheduleId,
-            keyFormatter: key => key,
-            defaultSortSelector: document => document.UpdatedAt,
-            queryTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
     }
 
@@ -157,14 +151,6 @@ public class WorkflowExecutionProjectionRegistrationTests
             },
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: report => report.RootActorId,
-            keyFormatter: key => key);
-        services.AddElasticsearchDocumentProjectionStore<ScheduledDispatchDocument, string>(
-            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
-            {
-                Endpoints = ["http://localhost:9200"],
-            },
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScheduledDispatchDocument>>().Metadata,
-            keySelector: document => document.ScheduleId,
             keyFormatter: key => key);
     }
 

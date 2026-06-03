@@ -1,6 +1,6 @@
-namespace Aevatar.Workflow.Infrastructure.Schedules;
+namespace Aevatar.GAgentService.Infrastructure.Schedules;
 
-internal static class ScheduledDispatchActorId
+public static class ScheduledDispatchActorId
 {
     private const string Prefix = "scheduled-dispatch:";
 

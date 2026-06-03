@@ -2,15 +2,15 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Workflow.Core;
+namespace Aevatar.GAgentService.Core.Schedules;
 
 public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 {
@@ -277,15 +277,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         foreach (var (key, value) in headers)
             propagation.Baggage[key] = value;
 
-        if (envelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out var workflowStartRequest))
-        {
-            ApplyWorkflowTarget(workflowStartRequest, State.Target?.Workflow);
-            foreach (var (key, value) in headers)
-                workflowStartRequest.Headers[key] = value;
-            envelope.Payload = Any.Pack(workflowStartRequest);
-            return new ScheduledDispatchEnvelope(ResolveDispatchTargetActorId(), envelope);
-        }
-
         if (envelope.Payload.TryUnpack<ServiceInvocationRequest>(out var serviceInvocationRequest))
         {
             serviceInvocationRequest.CommandId = idempotencyKey;
@@ -297,7 +288,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (envelope.Payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
         {
             chatRequest.SessionId = idempotencyKey;
-            chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = idempotencyKey;
             foreach (var (key, value) in headers)
                 chatRequest.Metadata[key] = value;
             envelope.Payload = Any.Pack(chatRequest);
@@ -400,7 +390,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private string ResolveDispatchTargetActorId() =>
         string.IsNullOrWhiteSpace(State.TargetActorId)
-            ? WorkflowScheduledDispatchAdapterConventions.TargetActorId
+            ? ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId
             : State.TargetActorId.Trim();
 
     private bool IsConfigured() =>
@@ -425,14 +415,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
         var normalizedTarget = NormalizeTarget(target);
-        if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.Workflow ||
-            triggerEnvelope.Payload.TryUnpack<WorkflowScheduledDispatchStartRequest>(out _))
-        {
-            var workflowTarget = NormalizeWorkflowTarget(normalizedTarget.Workflow);
-            _ = NormalizeRequired(workflowTarget.WorkflowName, "target.workflow.workflowName");
-            _ = NormalizeRequired(workflowTarget.Prompt, "target.workflow.prompt");
-        }
-        else if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.ServiceInvocation ||
+        if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.ServiceInvocation ||
                  triggerEnvelope.Payload.TryUnpack<ServiceInvocationRequest>(out _))
         {
             _ = NormalizeRequired(targetActorId, nameof(targetActorId));
@@ -462,11 +445,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         return target.Kind switch
         {
-            ScheduledDispatchTargetKindState.Workflow => new ScheduledDispatchTargetState
-            {
-                Kind = ScheduledDispatchTargetKindState.Workflow,
-                Workflow = NormalizeWorkflowTarget(target.Workflow),
-            },
             ScheduledDispatchTargetKindState.ServiceInvocation => new ScheduledDispatchTargetState
             {
                 Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
@@ -501,31 +479,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             RevisionId = NormalizeOptional(serviceInvocation.RevisionId),
             Caller = serviceInvocation.Caller?.Clone(),
         };
-    }
-
-    private static WorkflowScheduleTargetState NormalizeWorkflowTarget(WorkflowScheduleTargetState? workflowTarget)
-    {
-        if (workflowTarget == null)
-            return new WorkflowScheduleTargetState();
-
-        return new WorkflowScheduleTargetState
-        {
-            WorkflowName = NormalizeOptional(workflowTarget.WorkflowName),
-            Prompt = NormalizeOptional(workflowTarget.Prompt),
-            ScopeId = NormalizeOptional(workflowTarget.ScopeId),
-            SourceActorId = NormalizeOptional(workflowTarget.SourceActorId),
-        };
-    }
-
-    private static void ApplyWorkflowTarget(
-        WorkflowScheduledDispatchStartRequest request,
-        WorkflowScheduleTargetState? workflowTarget)
-    {
-        var normalized = NormalizeWorkflowTarget(workflowTarget);
-        request.WorkflowName = normalized.WorkflowName;
-        request.Prompt = normalized.Prompt;
-        request.ScopeId = normalized.ScopeId;
-        request.SourceActorId = normalized.SourceActorId;
     }
 
     private ScheduledDispatchState ApplyConfigured(

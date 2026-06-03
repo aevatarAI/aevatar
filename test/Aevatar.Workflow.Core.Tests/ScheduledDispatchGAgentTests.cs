@@ -6,8 +6,10 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
@@ -217,13 +219,11 @@ public sealed class ScheduledDispatchGAgentTests
         dispatched.Envelope.Route.GetTargetActorId().Should().Be("target-actor-1");
         var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
         chatRequest.SessionId.Should().Be(idempotencyKey);
-        chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId].Should().Be(idempotencyKey);
         chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
         chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(firstScheduledFireAt.ToUniversalTime().ToString("O"));
         chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
-        chatRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.IdempotencyKey);
 
         agent.State.FireCount.Should().Be(1);
         agent.State.FireRecords.Should().ContainKey(idempotencyKey);
@@ -245,28 +245,38 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task HandleFireAsync_WithWorkflowStartRequest_ShouldDispatchTypedAdapterEnvelope()
+    public async Task HandleFireAsync_WithServiceInvocationRequest_ShouldDispatchTypedAdapterEnvelope()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
         var agent = CreateAgent(eventStore, dispatch);
         await agent.ActivateAsync();
+        var invocation = new ServiceInvocationRequest
+        {
+            Identity = new ServiceIdentity
+            {
+                TenantId = "scope-1",
+                AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+                Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+                ServiceId = "daily-workflow",
+            },
+            EndpointId = "chat",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "run daily" }),
+        };
         await agent.HandleConfigureAsync(CreateConfigureCommand(
-            targetActorId: string.Empty,
-            triggerEnvelope: CreateTriggerEnvelope("schedule-1", new WorkflowScheduledDispatchStartRequest
+            targetActorId: ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+            triggerEnvelope: CreateTriggerEnvelope(
+                ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+                invocation),
+            target: new ScheduledDispatchTargetState
             {
-                ScheduleId = "schedule-1",
-                Headers =
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
                 {
-                    ["x-trace"] = "trace-1",
+                    Identity = invocation.Identity.Clone(),
+                    EndpointId = invocation.EndpointId,
+                    Payload = invocation.Payload.Clone(),
                 },
-            }),
-            workflowTarget: new WorkflowScheduleTargetState
-            {
-                WorkflowName = "daily-workflow",
-                Prompt = "run daily",
-                ScopeId = "scope-1",
-                SourceActorId = "definition-actor-1",
             },
             enabled: false));
 
@@ -279,19 +289,19 @@ public sealed class ScheduledDispatchGAgentTests
 
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstFireAt);
         dispatch.Dispatches.Should().ContainSingle();
-        dispatch.Dispatches[0].ActorId.Should().Be(WorkflowScheduledDispatchAdapterConventions.TargetActorId);
-        dispatch.Dispatches[0].Envelope.Route.GetTargetActorId().Should().Be(WorkflowScheduledDispatchAdapterConventions.TargetActorId);
+        dispatch.Dispatches[0].ActorId.Should().Be(ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId);
+        dispatch.Dispatches[0].Envelope.Route.GetTargetActorId().Should().Be(ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId);
         dispatch.Dispatches[0].Envelope.Id.Should().Be(idempotencyKey);
-        var startRequest = dispatch.Dispatches[0].Envelope.Payload.Unpack<WorkflowScheduledDispatchStartRequest>();
-        startRequest.ScheduleId.Should().Be("schedule-1");
-        startRequest.WorkflowName.Should().Be("daily-workflow");
-        startRequest.Prompt.Should().Be("run daily");
-        startRequest.ScopeId.Should().Be("scope-1");
-        startRequest.SourceActorId.Should().Be("definition-actor-1");
-        startRequest.Headers["x-trace"].Should().Be("trace-1");
-        startRequest.Headers[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        startRequest.Headers[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(firstFireAt.ToUniversalTime().ToString("O"));
-        startRequest.Headers[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        dispatch.Dispatches[0].Envelope.Propagation!.Baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        dispatch.Dispatches[0].Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.FireAtUtc]
+            .Should().Be(firstFireAt.ToUniversalTime().ToString("O"));
+        dispatch.Dispatches[0].Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        var serviceRequest = dispatch.Dispatches[0].Envelope.Payload.Unpack<ServiceInvocationRequest>();
+        serviceRequest.Identity.ServiceId.Should().Be("daily-workflow");
+        serviceRequest.EndpointId.Should().Be("chat");
+        serviceRequest.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("run daily");
+        serviceRequest.CommandId.Should().Be(idempotencyKey);
+        serviceRequest.CorrelationId.Should().Be("template-correlation");
     }
 
     [Fact]
@@ -326,7 +336,6 @@ public sealed class ScheduledDispatchGAgentTests
         chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
         chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
-        chatRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.IdempotencyKey);
     }
 
     [Fact]
@@ -363,7 +372,6 @@ public sealed class ScheduledDispatchGAgentTests
         chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
-        chatRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.IdempotencyKey);
         agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("generic-agent-1");
     }
 
@@ -516,14 +524,11 @@ public sealed class ScheduledDispatchGAgentTests
         await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
 
         var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
-        var act = () => agent.HandleFireAsync(
-            new ScheduledDispatchFireCommand
-            {
-                ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
-                Manual = false,
-            },
-            CreateFiredCallbackEnvelope(scheduler.TimeoutRequests.Single(), generation: 1, fireIndex: 1),
-            CancellationToken.None);
+        var act = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
@@ -649,7 +654,7 @@ public sealed class ScheduledDispatchGAgentTests
         string cronExpression = "*/15 * * * *",
         bool enabled = false,
         EventEnvelope? triggerEnvelope = null,
-        WorkflowScheduleTargetState? workflowTarget = null)
+        ScheduledDispatchTargetState? target = null)
     {
         return new ScheduledDispatchCreateCommand
         {
@@ -664,7 +669,7 @@ public sealed class ScheduledDispatchGAgentTests
             CronExpression = cronExpression,
             Timezone = "UTC",
             Enabled = enabled,
-            Target = CreateTargetState(workflowTarget),
+            Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
         };
     }
 
@@ -674,7 +679,7 @@ public sealed class ScheduledDispatchGAgentTests
         string cronExpression = "*/15 * * * *",
         bool enabled = false,
         EventEnvelope? triggerEnvelope = null,
-        WorkflowScheduleTargetState? workflowTarget = null)
+        ScheduledDispatchTargetState? target = null)
     {
         return new ScheduledDispatchUpdateCommand
         {
@@ -689,18 +694,17 @@ public sealed class ScheduledDispatchGAgentTests
             CronExpression = cronExpression,
             Timezone = "UTC",
             Enabled = enabled,
-            Target = CreateTargetState(workflowTarget),
+            Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
         };
     }
 
-    private static ScheduledDispatchTargetState CreateTargetState(WorkflowScheduleTargetState? workflowTarget) =>
-        workflowTarget == null
-            ? new ScheduledDispatchTargetState { Kind = ScheduledDispatchTargetKindState.Envelope }
-            : new ScheduledDispatchTargetState
-            {
-                Kind = ScheduledDispatchTargetKindState.Workflow,
-                Workflow = workflowTarget,
-            };
+    private static ScheduledDispatchTargetState CreateTargetState(string targetActorId, EventEnvelope? triggerEnvelope) =>
+        new()
+        {
+            Kind = ScheduledDispatchTargetKindState.Envelope,
+            ActorId = targetActorId,
+            Envelope = triggerEnvelope?.Clone(),
+        };
 
     private static EventEnvelope CreateTriggerEnvelope(string targetActorId, IMessage payload) =>
         new()

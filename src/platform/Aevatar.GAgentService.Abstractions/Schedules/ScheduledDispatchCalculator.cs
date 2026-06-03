@@ -1,6 +1,6 @@
 using Cronos;
 
-namespace Aevatar.Workflow.Application.Abstractions.Schedules;
+namespace Aevatar.GAgentService.Abstractions.Schedules;
 
 public static class ScheduledDispatchMetadataKeys
 {

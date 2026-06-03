@@ -6,19 +6,24 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Application.Scripts;
+using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
+using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
+using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Hosting.Demo;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -26,6 +31,7 @@ using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
@@ -77,6 +83,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
+        services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
+        services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
+        services.TryAddTransient<ScheduledDispatchGAgent>();
+        DecorateScheduledServiceInvocationDispatchPort(services);
         services.TryAddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>, StaticGAgentStreamInvocationApplicationService>();
         services.AddScopeGAgentDraftRunInteraction();
         services.AddScriptServiceRunInteraction();
@@ -96,6 +107,48 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeScriptSaveObservationPort, ScopeScriptSaveObservationService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, GAgentServiceDemoBootstrapHostedService>());
         return services;
+    }
+
+    private static void DecorateScheduledServiceInvocationDispatchPort(IServiceCollection services)
+    {
+        var existing = services.LastOrDefault(static descriptor => descriptor.ServiceType == typeof(IActorDispatchPort));
+        if (existing == null)
+            return;
+
+        services.Remove(existing);
+        services.Add(ServiceDescriptor.Describe(
+            typeof(ScheduledDispatchTransportDelegate),
+            sp => new ScheduledDispatchTransportDelegate(CreateInnerDispatchPort(existing, sp)),
+            existing.Lifetime));
+        services.Add(ServiceDescriptor.Describe(
+            typeof(IActorDispatchPort),
+            sp => new ScheduledServiceInvocationDispatchAdapterPort(
+                sp.GetRequiredService<ScheduledDispatchTransportDelegate>().Inner,
+                () => sp.GetService<IServiceInvocationPort>()),
+            existing.Lifetime));
+    }
+
+    private static IActorDispatchPort CreateInnerDispatchPort(
+        ServiceDescriptor descriptor,
+        IServiceProvider serviceProvider)
+    {
+        if (descriptor.ImplementationInstance is IActorDispatchPort instance)
+            return instance;
+
+        if (descriptor.ImplementationFactory != null)
+            return (IActorDispatchPort)descriptor.ImplementationFactory(serviceProvider)!;
+
+        if (descriptor.ImplementationType != null)
+            return (IActorDispatchPort)ActivatorUtilities.CreateInstance(
+                serviceProvider,
+                descriptor.ImplementationType);
+
+        throw new InvalidOperationException("IActorDispatchPort registration is not supported.");
+    }
+
+    private sealed class ScheduledDispatchTransportDelegate(IActorDispatchPort inner)
+    {
+        public IActorDispatchPort Inner { get; } = inner;
     }
 
     public static IServiceCollection AddGAgentServiceProjectionReadModelProviders(
@@ -126,6 +179,7 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<GAgentRunTerminalReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ScheduledDispatchDocument>(services, configuration, static readModel => readModel.ScheduleId);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
         }
@@ -142,6 +196,7 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<GAgentRunTerminalReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ScheduledDispatchDocument>(services, static readModel => readModel.ScheduleId);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
         }
@@ -164,6 +219,7 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<GAgentRunTerminalReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ScheduledDispatchDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind);
     }

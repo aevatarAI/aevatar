@@ -1,9 +1,19 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Schedules;
 
 public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplicationService
 {
+    private const string WorkflowScheduleHeader = "workflow.schedule";
+    private const string WorkflowNameHeader = WorkflowScheduleHeader + ".workflow_name";
+    private const string ScopeIdHeader = WorkflowScheduleHeader + ".scope_id";
+    private const string SourceActorIdHeader = WorkflowScheduleHeader + ".source_actor_id";
+
     private readonly IScheduledDispatchApplicationService _scheduledDispatches;
 
     public WorkflowScheduleApplicationService(IScheduledDispatchApplicationService scheduledDispatches)
@@ -63,7 +73,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         var result = await _scheduledDispatches.ListAsync(take, cursor, includeTotalCount, ct);
         return new WorkflowScheduleListResult(
             result.Items
-                .Where(static x => x.TargetKind == ScheduledDispatchTargetKind.Workflow)
+                .Where(static x => IsWorkflowCompatibilitySchedule(x.Headers))
                 .Select(ToWorkflowSummary)
                 .ToArray(),
             result.NextCursor,
@@ -99,16 +109,69 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             configuration.ScheduleId,
             configuration.DisplayName,
             new ScheduledDispatchTargetDescriptor(
-                ScheduledDispatchTargetKind.Workflow,
-                Workflow: new WorkflowScheduleTargetDescriptor(
-                    configuration.WorkflowName,
-                    configuration.Prompt,
-                    configuration.ScopeId ?? string.Empty,
-                    configuration.SourceActorId ?? string.Empty)),
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    BuildWorkflowServiceIdentity(configuration),
+                    "chat",
+                    Any.Pack(BuildWorkflowChatRequest(configuration)),
+                    configuration.RevisionId)),
             configuration.CronExpression,
             configuration.Timezone,
             configuration.Enabled,
-            configuration.Headers);
+            BuildWorkflowScheduleHeaders(configuration));
+    }
+
+    private static ServiceIdentity BuildWorkflowServiceIdentity(WorkflowScheduleConfiguration configuration)
+    {
+        var scopeId = NormalizeRequired(FirstNonBlank(configuration.ScopeId, configuration.TenantId), nameof(configuration.ScopeId));
+        var serviceId = NormalizeRequired(FirstNonBlank(configuration.ServiceId, configuration.WorkflowName), nameof(configuration.ServiceId));
+        return new ServiceIdentity
+        {
+            TenantId = scopeId,
+            AppId = NormalizeOptional(configuration.AppId, ScopeServiceIdentityDefaults.ServiceAppId),
+            Namespace = NormalizeOptional(configuration.Namespace, ScopeServiceIdentityDefaults.ServiceNamespace),
+            ServiceId = serviceId,
+        };
+    }
+
+    private static ChatRequestEvent BuildWorkflowChatRequest(WorkflowScheduleConfiguration configuration)
+    {
+        var request = new ChatRequestEvent
+        {
+            Prompt = NormalizeRequired(configuration.Prompt, nameof(configuration.Prompt)),
+        };
+
+        foreach (var (key, value) in BuildWorkflowScheduleHeaders(configuration))
+            request.Metadata[key] = value;
+
+        return request;
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildWorkflowScheduleHeaders(
+        WorkflowScheduleConfiguration configuration)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in configuration.Headers ?? new Dictionary<string, string>())
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+
+            var normalizedKey = key.Trim();
+            if (IsWorkflowScheduleHeader(normalizedKey))
+                continue;
+
+            headers[normalizedKey] = value.Trim();
+        }
+
+        headers[WorkflowNameHeader] = NormalizeRequired(configuration.WorkflowName, nameof(configuration.WorkflowName));
+        var scopeId = NormalizeOptional(FirstNonBlank(configuration.ScopeId, configuration.TenantId), string.Empty);
+        if (!string.IsNullOrWhiteSpace(scopeId))
+            headers[ScopeIdHeader] = scopeId;
+        var sourceActorId = NormalizeOptional(configuration.SourceActorId, string.Empty);
+        if (!string.IsNullOrWhiteSpace(sourceActorId))
+            headers[SourceActorIdHeader] = sourceActorId;
+
+        return headers;
     }
 
     private static WorkflowScheduleDetail ToWorkflowDetail(ScheduledDispatchDetail detail) =>
@@ -128,7 +191,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         new(
             summary.ScheduleId,
             summary.DisplayName,
-            summary.WorkflowName,
+            ResolveHeader(summary.Headers, WorkflowNameHeader, summary.ServiceId),
             summary.CronExpression,
             summary.Timezone,
             summary.Enabled,
@@ -143,8 +206,39 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             summary.FireCount,
             summary.FailureCount,
             summary.Headers,
-            string.Empty,
-            string.Empty,
+            ResolveHeader(summary.Headers, ScopeIdHeader, string.Empty),
+            ResolveHeader(summary.Headers, SourceActorIdHeader, string.Empty),
             summary.ScheduleActorId,
             summary.TargetActorId);
+
+    private static bool IsWorkflowCompatibilitySchedule(IReadOnlyDictionary<string, string> headers) =>
+        headers.ContainsKey(WorkflowNameHeader);
+
+    private static bool IsWorkflowScheduleHeader(string key) =>
+        string.Equals(key, WorkflowNameHeader, StringComparison.Ordinal) ||
+        string.Equals(key, ScopeIdHeader, StringComparison.Ordinal) ||
+        string.Equals(key, SourceActorIdHeader, StringComparison.Ordinal);
+
+    private static string ResolveHeader(
+        IReadOnlyDictionary<string, string> headers,
+        string key,
+        string fallback) =>
+        headers.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : fallback;
+
+    private static string NormalizeRequired(string? value, string fieldName)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new ArgumentException($"{fieldName} is required.", fieldName);
+
+        return normalized;
+    }
+
+    private static string NormalizeOptional(string? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+
+    private static string? FirstNonBlank(params string?[] values) =>
+        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
 }

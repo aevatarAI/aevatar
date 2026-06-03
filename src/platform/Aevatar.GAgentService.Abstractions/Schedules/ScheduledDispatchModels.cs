@@ -1,21 +1,19 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 
-namespace Aevatar.Workflow.Application.Abstractions.Schedules;
+namespace Aevatar.GAgentService.Abstractions.Schedules;
 
 public enum ScheduledDispatchTargetKind
 {
     Envelope = 0,
     ServiceInvocation = 1,
-    Workflow = 2,
 }
 
 public sealed record ScheduledDispatchTargetDescriptor(
     ScheduledDispatchTargetKind Kind,
     string? ActorId = null,
     EventEnvelope? Envelope = null,
-    ScheduledServiceInvocationTargetDescriptor? ServiceInvocation = null,
-    WorkflowScheduleTargetDescriptor? Workflow = null);
+    ScheduledServiceInvocationTargetDescriptor? ServiceInvocation = null);
 
 public sealed record ScheduledServiceInvocationTargetDescriptor(
     ServiceIdentity Identity,
@@ -48,7 +46,6 @@ public sealed record ScheduledDispatchSummary(
     string ServiceKey,
     string ServiceId,
     string ServiceEndpointId,
-    string WorkflowName,
     string CronExpression,
     string Timezone,
     bool Enabled,
@@ -223,119 +220,4 @@ public sealed class ScheduledDispatchConflictException : ScheduledDispatchApplic
         : base(scheduleId, message)
     {
     }
-}
-
-public sealed record WorkflowScheduleConfiguration(
-    string ScheduleId,
-    string DisplayName,
-    string WorkflowName,
-    string Prompt,
-    string CronExpression,
-    string Timezone,
-    bool Enabled,
-    IReadOnlyDictionary<string, string> Headers,
-    string? ScopeId = null,
-    string? SourceActorId = null);
-
-public sealed record WorkflowScheduleTargetDescriptor(
-    string WorkflowName,
-    string Prompt,
-    string ScopeId,
-    string SourceActorId);
-
-public sealed record WorkflowScheduleSummary(
-    string ScheduleId,
-    string DisplayName,
-    string WorkflowName,
-    string CronExpression,
-    string Timezone,
-    bool Enabled,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt,
-    DateTimeOffset? NextFireAt,
-    DateTimeOffset? LastFireAt,
-    string LastRunActorId,
-    string LastCommandId,
-    string LastCorrelationId,
-    string LastError,
-    int FireCount,
-    int FailureCount,
-    IReadOnlyDictionary<string, string> Headers,
-    string ScopeId,
-    string SourceActorId,
-    string ScheduleActorId,
-    string TargetActorId);
-
-public sealed record WorkflowScheduleFireRecord(
-    DateTimeOffset ScheduledFireAt,
-    DateTimeOffset CompletedAt,
-    string IdempotencyKey,
-    string RunActorId,
-    string CommandId,
-    string CorrelationId,
-    string Error,
-    bool Manual);
-
-public sealed record WorkflowScheduleDetail(
-    WorkflowScheduleSummary Schedule,
-    IReadOnlyList<WorkflowScheduleFireRecord> RecentFires);
-
-public sealed record WorkflowScheduleMutationReceipt(
-    string ScheduleId,
-    string ScheduleActorId,
-    bool Accepted);
-
-public sealed record WorkflowScheduleRunNowReceipt(
-    string ScheduleId,
-    string ScheduleActorId,
-    DateTimeOffset ScheduledFireAt,
-    string IdempotencyKey,
-    bool Accepted);
-
-public sealed record WorkflowScheduleListResult(
-    IReadOnlyList<WorkflowScheduleSummary> Items,
-    string? NextCursor,
-    long? TotalCount);
-
-public interface IWorkflowScheduleApplicationService
-{
-    Task<WorkflowScheduleMutationReceipt> CreateAsync(
-        WorkflowScheduleConfiguration configuration,
-        CancellationToken ct = default);
-
-    Task<WorkflowScheduleMutationReceipt> UpdateAsync(
-        string scheduleId,
-        WorkflowScheduleConfiguration configuration,
-        CancellationToken ct = default);
-
-    Task<WorkflowScheduleMutationReceipt> EnableAsync(
-        string scheduleId,
-        string reason,
-        CancellationToken ct = default);
-
-    Task<WorkflowScheduleMutationReceipt> DisableAsync(
-        string scheduleId,
-        string reason,
-        CancellationToken ct = default);
-
-    Task<WorkflowScheduleDetail?> GetAsync(
-        string scheduleId,
-        CancellationToken ct = default);
-
-    Task<WorkflowScheduleListResult> ListAsync(
-        int take = 50,
-        string? cursor = null,
-        bool includeTotalCount = false,
-        CancellationToken ct = default);
-
-    Task<ScheduledDispatchPreview> PreviewAsync(
-        string cronExpression,
-        string? timezone,
-        int count,
-        DateTimeOffset? fromUtc = null,
-        CancellationToken ct = default);
-
-    Task<WorkflowScheduleRunNowReceipt> RunNowAsync(
-        string scheduleId,
-        CancellationToken ct = default);
 }

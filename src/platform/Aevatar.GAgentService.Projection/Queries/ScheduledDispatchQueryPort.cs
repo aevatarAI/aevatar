@@ -1,6 +1,7 @@
-using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Projection.ReadModels;
 
-namespace Aevatar.Workflow.Projection.Orchestration;
+namespace Aevatar.GAgentService.Projection.Queries;
 
 public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
 {
@@ -57,7 +58,6 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.ServiceKey ?? string.Empty,
             document.ServiceId ?? string.Empty,
             document.ServiceEndpointId ?? string.Empty,
-            document.WorkflowName ?? string.Empty,
             document.CronExpression ?? string.Empty,
             document.Timezone ?? string.Empty,
             document.Enabled,

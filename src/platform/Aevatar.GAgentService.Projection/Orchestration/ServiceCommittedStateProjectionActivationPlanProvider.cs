@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
+using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Projection.Contexts;
 using Google.Protobuf.WellKnownTypes;
 
@@ -37,6 +38,7 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
             _ when payload.Is(RoleChatSessionCompletedEvent.Descriptor) => GAgentRunTerminalPlans(context),
             var type when type == typeof(LlmSessionGAgent) => LlmSessionPlans(context.ActorId),
             var type when type == typeof(ResponsesAgentToolStateGAgent) => ResponsesAgentToolPlans(context.ActorId),
+            var type when type == typeof(ScheduledDispatchGAgent) => ScheduledDispatchPlans(context.ActorId),
             _ => [],
         };
     }
@@ -63,6 +65,13 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
         DurablePlan<ServiceRevisionCatalogProjectionContext>(
             actorId,
             ServiceProjectionKinds.Revisions),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> ScheduledDispatchPlans(string actorId) =>
+    [
+        DurablePlan<ScheduledDispatchProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.ScheduledDispatches),
     ];
 
     private static IEnumerable<ProjectionActivationPlan> DeploymentPlans(string actorId, Any payload)

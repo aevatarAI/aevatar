@@ -1,12 +1,12 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
-using Aevatar.Workflow.Core;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Core.Schedules;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Workflow.Infrastructure.Schedules;
+namespace Aevatar.GAgentService.Infrastructure.Schedules;
 
-internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
+public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 {
     private const string PublisherId = "scheduled.dispatch.actor.port";
     private readonly IActorRuntime _runtime;
@@ -191,11 +191,6 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
         return descriptor.Kind switch
         {
-            ScheduledDispatchTargetKind.Workflow => new ScheduledDispatchTargetState
-            {
-                Kind = ScheduledDispatchTargetKindState.Workflow,
-                Workflow = CreateWorkflowTarget(descriptor.Workflow),
-            },
             ScheduledDispatchTargetKind.ServiceInvocation => new ScheduledDispatchTargetState
             {
                 Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
@@ -208,20 +203,6 @@ internal sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 Envelope = descriptor.Envelope?.Clone(),
             },
             _ => throw new ArgumentException($"Unsupported scheduled dispatch target kind '{descriptor.Kind}'.", nameof(descriptor)),
-        };
-    }
-
-    private static WorkflowScheduleTargetState CreateWorkflowTarget(WorkflowScheduleTargetDescriptor? descriptor)
-    {
-        if (descriptor == null)
-            return new WorkflowScheduleTargetState();
-
-        return new WorkflowScheduleTargetState
-        {
-            WorkflowName = descriptor.WorkflowName ?? string.Empty,
-            Prompt = descriptor.Prompt ?? string.Empty,
-            ScopeId = descriptor.ScopeId ?? string.Empty,
-            SourceActorId = descriptor.SourceActorId ?? string.Empty,
         };
     }
 

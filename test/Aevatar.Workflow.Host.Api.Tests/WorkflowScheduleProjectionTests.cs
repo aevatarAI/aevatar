@@ -1,11 +1,13 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
-using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Projection;
-using Aevatar.Workflow.Projection.Metadata;
-using Aevatar.Workflow.Projection.Orchestration;
-using Aevatar.Workflow.Projection.Projectors;
-using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Core.Schedules;
+using Aevatar.GAgentService.Projection.Contexts;
+using Aevatar.GAgentService.Projection.Metadata;
+using Aevatar.GAgentService.Projection.Projectors;
+using Aevatar.GAgentService.Projection.Queries;
+using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -15,7 +17,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowScheduleProjectionTests
 {
     [Fact]
-    public async Task CurrentStateProjector_ShouldMapScheduledDispatchStateAndWorkflowTarget()
+    public async Task CurrentStateProjector_ShouldMapScheduledDispatchStateAndServiceInvocationTarget()
     {
         var observedAt = DateTimeOffset.Parse("2026-05-29T09:15:00+00:00");
         var createdAt = observedAt.AddHours(-2);
@@ -46,17 +48,25 @@ public sealed class WorkflowScheduleProjectionTests
             FailureCount = 1,
             Target = new ScheduledDispatchTargetState
             {
-                Kind = ScheduledDispatchTargetKindState.Workflow,
-                Workflow = new WorkflowScheduleTargetState
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
                 {
-                    WorkflowName = "workflow-a",
-                    Prompt = "run it",
-                    ScopeId = "scope-1",
-                    SourceActorId = "definition-actor-1",
+                    Identity = new ServiceIdentity
+                    {
+                        TenantId = "scope-1",
+                        AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+                        Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+                        ServiceId = "workflow-a",
+                    },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new StringValue { Value = "run it" }),
                 },
             },
         };
         state.Headers["caller"] = "kept";
+        state.Headers["workflow.schedule.workflow_name"] = "workflow-a";
+        state.Headers["workflow.schedule.scope_id"] = "scope-1";
+        state.Headers["workflow.schedule.source_actor_id"] = "definition-actor-1";
         state.FireRecords["older"] = new ScheduledDispatchFireRecordState
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(olderFireAt),
@@ -90,8 +100,7 @@ public sealed class WorkflowScheduleProjectionTests
         document.ScheduleActorId.Should().Be("scheduled-dispatch:schedule-1");
         document.ScheduleId.Should().Be("schedule-1");
         document.DisplayName.Should().Be("Daily report");
-        document.TargetKind.Should().Be(ScheduledDispatchTargetKind.Workflow.ToString());
-        document.WorkflowName.Should().Be("workflow-a");
+        document.TargetKind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation.ToString());
         document.CronExpression.Should().Be("*/15 * * * *");
         document.Timezone.Should().Be("UTC");
         document.Enabled.Should().BeTrue();
@@ -105,14 +114,16 @@ public sealed class WorkflowScheduleProjectionTests
         document.LastError.Should().Be("last error");
         document.FireCount.Should().Be(2);
         document.FailureCount.Should().Be(1);
-        document.ServiceKey.Should().BeEmpty();
-        document.ServiceId.Should().BeEmpty();
-        document.ServiceEndpointId.Should().BeEmpty();
+        document.ServiceKey.Should().Be("scope-1:default:default:workflow-a");
+        document.ServiceId.Should().Be("workflow-a");
+        document.ServiceEndpointId.Should().Be("chat");
         document.TargetActorId.Should().Be("target-actor-1");
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("evt-7");
-        document.Headers.Should().ContainSingle().Which.Should().Be(
-            new KeyValuePair<string, string>("caller", "kept"));
+        document.Headers.Should().Contain("caller", "kept");
+        document.Headers.Should().Contain("workflow.schedule.workflow_name", "workflow-a");
+        document.Headers.Should().Contain("workflow.schedule.scope_id", "scope-1");
+        document.Headers.Should().Contain("workflow.schedule.source_actor_id", "definition-actor-1");
         document.FireRecords.Select(x => x.IdempotencyKey).Should().Equal("newer", "older");
         document.FireRecords[0].TargetActorId.Should().Be("run-actor-2");
         document.FireRecords[0].Manual.Should().BeTrue();
@@ -147,7 +158,6 @@ public sealed class WorkflowScheduleProjectionTests
         var document = dispatcher.Upserts.Single();
         document.ScheduleId.Should().Be("scheduled-dispatch:fallback");
         document.DisplayName.Should().BeEmpty();
-        document.WorkflowName.Should().BeEmpty();
         document.CronExpression.Should().BeEmpty();
         document.Timezone.Should().BeEmpty();
         document.CreatedAt.Should().Be(fallbackNow);
@@ -216,7 +226,6 @@ public sealed class WorkflowScheduleProjectionTests
         detail.Should().NotBeNull();
         detail!.Schedule.ScheduleId.Should().Be("schedule-1");
         detail.Schedule.DisplayName.Should().BeEmpty();
-        detail.Schedule.WorkflowName.Should().BeEmpty();
         detail.Schedule.CronExpression.Should().BeEmpty();
         detail.Schedule.Timezone.Should().BeEmpty();
         detail.Schedule.LastTargetActorId.Should().BeEmpty();
@@ -251,7 +260,6 @@ public sealed class WorkflowScheduleProjectionTests
                     {
                         ScheduleId = "schedule-1",
                         DisplayName = "Daily",
-                        WorkflowName = "workflow",
                         CronExpression = "0 9 * * *",
                         Timezone = "UTC",
                         Enabled = true,
@@ -285,7 +293,6 @@ public sealed class WorkflowScheduleProjectionTests
         var summary = result.Items.Single();
         summary.ScheduleId.Should().Be("schedule-1");
         summary.DisplayName.Should().Be("Daily");
-        summary.WorkflowName.Should().Be("workflow");
         summary.CronExpression.Should().Be("0 9 * * *");
         summary.Headers.Should().Contain("trace", "on");
         summary.ScheduleActorId.Should().Be("schedule-actor");
@@ -339,11 +346,11 @@ public sealed class WorkflowScheduleProjectionTests
         metadata.Aliases.Should().BeEmpty();
     }
 
-    private static WorkflowExecutionMaterializationContext CreateContext(string rootActorId) =>
+    private static ScheduledDispatchProjectionContext CreateContext(string rootActorId) =>
         new()
         {
             RootActorId = rootActorId,
-            ProjectionKind = "workflow-schedule",
+            ProjectionKind = "scheduled-dispatch",
         };
 
     private static EventEnvelope WrapCommitted(

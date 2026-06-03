@@ -12,7 +12,6 @@
     <ProjectReference Include="..\..\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Cronos" />
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Grpc.Tools">
       <PrivateAssets>all</PrivateAssets>
@@ -22,6 +21,5 @@
   <ItemGroup>
     <Protobuf Include="Queries/workflow_projection_query_models.proto" GrpcServices="None" />
     <Protobuf Include="Runs/workflow_run_events.proto" GrpcServices="None" />
-    <Protobuf Include="Schedules/workflow_scheduled_dispatch.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

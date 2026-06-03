@@ -1,11 +1,11 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Workflow.Application.Schedules;
+namespace Aevatar.GAgentService.Application.Schedules;
 
-internal sealed class ScheduledDispatchTargetPreparationService : IScheduledDispatchTargetPreparationService
+public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispatchTargetPreparationService
 {
     public Task<PreparedScheduledDispatchTarget> PrepareAsync(
         ScheduledDispatchConfiguration configuration,
@@ -20,7 +20,6 @@ internal sealed class ScheduledDispatchTargetPreparationService : IScheduledDisp
         {
             ScheduledDispatchTargetKind.Envelope => Task.FromResult(PrepareEnvelopeTarget(configuration, commandId, correlationId)),
             ScheduledDispatchTargetKind.ServiceInvocation => Task.FromResult(PrepareServiceInvocationTarget(configuration, commandId, correlationId)),
-            ScheduledDispatchTargetKind.Workflow => Task.FromResult(PrepareWorkflowTarget(configuration, commandId, correlationId)),
             _ => throw new ArgumentException(
                 $"Unsupported scheduled dispatch target kind '{configuration.Target.Kind}'.",
                 nameof(configuration)),
@@ -82,37 +81,6 @@ internal sealed class ScheduledDispatchTargetPreparationService : IScheduledDisp
 
         return new PreparedScheduledDispatchTarget(
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
-            envelope,
-            envelope.Payload.TypeUrl,
-            configuration.Target);
-    }
-
-    private static PreparedScheduledDispatchTarget PrepareWorkflowTarget(
-        ScheduledDispatchConfiguration configuration,
-        string commandId,
-        string correlationId)
-    {
-        var target = configuration.Target.Workflow
-            ?? throw new ArgumentException("Workflow scheduled dispatch target is required.", nameof(configuration));
-        var payload = new WorkflowScheduledDispatchStartRequest
-        {
-            ScheduleId = configuration.ScheduleId,
-            WorkflowName = target.WorkflowName.Trim(),
-            Prompt = target.Prompt.Trim(),
-            ScopeId = target.ScopeId.Trim(),
-            SourceActorId = target.SourceActorId.Trim(),
-        };
-        foreach (var (key, value) in configuration.Headers)
-            payload.Headers[key] = value;
-
-        var envelope = CreateAdapterEnvelope(
-            commandId,
-            correlationId,
-            WorkflowScheduledDispatchAdapterConventions.TargetActorId,
-            Any.Pack(payload));
-
-        return new PreparedScheduledDispatchTarget(
-            null,
             envelope,
             envelope.Payload.TypeUrl,
             configuration.Target);

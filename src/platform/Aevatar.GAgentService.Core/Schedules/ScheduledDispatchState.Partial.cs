@@ -1,7 +1,7 @@
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Workflow.Core;
+namespace Aevatar.GAgentService.Core.Schedules;
 
 public sealed partial class ScheduledDispatchState
 {
@@ -36,7 +36,7 @@ public sealed partial class ScheduledDispatchState
         value == null ? default : value.ToDateTimeOffset();
 }
 
-internal static class ScheduledDispatchRuntimeCallbackLeaseStateCodec
+public static class ScheduledDispatchRuntimeCallbackLeaseStateCodec
 {
     public static ScheduledDispatchRuntimeCallbackLeaseState? ToState(RuntimeCallbackLease? lease)
     {
