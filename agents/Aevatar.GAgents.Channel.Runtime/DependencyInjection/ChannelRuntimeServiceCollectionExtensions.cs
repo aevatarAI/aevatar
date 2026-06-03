@@ -77,14 +77,12 @@ public static class ChannelRuntimeServiceCollectionExtensions
             IProjectionActivationPlanProvider,
             ChannelBotRegistrationCommittedStateProjectionActivationPlanProvider>());
 
-        // Detect projection store provider from configuration. The helper logs a
-        // misconfiguration warning (Console.Error during SCE composition; structured
-        // log when a real logger is wired in tests) when configuration is present
-        // but Endpoints/Enabled are both empty, so operators see the InMemory
-        // fallback instead of discovering it after a restart wipes the replica.
-        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
-            configuration,
-            storeName: "ChannelRuntime");
+        var documentProvider = configuration is null
+            ? new ProjectionDocumentProviderSelection(
+                ProjectionDocumentProviderKind.InMemory,
+                ElasticsearchEnabled: false,
+                InMemoryEnabled: true)
+            : ProjectionDocumentProviderConfiguration.Resolve(configuration, "ChannelRuntime");
 
         // ─── Channel Bot Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -108,15 +106,15 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<ChannelBotRegistrationProjectionBootstrapActivator>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
 
-        if (useElasticsearch)
+        if (documentProvider.ElasticsearchEnabled)
         {
             services.AddElasticsearchDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
-                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration!),
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
             services.AddElasticsearchDocumentProjectionStore<ProjectionScopeStatusDocument, string>(
-                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                optionsFactory: _ => ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration!),
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
