@@ -223,6 +223,25 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldStartHostedServicesConcurrently()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var hostOptions = app.Services.GetRequiredService<IOptions<HostOptions>>().Value;
+
+        hostOptions.ServicesStartConcurrently.Should().BeTrue();
+        hostOptions.ServicesStopConcurrently.Should().BeTrue();
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldRegisterRetiredActorCleanupHostedService()
     {
         using var home = new TemporaryAevatarHomeScope();

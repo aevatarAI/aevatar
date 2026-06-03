@@ -50,6 +50,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -70,6 +71,14 @@ public static class MainnetHostBuilderExtensions
             // only when a hosted service or endpoint resolves the missing service.
             options.ValidateOnBuild = true;
             options.ValidateScopes = true;
+        });
+        builder.Services.Configure<HostOptions>(static options =>
+        {
+            // Mainnet hosts have several startup validators/materializers. Starting hosted
+            // services concurrently lets Kestrel expose liveness while slower background
+            // startup work is still reaching readiness.
+            options.ServicesStartConcurrently = true;
+            options.ServicesStopConcurrently = true;
         });
 
         if (string.IsNullOrWhiteSpace(builder.Configuration[WebHostDefaults.ServerUrlsKey]))
