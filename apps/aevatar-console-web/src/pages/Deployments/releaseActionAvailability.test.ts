@@ -1,6 +1,11 @@
+import { setLocale } from '@umijs/max';
 import { buildRolloutActionAvailability } from './releaseActionAvailability';
 
 describe('buildRolloutActionAvailability', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
   const rollout = {
     baselineTargets: [],
     currentStageIndex: 0,

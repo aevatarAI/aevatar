@@ -1,4 +1,5 @@
 import type { ServiceDeploymentSnapshot } from '@/shared/models/services';
+import { t } from "@/shared/i18n/messages";
 
 export type DeploymentActionAvailability = {
   enabled: boolean;
@@ -32,22 +33,22 @@ export function buildDeploymentDeactivateAvailability(
   if (!deployment?.deploymentId?.trim()) {
     return {
       enabled: false,
-      reason: '未选中 deployment，不能提交停用命令。',
-      summary: '未选中 deployment。',
+      reason: t("pages.deployments.deploymentactionavailability.the.deployment.is.not", "The deployment is not selected and the deactivation command cannot be submitted."),
+      summary: t("pages.deployments.deploymentactionavailability.deployment.is.not.selected", "deployment is not selected."),
     };
   }
 
   if (!isActiveDeploymentStatus(deployment.status)) {
     return {
       enabled: false,
-      reason: `当前 deployment 状态为 ${deployment.status || 'unknown'}，停用命令只适用于活动 deployment。`,
-      summary: '当前 deployment 不可停用。',
+      reason: t("pages.deployments.deploymentactionavailability.the.current.deployment.status", "The current deployment status is {value1} and the deactivation command only applies to active deployments.", { value1: deployment.status || 'unknown' }),
+      summary: t("pages.deployments.deploymentactionavailability.the.current.deployment.cannot", "The current deployment cannot be deactivated."),
     };
   }
 
   return {
     enabled: true,
-    reason: '停用会提交命令，仍需等待 catalog/serving/traffic 证据刷新。',
-    summary: '当前 deployment 可提交停用命令。',
+    reason: t("pages.deployments.deploymentactionavailability.deactivation.will.submit.the", "Deactivation will submit the command and still need to wait for the catalog/serving/traffic evidence to be refreshed."),
+    summary: t("pages.deployments.deploymentactionavailability.the.current.deployment.can", "The current deployment can submit deactivation commands."),
   };
 }

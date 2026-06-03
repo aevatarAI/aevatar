@@ -1,4 +1,4 @@
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 

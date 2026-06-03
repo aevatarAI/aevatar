@@ -2153,7 +2153,6 @@ v1 cutover step 2 细化为：
 |---|---|---|
 | **Voice Presence** | `VoicePresence` EventModule capability on a target actor; `/ws/voice` policy-aware Host entry; `/ws/voice/{actorId}` dev/admin bypass | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。VoicePresence 不是独立 router/session GAgent，Voice ↔ Chat 互通接口见 §15.5 open question |
 | **Aevatar Console Web chat 框** | `apps/aevatar-console-web/` | Console 是 aevatar 自有前端 UI，直接调 HTTP API，不走外部 IM channel 链路 |
-| **CLI** (`aevatar chat`, `aevatar invoke`) | `tools/Aevatar.Tools.Cli/` | 同上，CLI 直接调 HTTP API |
 | **Direct HTTP API** | `/api/scopes/{scopeId}/...` | 同上 |
 | **DeviceRegistration / HouseholdEntity 设备事件** | `Aevatar.GAgents.Device` + `Aevatar.GAgents.Household` | 设备事件是 sensor push，业务语义和对话无关。transport 虽然也是 webhook，但强行套 channel adapter 抽象会让 `IChannelTransport` / `IChannelOutboundPort` 失焦 |
 | **WeChat 个人 bot** | — | transport + capability gap 差异过大，单独 RFC 承接，继承本 RFC 的 `IChannelTransport` + `IChannelOutboundPort` 契约 |

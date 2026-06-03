@@ -196,8 +196,49 @@ ARGS+=(-)
 
 # Run with a hard wall-clock timeout. The harness watches the process; codex exits naturally
 # on completion. Append EXIT/DONE_AT footers so controller can post-mortem from log alone.
+run_codex_with_timeout() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$TIMEOUT" codex "${ARGS[@]}" < "$RENDERED_PROMPT" > "$LOG" 2>&1
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$TIMEOUT" codex "${ARGS[@]}" < "$RENDERED_PROMPT" > "$LOG" 2>&1
+    return $?
+  fi
+
+  local timeout_flag
+  timeout_flag="$(mktemp /tmp/spawn-codex-timeout.XXXXXXXX)"
+  rm -f "$timeout_flag"
+
+  codex "${ARGS[@]}" < "$RENDERED_PROMPT" > "$LOG" 2>&1 &
+  local codex_pid=$!
+  (
+    sleep "$TIMEOUT"
+    if kill -0 "$codex_pid" >/dev/null 2>&1; then
+      : > "$timeout_flag"
+      kill -TERM "$codex_pid" >/dev/null 2>&1 || true
+      sleep 5
+      kill -KILL "$codex_pid" >/dev/null 2>&1 || true
+    fi
+  ) &
+  local watchdog_pid=$!
+
+  wait "$codex_pid"
+  local codex_exit=$?
+  kill "$watchdog_pid" >/dev/null 2>&1 || true
+  wait "$watchdog_pid" >/dev/null 2>&1 || true
+
+  if [[ -f "$timeout_flag" ]]; then
+    rm -f "$timeout_flag"
+    return 124
+  fi
+
+  rm -f "$timeout_flag"
+  return "$codex_exit"
+}
+
 set +e
-timeout "$TIMEOUT" codex "${ARGS[@]}" < "$RENDERED_PROMPT" > "$LOG" 2>&1
+run_codex_with_timeout
 EXIT=$?
 set -e
 

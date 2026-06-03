@@ -10,6 +10,204 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class AgentBuilderCardFlowTests
 {
+    public static TheoryData<string, string, string?, string> TextAndCardToolActionCases()
+    {
+        return new TheoryData<string, string, string?, string>
+        {
+            { "/agents", "list_agents", null, "list_agents" },
+            { "/agent-status skill-runner-1", "agent_status", "skill-runner-1", "agent_status" },
+            { "/run-agent skill-runner-2", "run_agent", "skill-runner-2", "run_agent" },
+            { "/disable-agent skill-runner-3", "disable_agent", "skill-runner-3", "disable_agent" },
+            { "/enable-agent skill-runner-4", "enable_agent", "skill-runner-4", "enable_agent" },
+            { "/delete-agent skill-runner-5 confirm", "delete_agent", "skill-runner-5", "delete_agent" },
+        };
+    }
+
+    public static TheoryData<string, string, string> KnownTextCommandCases()
+    {
+        return new TheoryData<string, string, string>
+        {
+            { "/agents", "list_agents", "{}" },
+            { "/agent-status skill-runner-1", "agent_status", "{}" },
+            { "/run-agent skill-runner-2", "run_agent", "{}" },
+            { "/disable-agent skill-runner-3", "disable_agent", "{}" },
+            { "/enable-agent skill-runner-4", "enable_agent", "{}" },
+            { "/delete-agent skill-runner-5", string.Empty, "{}" },
+            { "/delete-agent skill-runner-5 confirm", "delete_agent", "{}" },
+        };
+    }
+
+    public static TheoryData<string, string> FormatterCases()
+    {
+        return new TheoryData<string, string>
+        {
+            {
+                "list_agents",
+                """
+                {
+                  "agents": [
+                    {
+                      "agent_id": "skill-runner-list-1",
+                      "template": "summary",
+                      "status": "running",
+                      "next_scheduled_run": "2026-04-23T09:00:00Z"
+                    }
+                  ]
+                }
+                """
+            },
+            {
+                "agent_status",
+                """
+                {
+                  "agent_id": "skill-runner-status-1",
+                  "template": "summary",
+                  "status": "running",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "last_run_at": "2026-04-25T05:30:00Z",
+                  "next_scheduled_run": "2026-04-26T09:00:00Z",
+                  "error_count": "0"
+                }
+                """
+            },
+            {
+                "run_agent",
+                """
+                {
+                  "agent_id": "skill-runner-run-1",
+                  "template": "summary",
+                  "status": "running",
+                  "note": "Manual run dispatched."
+                }
+                """
+            },
+            {
+                "disable_agent",
+                """
+                {
+                  "agent_id": "skill-runner-disable-1",
+                  "template": "summary",
+                  "status": "disabled",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "last_run_at": "2026-04-25T05:30:00Z",
+                  "next_scheduled_run": "n/a",
+                  "error_count": "0"
+                }
+                """
+            },
+            {
+                "enable_agent",
+                """
+                {
+                  "agent_id": "skill-runner-enable-1",
+                  "template": "summary",
+                  "status": "running",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "last_run_at": "2026-04-25T05:30:00Z",
+                  "next_scheduled_run": "2026-04-26T09:00:00Z",
+                  "error_count": "0"
+                }
+                """
+            },
+            {
+                "delete_agent",
+                """
+                {
+                  "status": "deleted",
+                  "agent_id": "skill-runner-delete-1",
+                  "revoked_api_key_id": "key-1",
+                  "agents": []
+                }
+                """
+            },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(TextAndCardToolActionCases))]
+    public async Task TryResolveAsync_TextAndCardSpecs_MapToSameToolAction(
+        string textCommand,
+        string cardAction,
+        string? agentId,
+        string expectedAction)
+    {
+        var textInbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            RegistrationScopeId = "scope-1",
+            Text = textCommand,
+        };
+        var cardInbound = new ChannelInboundEvent
+        {
+            ChatType = "card_action",
+            RegistrationScopeId = "scope-1",
+        };
+        cardInbound.Extra["agent_builder_action"] = cardAction;
+        if (agentId is not null)
+            cardInbound.Extra["agent_id"] = agentId;
+
+        var textDecision = await AgentBuilderCardFlow.TryResolveAsync(textInbound, userConfigQueryPort: null);
+        var cardDecision = await AgentBuilderCardFlow.TryResolveAsync(cardInbound, userConfigQueryPort: null);
+
+        textDecision.Should().NotBeNull();
+        cardDecision.Should().NotBeNull();
+        textDecision!.RequiresToolExecution.Should().BeTrue();
+        cardDecision!.RequiresToolExecution.Should().BeTrue();
+        textDecision.ToolAction.Should().Be(cardDecision.ToolAction);
+        textDecision.ToolAction.Should().Be(expectedAction);
+
+        using var textBody = JsonDocument.Parse(textDecision.ToolArgumentsJson!);
+        using var cardBody = JsonDocument.Parse(cardDecision.ToolArgumentsJson!);
+        textBody.RootElement.GetProperty("action").GetString().Should().Be(expectedAction);
+        cardBody.RootElement.GetProperty("action").GetString().Should().Be(expectedAction);
+        if (agentId is not null)
+        {
+            textBody.RootElement.GetProperty("agent_id").GetString().Should().Be(agentId);
+            cardBody.RootElement.GetProperty("agent_id").GetString().Should().Be(agentId);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(KnownTextCommandCases))]
+    public async Task TryResolveAsync_AllKnownTextCommands_ArePrivateChatRestricted(
+        string textCommand,
+        string expectedToolAction,
+        string _)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "group",
+            Text = textCommand,
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("private chat");
+        decision.ReplyPayload.Should().Contain(textCommand.Split(' ')[0]);
+        expectedToolAction.Should().NotBeNull();
+    }
+
+    [Theory]
+    [MemberData(nameof(FormatterCases))]
+    public void FormatToolResult_KnownToolActions_UseRegisteredFormatter(string toolAction, string toolResultJson)
+    {
+        var decision = AgentBuilderFlowDecision.ToolCall(toolAction, JsonSerializer.Serialize(new
+        {
+            action = toolAction,
+        }));
+
+        var result = AgentBuilderCardFlow.FormatToolResult(decision, toolResultJson);
+
+        result.Text.Should().BeNullOrEmpty();
+        result.Cards.Should().NotBeEmpty();
+        result.Cards.Select(card => card.Text).Should().NotContain(text => text.Contains("\"config\""));
+    }
+
     [Fact]
     public void FormatToolResult_ListAgents_ReturnsStructuredCardNotJsonText()
     {
@@ -27,7 +225,7 @@ public sealed class AgentBuilderCardFlowTests
               "agents": [
                 {
                   "agent_id": "skill-runner-card-click-1",
-                  "template": "daily",
+                  "template": "summary",
                   "status": "running",
                   "next_scheduled_run": "2026-04-23T09:00:00Z"
                 }
@@ -47,9 +245,6 @@ public sealed class AgentBuilderCardFlowTests
     [Fact]
     public void FormatToolResult_ListAgents_ReturnsSingleCardWithoutPerAgentButtons()
     {
-        // Refactor (iter9/cluster-1305-hybrid-minimal-delete):
-        // Old pattern: a retired relay builder flow had separate list rendering semantics.
-        // New principle: unified AgentBuilderCardFlow keeps the consolidated `/agents` card contract.
         var decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
         var result = AgentBuilderCardFlow.FormatToolResult(
             decision,
@@ -169,7 +364,7 @@ public sealed class AgentBuilderCardFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily",
+              "template": "summary",
               "status": "running",
               "schedule_cron": "0 9 * * *",
               "schedule_timezone": "UTC",
@@ -189,7 +384,7 @@ public sealed class AgentBuilderCardFlowTests
         var deleteButton = result.Actions.Should().Contain(a => a.ActionId == "confirm_delete_agent").Subject;
         deleteButton.IsDanger.Should().BeTrue();
         deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("agent_id", "skill-runner-1"));
-        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("template", "daily"));
+        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("template", "summary"));
     }
 
     [Fact]
@@ -201,7 +396,7 @@ public sealed class AgentBuilderCardFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily",
+              "template": "summary",
               "status": "running",
               "note": "Manual run dispatched."
             }
@@ -289,9 +484,9 @@ public sealed class AgentBuilderCardFlowTests
     [Theory]
     [InlineData("/foobar")]
     [InlineData("/goal draft Q2 launch")]
-    [InlineData("/daily")]
-    [InlineData("/daily alice")]
-    [InlineData("/DAILY alice schedule_time=09:00")]
+    [InlineData("/summary")]
+    [InlineData("/summary alice")]
+    [InlineData("/SUMMARY alice schedule_time=09:00")]
     public async Task TryResolveAsync_UnknownAndOrnnSlashCommands_FallThrough(string text)
     {
         var inbound = new ChannelInboundEvent
@@ -352,7 +547,7 @@ public sealed class AgentBuilderCardFlowTests
         };
         inbound.Extra["agent_builder_action"] = "confirm_delete_agent";
         inbound.Extra["agent_id"] = "skill-runner-1";
-        inbound.Extra["template"] = "daily";
+        inbound.Extra["template"] = "summary";
 
         var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
 
@@ -362,7 +557,7 @@ public sealed class AgentBuilderCardFlowTests
         decision.ReplyContent!.Text.Should().BeNullOrEmpty();
         decision.ReplyContent.Cards.Should().ContainSingle(card =>
             card.BlockId == "delete_confirm:skill-runner-1");
-        decision.ReplyContent.Cards.Single().Text.Should().Contain("daily");
+        decision.ReplyContent.Cards.Single().Text.Should().Contain("summary");
         var confirmButton = decision.ReplyContent.Actions.Should()
             .Contain(a => a.ActionId == "delete_agent").Subject;
         confirmButton.IsDanger.Should().BeTrue();

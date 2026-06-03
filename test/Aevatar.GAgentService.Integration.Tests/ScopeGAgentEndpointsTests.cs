@@ -14,7 +14,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -152,7 +152,7 @@ public sealed class ScopeGAgentEndpointsTests
 
                 await emitAsync(new AGUIEvent
                 {
-                    TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                    TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent
                     {
                         MessageId = "session-1",
                     },
@@ -413,6 +413,35 @@ public sealed class ScopeGAgentEndpointsTests
         var body = await ReadResponseBodyAsync(context);
         body.Should().Contain("GAGENT_ACTOR_TYPE_MISMATCH");
         body.Should().Contain("existing-actor");
+    }
+
+    [Fact]
+    public async Task HandleDraftRunAsync_ShouldReturnServiceUnavailable_WhenInteractionReportsProjectionUnavailable()
+    {
+        var interactionPort = new FakeGAgentDraftRunInteractionPort
+        {
+            ResultFactory = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
+                    GAgentDraftRunStartError.ProjectionUnavailable))
+        };
+        var logger = LoggerFactory.Create(_ => { });
+        var context = CreateDraftRunContext();
+
+        await InvokeHandleDraftRunAsync(
+            context,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                typeof(FakeAgent).AssemblyQualifiedName!,
+                "hello"),
+            interactionPort,
+            logger,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be((int)HttpStatusCode.ServiceUnavailable);
+        context.Response.ContentType.Should().Be("application/json");
+        var body = await ReadResponseBodyAsync(context);
+        body.Should().Contain("GAGENT_PROJECTION_UNAVAILABLE");
+        body.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]

@@ -1,7 +1,12 @@
+import { setLocale } from '@umijs/max';
 import { buildDeploymentReleaseEvidenceSnapshot } from './releaseEvidence';
 import { buildDeploymentReleaseHandoff } from './releaseHandoff';
 
 describe('buildDeploymentReleaseEvidenceSnapshot', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
   it('marks candidate deploy evidence observed only when rollout, serving, and traffic snapshots show it', () => {
     const handoff = buildDeploymentReleaseHandoff({
       action: 'deploy-candidate',

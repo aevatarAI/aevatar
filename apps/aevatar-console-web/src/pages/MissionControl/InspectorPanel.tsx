@@ -36,6 +36,7 @@ import {
   resolveMissionStatusTone,
   resolveObservationTone,
 } from './presentation';
+import { t } from "@/shared/i18n/messages";
 
 const monoStyle: React.CSSProperties = {
   fontFamily:
@@ -121,11 +122,9 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
             level={5}
             style={{ color: token.colorTextHeading, margin: 0 }}
           >
-            Node Insight
-          </Typography.Title>
+            {t("pages.missioncontrol.inspectorpanel.node.insight", "Node Insight")}</Typography.Title>
           <Typography.Text style={{ color: token.colorTextTertiary }}>
-            Inspect state, calls, and reasoning for the selected node; intervention automatically switches this panel into decision mode.
-          </Typography.Text>
+            {t("pages.missioncontrol.inspectorpanel.inspect.state.calls.and.reasoning", "Inspect state, calls, and reasoning for the selected node; intervention automatically switches this panel into decision mode.")}</Typography.Text>
         </div>
         <Tag color={presentation === 'push' ? 'blue' : 'default'}>
           {formatInspectorPresentationLabel(presentation)}
@@ -191,7 +190,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 {showIntervention.summary}
               </Typography.Text>
               <div
-                aria-label="Mission Control intervention handoff"
+                aria-label={t("pages.missioncontrol.inspectorpanel.mission.control.intervention.handoff", "Mission Control intervention handoff")}
                 style={{
                   background: token.colorBgContainer,
                   border: `1px solid ${token.colorBorderSecondary}`,
@@ -203,8 +202,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 }}
               >
                 <Typography.Text strong style={{ color: token.colorTextHeading }}>
-                  Operator handoff
-                </Typography.Text>
+                  {t("pages.missioncontrol.inspectorpanel.operator.handoff", "Operator handoff")}</Typography.Text>
                 <Typography.Text style={{ color: token.colorTextSecondary }}>
                   {operatorHandoff.inputLabel}
                 </Typography.Text>
@@ -224,8 +222,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 }}
               >
                 <Typography.Text style={{ color: token.colorTextTertiary }}>
-                  Intervention prompt
-                </Typography.Text>
+                  {t("pages.missioncontrol.inspectorpanel.intervention.prompt", "Intervention prompt")}</Typography.Text>
                 <Typography.Paragraph
                   style={{
                     color: token.colorTextHeading,
@@ -296,7 +293,8 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       loading={submittingActionKind === 'reject'}
                       onClick={() => handleSubmit('reject')}
                     >
-                      {showIntervention.secondaryActionLabel || 'Reject'}
+                      {showIntervention.secondaryActionLabel ||
+                        t("pages.missioncontrol.inspectorpanel.reject", "Reject")}
                     </Button>
                   </>
                 ) : null}
@@ -367,7 +365,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   {focusNode.summary}
                 </Typography.Text>
                 <div
-                  aria-label="Mission Control node handoff"
+                  aria-label={t("pages.missioncontrol.inspectorpanel.mission.control.node.handoff", "Mission Control node handoff")}
                   style={{
                     background: token.colorFillQuaternary,
                     border: `1px solid ${token.colorBorderSecondary}`,
@@ -407,24 +405,23 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 <Space size={8}>
                   <AlertOutlined />
                   <Typography.Text strong style={{ color: token.colorTextHeading }}>
-                    State Snapshot
-                  </Typography.Text>
+                    {t("pages.missioncontrol.inspectorpanel.state.snapshot", "State Snapshot")}</Typography.Text>
                 </Space>
                 <div style={summaryFieldGridStyle}>
                   <div style={summaryFieldStyle}>
-                    <span style={summaryFieldLabelStyle}>Current Conclusion</span>
+                    <span style={summaryFieldLabelStyle}>{t("pages.missioncontrol.inspectorpanel.current.conclusion", "Current Conclusion")}</span>
                     <Typography.Text>{focusNode.snapshot.headline}</Typography.Text>
                   </div>
                   <div style={summaryFieldStyle}>
-                    <span style={summaryFieldLabelStyle}>Current Step</span>
+                    <span style={summaryFieldLabelStyle}>{t("pages.missioncontrol.inspectorpanel.current.step", "Current Step")}</span>
                     <Typography.Text>{focusNode.snapshot.currentStepId}</Typography.Text>
                   </div>
                   <div style={summaryFieldStyle}>
-                    <span style={summaryFieldLabelStyle}>State Version</span>
+                    <span style={summaryFieldLabelStyle}>{t("pages.missioncontrol.inspectorpanel.state.version", "State Version")}</span>
                     <Typography.Text>{focusNode.snapshot.stateVersion}</Typography.Text>
                   </div>
                   <div style={summaryFieldStyle}>
-                    <span style={summaryFieldLabelStyle}>Captured At</span>
+                    <span style={summaryFieldLabelStyle}>{t("pages.missioncontrol.inspectorpanel.captured.at", "Captured At")}</span>
                     <Typography.Text>{focusNode.snapshot.capturedAt}</Typography.Text>
                   </div>
                 </div>
@@ -461,8 +458,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 <Space size={8}>
                   <ToolOutlined />
                   <Typography.Text strong style={{ color: token.colorTextHeading }}>
-                    Tool Calls
-                  </Typography.Text>
+                    {t("pages.missioncontrol.inspectorpanel.tool.calls", "Tool Calls")}</Typography.Text>
                 </Space>
                 {focusNode.toolCalls.map((toolCall) => (
                   <div
@@ -489,10 +485,10 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       {toolCall.summary}
                     </Typography.Text>
                     <Typography.Text style={{ color: token.colorTextTertiary }}>
-                      Input Summary: {toolCall.paramsSummary}
+                      {t("pages.missioncontrol.inspectorpanel.input.summary", "Input Summary:")}{toolCall.paramsSummary}
                     </Typography.Text>
                     <Typography.Text style={{ color: token.colorTextSecondary }}>
-                      Output Summary: {toolCall.resultSummary}
+                      {t("pages.missioncontrol.inspectorpanel.output.summary", "Output Summary:")}{toolCall.resultSummary}
                     </Typography.Text>
                   </div>
                 ))}
@@ -510,8 +506,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
             >
               <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                 <Typography.Text strong style={{ color: token.colorTextHeading }}>
-                  Reasoning Summary
-                </Typography.Text>
+                  {t("pages.missioncontrol.inspectorpanel.reasoning.summary", "Reasoning Summary")}</Typography.Text>
                 {focusNode.reasoningChain.map((insight) => (
                   <div
                     key={insight.id}
@@ -528,7 +523,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     <Space wrap size={[8, 8]}>
                       <Tag color="cyan">{insight.title}</Tag>
                       {typeof insight.confidence === 'number' ? (
-                        <Tag>{Math.round(insight.confidence * 100)}% confidence</Tag>
+                        <Tag>{Math.round(insight.confidence * 100)}{t("pages.missioncontrol.inspectorpanel.confidence", "% confidence")}</Tag>
                       ) : null}
                     </Space>
                     <Typography.Text style={{ color: token.colorTextSecondary }}>

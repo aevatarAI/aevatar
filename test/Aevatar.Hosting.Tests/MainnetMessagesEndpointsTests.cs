@@ -121,6 +121,53 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
+    public async Task PostMessages_WhenCompletionReadModelLags_ShouldWaitAndReturnAnthropicMessageEnvelope()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "Eventually visible",
+                    IsLast = true,
+                },
+            ],
+        };
+        var sessions = new MessagesRecordingSessionStore
+        {
+            CompletionObservationLagReads = 1,
+        };
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 256,
+              "messages": [
+                {"role": "user", "content": "Hello"}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("content")[0]
+            .GetProperty("text")
+            .GetString()
+            .Should()
+            .Be("Eventually visible");
+    }
+
+    [Fact]
     public async Task PostMessages_Streaming_ShouldEmitAnthropicSseFrames()
     {
         var provider = new MessagesRecordingLLMProvider
@@ -1012,10 +1059,13 @@ public sealed class MainnetMessagesEndpointsTests
         ILlmSessionQueryPort
     {
         private readonly Dictionary<string, LlmSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _completionObservationLagReads = new(StringComparer.Ordinal);
 
         public List<LlmSessionRecord> Registered { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
         public List<(string ActorId, string ResponseId, LlmSessionCompletion Completion)> RecordedCompletions { get; } = [];
+
+        public int CompletionObservationLagReads { get; init; }
 
         public Task<LlmSessionRegistrationResult> RegisterAsync(
             LlmSessionRecord record,
@@ -1092,6 +1142,10 @@ public sealed class MainnetMessagesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
+            if (CompletionObservationLagReads > 0)
+            {
+                _completionObservationLagReads[responseId] = CompletionObservationLagReads;
+            }
 
             return Task.CompletedTask;
         }
@@ -1112,8 +1166,19 @@ public sealed class MainnetMessagesEndpointsTests
 
         public Task<LlmSessionSnapshot?> GetByResponseIdAsync(
             string responseId,
-            CancellationToken ct = default) =>
-            Task.FromResult(_snapshots.GetValueOrDefault(responseId));
+            CancellationToken ct = default)
+        {
+            var snapshot = _snapshots.GetValueOrDefault(responseId);
+            if (snapshot?.Completion is not null &&
+                _completionObservationLagReads.TryGetValue(responseId, out var remaining) &&
+                remaining > 0)
+            {
+                _completionObservationLagReads[responseId] = remaining - 1;
+                return Task.FromResult<LlmSessionSnapshot?>(snapshot with { Completion = null });
+            }
+
+            return Task.FromResult(snapshot);
+        }
     }
 
     private sealed class MessagesRecordingResponsesToolProvider : IResponsesToolProvider

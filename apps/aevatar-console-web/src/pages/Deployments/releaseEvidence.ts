@@ -5,6 +5,7 @@ import type {
   ServiceTrafficViewSnapshot,
 } from '@/shared/models/services';
 import type { DeploymentReleaseHandoff } from './releaseHandoff';
+import { t } from "@/shared/i18n/messages";
 
 export type DeploymentReleaseEvidenceStatus = 'observed' | 'pending' | 'review';
 
@@ -180,7 +181,7 @@ export function buildDeploymentReleaseEvidenceSnapshot({
   serving,
   traffic,
 }: DeploymentReleaseEvidenceInput): DeploymentReleaseEvidenceSnapshot {
-  const candidateRevisionId = readSummaryValue(handoff, '候选 revision');
+  const candidateRevisionId = readSummaryValue(handoff, t("pages.deployments.releaseevidence.candidate.revision", "Candidate revision"));
   const deploymentId = readSummaryValue(handoff, 'Deployment');
   const checks: DeploymentReleaseEvidenceCheck[] = [];
 
@@ -211,11 +212,11 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         buildFreshDetail(
           rolloutMatchesHandoff,
           rollout?.updatedAt,
-          `活动 rollout ${rollout?.rolloutId} 已在本次提交后刷新`,
+          t("pages.deployments.releaseevidence.active.rollout.has.been", "Active rollout {value1} has been refreshed after this commit", { value1: rollout?.rolloutId }),
           rollout?.rolloutId
-            ? `活动 rollout ${rollout.rolloutId} 可见，但 updatedAt 早于本次提交，请等待刷新`
-            : '等待本次 rollout 出现或刷新',
-          '等待本次 rollout 出现或刷新',
+            ? t("pages.deployments.releaseevidence.activity.rollout.is.visible", "Activity rollout {value1} is visible, but updatedAt is earlier than this submission, please wait for refresh", { value1: rollout.rolloutId })
+            : t("pages.deployments.releaseevidence.wait.for.this.rollout", "Wait for this rollout to appear or refresh"),
+          t("pages.deployments.releaseevidence.wait.for.this.rollout.2", "Wait for this rollout to appear or refresh"),
           handoff,
         ),
       ),
@@ -226,9 +227,9 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         buildFreshDetail(
           servingHasCandidate,
           serving?.updatedAt,
-          `Serving targets 已在本次提交后包含 ${candidateRevisionId}`,
-          `Serving targets 已包含 ${candidateRevisionId}，但 updatedAt 早于本次提交，请等待 readmodel 刷新`,
-          `等待 serving targets 出现 ${candidateRevisionId || '候选 revision'}`,
+          t("pages.deployments.releaseevidence.serving.targets.already.contain", "serving targets already contain {value1} after this commit", { value1: candidateRevisionId }),
+          t("pages.deployments.releaseevidence.serving.targets.already.contain.2", "serving targets already contain {value1}, but updatedAt is earlier than this submission, please wait for readmodel to refresh", { value1: candidateRevisionId }),
+          t("pages.deployments.releaseevidence.wait.for.serving.targets", "Wait for serving targets {value1} to appear", { value1: candidateRevisionId || t("pages.deployments.releaseevidence.revision", "候选 revision") }),
           handoff,
         ),
       ),
@@ -239,9 +240,9 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         buildFreshDetail(
           trafficHasCandidate,
           traffic?.updatedAt,
-          `Traffic split 已在本次提交后包含 ${candidateRevisionId}`,
-          `Traffic split 已包含 ${candidateRevisionId}，但 updatedAt 早于本次提交，请等待 readmodel 刷新`,
-          '等待 traffic split 指向候选 revision',
+          t("pages.deployments.releaseevidence.traffic.split.already.contains", "Traffic split already contains {value1} after this commit", { value1: candidateRevisionId }),
+          t("pages.deployments.releaseevidence.traffic.split.already.contains.2", "Traffic split already contains {value1}, but updatedAt is earlier than this submission, please wait for readmodel to refresh", { value1: candidateRevisionId }),
+          t("pages.deployments.releaseevidence.wait.for.traffic.split", "Wait for traffic split to point to candidate revision"),
           handoff,
         ),
       ),
@@ -255,8 +256,8 @@ export function buildDeploymentReleaseEvidenceSnapshot({
           ? 'review'
           : 'pending',
         occurredAfterHandoff(serving?.updatedAt, handoff)
-          ? `Serving updatedAt ${serving?.updatedAt} 晚于本次提交，请确认权重是否匹配`
-          : '等待本次提交后的 serving readmodel 刷新',
+          ? t("pages.deployments.releaseevidence.serving.updatedat.is.later", "serving updatedAt {value1} is later than this submission, please confirm whether the weights match", { value1: serving?.updatedAt })
+          : t("pages.deployments.releaseevidence.wait.for.serving.readmodel", "Wait for serving readmodel to refresh after this submission"),
       ),
       buildCheck(
         'traffic-generation',
@@ -265,8 +266,8 @@ export function buildDeploymentReleaseEvidenceSnapshot({
           ? 'review'
           : 'pending',
         occurredAfterHandoff(traffic?.updatedAt, handoff)
-          ? `Traffic updatedAt ${traffic?.updatedAt} 晚于本次提交，请核对权重是否匹配`
-          : '等待本次提交后的 traffic readmodel 刷新',
+          ? t("pages.deployments.releaseevidence.traffic.updatedat.is.later", "Traffic updatedAt {value1} is later than this submission, please check whether the weights match.", { value1: traffic?.updatedAt })
+          : t("pages.deployments.releaseevidence.wait.for.the.traffic", "Wait for the traffic readmodel to be refreshed after this submission"),
       ),
     );
   } else if (handoff.action === 'deactivate-deployment') {
@@ -294,11 +295,11 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         buildFreshDetail(
           inactive,
           deployment?.updatedAt,
-          `${deploymentId || '目标 deployment'} 已在本次提交后离开 active`,
-          `${deploymentId || '目标 deployment'} 已不再显示为 active，但 updatedAt 早于本次提交，请等待 catalog 刷新`,
+          t("pages.deployments.releaseevidence.has.left.active.after", "{value1} has left active after this commit", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment", "目标 deployment") }),
+          t("pages.deployments.releaseevidence.is.no.longer.displayed", "{value1} is no longer displayed as active, but updatedAt is earlier than this submission, please wait for the catalog to refresh", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.2", "目标 deployment") }),
           deployment
-            ? `等待 ${deploymentId || '目标 deployment'} 状态离开 active`
-            : `等待 ${deploymentId || '目标 deployment'} 出现在 catalog 并显示非 active 状态`,
+            ? t("pages.deployments.releaseevidence.wait.for.state.to", "Wait for {value1} state to leave active", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.3", "目标 deployment") })
+            : t("pages.deployments.releaseevidence.wait.for.to.appear", "Wait for {value1} to appear in catalog and show inactive status", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.4", "目标 deployment") }),
           handoff,
         ),
       ),
@@ -309,9 +310,9 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         buildFreshDetail(
           servingExcludesTarget,
           serving?.updatedAt,
-          'Serving targets 已在本次提交后不再包含该 deployment',
-          'Serving targets 当前不包含该 deployment，但 updatedAt 早于本次提交，请等待 readmodel 刷新',
-          '等待 serving targets 移除该 deployment',
+          t("pages.deployments.releaseevidence.serving.targets.no.longer", "serving targets no longer contain the deployment after this submission"),
+          t("pages.deployments.releaseevidence.serving.targets.currently.do", "serving targets currently do not contain this deployment, but updatedAt is earlier than this submission, please wait for readmodel to refresh"),
+          t("pages.deployments.releaseevidence.wait.for.serving.targets.2", "Wait for serving targets to remove the deployment"),
           handoff,
         ),
       ),
@@ -322,9 +323,9 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         buildFreshDetail(
           trafficExcludesTarget,
           traffic?.updatedAt,
-          'Traffic split 已在本次提交后不再包含该 deployment',
-          'Traffic split 当前不包含该 deployment，但 updatedAt 早于本次提交，请等待 readmodel 刷新',
-          '等待 traffic split 移除该 deployment',
+          t("pages.deployments.releaseevidence.traffic.split.no.longer", "Traffic split no longer contains the deployment after this submission"),
+          t("pages.deployments.releaseevidence.traffic.split.currently.does", "Traffic split currently does not contain this deployment, but updatedAt is earlier than this submission, please wait for readmodel to refresh"),
+          t("pages.deployments.releaseevidence.wait.for.traffic.split.2", "Wait for traffic split to remove the deployment"),
           handoff,
         ),
       ),
@@ -354,12 +355,12 @@ export function buildDeploymentReleaseEvidenceSnapshot({
           ? buildFreshDetail(
               Boolean(rolloutHasExpectedStatus),
               rollout?.updatedAt,
-              `当前 rollout 状态已在本次提交后刷新为 ${rolloutStatus}`,
-              `当前 rollout 状态为 ${rolloutStatus}，但 updatedAt 早于本次提交，请等待刷新`,
-              `当前 rollout 状态为 ${rolloutStatus}，等待匹配本次命令的状态`,
+              t("pages.deployments.releaseevidence.the.current.rollout.status", "The current rollout status has been refreshed to {value1} after this commit", { value1: rolloutStatus }),
+              t("pages.deployments.releaseevidence.the.current.rollout.status.2", "The current rollout status is {value1}, but updatedAt is earlier than this submission, please wait for the refresh", { value1: rolloutStatus }),
+              t("pages.deployments.releaseevidence.the.current.rollout.status.3", "The current rollout status is {value1}, waiting for the status matching this command", { value1: rolloutStatus }),
               handoff,
             )
-          : '等待 rollout 状态刷新',
+          : t("pages.deployments.releaseevidence.wait.for.rollout.status", "Wait for rollout status to refresh"),
       ),
       buildCheck(
         'serving-targets',
@@ -368,8 +369,8 @@ export function buildDeploymentReleaseEvidenceSnapshot({
           ? 'review'
           : 'pending',
         occurredAfterHandoff(serving?.updatedAt, handoff)
-          ? `当前可见 ${serving?.targets.length ?? 0} 个 serving targets，请核对是否匹配本次命令`
-          : '等待本次提交后的 serving targets 刷新',
+          ? t("pages.deployments.releaseevidence.currently.serving.targets.are", "Currently {value1} serving targets are visible, please check whether they match this command.", { value1: serving?.targets.length ?? 0 })
+          : t("pages.deployments.releaseevidence.wait.for.serving.targets.3", "Wait for serving targets to be refreshed after this submission"),
       ),
       buildCheck(
         'traffic-split',
@@ -378,8 +379,8 @@ export function buildDeploymentReleaseEvidenceSnapshot({
           ? 'review'
           : 'pending',
         occurredAfterHandoff(traffic?.updatedAt, handoff)
-          ? `当前可见 ${traffic?.endpoints.length ?? 0} 个 traffic endpoints，请核对是否匹配本次命令`
-          : '等待本次提交后的 traffic split 刷新',
+          ? t("pages.deployments.releaseevidence.traffic.endpoints.are.currently", "{value1} traffic endpoints are currently visible, please check whether they match this command.", { value1: traffic?.endpoints.length ?? 0 })
+          : t("pages.deployments.releaseevidence.wait.for.the.traffic.2", "Wait for the traffic split to be refreshed after this submission"),
       ),
     );
   }
@@ -399,9 +400,9 @@ export function buildDeploymentReleaseEvidenceSnapshot({
     observedCount,
     summary:
       pendingCount > 0
-        ? `${pendingCount} 项证据仍待观察，避免把 submitted 当作 completed。`
+        ? t("pages.deployments.releaseevidence.evidence.remains.to.be", "{value1} evidence remains to be seen, avoid treating submitted as completed.", { value1: pendingCount })
         : reviewCount > 0
-          ? `${reviewCount} 项证据需要人工核对，避免把旧 readmodel 当作本次完成。`
-          : '所有关键证据都已在本次提交后观察到。',
+          ? t("pages.deployments.releaseevidence.evidence.needs.to.be", "{value1} evidence needs to be manually checked to avoid treating the old readmodel as completed this time.", { value1: reviewCount })
+          : t("pages.deployments.releaseevidence.all.key.evidence.has", "All key evidence has been observed following this submission."),
   };
 }

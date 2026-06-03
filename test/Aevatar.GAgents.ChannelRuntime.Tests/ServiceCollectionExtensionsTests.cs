@@ -2,6 +2,8 @@ using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -44,6 +46,12 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
             descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
@@ -152,6 +160,61 @@ public sealed class ServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddChannelRuntime_WithConfiguredInMemoryDenied_ShouldFailFast()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Policies:DenyInMemoryDocumentReadStore"] = "true",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        var act = () => services.AddChannelRuntime(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory document provider is not allowed by projection policy*");
+    }
+
+    [Fact]
+    public void AddChannelRuntime_WithProductionConfigurationAndImplicitInMemory_ShouldFailFast()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Policies:Environment"] = "Production",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        var act = () => services.AddChannelRuntime(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory document provider is not allowed by projection policy*");
+    }
+
+    [Fact]
+    public void AddChannelRuntime_WithElasticsearchEnabledButMissingEndpoints_ShouldFailOnStoreResolution()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddChannelRuntime(configuration);
+        using var provider = services.BuildServiceProvider();
+        var act = () => provider.GetRequiredService<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty*");
+    }
+
+    [Fact]
     public void AddChannelRuntime_RegistersOnlyPublicRegistrationProjectionServices_ForElasticsearchStore()
     {
         var configuration = new ConfigurationBuilder()
@@ -178,6 +241,12 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
             descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));

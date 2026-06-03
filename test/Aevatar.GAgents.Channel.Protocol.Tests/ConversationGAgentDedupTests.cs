@@ -8,6 +8,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
@@ -711,6 +712,237 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundAndReadyAsync_WhenSameConversationRunsTwice_InjectsAndRetainsPreviousHistory()
+    {
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    RunId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-lark-history", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-1", "lark:scope-a:chat-1"));
+        var firstReady = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-history-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "run-1",
+            Activity = CreateActivity("act-history-1", "lark:scope-a:chat-1"),
+            Outbound = new MessageContent { Text = "first assistant" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+        firstReady.AppendedHistory.Add(new ConversationHistoryEntry { Role = "user", Content = "first user" });
+        firstReady.AppendedHistory.Add(new ConversationHistoryEntry { Role = "assistant", Content = "first assistant" });
+        await agent.HandleLlmReplyReadyAsync(firstReady);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-2", "lark:scope-a:chat-1"));
+
+        agent.State.RetainedHistory.Select(entry => (entry.Role, entry.Content))
+            .ShouldContain(("user", "first user"));
+        agent.State.RetainedHistory.Select(entry => (entry.Role, entry.Content))
+            .ShouldContain(("assistant", "first assistant"));
+        dispatcher.Dispatched.Count.ShouldBe(2);
+        dispatcher.Dispatched[0].PriorHistory.ShouldBeEmpty();
+        dispatcher.Dispatched[1].PriorHistory.Select(entry => (entry.Role, entry.Content))
+            .ShouldContain(("user", "first user"));
+        dispatcher.Dispatched[1].PriorHistory.Select(entry => (entry.Role, entry.Content))
+            .ShouldContain(("assistant", "first assistant"));
+    }
+
+    [Fact]
+    public async Task HandleInboundAndReadyAsync_WhenRetainedHistoryExceedsCap_DoesNotKeepOrphanToolResult()
+    {
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    RunId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-lark-history-cap", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-cap-1", "lark:scope-a:chat-cap"));
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-history-cap-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "run-cap-1",
+            Activity = CreateActivity("act-history-cap-1", "lark:scope-a:chat-cap"),
+            Outbound = new MessageContent { Text = "latest assistant" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+
+        ready.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "assistant",
+            Content = "old assistant tool call",
+            ToolCalls =
+            {
+                new ConversationToolCallEntry
+                {
+                    Id = "old-call",
+                    Name = "search",
+                    ArgumentsJson = "{}",
+                },
+            },
+        });
+        ready.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "tool",
+            ToolCallId = "old-call",
+            Content = "old result",
+        });
+        for (var i = 0; i < 100; i++)
+        {
+            ready.AppendedHistory.Add(new ConversationHistoryEntry
+            {
+                Role = i % 2 == 0 ? "user" : "assistant",
+                Content = $"recent {i}",
+            });
+        }
+
+        await agent.HandleLlmReplyReadyAsync(ready);
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-cap-2", "lark:scope-a:chat-cap"));
+
+        agent.State.RetainedHistory.Count.ShouldBeLessThanOrEqualTo(100);
+        agent.State.RetainedHistory.ShouldNotContain(entry => entry.Role == "tool" && entry.ToolCallId == "old-call");
+        dispatcher.Dispatched.Count.ShouldBe(2);
+        dispatcher.Dispatched[1].PriorHistory.Count.ShouldBeLessThanOrEqualTo(100);
+        dispatcher.Dispatched[1].PriorHistory.ShouldNotContain(entry => entry.Role == "tool" && entry.ToolCallId == "old-call");
+    }
+
+    [Fact]
+    public async Task HandleInboundAndReadyAsync_WhenRetainedHistoryExceedsCap_PreservesCompleteToolPair()
+    {
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    RunId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-lark-history-tool-pair", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-history-tool-pair-1", "lark:scope-a:chat-tool-pair"));
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-history-tool-pair-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "run-tool-pair-1",
+            Activity = CreateActivity("act-history-tool-pair-1", "lark:scope-a:chat-tool-pair"),
+            Outbound = new MessageContent { Text = "latest assistant" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+
+        for (var i = 0; i < 98; i++)
+        {
+            ready.AppendedHistory.Add(new ConversationHistoryEntry
+            {
+                Role = i % 2 == 0 ? "user" : "assistant",
+                Content = $"older {i}",
+            });
+        }
+        ready.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "assistant",
+            Content = "kept assistant tool call",
+            ToolCalls =
+            {
+                new ConversationToolCallEntry
+                {
+                    Id = "kept-call",
+                    Name = "search",
+                    ArgumentsJson = "{}",
+                },
+            },
+        });
+        ready.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "tool",
+            ToolCallId = "kept-call",
+            Content = "kept result",
+        });
+        ready.AppendedHistory.Add(new ConversationHistoryEntry { Role = "user", Content = "latest user" });
+
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        agent.State.RetainedHistory.Count.ShouldBeLessThanOrEqualTo(100);
+        agent.State.RetainedHistory.ShouldContain(entry =>
+            entry.Role == "assistant" && entry.ToolCalls.Any(call => call.Id == "kept-call"));
+        agent.State.RetainedHistory.ShouldContain(entry => entry.Role == "tool" && entry.ToolCallId == "kept-call");
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_WhenDifferentConversationActorRuns_DoesNotInjectOtherConversationHistory()
+    {
+        var firstDispatcher = new RecordingRunDispatcher();
+        var secondDispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    RunId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (firstAgent, _) = CreateAgent(runner, "conv-lark-history-a", firstDispatcher);
+        var (secondAgent, _) = CreateAgent(runner, "conv-lark-history-b", secondDispatcher);
+
+        await firstAgent.HandleInboundActivityAsync(CreateActivity("act-history-a1", "lark:scope-a:chat-1"));
+        var firstReady = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-history-a1",
+            RegistrationId = "reg-1",
+            SourceActorId = "run-a1",
+            Activity = CreateActivity("act-history-a1", "lark:scope-a:chat-1"),
+            Outbound = new MessageContent { Text = "scope a assistant" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        };
+        firstReady.AppendedHistory.Add(new ConversationHistoryEntry { Role = "user", Content = "scope a user" });
+        firstReady.AppendedHistory.Add(new ConversationHistoryEntry { Role = "assistant", Content = "scope a assistant" });
+        await firstAgent.HandleLlmReplyReadyAsync(firstReady);
+
+        await secondAgent.HandleInboundActivityAsync(CreateActivity("act-history-b1", "lark:scope-b:chat-1"));
+
+        firstAgent.State.RetainedHistory.ShouldNotBeEmpty();
+        secondAgent.State.RetainedHistory.ShouldBeEmpty();
+        secondDispatcher.Dispatched.ShouldHaveSingleItem();
+        secondDispatcher.Dispatched[0].PriorHistory.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenDuplicateCorrelationId_CollapsesToSingleOutboundCommit()
     {
         var runner = new RecordingTurnRunner();
@@ -900,13 +1132,13 @@ public sealed class ConversationGAgentDedupTests
             [
                 new ChatRouteRule
                 {
-                    RuleId = "daily",
+                    RuleId = "summary",
                     Priority = 100,
                     Match = new ChatRouteMatch
                     {
                         SourceKind = ChatSourceKind.NyxRelay,
                         Channel = "lark",
-                        CommandName = "/daily",
+                        CommandName = "/summary",
                     },
                     Action = GAgentToolHint("target-gagent-1"),
                 },
@@ -923,7 +1155,7 @@ public sealed class ConversationGAgentDedupTests
         inboundActivity.ChannelId = new ChannelId { Value = "lark" };
         inboundActivity.Bot = new BotInstanceId { Value = "owner-scope" };
         inboundActivity.From = new ParticipantRef { CanonicalId = "sender-1" };
-        inboundActivity.Content = new MessageContent { Text = "/daily status" };
+        inboundActivity.Content = new MessageContent { Text = "/summary status" };
         inboundActivity.TransportExtras = new TransportExtras
         {
             NyxPlatform = "lark",
@@ -1231,6 +1463,71 @@ public sealed class ConversationGAgentDedupTests
                 ContainsSubsequence(payloadBytes, sentinelBytes)
                     .ShouldBeFalse(
                         $"persisted event {record.EventType} must not contain credential bytes for {sentinel}");
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_PersistsDurableToolContextButStripsTypedCredentials()
+    {
+        const string sentinelSenderToken = "sentinel-typed-sender-token-56bf";
+        const string sentinelOwnerToken = "sentinel-typed-owner-token-91d4";
+        const string sentinelOrgToken = "sentinel-typed-org-token-e720";
+        var durableSkillRecovery = new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: "summary",
+            OriginalCommand: "/summary",
+            PrimarySkillName: "project-summary",
+            MaxOrnnSearchAttempts: 2);
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    RunId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                    ToolContext = (AgentToolExecutionContext.Empty with
+                    {
+                        Credentials = new AgentToolCredentials(
+                            sentinelOwnerToken,
+                            sentinelOrgToken,
+                            sentinelSenderToken),
+                        SkillRecovery = durableSkillRecovery,
+                    }).ToPayload(),
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-persist-tool-context", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-tool-context", "conv:slack:C1"));
+
+        dispatcher.Dispatched.ShouldHaveSingleItem();
+        var dispatchedContext = AgentToolExecutionContextMapper.FromPayload(dispatcher.Dispatched[0].ToolContext);
+        dispatchedContext.Credentials.NyxIdAccessToken.ShouldBe(sentinelOwnerToken);
+        dispatchedContext.Credentials.NyxIdOrgToken.ShouldBe(sentinelOrgToken);
+        dispatchedContext.Credentials.SenderNyxIdAccessToken.ShouldBe(sentinelSenderToken);
+
+        var pending = agent.State.PendingLlmReplyRequests.Single();
+        var persistedContext = AgentToolExecutionContextMapper.FromPayload(pending.ToolContext);
+        persistedContext.SkillRecovery.ShouldBe(durableSkillRecovery);
+        persistedContext.Credentials.ShouldBe(AgentToolCredentials.Empty);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.ShouldNotBeEmpty();
+        foreach (var sentinel in new[] { sentinelSenderToken, sentinelOwnerToken, sentinelOrgToken })
+        {
+            var sentinelBytes = Encoding.UTF8.GetBytes(sentinel);
+            foreach (var record in events)
+            {
+                var payloadBytes = record.EventData?.Value?.ToByteArray() ?? Array.Empty<byte>();
+                ContainsSubsequence(payloadBytes, sentinelBytes)
+                    .ShouldBeFalse(
+                        $"persisted event {record.EventType} must not contain typed credential bytes for {sentinel}");
             }
         }
     }
@@ -1846,6 +2143,179 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_TransientInterimEditFailure_RetriesImmediateSelfOperation()
+    {
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                return callCount switch
+                {
+                    1 => ConversationStreamChunkResult.Succeeded("om_retry_success"),
+                    2 => ConversationStreamChunkResult.Failed(
+                        "relay_reply_update_rejected",
+                        "transient",
+                        failureKind: FailureKind.TransientAdapterError),
+                    _ => ConversationStreamChunkResult.Succeeded(pmid ?? "om_retry_success"),
+                };
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-interim-retry", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry", "relay-msg-1", "hello world"));
+        var failed = await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        var lifecycleAfterRetryQueued = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycleAfterRetryQueued.NyxRelayRetryAttempt.ShouldBe(1);
+        lifecycleAfterRetryQueued.NyxRelayOperationGeneration.ShouldBe(failed.OperationGeneration + 1);
+        lifecycleAfterRetryQueued.NyxRelayInFlightSequence.ShouldBe(failed.Sequence);
+
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        callCount.ShouldBe(3);
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextStreaming);
+        lifecycle.LastFlushedText.ShouldBe("hello world");
+        lifecycle.NyxRelayRetryAttempt.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_TransientInterimEditRetryExhaustion_SuppressesInterimButAllowsFinalEdit()
+    {
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_retry_exhaust");
+                if (callCount <= 4)
+                    return ConversationStreamChunkResult.Failed(
+                        "relay_reply_update_rejected",
+                        "transient",
+                        failureKind: FailureKind.TransientAdapterError);
+                return ConversationStreamChunkResult.Succeeded(pmid ?? "om_retry_exhaust");
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, store) = CreateAgent(runner, "conv-stream-interim-retry-exhaust", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry-exhaust", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry-exhaust", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        var suppressed = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        suppressed.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextSuppressingInterim);
+        suppressed.NyxRelayRetryAttempt.ShouldBe(0);
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-interim-retry-exhaust", "relay-msg-1", "hello dropped"));
+        callCount.ShouldBe(4);
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-interim-retry-exhaust",
+            RegistrationId = "reg-1",
+            RunId = "act-stream-interim-retry-exhaust",
+            SourceActorId = "agent-run",
+            Activity = CreateRelayActivity("act-stream-interim-retry-exhaust", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "hello final" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        runner.LlmReplyCount.ShouldBe(0);
+        callCount.ShouldBe(5);
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(
+            (await store.GetEventsAsync(agent.Id)).Last().EventData.Value);
+        completed.Outbound.Text.ShouldBe("hello final");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_PermanentInterimEditFailure_DoesNotRetry()
+    {
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_permanent_no_retry");
+                return ConversationStreamChunkResult.Failed(
+                    "relay_reply_edit_unsupported",
+                    "edit unsupported",
+                    editUnsupported: true,
+                    failureKind: FailureKind.PermanentAdapterError,
+                    rawErrorKey: "edit_unsupported");
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-permanent-no-retry", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-permanent-no-retry", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-permanent-no-retry", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        callCount.ShouldBe(2);
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextSuppressingInterim);
+        lifecycle.NyxRelayRetryAttempt.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_TransientInterimEditFailureWithPositiveRetryAfter_DoesNotScheduleRetry()
+    {
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, pmid) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_retry_after_no_retry");
+                return ConversationStreamChunkResult.Failed(
+                    "relay_reply_update_rejected",
+                    "rate limited",
+                    failureKind: FailureKind.TransientAdapterError,
+                    retryAfter: TimeSpan.FromSeconds(4),
+                    rawErrorKey: "rate_limited");
+            },
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var (agent, _) = CreateAgent(runner, "conv-stream-retry-after-no-retry", dispatchPort: dispatch);
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-retry-after-no-retry", "relay-msg-1", "hello"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-retry-after-no-retry", "relay-msg-1", "hello world"));
+        await CompleteNextNyxRelayTextOperationAsync(agent, dispatch);
+
+        callCount.ShouldBe(2);
+        var lifecycle = agent.State.ActiveReplyLifecycles.ShouldHaveSingleItem();
+        lifecycle.Phase.ShouldBe(ConversationReplyLifecyclePhase.TextSuppressingInterim);
+        lifecycle.NyxRelayRetryAttempt.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenTokenAlreadyConsumedAndInterimEditFailed_RetriesFinalEditInsteadOfReusingToken()
     {
         // Regression for PR#374 P1 review: final LlmReplyReady must try the final /reply/update
@@ -2009,6 +2479,7 @@ public sealed class ConversationGAgentDedupTests
         // Two RunStreamChunkAsync calls: first chunk + failure-edit.
         callCount.ShouldBe(2);
         // The placeholder was edited with the classified failure text.
+        lastEditedText.ShouldNotBeNull();
         lastEditedText.ShouldContain("rate limited");
 
         var events = await store.GetEventsAsync(agent.Id);

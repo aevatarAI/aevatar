@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import ServicesPage from './index';
@@ -124,6 +125,7 @@ jest.mock('@/shared/studio/api', () => ({
 describe('ServicesPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    setLocale('zh-CN', false);
     window.history.replaceState({}, '', '/services');
   });
 
@@ -138,8 +140,8 @@ describe('ServicesPage', () => {
     expect(await screen.findByText('无公开入口')).toBeTruthy();
     expect(await screen.findByText('查找服务')).toBeTruthy();
     expect(await screen.findByText('Service Alpha')).toBeTruthy();
-    expect(screen.getByText('Team / Tenant')).toBeTruthy();
-    expect(screen.getByText('Result window')).toBeTruthy();
+    expect(screen.getByText('团队/租户')).toBeTruthy();
+    expect(screen.getByText('结果窗口')).toBeTruthy();
     expect(screen.getByRole('button', { name: '重置' })).toBeTruthy();
     expect(screen.getByText('Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、Deployments 或 Topology。')).toBeTruthy();
     expect(screen.getByText('服务目录')).toBeTruthy();

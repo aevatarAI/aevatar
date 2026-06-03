@@ -12,6 +12,7 @@
     <ProjectReference Include="..\Aevatar.Foundation.VoicePresence.Abstractions\Aevatar.Foundation.VoicePresence.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.AI.Tests" />
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Microsoft.Extensions.AI" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />

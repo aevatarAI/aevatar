@@ -27,6 +27,22 @@ internal static class AgentRunReplyStepMappers
         return target;
     }
 
+    public static AgentRunChatMessage ToProto(Aevatar.GAgents.Channel.Runtime.ConversationHistoryEntry source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var target = new AgentRunChatMessage
+        {
+            Role = string.IsNullOrWhiteSpace(source.Role) ? "user" : source.Role,
+            Content = source.Content ?? string.Empty,
+            ReasoningContent = source.ReasoningContent ?? string.Empty,
+            ToolCallId = source.ToolCallId ?? string.Empty,
+        };
+        target.ContentParts.AddRange(source.ContentParts);
+        target.ToolCalls.AddRange(source.ToolCalls.Select(ToProto));
+        return target;
+    }
+
     public static ChatMessage FromProto(AgentRunChatMessage source)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -57,6 +73,17 @@ internal static class AgentRunReplyStepMappers
         };
     }
 
+    public static AgentRunToolCall ToProto(Aevatar.GAgents.Channel.Runtime.ConversationToolCallEntry source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return new AgentRunToolCall
+        {
+            Id = source.Id ?? string.Empty,
+            Name = source.Name ?? string.Empty,
+            ArgumentsJson = source.ArgumentsJson ?? string.Empty,
+        };
+    }
+
     public static ToolCall FromProto(AgentRunToolCall source)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -65,6 +92,35 @@ internal static class AgentRunReplyStepMappers
             Id = source.Id,
             Name = source.Name,
             ArgumentsJson = source.ArgumentsJson,
+        };
+    }
+
+    public static Aevatar.GAgents.Channel.Runtime.ConversationHistoryEntry ToConversationHistoryEntry(
+        AgentRunChatMessage source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var target = new Aevatar.GAgents.Channel.Runtime.ConversationHistoryEntry
+        {
+            Role = source.Role ?? string.Empty,
+            Content = source.Content ?? string.Empty,
+            ReasoningContent = source.ReasoningContent ?? string.Empty,
+            ToolCallId = source.ToolCallId ?? string.Empty,
+        };
+        target.ContentParts.AddRange(source.ContentParts);
+        target.ToolCalls.AddRange(source.ToolCalls.Select(ToConversationToolCallEntry));
+        return target;
+    }
+
+    private static Aevatar.GAgents.Channel.Runtime.ConversationToolCallEntry ToConversationToolCallEntry(
+        AgentRunToolCall source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return new Aevatar.GAgents.Channel.Runtime.ConversationToolCallEntry
+        {
+            Id = source.Id ?? string.Empty,
+            Name = source.Name ?? string.Empty,
+            ArgumentsJson = source.ArgumentsJson ?? string.Empty,
         };
     }
 

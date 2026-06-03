@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Aevatar.AI.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -11,7 +10,7 @@ internal static class ChatJsonPayloads
     private static readonly JsonFormatter Formatter = new(
         JsonFormatter.Settings.Default
             .WithFormatDefaultValues(false)
-            .WithTypeRegistry(WorkflowJsonTypeRegistry.Create(AiMessagesReflection.Descriptor)));
+            .WithTypeRegistry(WorkflowJsonTypeRegistry.Default));
 
     public static string Format(IMessage message)
     {

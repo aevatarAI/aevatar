@@ -1,6 +1,11 @@
+import { setLocale } from '@umijs/max';
 import { buildServingTargetPlanStatus } from './servingTargetPlan';
 
 describe('buildServingTargetPlanStatus', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
   it('disables empty serving target submissions', () => {
     const status = buildServingTargetPlanStatus([]);
 

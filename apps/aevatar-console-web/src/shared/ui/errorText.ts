@@ -1,3 +1,4 @@
+import { t } from "@/shared/i18n/messages";
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -19,23 +20,23 @@ function normalizeUserFacingError(message: string): string {
   }
 
   if (lower.includes("/api/auth/") || lower.includes("auth")) {
-    return "登录状态暂时不可用，请刷新后重试。";
+    return t("shared.ui.errortext.the.login.status.is", "The login status is temporarily unavailable, please refresh and try again.");
   }
 
   if (lower.includes("workspace")) {
-    return "工作区设置暂时不可用，请稍后再试。";
+    return t("shared.ui.errortext.workspace.settings.are.temporarily", "Workspace settings are temporarily unavailable, please try again later.");
   }
 
   if (lower.includes("app context")) {
-    return "当前上下文暂时不可用，请稍后再试。";
+    return t("shared.ui.errortext.the.current.context.is", "The current context is temporarily unavailable, please try again later.");
   }
 
-  return "当前服务暂时不可用，请稍后再试。";
+  return t("shared.ui.errortext.the.current.service.is", "The current service is temporarily unavailable, please try again later.");
 }
 
 export function describeError(
   error: unknown,
-  fallback = "当前服务暂时不可用，请稍后再试。"
+  fallback = t("shared.ui.errortext.the.current.service.is.2", "The current service is temporarily unavailable, please try again later.")
 ): string {
   if (error instanceof Error) {
     const message = normalizeUserFacingError(error.message || error.name || "");

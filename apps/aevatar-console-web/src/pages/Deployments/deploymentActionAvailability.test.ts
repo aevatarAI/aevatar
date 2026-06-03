@@ -1,6 +1,11 @@
+import { setLocale } from '@umijs/max';
 import { buildDeploymentDeactivateAvailability } from './deploymentActionAvailability';
 
 describe('buildDeploymentDeactivateAvailability', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
   const deployment = {
     activatedAt: '2026-03-30T10:00:00Z',
     deploymentId: 'dep-1',

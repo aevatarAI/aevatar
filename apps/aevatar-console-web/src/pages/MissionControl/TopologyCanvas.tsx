@@ -34,6 +34,7 @@ import {
   resolveObservationTone,
   type MissionThemeToken,
 } from './presentation';
+import { t } from "@/shared/i18n/messages";
 
 type TopologyCanvasProps = {
   activeNodeId?: string;
@@ -235,7 +236,7 @@ function TopologyNodeCard({
       </Typography.Paragraph>
       <Tooltip title={node.handoff.nextStep}>
         <div
-          aria-label="Mission Control node handoff"
+          aria-label={t("pages.missioncontrol.topologycanvas.mission.control.node.handoff", "Mission Control node handoff")}
           style={{
             background: token.colorFillQuaternary,
             border: `1px solid ${token.colorBorderSecondary}`,
@@ -277,8 +278,7 @@ function TopologyNodeCard({
       >
         <div>
           <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
-            Status
-          </Typography.Text>
+            {t("pages.missioncontrol.topologycanvas.status", "Status")}</Typography.Text>
           <Typography.Text
             style={{
               color: statusTone,
@@ -292,8 +292,7 @@ function TopologyNodeCard({
         </div>
         <div>
           <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
-            Freshness
-          </Typography.Text>
+            {t("pages.missioncontrol.topologycanvas.freshness", "Freshness")}</Typography.Text>
           <Typography.Text
             style={{
               color: observationTone,
@@ -307,8 +306,7 @@ function TopologyNodeCard({
         </div>
         <div>
           <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
-            Handoff
-          </Typography.Text>
+            {t("pages.missioncontrol.topologycanvas.handoff", "Handoff")}</Typography.Text>
           <Tag
             color={resolveHandoffTagColor(node.handoff.severity)}
             style={{ display: 'block', fontSize: 11, marginInlineEnd: 0, marginTop: 2 }}
@@ -577,10 +575,12 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
         >
           <Typography.Text strong style={{ color: token.colorTextLightSolid }}>
             {connectionStatus === 'idle'
-              ? 'Attach a live run first'
+              ? t("pages.missioncontrol.topologycanvas.attach.live.run.first", "Attach a live run first")
               : snapshot.nodes.length === 0
-                ? 'Waiting for runtime topology...'
-                : `Runtime: ${formatConnectionLabel(connectionStatus)}`}
+                ? t("pages.missioncontrol.topologycanvas.waiting.runtime.topology", "Waiting for runtime topology...")
+                : t("pages.missioncontrol.topologycanvas.runtime.connection", "Runtime: {connection}", {
+                    connection: formatConnectionLabel(connectionStatus),
+                  })}
           </Typography.Text>
           <Typography.Text
             style={{
@@ -589,7 +589,8 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
               opacity: 0.86,
             }}
           >
-            {connectionMessage || 'Synchronizing runtime state, topology, and key events.'}
+            {connectionMessage ||
+              t("pages.missioncontrol.topologycanvas.synchronizing.runtime.state", "Synchronizing runtime state, topology, and key events.")}
           </Typography.Text>
           <Typography.Text
             style={{
@@ -606,9 +607,9 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
             }}
           >
             {connectionStatus === 'idle'
-              ? 'Live Run Context Required'
+              ? t("pages.missioncontrol.topologycanvas.live.run.context.required", "Live Run Context Required")
               : snapshot.nodes.length === 0
-                ? 'Topology Pending'
+                ? t("pages.missioncontrol.topologycanvas.topology.pending", "Topology Pending")
                 : formatConnectionLabel(connectionStatus)}
           </Typography.Text>
         </div>

@@ -1,7 +1,5 @@
 using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
-using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
@@ -14,22 +12,16 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
 
-/// <summary>LLM call module. Sends <see cref="ChatRequestEvent"/> to a role actor.</summary>
+/// <summary>LLM call module. Sends <see cref="WorkflowLlmExecutionIntent"/> to a role actor.</summary>
 // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
 //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
 //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
 // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
 //   Old pattern: Information log included raw value/prompt/input preview
 //   New principle: only stable id + length + status + redaction marker
-// Refactor (iter164/cluster-002-first):
-//   Old pattern: module listened to TextMessageEndEvent / ChatResponseEvent (presentation frames)
-//                and converted them to StepCompletedEvent.
-//   New principle: module reads completion from WorkflowRoleReplyRecordedEvent
-//                  (actor-owned committed event), removing dependency on presentation stream.
 public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
-    private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const string LlmWatchdogCallbackPrefix = "llm-watchdog";
     private const string ModuleStateKey = "llm_call";
 
@@ -46,12 +38,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
-        // Refactor (iter170/cluster-1247-first):
-        //   Old pattern: live TextMessageEndEvent/ChatResponseEvent frames completed workflow steps.
-        //   New principle: only committed WorkflowRoleReplyRecordedEvent can complete pending LLM steps.
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor) ||
-                payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor) ||
+                payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor) ||
                 payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor));
     }
 
@@ -67,9 +56,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        if (payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
+        if (payload.Is(WorkflowLlmInvocationCompletedEvent.Descriptor))
         {
-            await HandleRoleReplyRecordedAsync(payload.Unpack<WorkflowRoleReplyRecordedEvent>(), envelope, ctx, ct);
+            await HandleLlmInvocationCompletedAsync(payload.Unpack<WorkflowLlmInvocationCompletedEvent>(), envelope, ctx, ct);
             return;
         }
 
@@ -163,8 +152,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private async Task HandleRoleReplyRecordedAsync(
-        WorkflowRoleReplyRecordedEvent evt,
+    private async Task HandleLlmInvocationCompletedAsync(
+        WorkflowLlmInvocationCompletedEvent evt,
         EventEnvelope envelope,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
@@ -178,12 +167,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
-        var publisherActorId = !string.IsNullOrWhiteSpace(evt.RoleActorId)
-            ? evt.RoleActorId
-            : envelope.Route?.PublisherActorId ?? ctx.AgentId;
-        if (TryExtractLlmFailure(evt.Content, out var error))
+        var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
+        if (!evt.Success)
         {
-            await PublishFailedCompletionAsync(pending, error, publisherActorId, ctx, ct);
+            await PublishFailedCompletionAsync(pending, string.IsNullOrWhiteSpace(evt.Error) ? "LLM call failed." : evt.Error, publisherActorId, ctx, ct);
             await RemovePendingAsync(sessionId, pending, ctx, ct);
             return;
         }
@@ -280,58 +267,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return DefaultLlmTimeoutMs;
     }
 
-    private static bool TryExtractLlmFailure(string? content, out string error)
-    {
-        if (string.IsNullOrEmpty(content) ||
-            !content.StartsWith(LlmFailureContentPrefix, StringComparison.Ordinal))
-        {
-            error = string.Empty;
-            return false;
-        }
-
-        var extracted = content[LlmFailureContentPrefix.Length..].Trim();
-        error = string.IsNullOrWhiteSpace(extracted) ? "LLM call failed." : extracted;
-        return true;
-    }
-
-    // Refactor (iter159/cluster-613-first):
-    //   Old pattern: NyxID bearer entered workflow durable + pending approval surface.
-    //   New principle: request bearer scrubbed at envelope/state/continuation; only durable model/route controls remain.
-    private static void ApplyTypedLlmControl(
-        IWorkflowExecutionContext ctx,
-        ChatRequestEvent chatRequest)
-    {
-        if (!WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
-            return;
-
-        chatRequest.LlmControl = new LLMControlContext(
-            NyxIdAccessToken: null,
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
-            ModelOverride: Normalize(llm.ModelOverride),
-            NyxIdRoutePreference: Normalize(llm.NyxidRoutePreference),
-            MaxToolRoundsOverride: null,
-            UserMemoryPrompt: null).ToPayload();
-    }
-
-    private static AgentToolExecutionContext BuildLlmControlToolContext(LLMControlContext control) =>
-        AgentToolExecutionContext.Empty with
-        {
-            Credentials = AgentToolCredentials.Empty with
-            {
-                NyxIdAccessToken = control.NyxIdAccessToken,
-                NyxIdOrgToken = control.NyxIdOrgToken,
-                SenderNyxIdAccessToken = control.SenderNyxIdAccessToken,
-            },
-            Routing = LLMRequestRoutingContext.Empty with
-            {
-                ModelOverride = control.ModelOverride,
-                NyxIdRoutePreference = control.NyxIdRoutePreference,
-                MaxToolRoundsOverride = control.MaxToolRoundsOverride,
-                UserMemoryPrompt = control.UserMemoryPrompt,
-            },
-        };
-
     // Refactor (iter16/cluster-031):
     //   Old pattern: LLM override metadata was forwarded from generic execution
     //                item values after string-key lookup.
@@ -339,7 +274,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     //                  override fields after blank-value filtering.
     private static void CopyParametersToChatRequest(
         StepRequestEvent request,
-        ChatRequestEvent chatRequest,
+        WorkflowLlmExecutionIntent intent,
         int timeoutMs)
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
@@ -351,10 +286,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 continue;
             var normalizedKey = key.Trim();
             var normalizedValue = value.Trim();
-            if (TryApplyTelegramParameter(chatRequest.Telegram, normalizedKey, normalizedValue, timeoutMs))
+            if (IsReservedParameter(normalizedKey))
                 continue;
 
-            chatRequest.Metadata[normalizedKey] = normalizedValue;
+            intent.Annotations[normalizedKey] = normalizedValue;
         }
     }
 
@@ -362,161 +297,23 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         "Maintainability",
         "CA1502:Avoid excessive complexity",
         Justification = "Mechanical boundary normalization from known workflow step keys into typed Telegram fields; splitting would add indirection without changing behavior.")]
-    internal static bool TryApplyTelegramParameter(
-        TelegramBridgeRequest telegram,
-        string key,
-        string value,
-        int? timeoutMs = null)
+    internal static bool IsReservedParameter(string key)
     {
-        // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         switch (key)
         {
-            case "telegram.connector":
-            case "connector":
-            case "connector_name":
-                telegram.ConnectorName = value;
-                return true;
-            case "telegram.chat_id":
-            case "chat_id":
-                telegram.ChatId = value;
-                return true;
-            case "telegram.operation":
-            case "operation":
-            case "path":
-                telegram.Operation = ParseTelegramOperation(value);
-                return true;
-            case "telegram.message_thread_id":
-            case "message_thread_id":
-                if (TryParseInt64(value, out var messageThreadId))
-                    telegram.MessageThreadId = messageThreadId;
-                return true;
-            case "telegram.text":
-            case "text":
-                telegram.Text = value;
-                return true;
-            case "telegram.parse_mode":
-            case "parse_mode":
-                telegram.ParseMode = value;
-                return true;
-            case "telegram.disable_web_page_preview":
-            case "disable_web_page_preview":
-                if (TryParseBool(value, out var disableWebPagePreview))
-                    telegram.DisableWebPagePreview = disableWebPagePreview;
-                return true;
-            case "telegram.reply_to_message_id":
-            case "reply_to_message_id":
-                if (TryParseInt64(value, out var replyToMessageId))
-                    telegram.ReplyToMessageId = replyToMessageId;
-                return true;
-            case "telegram.expected_from_user_id":
-            case "expected_from_user_id":
-            case "from_user_id":
-                telegram.ExpectedFromUserId = value;
-                return true;
-            case "telegram.expected_from_username":
-            case "expected_from_username":
-            case "from_username":
-            case "from_user":
-                telegram.ExpectedFromUsername = value;
-                return true;
-            case "telegram.correlation_contains":
-            case "correlation_contains":
-            case "contains":
-                telegram.CorrelationContains = value;
-                return true;
-            case "telegram.wait_timeout_ms":
-            case "wait_timeout_ms":
-                if (TryParseInt32(value, out var waitTimeoutMs))
-                    telegram.WaitTimeoutMs = waitTimeoutMs;
-                return true;
-            case "telegram.poll_timeout_sec":
-            case "telegram.poll_timeout_seconds":
-            case "poll_timeout_sec":
-            case "poll_timeout_seconds":
-                if (TryParseInt32(value, out var pollTimeoutSeconds))
-                    telegram.PollTimeoutSeconds = pollTimeoutSeconds;
-                return true;
-            case "telegram.settle_polls_after_match":
-            case "settle_polls_after_match":
-                if (TryParseInt32(value, out var settlePollsAfterMatch))
-                    telegram.SettlePollsAfterMatch = settlePollsAfterMatch;
-                return true;
-            case "telegram.collect_all_replies":
-            case "collect_all_replies":
-                if (TryParseBool(value, out var collectAllReplies))
-                    telegram.CollectAllReplies = collectAllReplies;
-                return true;
-            case "telegram.start_from_latest":
-            case "start_from_latest":
-                if (TryParseBool(value, out var startFromLatest))
-                    telegram.StartFromLatest = startFromLatest;
-                return true;
-            case "telegram.offset":
-            case "offset":
-                if (TryParseInt64(value, out var offset) && offset > 0)
-                    telegram.Offset = offset;
-                return true;
-            case "telegram.http_method":
-            case "method":
-            case "http_method":
-                telegram.HttpMethod = value;
-                return true;
-            case "telegram.content_type":
-            case "content_type":
-                telegram.ContentType = value;
-                return true;
             case "telegram.timeout_ms":
-                if (TryParseInt32(value, out var connectorTimeoutMs))
-                    telegram.TimeoutMs = connectorTimeoutMs;
-                return true;
             case "timeout_ms":
             case "llm_timeout_ms":
             case "aevatar.llm_timeout_ms":
-                if (TryParseInt32(value, out var requestTimeoutMs))
-                {
-                    if (key == "timeout_ms" || key == "aevatar.llm_timeout_ms")
-                    {
-                        telegram.TimeoutMs = requestTimeoutMs == 0
-                            ? 0
-                            : timeoutMs is > 0
-                            ? Math.Max(100, Math.Min(requestTimeoutMs, timeoutMs.Value) - 1000)
-                            : requestTimeoutMs;
-                    }
-                }
-                return true;
-            case "telegram.phone_number":
-            case "telegram_user.phone_number":
-            case "phone_number":
-                telegram.PhoneNumber = value;
-                return true;
-            case "telegram.verification_code":
-            case "telegram_user.verification_code":
-            case "verification_code":
-                telegram.VerificationCode = value;
-                return true;
-            case "telegram.2fa_password":
-            case "telegram.password":
-            case "telegram_user.2fa_password":
-            case "telegram_user.password":
-            case "2fa_password":
-            case "password":
-                telegram.Password = value;
-                return true;
-            case "telegram.emit_chat_response":
-            case "emit_chat_response":
-                if (TryParseBool(value, out var emitChatResponse))
-                    telegram.EmitChatResponse = emitChatResponse;
                 return true;
             case "run_id":
             case "workflow.run_id":
             case "workflow_run_id":
             case "session_id":
-                telegram.RunId = value;
                 return true;
             case "step_id":
             case "workflow.step_id":
             case "workflow_step_id":
-                telegram.StepId = value;
                 return true;
             default:
                 return false;
@@ -581,18 +378,23 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var chatRequest = new ChatRequestEvent
+        var intent = new WorkflowLlmExecutionIntent
         {
             Prompt = prompt,
             SessionId = sessionId,
             TimeoutMs = timeoutMs,
-            Telegram = new TelegramBridgeRequest(),
+            RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
+            StepId = stepId,
         };
-        ApplyTypedLlmControl(ctx, chatRequest);
-        CopyParametersToChatRequest(request, chatRequest, timeoutMs);
-        chatRequest.Telegram.RunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-        chatRequest.Telegram.StepId = stepId;
-        WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, chatRequest.Metadata);
+        if (WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
+        {
+            intent.Model = Normalize(llm.ModelOverride) ?? string.Empty;
+            intent.UserMemoryPrompt = Normalize(llm.UserMemoryPrompt) ?? string.Empty;
+            if (llm.HasMaxToolRoundsOverride)
+                intent.MaxToolRounds = llm.MaxToolRoundsOverride;
+        }
+        CopyParametersToChatRequest(request, intent, timeoutMs);
+        WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!target.UseSelf)
@@ -606,7 +408,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 target.ActorId,
                 timeoutMs,
                 prompt.Length);
-            await ctx.SendToAsync(target.ActorId, chatRequest, ct, dispatchOptions);
+            await ctx.SendToAsync(target.ActorId, intent, ct, dispatchOptions);
             return;
         }
 
@@ -617,7 +419,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             sessionId,
             timeoutMs,
             prompt.Length);
-        await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct, dispatchOptions);
+        await ctx.PublishAsync(intent, TopologyAudience.Self, ct, dispatchOptions);
     }
 
     private static Task PublishFailedCompletionAsync(
@@ -664,8 +466,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
     private static string CreateSessionId(string scopeId, string runId, string stepId, int attempt) =>
         string.IsNullOrWhiteSpace(runId)
-            ? ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, $"{stepId}:a{attempt}")
-            : ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepId, attempt);
+            ? WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, $"{stepId}:a{attempt}")
+            : WorkflowChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepId, attempt);
 
     private static EventEnvelopePublishOptions BuildDispatchOptions(string dispatchDedupId) =>
         new()
@@ -675,54 +477,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 DeduplicationOperationId = dispatchDedupId,
             },
         };
-
-    private static TelegramBridgeOperation ParseTelegramOperation(string value)
-    {
-        if (string.Equals(value, "/waitReply", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "wait_reply", StringComparison.OrdinalIgnoreCase))
-        {
-            return TelegramBridgeOperation.WaitReply;
-        }
-
-        if (string.Equals(value, "/ensureLogin", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "ensure_login", StringComparison.OrdinalIgnoreCase))
-        {
-            return TelegramBridgeOperation.EnsureLogin;
-        }
-
-        return TelegramBridgeOperation.SendMessage;
-    }
-
-    private static bool TryParsePositiveInt32(string value, out int parsed) =>
-        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) && parsed > 0;
-
-    private static bool TryParseInt32(string value, out int parsed) =>
-        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed);
-
-    private static bool TryParseInt64(string value, out long parsed) =>
-        long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed);
-
-    private static bool TryParseBool(string value, out bool parsed)
-    {
-        parsed = false;
-        if (string.Equals(value, "1", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase))
-        {
-            parsed = true;
-            return true;
-        }
-
-        if (string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, "no", StringComparison.OrdinalIgnoreCase))
-        {
-            parsed = false;
-            return true;
-        }
-
-        return false;
-    }
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

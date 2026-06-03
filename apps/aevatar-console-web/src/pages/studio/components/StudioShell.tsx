@@ -13,6 +13,7 @@ import {
   AEVATAR_INTERACTIVE_CHIP_CLASS,
   AEVATAR_PRESSABLE_CARD_CLASS,
 } from '@/shared/ui/interactionStandards';
+import { t } from "@/shared/i18n/messages";
 
 export type StudioShellMemberKind =
   | 'workflow'
@@ -506,7 +507,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
   return (
     <div style={shellRootStyle}>
       {showMemberRail ? (
-      <aside style={railStyle} aria-label="Team members">
+      <aside style={railStyle} aria-label={t("pages.studio.studioshell.team.members.3", "Team members")}>
         <div style={railHeaderStyle}>
           <div
             style={{
@@ -526,8 +527,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                 lineHeight: '20px',
               }}
             >
-              Team members
-            </Typography.Title>
+              {t("pages.studio.studioshell.team.members.4", "Team members")}</Typography.Title>
             <span style={railPillStyle}>{members.length}</span>
             <InlineInfoButton
               ariaLabel="Open team members help"
@@ -536,9 +536,9 @@ const StudioShell: React.FC<StudioShellProps> = ({
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
             <input
-              aria-label="Search team members"
+              aria-label={t("pages.studio.studioshell.search.team.members.2", "Search team members")}
               onChange={(event) => setMemberSearch(event.target.value)}
-              placeholder="Search members or revisions"
+              placeholder={t("pages.studio.studioshell.search.members.or.revisions.2", "Search members or revisions")}
               style={railSearchInputStyle}
               type="search"
               value={memberSearch}
@@ -579,7 +579,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
           <div style={railSectionHeaderStackStyle}>
             <div style={railSectionHeaderRowStyle}>
               <div style={railSectionHeaderStyle}>
-                <span>Member inventory</span>
+                <span>{t("pages.studio.studioshell.member.inventory.2", "Member inventory")}</span>
               </div>
             </div>
             {inventoryActions}
@@ -758,8 +758,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
               }}
             >
               {members.length > 0
-                ? 'No members match the current search or filter. Try clearing the rail controls.'
-                : 'No team members yet. Create a member to start building in Studio.'}
+                ? t("pages.studio.studioshell.no.members.match.the.current.search", "No members match the current search or filter. Try clearing the rail controls.")
+                : t("pages.studio.studioshell.no.team.members.yet.create.member", "No team members yet. Create a member to start building in Studio.")}
             </Typography.Text>
           )}
         </div>
@@ -781,15 +781,14 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   textTransform: 'uppercase',
                 }}
               >
-                Member lifecycle
-              </Typography.Text>
+                {t("pages.studio.studioshell.member.lifecycle.3", "Member lifecycle")}</Typography.Text>
               <InlineInfoButton
                 ariaLabel="Open lifecycle help"
                 content="Keep the selected member in one shell while Build, Bind, Invoke, and Observe stay aligned to the same workbench."
               />
             </div>
             <nav
-              aria-label="Member lifecycle"
+              aria-label={t("pages.studio.studioshell.member.lifecycle.4", "Member lifecycle")}
               data-testid="studio-lifecycle-stepper"
               style={lifecycleRowStyle}
             >

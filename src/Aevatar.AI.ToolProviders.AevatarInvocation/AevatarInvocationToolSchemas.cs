@@ -29,7 +29,8 @@ internal static class AevatarInvocationToolSchemas
         [
             ["actor_id"],
             ["actor_name"],
-        ]);
+        ],
+        emitTopLevelOneOf: false);
 
     public static readonly string InvokeTeam = ProtoToolSchema.Build(
         InvokeTeamToolRequest.Descriptor,

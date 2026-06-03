@@ -35,6 +35,15 @@ public sealed class MessagesCommandFacadeTests
         command.ResponseId.Should().Be(result.Accepted.Session.ResponseId);
         command.RunId.Should().Be($"{result.Accepted.Session.ResponseId}:llm-run");
         command.Model.Should().Be("claude-sonnet");
+        command.ScopeId.Should().Be("scope-1");
+        command.BearerToken.Should().Be("token");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        toolContext.Request.RequestId.Should().Be(command.ResponseId);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
 
     [Fact]
@@ -64,6 +73,9 @@ public sealed class MessagesCommandFacadeTests
         result.Completed.Should().BeNull();
         result.StreamPlan!.LlmRequest.Model.Should().Be("claude");
         result.StreamPlan.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
         result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.MessageId);
         result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
@@ -210,6 +222,7 @@ public sealed class MessagesCommandFacadeTests
                 RequestId = "msg_stream",
                 Model = "claude-sonnet",
                 Messages = [ChatMessage.User("hello")],
+                ToolContext = BuildToolContext("msg_stream"),
             },
             BuildToolContext("msg_stream"),
             new ResponsesToolClassification([], [], [], []),
@@ -260,7 +273,10 @@ public sealed class MessagesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+    private sealed class StaticResponsesChatRouteDecisionPort(
+        ChatRouteAction action,
+        bool usedFallback = false,
+        string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
         public Task<ChatRouteDecision> ResolveAsync(
@@ -272,7 +288,8 @@ public sealed class MessagesCommandFacadeTests
             => Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
-                UsedFallback = false,
+                UsedFallback = usedFallback,
+                MatchedRuleId = matchedRuleId,
             });
     }
 

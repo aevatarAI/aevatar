@@ -5,6 +5,7 @@ using Aevatar.GAgents.StreamingProxy;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,12 +31,12 @@ public sealed class StreamingProxyEndpointsCoverageTests
             new StreamingProxyRoomCreateResult(
                 StreamingProxyRoomCreateStatus.Created,
                 "room-123",
-                "Daily Standup"));
+                "Summary Standup"));
 
         var result = await InvokeHandleCreateRoomAsync(
             CreateScopedHttpContext(),
             "scope-a",
-            new StreamingProxyEndpoints.CreateRoomRequest("  Daily Standup  "),
+            new StreamingProxyEndpoints.CreateRoomRequest("  Summary Standup  "),
             service,
             CancellationToken.None);
 
@@ -43,9 +44,9 @@ public sealed class StreamingProxyEndpointsCoverageTests
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         service.Commands.Should().ContainSingle();
-        service.Commands[0].Should().Be(new StreamingProxyRoomCreateCommand("scope-a", "  Daily Standup  "));
+        service.Commands[0].Should().Be(new StreamingProxyRoomCreateCommand("scope-a", "  Summary Standup  "));
         body.Should().Contain("room-123");
-        body.Should().Contain("Daily Standup");
+        body.Should().Contain("Summary Standup");
     }
 
     [Fact]
@@ -95,13 +96,24 @@ public sealed class StreamingProxyEndpointsCoverageTests
     [Fact]
     public async Task HandleListParticipantsAsync_ShouldReturnRoomProjectionParticipants()
     {
-        var participantService = new RecordingRoomParticipantService
+        var joinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-14T10:00:00+08:00"));
+        var participantsQueryPort = new RecordingRoomParticipantsQueryPort
         {
-            Result = new StreamingProxyRoomParticipantListResult(
-                "room-1",
-                5,
-                DateTimeOffset.Parse("2026-04-14T10:00:00+08:00"),
-                [new StreamingProxyRoomParticipantEntry("agent-1", "Bot", DateTimeOffset.Parse("2026-04-14T10:00:00+08:00"))]),
+            Result = new StreamingProxyRoomParticipantsSnapshot
+            {
+                RootActorId = "room-1",
+                StateVersion = 5,
+                UpdatedAt = joinedAt,
+                Participants =
+                {
+                    new StreamingProxyRoomParticipantSnapshotEntry
+                    {
+                        AgentId = "agent-1",
+                        DisplayName = "Bot",
+                        JoinedAt = joinedAt,
+                    },
+                },
+            },
         };
         var loggerFactory = LoggerFactory.Create(_ => { });
 
@@ -109,7 +121,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
-            participantService,
+            participantsQueryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -118,16 +130,15 @@ public sealed class StreamingProxyEndpointsCoverageTests
         statusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("agent-1");
         body.Should().Contain("Bot");
-        participantService.Queries.Should().ContainSingle()
-            .Which.Should().Be(new StreamingProxyRoomParticipantListQuery("room-1"));
+        participantsQueryPort.Queries.Should().ContainSingle().Which.Should().Be("room-1");
     }
 
     [Fact]
-    public async Task HandleListParticipantsAsync_ShouldReturnServerError_WhenParticipantServiceThrows()
+    public async Task HandleListParticipantsAsync_ShouldReturnServerError_WhenParticipantsQueryThrows()
     {
-        var participantService = new RecordingRoomParticipantService
+        var participantsQueryPort = new RecordingRoomParticipantsQueryPort
         {
-            ThrowOnList = new InvalidOperationException("list failed"),
+            ThrowOnGet = new InvalidOperationException("list failed"),
         };
         var loggerFactory = LoggerFactory.Create(_ => { });
 
@@ -135,7 +146,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             "room-1",
-            participantService,
+            participantsQueryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -172,14 +183,14 @@ public sealed class StreamingProxyEndpointsCoverageTests
     [Fact]
     public async Task HandleListParticipantsAsync_ShouldRejectMismatchedAuthenticatedScope()
     {
-        var participantService = new RecordingRoomParticipantService();
+        var participantsQueryPort = new RecordingRoomParticipantsQueryPort();
         var loggerFactory = LoggerFactory.Create(_ => { });
 
         var result = await InvokeHandleListParticipantsAsync(
             CreateScopedHttpContext("scope-b"),
             "scope-a",
             "room-1",
-            participantService,
+            participantsQueryPort,
             loggerFactory,
             CancellationToken.None);
 
@@ -206,13 +217,13 @@ public sealed class StreamingProxyEndpointsCoverageTests
         HttpContext context,
         string scopeId,
         string roomId,
-        IStreamingProxyRoomParticipantService participantService,
+        IStreamingProxyRoomParticipantsQueryPort participantsQueryPort,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         return await (Task<IResult>)HandleListParticipantsAsyncMethod.Invoke(
             null,
-            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantService, loggerFactory, ct])!;
+            [context, scopeId, roomId, new RecordingGAgentActorStore([]), participantsQueryPort, loggerFactory, ct])!;
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -357,46 +368,51 @@ public sealed class StreamingProxyEndpointsCoverageTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+
+        public Task SubmitParticipantsResolvedAsync(
+            StreamingProxyRoomParticipantsResolvedCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task SubmitParticipantReplyObservedAsync(
+            StreamingProxyRoomParticipantReplyObservedCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task SubmitParticipantReplyFailedAsync(
+            StreamingProxyRoomParticipantReplyFailedCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
-    private sealed class RecordingRoomParticipantService : IStreamingProxyRoomParticipantService
+    private sealed class RecordingRoomParticipantsQueryPort : IStreamingProxyRoomParticipantsQueryPort
     {
-        public List<StreamingProxyRoomParticipantListQuery> Queries { get; } = [];
-        public Exception? ThrowOnList { get; init; }
-        public StreamingProxyRoomParticipantListResult? Result { get; init; }
+        public List<string> Queries { get; } = [];
+        public Exception? ThrowOnGet { get; init; }
+        public StreamingProxyRoomParticipantsSnapshot? Result { get; init; }
 
-        public Task<StreamingProxyRoomParticipantListResult> ListAsync(
-            StreamingProxyRoomParticipantListQuery query,
+        public Task<StreamingProxyRoomParticipantsSnapshot?> GetAsync(
+            string rootActorId,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (ThrowOnList is not null)
-                throw ThrowOnList;
+            if (ThrowOnGet is not null)
+                throw ThrowOnGet;
 
-            Queries.Add(query);
-            return Task.FromResult(Result ?? new StreamingProxyRoomParticipantListResult(
-                query.RoomId,
-                0,
-                DateTimeOffset.MinValue,
-                []));
-        }
-
-        public Task<IReadOnlyList<StreamingProxyNyxParticipantDefinition>> EnsureNyxParticipantsJoinedAsync(
-            StreamingProxyRoomNyxParticipantJoinCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            _ = command;
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<StreamingProxyNyxParticipantDefinition>>([]);
-        }
-
-        public Task<int> GenerateNyxRepliesAsync(
-            StreamingProxyRoomNyxReplyCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            _ = command;
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(0);
+            Queries.Add(rootActorId);
+            return Task.FromResult(Result);
         }
     }
 

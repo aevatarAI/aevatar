@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import {
   cleanupTestQueryClients,
@@ -63,6 +64,7 @@ function renderDeploymentsPage(path = '/deployments?tenantId=scope-1') {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  setLocale('zh-CN', false);
 
   mockServicesApi.listServices.mockResolvedValue([
     {
@@ -626,7 +628,7 @@ describe('DeploymentsPage', () => {
 
     expect(await screen.findByText('Deployment 详情')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: '停用 deployment' }),
+      screen.getByRole('button', { name: '停用 Deployment' }),
     ).toBeInTheDocument();
   });
 
@@ -655,7 +657,7 @@ describe('DeploymentsPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '查看详情' }));
 
     expect(await screen.findByText('Deployment 详情')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '停用 deployment' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '停用 Deployment' })).toBeNull();
     expect(screen.getByRole('button', { name: '不可停用' })).toBeDisabled();
   });
 });

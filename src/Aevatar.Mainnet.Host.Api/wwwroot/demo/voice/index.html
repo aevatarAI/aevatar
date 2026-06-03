@@ -14,7 +14,7 @@
         <h1>Voice to Agent Demo</h1>
         <p class="lede">
           浏览器采集麦克风音频，按 PCM16 24kHz 发送到当前主网 Host 的 voice endpoint。
-          上游 Realtime 固定通过 NyxID 主网 proxy 访问，浏览器不会接触 OpenAI key。
+          页面只连接当前 Host 的 bootstrap 与 `/ws/voice`，不会接触 provider credential。
         </p>
       </div>
       <div class="status-strip" aria-live="polite">
@@ -60,11 +60,6 @@
         </label>
 
         <label class="field">
-          <span>NyxID upstream</span>
-          <input id="nyxidEndpoint" readonly>
-        </label>
-
-        <label class="field">
           <span>WS URL</span>
           <input id="wsUrl" readonly>
         </label>
@@ -102,15 +97,13 @@
 
     <section class="setup-grid">
       <article class="panel">
-        <h2>1. NyxID 已写死</h2>
-        <p>这个 demo 固定走 NyxID 主网，不需要在页面或本地再填 OpenAI API key。Host 内置的 Realtime proxy endpoint 是：</p>
-        <pre><code>https://nyx.chrono-ai.fun/api/v1/proxy/s/llm-openai</code></pre>
-        <p>NyxID 负责注入真正的 OpenAI credential；demo 调试直连当前 Mainnet Host 的 `/ws/voice/{actorId}`。</p>
+        <h2>1. Host 负责 provider 配置</h2>
+        <p>这个 demo 只连接当前 Mainnet Host。Voice provider 是否可用由 Host 配置和 voice readmodel 决定，页面不会声明固定上游 endpoint。</p>
       </article>
 
       <article class="panel">
         <h2>2. Agent 要有 voice module</h2>
-        <p>点击“开始说话”时，demo 会自动创建或复用当前用户的 voice demo agent，并挂上 `voice_presence_openai` 模块。Mainnet Host 的上游 URL 已固定为 NyxID proxy；请求里的 NyxID bearer 只用于向 NyxID proxy 鉴权，不会作为 OpenAI key 暴露给浏览器。</p>
+        <p>点击“开始说话”时，demo 会自动创建或复用当前用户的 voice demo agent，并挂上 `voice_presence_openai` 模块。请求里的 NyxID bearer 只用于当前 Host 的身份认证，不会作为 provider credential 暴露给浏览器。</p>
         <p>普通 `/ws/voice` 只从 typed `voice_attach_target` 读取目标 agent；`/ws/voice/{actorId}` 是调试直连入口，需要登录用户具备 `voice:bypass` scope 或 admin/owner 角色。</p>
       </article>
 

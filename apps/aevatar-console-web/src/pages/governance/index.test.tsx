@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import GovernanceIndexPage from './index';
@@ -105,6 +106,7 @@ jest.mock('@/shared/api/governanceApi', () => ({
 
 describe('GovernanceIndexPage', () => {
   beforeEach(() => {
+    setLocale('zh-CN', false);
     window.history.replaceState(
       {},
       '',
@@ -159,7 +161,7 @@ describe('GovernanceIndexPage', () => {
     renderWithQueryClient(React.createElement(GovernanceIndexPage));
 
     expect(await screen.findByText('选择一个服务')).toBeTruthy();
-    expect(screen.getByText('当前范围 tenant-a / app-a / default')).toBeTruthy();
+    expect(screen.getByText('当前 Scope tenant-a / app-a / default')).toBeTruthy();
     expect(screen.getByRole('button', { name: '加载治理工作台' })).toBeDisabled();
   });
 

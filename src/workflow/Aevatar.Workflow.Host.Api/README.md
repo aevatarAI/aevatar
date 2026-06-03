@@ -13,9 +13,9 @@
   - `POST /api/chat`（SSE）
   - `GET /api/ws/chat`（WebSocket）
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
-  - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（注册表名称 lookup，含内建与文件工作流）或 `workflowYamls`（inline YAML bundle）；仅在新建 Actor 且 `workflow/workflowYamls` 同时为空时，外部 API 默认走 `auto`
+  - `chat` payload 支持 `prompt`、`workflow`（注册表名称 lookup，含内建与文件工作流）、`workflowYamls`（inline YAML bundle）或 typed `source.definitionActor.actorId`；仅在新建 Actor 且未提供 source/workflow/workflowYamls 时，外部 API 默认走 `auto`
 - 调用应用层：
-  - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`
+  - `IWorkflowChatRunInteractionPort`（`/api/chat` SSE 与 WebSocket 实时交互入口）
   - `ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>`
   - `IWorkflowExecutionQueryApplicationService`
 - 不承载 workflow/cqrs 业务编排。
@@ -26,10 +26,10 @@
 |------|------|
 | 按名称加载已注册 workflow（新建 Actor） | `{ "prompt": "...", "workflow": "publish_pipeline" }` |
 | `workflow/workflowYamls` 都不传（新建 Actor） | `{ "prompt": "..." }` |
-| 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "agentId": "actor-123" }` |
+| 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "source": { "kind": "definition_actor", "definitionActor": { "actorId": "actor-123" } } }` |
 | 显式选择内建 workflow | `{ "prompt": "...", "workflow": "auto_review" }` |
 | inline 提交 workflow YAML bundle（新建 Actor） | `{ "prompt": "...", "workflowYamls": ["name: root\\nroles: ...\\nsteps: ..."] }` |
-| 指定 Actor + inline YAML bundle | `{ "prompt": "...", "agentId": "actor-123", "workflowYamls": ["..."] }` |
+| 指定 Actor + inline YAML bundle | `{ "prompt": "...", "source": { "kind": "inline_yaml_bundle", "inlineBundle": { "actorId": "actor-123", "yamlDocuments": [{ "yaml": "..." }] } } }` |
 | `workflow` + `workflowYamls` 同传 | 固定以 `workflowYamls` 路径为准，`workflow` 被忽略 |
 
 常见错误码：
@@ -37,7 +37,7 @@
 - `INVALID_WORKFLOW_YAML`：`workflowYamls` 任一 YAML 解析或校验失败（400）
 - `WORKFLOW_BINDING_MISMATCH`：目标 actor 已绑定其它 workflow（409）
 - `WORKFLOW_NOT_FOUND`：`workflow` 未命中注册表名称（404）
-- `AGENT_WORKFLOW_NOT_CONFIGURED`：传了 `agentId`，但 actor 未绑定且未提供 `workflowYamls`（409）
+- `AGENT_WORKFLOW_NOT_CONFIGURED`：typed source 指定的 actor 未绑定且未提供 inline YAML（409）
 
 异常回退语义：
 
@@ -53,6 +53,7 @@
 ## 运行语义
 
 - API 输入先被规范化为 `WorkflowChatRunRequest` 等应用命令模型，再走 CQRS 标准命令骨架：`target resolve -> command context -> envelope -> dispatch port -> accepted receipt`。
+- Workflow Host 通过 `IWorkflowChatRunInteractionPort` 启动实时交互；该业务端口内部使用默认 CQRS interaction service 作为非 fallback plumbing，并负责本次 realtime projection scope activation 与 cleanup ownership。
 - Workflow Host 只消费这条 CQRS 骨架，不自定义通用 command lifecycle；workflow 领域只负责目标解析、payload 映射与读侧观察映射。
 - `resume/signal` 也复用同一条骨架，Host 只依赖对应的 `ICommandDispatchService<...>`，不再直接注入 `IActorRuntime/IActorDispatchPort`。
 - 命令最终会被包装成 `EventEnvelope`；目标 Actor 的获取/创建由 `IActorRuntime` 负责，envelope 投递由 `IActorDispatchPort` 完成，CQRS 侧由 `ActorCommandTargetDispatcher` 承接 target dispatch。

@@ -1,8 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
+import { setLocale } from "@umijs/max";
 import RunsTracePane from "./RunsTracePane";
 
 describe("RunsTracePane", () => {
+  beforeEach(() => {
+    setLocale("en-US");
+  });
+
   it("keeps the tab viewport stretchable so inner panes can scroll", () => {
     const { container } = render(
       <RunsTracePane
@@ -79,6 +84,7 @@ describe("RunsTracePane", () => {
         messageCount={1}
         messagesLabel="Conversation"
         onConsoleViewChange={() => undefined}
+        preferMessagesFirst
         timelineView={<div>timeline</div>}
       />,
     );

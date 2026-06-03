@@ -6,6 +6,7 @@ import type {
   RuntimeToolCallInfo,
 } from "./runtimeEventSemantics";
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
+import { t } from "@/shared/i18n/messages";
 
 function renderInline(text: string): React.ReactNode[] {
   const parts = text.split(/(`[^`]+`)/g);
@@ -204,7 +205,8 @@ function StepIndicator({
           fontWeight: 500,
         }}
       >
-        {step.name || "Processing"}
+        {step.name ||
+          t("shared.agui.runtimeconversationpresentation.processing", "Processing")}
       </span>
       {step.stepType ? (
         <span
@@ -378,7 +380,7 @@ function ThinkingBlock({
             strokeLinejoin="round"
           />
         </svg>
-        <span>Thinking</span>
+        <span>{t("shared.agui.runtimeconversationpresentation.thinking", "Thinking")}</span>
         {isStreaming ? (
           <span
             style={{
@@ -520,8 +522,7 @@ export function RuntimeAssistantOutput({
                   />
                 </svg>
                 <span>
-                  {(steps?.length ?? 0) + (toolCalls?.length ?? 0)} action
-                  {(steps?.length ?? 0) + (toolCalls?.length ?? 0) > 1
+                  {(steps?.length ?? 0) + (toolCalls?.length ?? 0)} {t("shared.agui.runtimeconversationpresentation.action", "action")}{(steps?.length ?? 0) + (toolCalls?.length ?? 0) > 1
                     ? "s"
                     : ""}
                 </span>
@@ -661,7 +662,7 @@ export function RuntimeEventPreviewPanel({
   if (events.length === 0) {
     return (
       <Empty
-        description="No events have been observed yet."
+        description={t("shared.agui.runtimeconversationpresentation.no.events.have.been.observed", "No events have been observed yet.")}
         image={Empty.PRESENTED_IMAGE_SIMPLE}
       />
     );
@@ -688,7 +689,10 @@ export function RuntimeEventPreviewPanel({
           textTransform: "uppercase",
         }}
       >
-        {title || `Raw Events (${events.length})`}
+        {title ||
+          t("shared.agui.runtimeconversationpresentation.raw.events.count", "Raw Events ({count})", {
+            count: events.length,
+          })}
       </div>
       <div
         style={{

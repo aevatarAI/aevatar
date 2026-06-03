@@ -76,6 +76,11 @@ import {
   type GovernanceCatalogKind,
   type GovernanceCommandReceipt,
 } from "./governanceCommandReceipt";
+import {
+  formatConsoleMessage,
+  t,
+  type ConsoleMessageDescriptor,
+} from "@/shared/i18n/messages";
 
 type GovernanceNotice = {
   message: string;
@@ -83,8 +88,8 @@ type GovernanceNotice = {
 };
 
 type GovernanceViewMeta = {
-  description: string;
-  title: string;
+  description?: ConsoleMessageDescriptor;
+  title: ConsoleMessageDescriptor;
 };
 
 const defaultScopeServiceAppId = "default";
@@ -99,28 +104,40 @@ type GovernanceViewActionConfig = {
 
 const governanceViewMeta: Record<GovernanceWorkbenchView, GovernanceViewMeta> = {
   overview: {
-    description: "",
-    title: "总览",
+    title: {
+      defaultMessage: "Overview",
+      id: "pages.governance.governanceworkbench.views.overview",
+    },
   },
   activation: {
-    description: "",
-    title: "激活诊断",
+    title: {
+      defaultMessage: "Activation diagnostics",
+      id: "pages.governance.governanceworkbench.views.activation",
+    },
   },
   bindings: {
-    description: "",
-    title: "绑定",
+    title: {
+      defaultMessage: "Bindings",
+      id: "pages.governance.governanceworkbench.views.bindings",
+    },
   },
   changes: {
-    description: "",
-    title: "变更摘要",
+    title: {
+      defaultMessage: "Change summary",
+      id: "pages.governance.governanceworkbench.views.changes",
+    },
   },
   endpoints: {
-    description: "",
-    title: "入口",
+    title: {
+      defaultMessage: "Endpoints",
+      id: "pages.governance.governanceworkbench.views.endpoints",
+    },
   },
   policies: {
-    description: "",
-    title: "策略",
+    title: {
+      defaultMessage: "Policies",
+      id: "pages.governance.governanceworkbench.views.policies",
+    },
   },
 };
 
@@ -296,12 +313,12 @@ function buildAuditEvents(input: {
 
   if (selectedService) {
     events.push({
-      action: "Governance scope attached",
-      actor: "Service Registry",
+      action: t("pages.governance.governanceworkbench.governance.scope.attached.2", "Governance scope attached"),
+      actor: t("pages.governance.governanceworkbench.service.registry.2", "Service Registry"),
       at: selectedService.updatedAt,
       id: `service-${selectedService.serviceId}-${selectedService.updatedAt}`,
       status: selectedService.deploymentStatus || "active",
-      summary: `Governance is now anchored to ${selectedService.displayName || selectedService.serviceId}.`,
+      summary: t("pages.governance.governanceworkbench.governance.is.now.anchored.to", "Governance is now anchored to {value1}.", { value1: selectedService.displayName || selectedService.serviceId }),
       targetId: selectedService.serviceId,
       targetKind: "service",
       targetLabel: selectedService.displayName || selectedService.serviceId,
@@ -311,24 +328,24 @@ function buildAuditEvents(input: {
   for (const revision of revisions) {
     if (revision.publishedAt) {
       events.push({
-        action: "Revision published",
-        actor: "Release Manager",
+        action: t("pages.governance.governanceworkbench.revision.published.2", "Revision published"),
+        actor: t("pages.governance.governanceworkbench.release.manager.2", "Release Manager"),
         at: revision.publishedAt,
         id: `revision-published-${revision.revisionId}`,
         status: "published",
-        summary: `Revision ${revision.revisionId} was published for governance evaluation.`,
+        summary: t("pages.governance.governanceworkbench.revision.was.published.for.governance.evaluation", "Revision {value1} was published for governance evaluation.", { value1: revision.revisionId }),
         targetId: revision.revisionId,
         targetKind: "activation",
         targetLabel: revision.revisionId,
       });
     } else if (revision.preparedAt) {
       events.push({
-        action: "Revision prepared",
-        actor: "Release Manager",
+        action: t("pages.governance.governanceworkbench.revision.prepared.2", "Revision prepared"),
+        actor: t("pages.governance.governanceworkbench.release.manager.3", "Release Manager"),
         at: revision.preparedAt,
         id: `revision-prepared-${revision.revisionId}`,
         status: revision.status || "pending",
-        summary: `Revision ${revision.revisionId} is prepared and waiting for promotion decisions.`,
+        summary: t("pages.governance.governanceworkbench.revision.is.prepared.and.waiting.for", "Revision {value1} is prepared and waiting for promotion decisions.", { value1: revision.revisionId }),
         targetId: revision.revisionId,
         targetKind: "activation",
         targetLabel: revision.revisionId,
@@ -338,12 +355,12 @@ function buildAuditEvents(input: {
 
   if (bindingsUpdatedAt) {
     events.push({
-      action: "Binding catalog synchronized",
-      actor: "Binding Registry",
+      action: t("pages.governance.governanceworkbench.binding.catalog.synchronized.2", "Binding catalog synchronized"),
+      actor: t("pages.governance.governanceworkbench.binding.registry.2", "Binding Registry"),
       at: bindingsUpdatedAt,
       id: `binding-catalog-${bindingsUpdatedAt}`,
       status: bindings.some((binding) => binding.retired) ? "retired" : "active",
-      summary: `${bindings.length} binding${bindings.length === 1 ? "" : "s"} are currently tracked for this service.`,
+      summary: t("pages.governance.governanceworkbench.binding.are.currently.tracked.for.this", "{value1} binding{value2} are currently tracked for this service.", { value1: bindings.length, value2: bindings.length === 1 ? "" : "s" }),
       targetId: "binding-catalog",
       targetKind: "binding",
       targetLabel: `${bindings.length} bindings`,
@@ -352,12 +369,12 @@ function buildAuditEvents(input: {
 
   for (const binding of bindings.filter((item) => item.retired)) {
     events.push({
-      action: "Binding retired",
-      actor: "Binding Registry",
+      action: t("pages.governance.governanceworkbench.binding.retired.2", "Binding retired"),
+      actor: t("pages.governance.governanceworkbench.binding.registry.3", "Binding Registry"),
       at: bindingsUpdatedAt || selectedService?.updatedAt || "",
       id: `binding-retired-${binding.bindingId}`,
       status: "retired",
-      summary: `${binding.displayName || binding.bindingId} was removed from the active dependency surface.`,
+      summary: t("pages.governance.governanceworkbench.was.removed.from.the.active.dependency", "{value1} was removed from the active dependency surface.", { value1: binding.displayName || binding.bindingId }),
       targetId: binding.bindingId,
       targetKind: "binding",
       targetLabel: binding.displayName || binding.bindingId,
@@ -366,12 +383,12 @@ function buildAuditEvents(input: {
 
   if (policiesUpdatedAt) {
     events.push({
-      action: "Policy catalog synchronized",
-      actor: "Policy Engine",
+      action: t("pages.governance.governanceworkbench.policy.catalog.synchronized.2", "Policy catalog synchronized"),
+      actor: t("pages.governance.governanceworkbench.policy.engine.2", "Policy Engine"),
       at: policiesUpdatedAt,
       id: `policy-catalog-${policiesUpdatedAt}`,
       status: policies.some((policy) => policy.retired) ? "retired" : "active",
-      summary: `${policies.length} governance polic${policies.length === 1 ? "y" : "ies"} are materialized for this service.`,
+      summary: t("pages.governance.governanceworkbench.governance.polic.are.materialized.for.this", "{value1} governance polic{value2} are materialized for this service.", { value1: policies.length, value2: policies.length === 1 ? "y" : "ies" }),
       targetId: "policy-catalog",
       targetKind: "policy",
       targetLabel: `${policies.length} policies`,
@@ -386,7 +403,7 @@ function buildAuditEvents(input: {
   )) {
     events.push({
       action: policy.retired ? "Policy retired" : "Policy gate enforced",
-      actor: "Policy Engine",
+      actor: t("pages.governance.governanceworkbench.policy.engine.3", "Policy Engine"),
       at: policiesUpdatedAt || selectedService?.updatedAt || "",
       id: `policy-${policy.policyId}-${policy.retired ? "retired" : "enforced"}`,
       status: policy.retired ? "retired" : "active",
@@ -399,14 +416,14 @@ function buildAuditEvents(input: {
 
   if (endpointsUpdatedAt) {
     events.push({
-      action: "Endpoint catalog synchronized",
-      actor: "Exposure Controller",
+      action: t("pages.governance.governanceworkbench.endpoint.catalog.synchronized.2", "Endpoint catalog synchronized"),
+      actor: t("pages.governance.governanceworkbench.exposure.controller.2", "Exposure Controller"),
       at: endpointsUpdatedAt,
       id: `endpoint-catalog-${endpointsUpdatedAt}`,
       status: endpoints.some((endpoint) => endpoint.exposureKind === "disabled")
         ? "disabled"
         : "active",
-      summary: `${endpoints.length} endpoint${endpoints.length === 1 ? "" : "s"} are under governance exposure control.`,
+      summary: t("pages.governance.governanceworkbench.endpoint.are.under.governance.exposure.control", "{value1} endpoint{value2} are under governance exposure control.", { value1: endpoints.length, value2: endpoints.length === 1 ? "" : "s" }),
       targetId: "endpoint-catalog",
       targetKind: "endpoint",
       targetLabel: `${endpoints.length} endpoints`,
@@ -422,7 +439,7 @@ function buildAuditEvents(input: {
         endpoint.exposureKind === "public"
           ? "Endpoint opened"
           : "Endpoint disabled",
-      actor: "Exposure Controller",
+      actor: t("pages.governance.governanceworkbench.exposure.controller.3", "Exposure Controller"),
       at: endpointsUpdatedAt || selectedService?.updatedAt || "",
       id: `endpoint-${endpoint.endpointId}-${endpoint.exposureKind}`,
       status: endpoint.exposureKind,
@@ -439,7 +456,7 @@ function buildAuditEvents(input: {
         activationView.missingPolicyIds.length > 0
           ? "Activation blocked"
           : "Activation verified",
-      actor: "Activation Guard",
+      actor: t("pages.governance.governanceworkbench.activation.guard.2", "Activation Guard"),
       at: selectedService?.updatedAt || policiesUpdatedAt || endpointsUpdatedAt || "",
       id: `activation-${activationView.revisionId || "unresolved"}`,
       status:
@@ -607,7 +624,7 @@ const GovernanceWorkbench: React.FC = () => {
   const revisionOptions = useMemo<GovernanceRevisionOption[]>(
     () =>
       (revisionsQuery.data?.revisions ?? []).map((revision) => ({
-        label: `${revision.revisionId} · ${revision.status}`,
+        label: t("pages.governance.governanceworkbench.copy.110", "{value1} · {value2}", { value1: revision.revisionId, value2: revision.status }),
         value: revision.revisionId,
       })),
     [revisionsQuery.data],
@@ -802,7 +819,7 @@ const GovernanceWorkbench: React.FC = () => {
   const governanceMetrics = useMemo(
     () => [
       {
-        label: "激活中的策略",
+        label: t("pages.governance.governanceworkbench.copy", "激活中的策略"),
         tone:
           activePolicies.length > 0
             ? ("default" as const)
@@ -810,7 +827,7 @@ const GovernanceWorkbench: React.FC = () => {
         value: String(activePolicies.length),
       },
       {
-        label: "激活中的绑定",
+        label: t("pages.governance.governanceworkbench.copy.2", "激活中的绑定"),
         tone:
           activeBindings.length > 0
             ? ("default" as const)
@@ -818,12 +835,12 @@ const GovernanceWorkbench: React.FC = () => {
         value: String(activeBindings.length),
       },
       {
-        label: "公开入口",
+        label: t("pages.governance.governanceworkbench.copy.3", "公开入口"),
         tone: "success" as const,
         value: String(publicEndpoints.length),
       },
       {
-        label: "激活阻塞",
+        label: t("pages.governance.governanceworkbench.copy.4", "激活阻塞"),
         tone:
           (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
             ? ("warning" as const)
@@ -834,14 +851,10 @@ const GovernanceWorkbench: React.FC = () => {
     [activationQuery.data, activeBindings.length, activePolicies.length, publicEndpoints.length],
   );
 
-  const governanceTabItems = useMemo(
-    () =>
-      Object.entries(governanceViewMeta).map(([key, meta]) => ({
-        key,
-        label: meta.title,
-      })),
-    [],
-  );
+  const governanceTabItems = Object.entries(governanceViewMeta).map(([key, meta]) => ({
+    key,
+    label: formatConsoleMessage(meta.title),
+  }));
 
   const navigateToGovernanceView = useCallback(
     (
@@ -869,8 +882,7 @@ const GovernanceWorkbench: React.FC = () => {
     () =>
       hasSelectedServiceContext ? (
         <Button icon={<DeploymentUnitOutlined />} onClick={openDeploymentsHandoff}>
-          打开 Deployments
-        </Button>
+          {t("pages.governance.governanceworkbench.deployments", "打开 Deployments")}</Button>
       ) : null,
     [hasSelectedServiceContext, openDeploymentsHandoff],
   );
@@ -885,7 +897,7 @@ const GovernanceWorkbench: React.FC = () => {
       overview: hasSelectedServiceContext
         ? {
             icon: <DeploymentUnitOutlined />,
-            label: "检查激活",
+            label: t("pages.governance.governanceworkbench.copy.5", "检查激活"),
             onClick: () =>
               navigateToGovernanceView("activation", {
                 ...activeDraft,
@@ -898,7 +910,7 @@ const GovernanceWorkbench: React.FC = () => {
         activationQuery.data != null
           ? {
               icon: <DeploymentUnitOutlined />,
-              label: "打开诊断",
+              label: t("pages.governance.governanceworkbench.copy.6", "打开诊断"),
               onClick: () =>
                 setDrawerTarget({
                   kind: "activation",
@@ -909,7 +921,7 @@ const GovernanceWorkbench: React.FC = () => {
       policies: hasSelectedServiceContext
         ? {
             icon: <PlusOutlined />,
-            label: "新建策略",
+            label: t("pages.governance.governanceworkbench.copy.7", "新建策略"),
             onClick: () =>
               setDrawerTarget({
                 kind: "policy",
@@ -922,7 +934,7 @@ const GovernanceWorkbench: React.FC = () => {
       bindings: hasSelectedServiceContext
         ? {
             icon: <PlusOutlined />,
-            label: "新建绑定",
+            label: t("pages.governance.governanceworkbench.copy.8", "新建绑定"),
             onClick: () =>
               setDrawerTarget({
                 kind: "binding",
@@ -935,7 +947,7 @@ const GovernanceWorkbench: React.FC = () => {
       endpoints: hasSelectedServiceContext
         ? {
             icon: <PlusOutlined />,
-            label: "新建入口",
+            label: t("pages.governance.governanceworkbench.copy.9", "新建入口"),
             onClick: () =>
               setDrawerTarget({
                 kind: "endpoint",
@@ -967,11 +979,10 @@ const GovernanceWorkbench: React.FC = () => {
     [surfaceToken],
   );
 
-  const policyTableColumns = useMemo<ColumnsType<ServicePolicySnapshot>>(
-    () => [
+  const policyTableColumns: ColumnsType<ServicePolicySnapshot> = [
       {
         key: "policy",
-        title: "策略",
+        title: t("pages.governance.governanceworkbench.copy.10", "策略"),
         render: (_, record) => (
           <Space orientation="vertical" size={2}>
             <Typography.Text strong>
@@ -987,36 +998,36 @@ const GovernanceWorkbench: React.FC = () => {
       },
       {
         key: "bindings",
-        title: "激活依赖",
+        title: t("pages.governance.governanceworkbench.copy.11", "激活依赖"),
         render: (_, record) =>
           record.activationRequiredBindingIds.length > 0
-            ? `${record.activationRequiredBindingIds.length} 个绑定`
-            : "无前置绑定",
+            ? t("pages.governance.governanceworkbench.copy.12", "{value1} 个绑定", { value1: record.activationRequiredBindingIds.length })
+            : t("pages.governance.governanceworkbench.copy.13", "无前置绑定"),
       },
       {
         key: "callers",
-        title: "调用限制",
+        title: t("pages.governance.governanceworkbench.copy.14", "调用限制"),
         render: (_, record) =>
           record.invokeAllowedCallerServiceKeys.length > 0
-            ? `${record.invokeAllowedCallerServiceKeys.length} 条 allowlist`
-            : "未限制 caller",
+            ? t("pages.governance.governanceworkbench.allowlist", "{value1} 条 allowlist", { value1: record.invokeAllowedCallerServiceKeys.length })
+            : t("pages.governance.governanceworkbench.caller", "未限制 caller"),
       },
       {
         key: "status",
-        title: "状态",
+        title: t("pages.governance.governanceworkbench.copy.15", "状态"),
         width: 220,
         render: (_, record) => (
           <Space wrap size={[8, 8]}>
             <WorkbenchStatusTag status={record.retired ? "retired" : "active"} />
             {record.invokeRequiresActiveDeployment ? (
-              <Tag color="gold">要求已激活部署</Tag>
+              <Tag color="gold">{t("pages.governance.governanceworkbench.copy.16", "要求已激活部署")}</Tag>
             ) : null}
           </Space>
         ),
       },
       {
         key: "actions",
-        title: "操作",
+        title: t("pages.governance.governanceworkbench.copy.17", "操作"),
         width: 120,
         render: (_, record) => (
           <Button
@@ -1030,19 +1041,16 @@ const GovernanceWorkbench: React.FC = () => {
               })
             }
           >
-            {record.retired ? "查看" : "配置"}
+            {record.retired ? t("pages.governance.governanceworkbench.copy.18", "查看") : t("pages.governance.governanceworkbench.copy.19", "配置")}
           </Button>
         ),
       },
-    ],
-    [],
-  );
+  ];
 
-  const bindingTableColumns = useMemo<ColumnsType<ServiceBindingSnapshot>>(
-    () => [
+  const bindingTableColumns: ColumnsType<ServiceBindingSnapshot> = [
       {
         key: "binding",
-        title: "绑定",
+        title: t("pages.governance.governanceworkbench.copy.20", "绑定"),
         render: (_, record) => (
           <Space orientation="vertical" size={2}>
             <Typography.Text strong>
@@ -1059,13 +1067,13 @@ const GovernanceWorkbench: React.FC = () => {
       {
         dataIndex: "bindingKind",
         key: "bindingKind",
-        title: "类型",
+        title: t("pages.governance.governanceworkbench.copy.21", "类型"),
         width: 120,
         render: (_, record) => formatAevatarStatusLabel(record.bindingKind),
       },
       {
         key: "target",
-        title: "目标",
+        title: t("pages.governance.governanceworkbench.copy.22", "目标"),
         render: (_, record) => (
           <AevatarCompactText
             maxWidth={240}
@@ -1076,15 +1084,15 @@ const GovernanceWorkbench: React.FC = () => {
       },
       {
         key: "policies",
-        title: "挂载策略",
+        title: t("pages.governance.governanceworkbench.copy.23", "挂载策略"),
         render: (_, record) =>
           record.policyIds.length > 0
-            ? `${record.policyIds.length} 条`
-            : "未挂策略",
+            ? t("pages.governance.governanceworkbench.copy.24", "{value1} 条", { value1: record.policyIds.length })
+            : t("pages.governance.governanceworkbench.copy.25", "未挂策略"),
       },
       {
         key: "status",
-        title: "状态",
+        title: t("pages.governance.governanceworkbench.copy.26", "状态"),
         width: 120,
         render: (_, record) => (
           <WorkbenchStatusTag status={record.retired ? "retired" : "active"} />
@@ -1092,7 +1100,7 @@ const GovernanceWorkbench: React.FC = () => {
       },
       {
         key: "actions",
-        title: "操作",
+        title: t("pages.governance.governanceworkbench.copy.27", "操作"),
         width: 120,
         render: (_, record) => (
           <Button
@@ -1106,19 +1114,16 @@ const GovernanceWorkbench: React.FC = () => {
               })
             }
           >
-            {record.retired ? "查看" : "配置"}
+            {record.retired ? t("pages.governance.governanceworkbench.copy.28", "查看") : t("pages.governance.governanceworkbench.copy.29", "配置")}
           </Button>
         ),
       },
-    ],
-    [],
-  );
+  ];
 
-  const endpointTableColumns = useMemo<ColumnsType<ServiceEndpointExposureSnapshot>>(
-    () => [
+  const endpointTableColumns: ColumnsType<ServiceEndpointExposureSnapshot> = [
       {
         key: "endpoint",
-        title: "入口",
+        title: t("pages.governance.governanceworkbench.copy.30", "入口"),
         render: (_, record) => (
           <Space orientation="vertical" size={2}>
             <Typography.Text strong>
@@ -1135,14 +1140,14 @@ const GovernanceWorkbench: React.FC = () => {
       {
         dataIndex: "kind",
         key: "kind",
-        title: "类型",
+        title: t("pages.governance.governanceworkbench.copy.31", "类型"),
         width: 120,
         render: (_, record) => formatAevatarStatusLabel(record.kind),
       },
       {
         dataIndex: "exposureKind",
         key: "exposureKind",
-        title: "暴露状态",
+        title: t("pages.governance.governanceworkbench.copy.32", "暴露状态"),
         width: 140,
         render: (_, record) => (
           <WorkbenchStatusTag status={record.exposureKind || "internal"} />
@@ -1150,15 +1155,15 @@ const GovernanceWorkbench: React.FC = () => {
       },
       {
         key: "policies",
-        title: "挂载策略",
+        title: t("pages.governance.governanceworkbench.copy.33", "挂载策略"),
         render: (_, record) =>
           record.policyIds.length > 0
-            ? `${record.policyIds.length} 条`
-            : "未挂策略",
+            ? t("pages.governance.governanceworkbench.copy.34", "{value1} 条", { value1: record.policyIds.length })
+            : t("pages.governance.governanceworkbench.copy.35", "未挂策略"),
       },
       {
         key: "requestTypeUrl",
-        title: "请求契约",
+        title: t("pages.governance.governanceworkbench.copy.36", "请求契约"),
         render: (_, record) =>
           record.requestTypeUrl ? (
             <AevatarCompactText
@@ -1168,12 +1173,12 @@ const GovernanceWorkbench: React.FC = () => {
               value={record.requestTypeUrl}
             />
           ) : (
-            "未声明"
+            t("pages.governance.governanceworkbench.copy.37", "未声明")
           ),
       },
       {
         key: "actions",
-        title: "操作",
+        title: t("pages.governance.governanceworkbench.copy.38", "操作"),
         width: 120,
         render: (_, record) => (
           <Button
@@ -1187,13 +1192,10 @@ const GovernanceWorkbench: React.FC = () => {
               })
             }
           >
-            配置
-          </Button>
+            {t("pages.governance.governanceworkbench.copy.39", "配置")}</Button>
         ),
       },
-    ],
-    [],
-  );
+  ];
 
   const invalidateGovernanceQueries = useCallback(async () => {
     await Promise.all([
@@ -1494,19 +1496,19 @@ const GovernanceWorkbench: React.FC = () => {
     if (!hasSelectedServiceContext) {
       return (
         <GovernanceSelectionNotice
-          title="选择一个服务"
+          title={t("pages.governance.governanceworkbench.copy.40", "选择一个服务")}
           highlights={[
             {
-              label: "团队",
-              value: draft.tenantId || "待选择",
+              label: t("pages.governance.governanceworkbench.copy.41", "团队"),
+              value: draft.tenantId || t("pages.governance.governanceworkbench.copy.42", "待选择"),
             },
             {
-              label: "应用",
-              value: draft.appId || "待选择",
+              label: t("pages.governance.governanceworkbench.copy.43", "应用"),
+              value: draft.appId || t("pages.governance.governanceworkbench.copy.44", "待选择"),
             },
             {
-              label: "命名空间",
-              value: draft.namespace || "待选择",
+              label: t("pages.governance.governanceworkbench.copy.45", "命名空间"),
+              value: draft.namespace || t("pages.governance.governanceworkbench.copy.46", "待选择"),
             },
           ]}
         />
@@ -1533,17 +1535,17 @@ const GovernanceWorkbench: React.FC = () => {
             includeDefaultFields={false}
             extraFields={[
               {
-                label: "服务 Key",
+                label: t("pages.governance.governanceworkbench.key", "服务 Key"),
                 value:
                   selectedService?.serviceKey?.trim()
                     ? buildGovernanceCompactValue(selectedService.serviceKey, {
                         head: 10,
                         tail: 10,
                       })
-                    : "待选择",
+                    : t("pages.governance.governanceworkbench.copy.47", "待选择"),
               },
               {
-                label: "最近治理快照",
+                label: t("pages.governance.governanceworkbench.copy.48", "最近治理快照"),
                 value: formatGovernanceTimestamp(latestGovernanceUpdatedAt),
               },
             ]}
@@ -1560,9 +1562,9 @@ const GovernanceWorkbench: React.FC = () => {
             revisionId={activationRevisionId || undefined}
             status={{
               color: missingPolicyCount > 0 ? "warning" : "success",
-              label: missingPolicyCount > 0 ? "存在激活阻塞" : "治理闭环完整",
+              label: missingPolicyCount > 0 ? t("pages.governance.governanceworkbench.copy.49", "存在激活阻塞") : t("pages.governance.governanceworkbench.copy.50", "治理闭环完整"),
             }}
-            title="治理总览"
+            title={t("pages.governance.governanceworkbench.copy.51", "治理总览")}
           />
 
           <div
@@ -1573,67 +1575,67 @@ const GovernanceWorkbench: React.FC = () => {
             }}
           >
             <GovernanceSelectionNotice
-              title="入口暴露"
+              title={t("pages.governance.governanceworkbench.copy.52", "入口暴露")}
               highlights={[
-                { label: "公开", value: publicEndpoints.length },
-                { label: "内部", value: internalEndpoints.length },
-                { label: "停用", value: disabledEndpoints.length },
+                { label: t("pages.governance.governanceworkbench.copy.53", "公开"), value: publicEndpoints.length },
+                { label: t("pages.governance.governanceworkbench.copy.54", "内部"), value: internalEndpoints.length },
+                { label: t("pages.governance.governanceworkbench.copy.55", "停用"), value: disabledEndpoints.length },
                 {
-                  label: "最近更新",
+                  label: t("pages.governance.governanceworkbench.copy.56", "最近更新"),
                   value: formatGovernanceTimestamp(endpointsQuery.data?.updatedAt),
                 },
               ]}
             />
             <GovernanceSelectionNotice
-              title="策略覆盖"
+              title={t("pages.governance.governanceworkbench.copy.57", "策略覆盖")}
               highlights={[
-                { label: "激活中的策略", value: activePolicies.length },
+                { label: t("pages.governance.governanceworkbench.copy.58", "激活中的策略"), value: activePolicies.length },
                 {
-                  label: "要求已激活部署",
+                  label: t("pages.governance.governanceworkbench.copy.59", "要求已激活部署"),
                   value: activePolicies.filter(
                     (policy) => policy.invokeRequiresActiveDeployment,
                   ).length,
                 },
                 {
-                  label: "缺失策略",
+                  label: t("pages.governance.governanceworkbench.copy.60", "缺失策略"),
                   value: missingPolicyCount,
                 },
                 {
-                  label: "最近更新",
+                  label: t("pages.governance.governanceworkbench.copy.61", "最近更新"),
                   value: formatGovernanceTimestamp(policiesQuery.data?.updatedAt),
                 },
               ]}
             />
             <GovernanceSelectionNotice
-              title="绑定依赖"
+              title={t("pages.governance.governanceworkbench.copy.62", "绑定依赖")}
               highlights={[
                 { label: "Service", value: serviceBindings },
                 { label: "Connector", value: connectorBindings },
                 { label: "Secret", value: secretBindings },
                 {
-                  label: "最近更新",
+                  label: t("pages.governance.governanceworkbench.copy.63", "最近更新"),
                   value: formatGovernanceTimestamp(bindingsQuery.data?.updatedAt),
                 },
               ]}
             />
             <GovernanceSelectionNotice
               actions={releaseHandoffAction}
-              title="下一步建议"
+              title={t("pages.governance.governanceworkbench.copy.64", "下一步建议")}
               highlights={[
                 {
-                  label: "当前版本",
+                  label: t("pages.governance.governanceworkbench.copy.65", "当前版本"),
                   value: activationRevisionId
                     ? buildGovernanceCompactValue(activationRevisionId)
-                    : "待选择",
+                    : t("pages.governance.governanceworkbench.copy.66", "待选择"),
                 },
                 {
-                  label: "建议动作",
+                  label: t("pages.governance.governanceworkbench.copy.67", "建议动作"),
                   value:
                     missingPolicyCount > 0
-                      ? "先补齐缺失策略，再检查绑定是否挂齐"
+                      ? t("pages.governance.governanceworkbench.copy.68", "先补齐缺失策略，再检查绑定是否挂齐")
                       : publicEndpoints.length === 0
-                        ? "先确认是否需要公开入口，再检查 endpoint 暴露"
-                        : "进入激活诊断，确认 revision 已经可激活",
+                        ? t("pages.governance.governanceworkbench.endpoint", "先确认是否需要公开入口，再检查 endpoint 暴露")
+                        : t("pages.governance.governanceworkbench.revision", "进入激活诊断，确认 revision 已经可激活"),
                 },
               ]}
             />
@@ -1645,7 +1647,7 @@ const GovernanceWorkbench: React.FC = () => {
     if (targetView === "activation" && !activationRevisionId.trim()) {
       return (
         <GovernanceSelectionNotice
-          title="选择一个版本"
+          title={t("pages.governance.governanceworkbench.copy.69", "选择一个版本")}
         />
       );
     }
@@ -1654,11 +1656,11 @@ const GovernanceWorkbench: React.FC = () => {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <GovernanceSelectionNotice
-            title="变更摘要"
+            title={t("pages.governance.governanceworkbench.copy.70", "变更摘要")}
             highlights={[
-              { label: "事件数", value: auditEvents.length },
+              { label: t("pages.governance.governanceworkbench.copy.71", "事件数"), value: auditEvents.length },
               {
-                label: "最近更新",
+                label: t("pages.governance.governanceworkbench.copy.72", "最近更新"),
                 value: formatGovernanceTimestamp(latestGovernanceUpdatedAt),
               },
             ]}
@@ -1680,17 +1682,17 @@ const GovernanceWorkbench: React.FC = () => {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <GovernanceSelectionNotice
-            title="策略目录"
+            title={t("pages.governance.governanceworkbench.copy.73", "策略目录")}
             highlights={[
-              { label: "激活中的策略", value: activePolicies.length },
+              { label: t("pages.governance.governanceworkbench.copy.74", "激活中的策略"), value: activePolicies.length },
               {
-                label: "已退役",
+                label: t("pages.governance.governanceworkbench.copy.75", "已退役"),
                 value: (policiesQuery.data?.policies ?? []).filter(
                   (policy) => policy.retired,
                 ).length,
               },
               {
-                label: "要求已激活部署",
+                label: t("pages.governance.governanceworkbench.copy.76", "要求已激活部署"),
                 value: activePolicies.filter(
                   (policy) => policy.invokeRequiresActiveDeployment,
                 ).length,
@@ -1703,8 +1705,8 @@ const GovernanceWorkbench: React.FC = () => {
               dataSource={policiesQuery.data?.policies ?? []}
               locale={{
                 emptyText: policiesQuery.isLoading
-                  ? "正在加载策略..."
-                  : "当前服务还没有治理策略。",
+                  ? t("pages.governance.governanceworkbench.copy.77", "正在加载策略...")
+                  : t("pages.governance.governanceworkbench.copy.78", "当前服务还没有治理策略。"),
               }}
               pagination={{ pageSize: 8, showSizeChanger: false }}
               rowKey="policyId"
@@ -1719,7 +1721,7 @@ const GovernanceWorkbench: React.FC = () => {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <GovernanceSelectionNotice
-            title="绑定目录"
+            title={t("pages.governance.governanceworkbench.copy.79", "绑定目录")}
             highlights={[
               {
                 label: "Service",
@@ -1747,8 +1749,8 @@ const GovernanceWorkbench: React.FC = () => {
               dataSource={bindingsQuery.data?.bindings ?? []}
               locale={{
                 emptyText: bindingsQuery.isLoading
-                  ? "正在加载绑定..."
-                  : "当前服务还没有绑定依赖。",
+                  ? t("pages.governance.governanceworkbench.copy.80", "正在加载绑定...")
+                  : t("pages.governance.governanceworkbench.copy.81", "当前服务还没有绑定依赖。"),
               }}
               pagination={{ pageSize: 8, showSizeChanger: false }}
               rowKey="bindingId"
@@ -1763,11 +1765,11 @@ const GovernanceWorkbench: React.FC = () => {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <GovernanceSelectionNotice
-            title="入口目录"
+            title={t("pages.governance.governanceworkbench.copy.82", "入口目录")}
             highlights={[
-              { label: "公开", value: publicEndpoints.length },
-              { label: "内部", value: internalEndpoints.length },
-              { label: "停用", value: disabledEndpoints.length },
+              { label: t("pages.governance.governanceworkbench.copy.83", "公开"), value: publicEndpoints.length },
+              { label: t("pages.governance.governanceworkbench.copy.84", "内部"), value: internalEndpoints.length },
+              { label: t("pages.governance.governanceworkbench.copy.85", "停用"), value: disabledEndpoints.length },
             ]}
           />
           <div style={stageTableShellStyle}>
@@ -1776,8 +1778,8 @@ const GovernanceWorkbench: React.FC = () => {
               dataSource={endpointsQuery.data?.endpoints ?? []}
               locale={{
                 emptyText: endpointsQuery.isLoading
-                  ? "正在加载入口目录..."
-                  : "当前服务还没有入口目录。",
+                  ? t("pages.governance.governanceworkbench.copy.86", "正在加载入口目录...")
+                  : t("pages.governance.governanceworkbench.copy.87", "当前服务还没有入口目录。"),
               }}
               pagination={{ pageSize: 8, showSizeChanger: false }}
               rowKey="endpointId"
@@ -1796,7 +1798,7 @@ const GovernanceWorkbench: React.FC = () => {
           includeDefaultFields={false}
           metrics={[
             {
-              label: "缺失策略",
+              label: t("pages.governance.governanceworkbench.copy.88", "缺失策略"),
               tone:
                 (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
                   ? "warning"
@@ -1804,15 +1806,15 @@ const GovernanceWorkbench: React.FC = () => {
               value: String(activationQuery.data?.missingPolicyIds.length ?? 0),
             },
             {
-              label: "可见绑定",
+              label: t("pages.governance.governanceworkbench.copy.89", "可见绑定"),
               value: String((activationQuery.data?.bindings ?? []).length),
             },
             {
-              label: "可见入口",
+              label: t("pages.governance.governanceworkbench.copy.90", "可见入口"),
               value: String((activationQuery.data?.endpoints ?? []).length),
             },
             {
-              label: "可见策略",
+              label: t("pages.governance.governanceworkbench.copy.91", "可见策略"),
               value: String((activationQuery.data?.policies ?? []).length),
             },
           ]}
@@ -1824,10 +1826,10 @@ const GovernanceWorkbench: React.FC = () => {
                 : "success",
             label:
               (activationQuery.data?.missingPolicyIds.length ?? 0) > 0
-                ? "存在激活阻塞"
-                : "可以进入激活",
+                ? t("pages.governance.governanceworkbench.copy.92", "存在激活阻塞")
+                : t("pages.governance.governanceworkbench.copy.93", "可以进入激活"),
           }}
-          title="激活诊断"
+          title={t("pages.governance.governanceworkbench.copy.94", "激活诊断")}
         />
 
         <div
@@ -1838,41 +1840,41 @@ const GovernanceWorkbench: React.FC = () => {
           }}
         >
           <GovernanceSelectionNotice
-            title="缺失策略"
+            title={t("pages.governance.governanceworkbench.copy.95", "缺失策略")}
             highlights={
               (activationQuery.data?.missingPolicyIds ?? []).length > 0
                 ? activationQuery.data?.missingPolicyIds.map((policyId) => ({
                     key: policyId,
                     label: buildGovernanceCompactValue(policyId),
-                    value: "缺失",
+                    value: t("pages.governance.governanceworkbench.copy.96", "缺失"),
                   })) ?? []
-                : [{ label: "状态", value: "无缺失策略" }]
+                : [{ label: t("pages.governance.governanceworkbench.copy.97", "状态"), value: t("pages.governance.governanceworkbench.copy.98", "无缺失策略") }]
             }
           />
 
           <GovernanceSelectionNotice
-            title="作用域内绑定"
+            title={t("pages.governance.governanceworkbench.copy.99", "作用域内绑定")}
             highlights={
               (activationQuery.data?.bindings ?? []).length > 0
                 ? (activationQuery.data?.bindings ?? []).slice(0, 4).map((binding) => ({
                     key: binding.bindingId,
                     label: buildGovernanceCompactValue(binding.bindingId),
-                    value: `${binding.displayName || binding.bindingId} · ${formatAevatarStatusLabel(binding.bindingKind)}`,
+                    value: t("pages.governance.governanceworkbench.copy.111", "{value1} · {value2}", { value1: binding.displayName || binding.bindingId, value2: formatAevatarStatusLabel(binding.bindingKind) }),
                   }))
-                : [{ label: "状态", value: "当前没有可见绑定" }]
+                : [{ label: t("pages.governance.governanceworkbench.copy.100", "状态"), value: t("pages.governance.governanceworkbench.copy.101", "当前没有可见绑定") }]
             }
           />
 
           <GovernanceSelectionNotice
-            title="当前入口覆盖"
+            title={t("pages.governance.governanceworkbench.copy.102", "当前入口覆盖")}
             highlights={
               (activationQuery.data?.endpoints ?? []).length > 0
                 ? (activationQuery.data?.endpoints ?? []).slice(0, 4).map((endpoint) => ({
                     key: endpoint.endpointId,
                     label: buildGovernanceCompactValue(endpoint.endpointId),
-                    value: `${endpoint.displayName || endpoint.endpointId} · ${formatAevatarStatusLabel(endpoint.exposureKind)}`,
+                    value: t("pages.governance.governanceworkbench.copy.112", "{value1} · {value2}", { value1: endpoint.displayName || endpoint.endpointId, value2: formatAevatarStatusLabel(endpoint.exposureKind) }),
                   }))
-                : [{ label: "状态", value: "当前没有可见入口" }]
+                : [{ label: t("pages.governance.governanceworkbench.copy.103", "状态"), value: t("pages.governance.governanceworkbench.copy.104", "当前没有可见入口") }]
             }
           />
         </div>
@@ -1926,8 +1928,8 @@ const GovernanceWorkbench: React.FC = () => {
         {commandReceipt && commandReceiptObservation ? (
           <Alert
             closable
-            description={`${commandReceipt.commandLabel} 目标 ${commandReceipt.targetId}。${commandReceiptObservation.summary}`}
-            message="治理命令已接收"
+            description={t("pages.governance.governanceworkbench.copy.105", "{value1} 目标 {value2}。{value3}", { value1: commandReceipt.commandLabel, value2: commandReceipt.targetId, value3: commandReceiptObservation.summary })}
+            message={t("pages.governance.governanceworkbench.copy.106", "治理命令已接收")}
             showIcon
             type={commandReceiptObservation.observed ? "success" : "info"}
             onClose={() => setCommandReceipt(null)}
@@ -1938,7 +1940,7 @@ const GovernanceWorkbench: React.FC = () => {
           draft={draft}
           includeRevision={view === "activation"}
           loadLabel={
-            view === "activation" ? "加载激活诊断" : "加载治理工作台"
+            view === "activation" ? t("pages.governance.governanceworkbench.copy.107", "加载激活诊断") : t("pages.governance.governanceworkbench.copy.108", "加载治理工作台")
           }
           onChange={setDraft}
           onLoad={() => {
@@ -2022,20 +2024,19 @@ const GovernanceWorkbench: React.FC = () => {
                             textTransform: "uppercase",
                           }}
                         >
-                          治理工作区
-                        </Typography.Text>
+                          {t("pages.governance.governanceworkbench.copy.109", "治理工作区")}</Typography.Text>
                         <Typography.Text
                           strong
                           style={{ color: surfaceToken.colorTextHeading, fontSize: 20 }}
                         >
-                          {governanceViewMeta[view].title}
+                          {formatConsoleMessage(governanceViewMeta[view].title)}
                         </Typography.Text>
                         {governanceViewMeta[view].description ? (
                           <Typography.Text
                             type="secondary"
                             style={{ fontSize: 14, lineHeight: 1.65 }}
                           >
-                            {governanceViewMeta[view].description}
+                            {formatConsoleMessage(governanceViewMeta[view].description)}
                           </Typography.Text>
                         ) : null}
                       </Space>

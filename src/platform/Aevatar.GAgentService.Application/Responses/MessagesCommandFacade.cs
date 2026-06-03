@@ -28,8 +28,6 @@ public sealed class MessagesCommandFacade(
     IResponsesDirectToolPlanService directToolPlanService,
     ILogger<MessagesCommandFacade> logger) : IMessagesCommandFacade
 {
-    private const string RegistrationScopeMetadataKey = "scope_id";
-
     public async Task<MessagesCreateCommandResult> CreateAsync(
         MessagesCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -163,7 +161,7 @@ public sealed class MessagesCommandFacade(
         }
 
         var action = routeDecision.Action.Clone();
-        var routedModel = !string.IsNullOrWhiteSpace(action.ForwardToModel?.ModelName)
+        var routedModel = ShouldUseRouteModel(routeDecision, normalized.Model)
             ? action.ForwardToModel.ModelName.Trim()
             : normalized.Model;
         if (action.ForwardToModel is null)
@@ -173,6 +171,21 @@ public sealed class MessagesCommandFacade(
 
         action.ForwardToModel.ModelName = routedModel;
         return RouteTargetResult.FromModel(routedModel, action);
+    }
+
+    private static bool ShouldUseRouteModel(ChatRouteDecision routeDecision, string requestModel)
+    {
+        var routeModel = routeDecision.Action.ForwardToModel?.ModelName;
+        if (string.IsNullOrWhiteSpace(routeModel))
+            return false;
+
+        if (!routeDecision.UsedFallback)
+        {
+            return !string.IsNullOrWhiteSpace(routeDecision.MatchedRuleId) ||
+                   ResponsesModelRouteParser.Parse(requestModel).RouteSlug is null;
+        }
+
+        return ResponsesModelRouteParser.Parse(requestModel).RouteSlug is null;
     }
 
     private async Task<SessionRegistrationResult> RegisterSessionAsync(
@@ -333,16 +346,11 @@ public sealed class MessagesCommandFacade(
         ResponsesToolClassification toolClassification,
         AgentToolExecutionContext toolContext)
     {
-        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.MessageId,
-            [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-        };
         return new LLMRequest
         {
             Messages = [.. normalized.ChatMessages],
             RequestId = normalized.MessageId,
-            Metadata = llmMetadata,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
             CallerContext = new LLMRequestCallerContext(
                 callerScope.ScopeId,
                 callerScope.OwnerSubject,
@@ -391,6 +399,7 @@ public sealed class MessagesCommandFacade(
             AgentToolSenderBindingContext.Empty,
             new LLMRequestRoutingContext(null, routePreference, null, null),
             AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal));
 
     private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
@@ -483,6 +492,7 @@ public sealed class MessagesCommandFacade(
             ScopeId = request.CallerContext?.ScopeId ?? string.Empty,
             OwnerSubject = request.CallerContext?.OwnerSubject ?? string.Empty,
             BearerToken = request.CallerContext?.Credentials?.NyxIdBearer ?? string.Empty,
+            ToolContext = (request.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload(),
             RequestedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
         if (request.Temperature is not null)

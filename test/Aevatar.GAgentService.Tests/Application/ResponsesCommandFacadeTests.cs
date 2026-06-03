@@ -41,6 +41,7 @@ public sealed class ResponsesCommandFacadeTests
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
         result.Completed.Should().BeNull();
+        result.Accepted!.Admission.Accepted.Should().BeTrue();
         sessions.Registered.Should().ContainSingle().Which.ResponseId.Should().StartWith("resp_");
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
@@ -49,6 +50,69 @@ public sealed class ResponsesCommandFacadeTests
         command.RoutePreference.Should().Be("route-value");
         command.ScopeId.Should().Be("scope-1");
         command.BearerToken.Should().Be("token");
+        result.Accepted.Admission.CommandId.Should().NotBeNullOrWhiteSpace();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        toolContext.Request.RequestId.Should().Be(command.ResponseId);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenFallbackRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini"),
+                usedFallback: true));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.4-mini",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.4-mini");
+        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDefaultRouteHasModel_ShouldPreserveExplicitPrefixedRequestModel()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
+                ForwardToModelAction("gpt-5.4-mini")));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.4-mini",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        result.Accepted.Should().NotBeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.4-mini");
+        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
     }
 
     [Fact]
@@ -349,6 +413,9 @@ public sealed class ResponsesCommandFacadeTests
         result.Error.Should().BeNull();
         result.StreamPlan.Should().NotBeNull();
         result.StreamPlan!.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
         result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.ResponseId);
         result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
@@ -453,6 +520,7 @@ public sealed class ResponsesCommandFacadeTests
                 RequestId = "resp_stream",
                 Model = "model",
                 Messages = [ChatMessage.User("hello")],
+                ToolContext = BuildToolContext("resp_stream"),
             },
             BuildToolContext("resp_stream"),
             new ResponsesToolClassification([], [], [], []),
@@ -536,7 +604,10 @@ public sealed class ResponsesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+    private sealed class StaticResponsesChatRouteDecisionPort(
+        ChatRouteAction action,
+        bool usedFallback = false,
+        string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
         public Task<ChatRouteDecision> ResolveAsync(
@@ -548,7 +619,8 @@ public sealed class ResponsesCommandFacadeTests
             => Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
-                UsedFallback = false,
+                UsedFallback = usedFallback,
+                MatchedRuleId = matchedRuleId,
             });
     }
 

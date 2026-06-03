@@ -109,6 +109,7 @@ public class NyxIdProxyToolDualTokenTests
             AgentToolSenderBindingContext.Empty,
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
+            AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal)));
 
         var first = await tool.ExecuteAsync("""{"slug":"org-service","path":"/ping"}""");

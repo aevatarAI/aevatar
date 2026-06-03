@@ -43,47 +43,4 @@ public static class AgentToolRequestContext
             return value;
         return null;
     }
-
-    /// <summary>
-    /// Legacy test/boundary shim. Production control flow should use typed accessors or
-    /// <see cref="AgentToolExecutionContextMapper"/> when entering from an old metadata surface.
-    /// </summary>
-    public static IReadOnlyDictionary<string, string>? CurrentMetadata
-    {
-        get => s_context.Value?.ToLegacyMetadata();
-        set => s_context.Value = AgentToolExecutionContextMapper.FromMetadata(value);
-    }
-
-    /// <summary>
-    /// Legacy mapper-only shim for older tests and adapters while production consumers migrate.
-    /// </summary>
-    public static string? TryGet(string key)
-    {
-        var context = s_context.Value;
-        if (context == null)
-            return null;
-
-        return key switch
-        {
-            LLMProviders.LLMRequestMetadataKeys.NyxIdAccessToken => context.Credentials.NyxIdAccessToken,
-            LLMProviders.LLMRequestMetadataKeys.NyxIdOrgToken => context.Credentials.NyxIdOrgToken,
-            LLMProviders.LLMRequestMetadataKeys.SenderNyxIdAccessToken => context.Credentials.SenderNyxIdAccessToken,
-            LLMProviders.LLMRequestMetadataKeys.ScopeId or "scope_id" => context.Caller.ScopeId,
-            LLMProviders.LLMRequestMetadataKeys.OwnerSubject => context.Caller.OwnerSubject,
-            LLMProviders.LLMRequestMetadataKeys.ResponseId => context.Caller.ResponseId,
-            LLMProviders.LLMRequestMetadataKeys.RequestId => context.Request.RequestId,
-            LLMProviders.LLMRequestMetadataKeys.CallId => context.Request.CallId,
-            LLMProviders.LLMRequestMetadataKeys.SenderBindingId => context.SenderBinding.BindingId,
-            LLMProviders.LLMRequestMetadataKeys.ModelOverride => context.Routing.ModelOverride,
-            LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference => context.Routing.NyxIdRoutePreference,
-            LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride => context.Routing.MaxToolRoundsOverride?.ToString(),
-            LLMProviders.LLMRequestMetadataKeys.ConnectedServicesContext => context.ConnectedServices.ContextJson,
-            "platform" => context.Channel.Platform,
-            "sender_id" => context.Channel.SenderId,
-            "registration_scope_id" => context.Channel.RegistrationScopeId,
-            "message_id" or "lark.message_id" => context.Channel.MessageId,
-            "platform_message_id" => context.Channel.PlatformMessageId,
-            _ => TryGetExternalMetadata(key),
-        };
-    }
 }

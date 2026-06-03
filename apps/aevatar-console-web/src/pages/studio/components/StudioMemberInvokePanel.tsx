@@ -48,6 +48,7 @@ import {
   trimOptional,
   trimPreview,
 } from './studioInvokeUi';
+import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
@@ -451,7 +452,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(selectedMemberLabel) ||
     trimOptional(selectedService?.displayName) ||
     trimOptional(selectedService?.serviceId) ||
-    '当前成员';
+    t("pages.studio.studiomemberinvokepanel.current.members", "current members");
   const canInvoke = Boolean(
     scopeId && normalizedMemberId && selectedService && selectedEndpoint,
   );
@@ -841,14 +842,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setConsoleTab('output');
     setInvokeResult((current) => ({
       ...current,
-      error: '调用已中止。',
+      error: t("pages.studio.studiomemberinvokepanel.the.call.was.aborted", "The call was aborted."),
       status: 'cancelled',
     }));
     setActiveRunCompletedAt(completedAt);
     updateRequestHistoryEntry(activeHistoryEntryIdRef.current, (entry) => {
       const cancelledResult: InvokeResultState = {
         ...entry.snapshot.result,
-        error: entry.snapshot.result.error || '调用已中止。',
+        error: entry.snapshot.result.error || t("pages.studio.studiomemberinvokepanel.the.call.was.aborted.2", "The call was aborted."),
         status: 'cancelled',
       };
 
@@ -859,7 +860,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         eventCount:
           cancelledResult.eventCount || cancelledResult.events.length,
         status: 'cancelled',
-        summary: '该 Run 已停止，当前可能只显示部分输出。',
+        summary: t("pages.studio.studiomemberinvokepanel.the.run.has.stopped", "The run has stopped and only partial output may currently be displayed."),
         snapshot: {
           chatMessages: cloneChatMessages(entry.snapshot.chatMessages),
           result: cloneInvokeResult(cancelledResult),
@@ -890,7 +891,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       : 'invoke';
 
     if (isChatServiceEndpoint(selectedEndpoint) && !trimmedPrompt) {
-      setFormError('请输入 Prompt 后再发起 Invoke。');
+      setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before", "Please enter Prompt before initiating Invoke."));
       return;
     }
 
@@ -899,7 +900,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       !trimmedPrompt &&
       !trimmedPayloadBase64
     ) {
-      setFormError('请输入 Prompt 后再发起 Invoke。');
+      setFormError(t("pages.studio.studiomemberinvokepanel.please.enter.prompt.before.2", "Please enter Prompt before initiating Invoke."));
       return;
     }
 
@@ -1098,7 +1099,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               accumulator.errorText ||
               trimOptional(accumulator.finalOutput) ||
               accumulator.assistantText ||
-              '该 Run 没有返回额外文本。',
+              t("pages.studio.studiomemberinvokepanel.this.run.returns.no", "This Run returns no additional text."),
             snapshot: {
               chatMessages: cloneChatMessages(finalChatMessages),
               result: cloneInvokeResult(finalResult),
@@ -1268,7 +1269,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         summary:
           trimPreview(trimmedPrompt, 72) ||
           trimPreview(trimmedPayloadTypeUrl, 72) ||
-          '结构化调用',
+          t("pages.studio.studiomemberinvokepanel.structured.call", "structured call"),
         snapshot: {
           chatMessages: [],
           result: cloneInvokeResult(finalResult),
@@ -1342,7 +1343,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       {!scopeId ? (
         <Alert
           showIcon
-          message="请先确定团队作用域，再调用这个成员。"
+          message={t("pages.studio.studiomemberinvokepanel.please.determine.the.team", "Please determine the team scope first before calling this member.")}
           type="info"
         />
       ) : emptyState ? (
@@ -1355,8 +1356,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       ) : services.length === 0 ? (
         <Alert
           showIcon
-          message="当前作用域里还没有可调用的已发布成员服务。"
-          description="请先为成员完成绑定并发布版本，然后再回到这里调用。"
+          message={t("pages.studio.studiomemberinvokepanel.there.are.no.published", "There are no published member services that can be called in the current scope.")}
+          description={t("pages.studio.studiomemberinvokepanel.please.complete.the.binding", "Please complete the binding and release the version for the member before calling back here.")}
           type="warning"
         />
       ) : (
@@ -1376,9 +1377,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                       <span>·</span>
                     </>
                   ) : null}
-                  <span>Member: {normalizedMemberId || 'not selected'}</span>
+                  <span>Member: {normalizedMemberId || t("pages.studio.studiomemberinvokepanel.not.selected", "not selected")}</span>
                   <span>·</span>
-                  <span>Service: {selectedService?.displayName || selectedServiceId || 'not selected'}</span>
+                  <span>Service: {selectedService?.displayName || selectedServiceId || t("pages.studio.studiomemberinvokepanel.not.selected.2", "not selected")}</span>
                   <span>·</span>
                   <span>Endpoint: {endpointSummaryLabel}</span>
                   <span>·</span>
@@ -1439,7 +1440,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               style={invokeRunOutputSectionStyle}
             >
               <div style={{ flex: '0 0 auto', padding: '12px 14px 0' }}>
-                <span style={invokeSectionTitleStyle}>Run output</span>
+                <span style={invokeSectionTitleStyle}>{t("pages.studio.studiomemberinvokepanel.run.output", "Run output")}</span>
               </div>
               <div
                 data-testid="studio-invoke-run-output-body"

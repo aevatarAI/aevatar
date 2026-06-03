@@ -75,6 +75,9 @@ message AgentRunGAgentState {
   int64 pending_drop_notification_dropped_at_unix_ms = 20;
   int64 drop_notification_dispatched_at_unix_ms = 21;
   AgentRunReplyStepState generation_step = 22;
+  // Immutable history entries produced by the LLM run. Output-dispatch retries
+  // re-deliver these entries without re-running the LLM/tool chain.
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry produced_appended_history = 23;
 }
 
 enum AgentRunReplyStepKind {
@@ -125,6 +128,7 @@ message AgentRunReplyStepState {
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 18;
   map<string, string> external_metadata = 19;
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 21;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -212,6 +216,7 @@ message AgentRunReplyProducedEvent {
   // external API calls and incur duplicate billing).
   string reply_text = 8;
   aevatar.gagents.channel.abstractions.MessageContent outbound = 9;
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
 }
 
 // Persisted after admission gates pass and before the transient generation

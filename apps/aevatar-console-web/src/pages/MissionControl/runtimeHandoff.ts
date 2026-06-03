@@ -11,6 +11,7 @@ import type {
   WorkflowExecutionEventType,
 } from './models';
 import { formatMissionLabel } from './presentation';
+import { t } from "@/shared/i18n/messages";
 
 function observationEvidence(status: MissionObservationStatus, freshnessLabel: string) {
   switch (status) {
@@ -97,9 +98,9 @@ export function buildMissionNodeHandoffCue(input: {
         : 'Observation evidence';
 
   return {
-    detail: `${input.label} is ${formatMissionLabel(input.status)} with ${formatMissionLabel(
+    detail: t("pages.missioncontrol.runtimehandoff.is.with.evidence", "{value1} is {value2} with {value3} evidence.", { value1: input.label, value2: formatMissionLabel(input.status), value3: formatMissionLabel(
       input.observationStatus,
-    )} evidence.`,
+    ) }),
     evidence: observationEvidence(input.observationStatus, input.freshnessLabel),
     nextStep: nextStepForNode(severity, input.kind, input.isInterventionNode),
     severity,
@@ -128,34 +129,34 @@ export function buildMissionEventHandoffCue(input: {
 
   if (isInterventionEvent && input.intervention) {
     return {
-      detail: `${input.intervention.title} at step ${input.intervention.stepId}.`,
+      detail: t("pages.missioncontrol.runtimehandoff.at.step", "{value1} at step {value2}.", { value1: input.intervention.title, value2: input.intervention.stepId }),
       evidence: input.detail || 'Runtime published a blocking event.',
       nextStep:
         input.intervention.kind === 'human_approval'
           ? 'Open the intervention panel and decide with the latest event dock evidence.'
           : 'Open the intervention panel and submit the requested context or signal.',
       severity: 'action',
-      title: 'Action handoff',
+      title: t("pages.missioncontrol.runtimehandoff.action.handoff", "Action handoff"),
     };
   }
 
   if (terminal) {
     return {
-      detail: 'This event reflects a terminal or settled runtime fact.',
+      detail: t("pages.missioncontrol.runtimehandoff.this.event.reflects.terminal.or.settled", "This event reflects a terminal or settled runtime fact."),
       evidence: input.detail || 'Runtime emitted terminal evidence.',
       nextStep: 'Use this event as committed evidence; no operator action is implied.',
       severity: 'observe',
-      title: 'Settled evidence',
+      title: t("pages.missioncontrol.runtimehandoff.settled.evidence", "Settled evidence"),
     };
   }
 
   if (input.type === 'step_requested' || input.type === 'workflow_run_execution_started') {
     return {
-      detail: 'Runtime accepted work and queued the next step.',
+      detail: t("pages.missioncontrol.runtimehandoff.runtime.accepted.work.and.queued.the", "Runtime accepted work and queued the next step."),
       evidence: input.detail || 'Runtime emitted an execution start event.',
       nextStep: 'Wait for the matching completion, suspension, or signal event.',
       severity: 'confirming',
-      title: 'Await confirmation',
+      title: t("pages.missioncontrol.runtimehandoff.await.confirmation", "Await confirmation"),
     };
   }
 
@@ -166,7 +167,7 @@ export function buildMissionEventHandoffCue(input: {
     evidence: input.detail || 'Runtime emitted an observable event.',
     nextStep: 'Keep observing unless a blocker card appears.',
     severity: 'observe',
-    title: 'Event evidence',
+    title: t("pages.missioncontrol.runtimehandoff.event.evidence", "Event evidence"),
   };
 }
 

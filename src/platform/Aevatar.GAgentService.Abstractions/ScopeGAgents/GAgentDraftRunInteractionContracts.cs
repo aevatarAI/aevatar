@@ -1,7 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 
 namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
 
@@ -16,9 +16,12 @@ public sealed record GAgentDraftRunInteractionRequest(
     string? NyxIdAccessToken = null,
     string? ModelOverride = null,
     string? PreferredLlmRoute = null,
+    IReadOnlyDictionary<string, string>? Headers = null,
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
     AgentToolExecutionContext? ToolContext = null,
-    LLMControlContext? LlmControl = null);
+    LLMControlContext? LlmControl = null,
+    bool UseCorrelationIdAsFallbackSessionId = true,
+    string? AgentKind = null);
 
 public sealed record GAgentDraftRunPreparedActor(
     string ScopeId,

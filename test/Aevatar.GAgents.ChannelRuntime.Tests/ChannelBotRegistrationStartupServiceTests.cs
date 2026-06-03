@@ -38,7 +38,7 @@ public sealed class ChannelBotRegistrationStartupServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_WhenActivationFails_DispatchesOnlyOneActivationAttempt()
+    public async Task StartAsync_WhenActivationFails_PropagatesFailure_AndAttemptsOnce()
     {
         var activationService = Substitute.For<IProjectionScopeActivationService<ChannelBotRegistrationMaterializationRuntimeLease>>();
         activationService.EnsureAsync(Arg.Any<ProjectionScopeStartRequest>(), Arg.Any<CancellationToken>())
@@ -49,7 +49,10 @@ public sealed class ChannelBotRegistrationStartupServiceTests
             projectionActivator,
             NullLogger<ChannelBotRegistrationStartupService>.Instance);
 
-        await startupService.StartAsync(CancellationToken.None);
+        await startupService.Invoking(service => service.StartAsync(CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("boom");
 
         await activationService.Received(1).EnsureAsync(
             Arg.Is<ProjectionScopeStartRequest>(request =>

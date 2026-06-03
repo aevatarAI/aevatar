@@ -174,7 +174,7 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
                 return Task.CompletedTask;
             });
 
-        await runAgent.HandleChatRequest(new ChatRequestEvent
+        await runAgent.HandleChatRequest(new WorkflowChatRequestEvent
         {
             Prompt = evt.InputText,
             SessionId = evt.CommandId,

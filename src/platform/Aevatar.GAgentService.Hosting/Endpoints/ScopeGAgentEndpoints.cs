@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Hosting;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
@@ -310,6 +311,14 @@ public static class ScopeGAgentEndpoints
                     string.IsNullOrWhiteSpace(actorId)
                         ? $"Requested actor is not compatible with requested type '{actorTypeName}'."
                         : $"Actor '{actorId}' is not compatible with requested type '{actorTypeName}'.",
+                    ct);
+                break;
+            case GAgentDraftRunStartError.ProjectionUnavailable:
+                response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await WriteJsonErrorAsync(
+                    response,
+                    "GAGENT_PROJECTION_UNAVAILABLE",
+                    "GAgent projection is unavailable.",
                     ct);
                 break;
         }

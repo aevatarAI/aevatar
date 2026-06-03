@@ -15,6 +15,16 @@ internal interface ITypedConversationReplyGenerator : IConversationReplyGenerato
         AgentToolExecutionContext? toolContext,
         IStreamingReplySink? streamingSink,
         CancellationToken ct);
+
+    Task<ConversationReplyResult> GenerateReplyAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext? llmControl,
+        AgentToolExecutionContext? toolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+        IStreamingReplySink? streamingSink,
+        CancellationToken ct) =>
+        GenerateReplyAsync(activity, metadata, llmControl, toolContext, streamingSink, ct);
 }
 
 internal interface IAgentRunStepConversationReplyGenerator : ITypedConversationReplyGenerator
@@ -24,6 +34,7 @@ internal interface IAgentRunStepConversationReplyGenerator : ITypedConversationR
         IReadOnlyDictionary<string, string> metadata,
         LLMControlContext? llmControl,
         AgentToolExecutionContext? toolContext,
+        IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         bool forceDisableTools,
         CancellationToken ct);
 

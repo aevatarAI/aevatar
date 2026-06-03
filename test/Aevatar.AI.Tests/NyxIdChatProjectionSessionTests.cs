@@ -5,7 +5,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.NyxidChat;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -33,7 +33,7 @@ public sealed class NyxIdChatProjectionSessionTests
         var attachment = await port.AttachExistingChatProjectionAsync("chat-actor-1", "session-1", sink, CancellationToken.None);
         await hub.Handler!(new AGUIEvent
         {
-            TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+            TextMessageContent = new Aevatar.AGUI.Contracts.TextMessageContentEvent
             {
                 MessageId = "session-1",
                 Delta = "hello",

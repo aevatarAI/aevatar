@@ -36,7 +36,7 @@ public static class WorkflowCapabilityEndpoints
     public static async Task HandleChat(
         HttpContext http,
         ChatInput input,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null)
     {
@@ -49,9 +49,11 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
+            var connectorAuthorization = ConnectorHttpAuthorizationExtractor.Extract(http);
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
-                defaultMetadata);
+                defaultMetadata,
+                trustedConnectorHttpAuthorization: connectorAuthorization);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -502,7 +504,7 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task HandleChatWebSocket(
         HttpContext http,
-        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IWorkflowChatRunInteractionPort chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {

@@ -151,9 +151,11 @@ message WorkflowRunExecutionContextState
 
 message WorkflowLlmExecutionContextState
 {
-  string nyxid_access_token = 1;
+  reserved 1, 3;
+  reserved "nyxid_access_token", "nyxid_route_preference";
   string model_override = 2;
-  string nyxid_route_preference = 3;
+  optional int32 max_tool_rounds_override = 4;
+  string user_memory_prompt = 5;
 }
 
 message WorkflowConnectorExecutionContextState
@@ -287,6 +289,23 @@ message SecureInputModuleState
 {
   map<string, PendingSecureInputState> pending = 1;
   map<string, CapturedSecureInputState> captured = 2;
+}
+
+message PendingToolCallApprovalState
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  string tool_call_id = 5;
+  string approval_request_id = 6;
+  string arguments_json = 7;
+  string input = 8;
+}
+
+message ToolCallModuleState
+{
+  map<string, PendingToolCallApprovalState> pending_approvals = 1;
 }
 
 message PendingApprovalState

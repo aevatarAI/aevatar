@@ -10,6 +10,7 @@ export type NavigationGroup = {
   icon: React.ReactNode;
   key: string;
   label: string;
+  labelMessageId: string;
 };
 
 const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
@@ -17,17 +18,20 @@ const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
     icon: <TeamOutlined />,
     key: "teams",
     label: "Teams",
+    labelMessageId: "nav.groups.teams",
   },
   {
     icon: <DashboardOutlined />,
     key: "platform",
     label: "Platform",
+    labelMessageId: "nav.groups.platform",
   },
   {
     flattenSingleItem: true,
     icon: <SettingOutlined />,
     key: "settings",
     label: "Settings",
+    labelMessageId: "nav.groups.settings",
   },
 ] as const;
 

@@ -5,6 +5,7 @@ import React from "react";
 import { history } from "@/shared/navigation/history";
 import { buildRuntimeExplorerHref } from "@/shared/navigation/runtimeRoutes";
 import { formatDateTime } from "@/shared/datetime/dateTime";
+import { formatConsoleMessage, t } from "@/shared/i18n/messages";
 import {
   type RunEndpointKind,
   normalizeRunEndpointKind,
@@ -222,16 +223,16 @@ function renderReadinessSummary(
       <div style={readinessHeaderStyle}>
         <div>
           <Typography.Text strong>
-            {runReadiness.ready ? "Ready to send" : "Send readiness"}
+            {runReadiness.ready ? t("pages.runs.runslaunchrail.ready.to.send", "Ready to send") : t("pages.runs.runslaunchrail.send.readiness", "Send readiness")}
           </Typography.Text>
           <Typography.Paragraph style={readinessHelperStyle}>
             {runReadiness.ready
-              ? "Prompt runs will use this workspace context."
+              ? t("pages.runs.runslaunchrail.prompt.runs.will.use.this.workspace", "Prompt runs will use this workspace context.")
               : runReadiness.blockingReason}
           </Typography.Paragraph>
         </div>
         <Tag color={runReadiness.ready ? "success" : "warning"}>
-          {runReadiness.ready ? "Ready" : "Blocked"}
+          {runReadiness.ready ? t("pages.runs.runslaunchrail.ready", "Ready") : t("pages.runs.runslaunchrail.blocked", "Blocked")}
         </Tag>
       </div>
 
@@ -254,10 +255,10 @@ function renderReadinessSummary(
               }
             >
               {item.status === "ready"
-                ? "Ready"
+                ? t("pages.runs.runslaunchrail.ready.2", "Ready")
                 : item.status === "required"
-                  ? "Required"
-                  : "Context"}
+                  ? t("pages.runs.runslaunchrail.required.2", "Required")
+                  : t("pages.runs.runslaunchrail.context", "Context")}
             </Tag>
             <Typography.Paragraph style={readinessHelperStyle}>
               {item.helper}
@@ -283,8 +284,8 @@ function renderRouteMiniCard(
     return (
       <div style={embeddedPanelStyle}>
         <Space wrap size={[6, 6]}>
-          <Tag color="geekblue">Command invoke</Tag>
-          <Tag>Workspace binding</Tag>
+          <Tag color="geekblue">{t("pages.runs.runslaunchrail.command.invoke.3", "Command invoke")}</Tag>
+          <Tag>{t("pages.runs.runslaunchrail.workspace.binding.2", "Workspace binding")}</Tag>
         </Space>
         <Typography.Text strong style={{ display: "block", marginTop: 10 }}>
           {activeEndpointId}
@@ -293,10 +294,7 @@ function renderRouteMiniCard(
           style={{ margin: "6px 0 0" }}
           type="secondary"
         >
-          Invoke the selected endpoint with explicit protobuf bytes, or let the
-          workbench derive bytes only for StringValue and AppScriptCommand
-          payloads.
-        </Typography.Paragraph>
+          {t("pages.runs.runslaunchrail.invoke.the.selected.endpoint.with.2", "Invoke the selected endpoint with explicit protobuf bytes, or let the workbench derive bytes only for StringValue and AppScriptCommand payloads.")}</Typography.Paragraph>
       </div>
     );
   }
@@ -305,7 +303,7 @@ function renderRouteMiniCard(
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="Select a route preview or endpoint to inspect the current route."
+        description={t("pages.runs.runslaunchrail.select.route.preview.or.endpoint.2", "Select a route preview or endpoint to inspect the current route.")}
       />
     );
   }
@@ -314,14 +312,14 @@ function renderRouteMiniCard(
     <div style={embeddedPanelStyle}>
       <Space wrap size={[6, 6]}>
         <Tag color={activeEndpointKind === "chat" ? "processing" : "geekblue"}>
-          {activeEndpointKind === "chat" ? "Service SSE" : "Command invoke"}
+          {activeEndpointKind === "chat" ? t("pages.runs.runslaunchrail.service.sse.2", "Service SSE") : t("pages.runs.runslaunchrail.command.invoke.5", "Command invoke")}
         </Tag>
         <Tag>{selectedRouteRecord.groupLabel}</Tag>
         <Tag>{selectedRouteRecord.sourceLabel}</Tag>
         <Tag color={selectedRouteRecord.llmStatus === "processing" ? "blue" : "success"}>
           {selectedRouteRecord.llmStatus === "processing"
-            ? "LLM required"
-            : "LLM optional"}
+            ? t("pages.runs.runslaunchrail.llm.required.2", "LLM required")
+            : t("pages.runs.runslaunchrail.llm.optional.2", "LLM optional")}
         </Tag>
       </Space>
       <Typography.Text strong style={{ display: "block", marginTop: 10 }}>
@@ -332,14 +330,14 @@ function renderRouteMiniCard(
         style={{ margin: "6px 0 0" }}
         type="secondary"
       >
-        {selectedRouteRecord.description || "No description provided."}
+        {selectedRouteRecord.description || t("pages.runs.runslaunchrail.no.description.provided.2", "No description provided.")}
       </Typography.Paragraph>
       <Space wrap size={[6, 6]}>
         {selectedRouteDetailsPrimitives.slice(0, 3).map((primitive) => (
           <Tag key={primitive}>{primitive}</Tag>
         ))}
         {selectedRouteDetailsPrimitives.length > 3 ? (
-          <Tag>+{selectedRouteDetailsPrimitives.length - 3} more</Tag>
+          <Tag>+{selectedRouteDetailsPrimitives.length - 3} {t("pages.runs.runslaunchrail.more.3", "more")}</Tag>
         ) : null}
       </Space>
     </div>
@@ -372,7 +370,7 @@ function resolveRunTargetSummary(input: {
 
   if (input.draftMode) {
     return {
-      description: `${workspaceId} will run the bundled Studio draft before it is published.`,
+      description: t("pages.runs.runslaunchrail.will.run.the.bundled.studio.draft", "{value1} will run the bundled Studio draft before it is published.", { value1: workspaceId }),
       mode: "Studio draft",
       required: "Workspace, draft bundle, prompt",
       target,
@@ -381,7 +379,7 @@ function resolveRunTargetSummary(input: {
 
   if (input.actorId) {
     return {
-      description: `Continue actor ${input.actorId} in ${workspaceId}.`,
+      description: t("pages.runs.runslaunchrail.continue.actor.in", "Continue actor {value1} in {value2}.", { value1: input.actorId, value2: workspaceId }),
       mode: "Existing actor",
       required: "Workspace, actor, prompt",
       target,
@@ -411,7 +409,7 @@ function renderRecentRunCards(
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="No local runs have been recorded yet."
+        description={t("pages.runs.runslaunchrail.no.local.runs.have.been.2", "No local runs have been recorded yet.")}
       />
     );
   }
@@ -448,7 +446,7 @@ function renderRecentRunCards(
                     {resolveRunEndpointId(record.endpointKind, record.endpointId)}
                   </Tag>
                   <Tag>{formatDateTime(record.recordedAt)}</Tag>
-                  <Tag>{record.runId || "No runId"}</Tag>
+                  <Tag>{record.runId || t("pages.runs.runslaunchrail.no.runid", "No runId")}</Tag>
                 </div>
               </div>
             </div>
@@ -460,18 +458,16 @@ function renderRecentRunCards(
             >
               {record.lastMessagePreview ||
                 record.prompt ||
-                "No preview recorded."}
+                t("pages.runs.runslaunchrail.no.preview.recorded.2", "No preview recorded.")}
             </Typography.Paragraph>
 
             <div style={railListActionStyle}>
               <Space wrap size={[8, 8]}>
                 <Button type="link" onClick={() => record.onRestore?.()}>
-                  Restore
-                </Button>
+                  {t("pages.runs.runslaunchrail.restore.2", "Restore")}</Button>
                 {record.actorId ? (
                   <Button type="link" onClick={() => record.onOpenActor?.()}>
-                    Actor
-                  </Button>
+                    {t("pages.runs.runslaunchrail.actor.2", "Actor")}</Button>
                 ) : null}
               </Space>
             </div>
@@ -481,8 +477,7 @@ function renderRecentRunCards(
 
       <Space>
         <Button danger onClick={onClearRecentRuns}>
-          Clear local runs
-        </Button>
+          {t("pages.runs.runslaunchrail.clear.local.runs.2", "Clear local runs")}</Button>
       </Space>
     </div>
   );
@@ -496,7 +491,7 @@ function renderPresetCards(
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="No presets are currently available."
+        description={t("pages.runs.runslaunchrail.no.presets.are.currently.available.2", "No presets are currently available.")}
       />
     );
   }
@@ -508,7 +503,7 @@ function renderPresetCards(
           <div style={railListHeaderStyle}>
             <div style={railListContentStyle}>
               <Typography.Text strong style={railTitleStyle}>
-                {record.title}
+                {formatConsoleMessage(record.title)}
               </Typography.Text>
               <div style={railMetaWrapStyle}>
                 <Tag color="processing">{record.routeName}</Tag>
@@ -516,7 +511,7 @@ function renderPresetCards(
                   <Tag key={`${record.key}-${tag}`}>{tag}</Tag>
                 ))}
                 {record.tags.length > 2 ? (
-                  <Tag>+{record.tags.length - 2} more</Tag>
+                  <Tag>+{record.tags.length - 2} {t("pages.runs.runslaunchrail.more.4", "more")}</Tag>
                 ) : null}
               </div>
             </div>
@@ -527,13 +522,12 @@ function renderPresetCards(
             style={railDescriptionStyle}
             type="secondary"
           >
-            {record.description}
+            {formatConsoleMessage(record.description)}
           </Typography.Paragraph>
 
           <div style={railListActionStyle}>
             <Button type="link" onClick={() => onUsePreset(record)}>
-              Use preset
-            </Button>
+              {t("pages.runs.runslaunchrail.use.preset.2", "Use preset")}</Button>
           </div>
         </div>
       ))}
@@ -604,25 +598,25 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
               />
               <div style={quickGridStyle}>
                 <div style={quickMetricStyle}>
-                  <Typography.Text style={quickMetricLabelStyle}>Required</Typography.Text>
+                  <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.required", "Required")}</Typography.Text>
                   <Typography.Text style={quickMetricValueStyle}>
                     {runTargetSummary.required}
                   </Typography.Text>
                 </div>
                 <div style={quickMetricStyle}>
-                  <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
+                  <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.mode.2", "Mode")}</Typography.Text>
                   <Typography.Text style={quickMetricValueStyle}>
                     {runTargetSummary.mode}
                   </Typography.Text>
                 </div>
                 <div style={quickMetricStyle}>
-                  <Typography.Text style={quickMetricLabelStyle}>Endpoint</Typography.Text>
+                  <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.endpoint.3", "Endpoint")}</Typography.Text>
                   <Typography.Text style={quickMetricValueStyle}>
                     {activeEndpointId || "chat"}
                   </Typography.Text>
                 </div>
                 <div style={quickMetricStyle}>
-                  <Typography.Text style={quickMetricLabelStyle}>Presets</Typography.Text>
+                  <Typography.Text style={quickMetricLabelStyle}>{t("pages.runs.runslaunchrail.presets.2", "Presets")}</Typography.Text>
                   <Typography.Text style={quickMetricValueStyle}>
                     {visiblePresets.length}
                   </Typography.Text>
@@ -703,11 +697,9 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                                   loading={streaming}
                                   onClick={() => props.form?.submit?.()}
                                 >
-                                  Start run
-                                </Button>
+                                  {t("pages.runs.runslaunchrail.start.run.2", "Start run")}</Button>
                                 <Button onClick={onAbortRun} disabled={!streaming}>
-                                  Abort
-                                </Button>
+                                  {t("pages.runs.runslaunchrail.abort.2", "Abort")}</Button>
                                 {actorId ? (
                                   <Button
                                     onClick={() =>
@@ -718,8 +710,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                                       )
                                     }
                                   >
-                                    Actor explorer
-                                  </Button>
+                                    {t("pages.runs.runslaunchrail.actor.explorer.2", "Actor explorer")}</Button>
                                 ) : null}
                               </Space>
                             ),
@@ -740,7 +731,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         rules={[
                           {
                             required: true,
-                            message: "Prompt is required.",
+                            message: t("pages.runs.runslaunchrail.prompt.is.required.2", "Prompt is required."),
                           },
                         ]}
                       />
@@ -755,7 +746,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         rules={[
                           {
                             required: true,
-                            message: "Transport is required.",
+                            message: t("pages.runs.runslaunchrail.transport.is.required.2", "Transport is required."),
                           },
                         ]}
                       />
@@ -763,16 +754,16 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     {!draftMode && !isChatVariant ? (
                       <ProFormSelect<RunEndpointKind>
                         name="endpointKind"
-                        label="Endpoint kind"
+                        label={t("pages.runs.runslaunchrail.endpoint.kind.2", "Endpoint kind")}
                         options={[
-                          { label: "Chat stream", value: "chat" },
-                          { label: "Command invoke", value: "command" },
+                          { label: t("pages.runs.runslaunchrail.chat.stream.2", "Chat stream"), value: "chat" },
+                          { label: t("pages.runs.runslaunchrail.command.invoke.4", "Command invoke"), value: "command" },
                         ]}
-                        extra="Chat endpoints keep the service streaming path even when the endpoint id is custom."
+                        extra={t("pages.runs.runslaunchrail.chat.endpoints.keep.the.service.2", "Chat endpoints keep the service streaming path even when the endpoint id is custom.")}
                         rules={[
                           {
                             required: true,
-                            message: "Endpoint kind is required.",
+                            message: t("pages.runs.runslaunchrail.endpoint.kind.is.required.2", "Endpoint kind is required."),
                           },
                         ]}
                       />
@@ -804,12 +795,11 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                           onSearch: onCatalogSearchChange,
                           notFoundContent: workflowCatalogLoading ? (
                             <Typography.Text type="secondary">
-                              Loading chat routes...
-                            </Typography.Text>
+                              {t("pages.runs.runslaunchrail.loading.chat.routes.2", "Loading chat routes...")}</Typography.Text>
                           ) : (
                             <Empty
                               image={Empty.PRESENTED_IMAGE_SIMPLE}
-                              description="No chat routes available."
+                              description={t("pages.runs.runslaunchrail.no.chat.routes.available.2", "No chat routes available.")}
                             />
                           ),
                           searchValue: catalogSearch,
@@ -819,18 +809,18 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                       <Alert
                         showIcon
                         type="info"
-                        title="Generic endpoint invoke"
-                        description="Use the prompt as the default payload text, or provide an explicit type URL and protobuf base64 payload."
+                        title={t("pages.runs.runslaunchrail.generic.endpoint.invoke.2", "Generic endpoint invoke")}
+                        description={t("pages.runs.runslaunchrail.use.the.prompt.as.the.2", "Use the prompt as the default payload text, or provide an explicit type URL and protobuf base64 payload.")}
                       />
                     )}
                     <ProFormText
                       name="scopeId"
-                      label="Workspace ID"
-                      placeholder="NyxID user / workspace id"
+                      label={t("pages.runs.runslaunchrail.workspace.id.2", "Workspace ID")}
+                      placeholder={t("pages.runs.runslaunchrail.nyxid.user.workspace.id.2", "NyxID user / workspace id")}
                       rules={[
                         {
                           required: true,
-                          message: "Workspace ID is required.",
+                          message: t("pages.runs.runslaunchrail.workspace.id.is.required.2", "Workspace ID is required."),
                         },
                       ]}
                     />
@@ -840,41 +830,41 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         items={[
                           {
                             key: "advanced",
-                            label: "Advanced payload and transport",
+                            label: t("pages.runs.runslaunchrail.advanced.payload.and.transport", "Advanced payload and transport"),
                             children: (
                               <div style={compactStackStyle}>
                                 <ProFormText
                                   name="endpointId"
                                   label="Endpoint"
-                                  placeholder="chat (or a custom chat endpoint id)"
+                                  placeholder={t("pages.runs.runslaunchrail.chat.or.custom.chat.endpoint.2", "chat (or a custom chat endpoint id)")}
                                   disabled={draftMode}
                                 />
                                 {!draftMode ? (
                                   <ProFormText
                                     name="serviceOverrideId"
-                                    label="Binding override (optional)"
-                                    placeholder="Leave empty to use the workspace default binding."
+                                    label={t("pages.runs.runslaunchrail.binding.override.optional.3", "Binding override (optional)")}
+                                    placeholder={t("pages.runs.runslaunchrail.leave.empty.to.use.the.3", "Leave empty to use the workspace default binding.")}
                                   />
                                 ) : null}
                                 {isChatEndpoint ? (
                                   <ProFormText
                                     name="actorId"
-                                    label="Existing actor ID"
+                                    label={t("pages.runs.runslaunchrail.existing.actor.id.3", "Existing actor ID")}
                                     placeholder="Actor:..."
                                     disabled={draftMode}
                                   />
                                 ) : null}
                                 <ProFormText
                                   name="payloadTypeUrl"
-                                  label="Payload type URL"
+                                  label={t("pages.runs.runslaunchrail.payload.type.url.3", "Payload type URL")}
                                   placeholder="type.googleapis.com/google.protobuf.StringValue"
-                                  extra="When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand."
+                                  extra={t("pages.runs.runslaunchrail.when.payload.base64.is.empty.3", "When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand.")}
                                 />
                                 <ProFormTextArea
                                   name="payloadBase64"
-                                  label="Payload base64 (advanced)"
+                                  label={t("pages.runs.runslaunchrail.payload.base64.advanced.3", "Payload base64 (advanced)")}
                                   fieldProps={{ rows: 3 }}
-                                  placeholder="Required for custom payload types; leave empty only for StringValue or AppScriptCommand."
+                                  placeholder={t("pages.runs.runslaunchrail.required.for.custom.payload.types.3", "Required for custom payload types; leave empty only for StringValue or AppScriptCommand.")}
                                 />
                               </div>
                             ),
@@ -887,7 +877,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         items={[
                           {
                             key: "advanced",
-                            label: "Advanced endpoint and payload options",
+                            label: t("pages.runs.runslaunchrail.advanced.endpoint.and.payload.options", "Advanced endpoint and payload options"),
                             children: (
                               <div style={compactStackStyle}>
                                 <ProFormText
@@ -902,36 +892,36 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                                   rules={[
                                     {
                                       required: !draftMode && !isChatEndpoint,
-                                      message: "Endpoint ID is required for command invokes.",
+                                      message: t("pages.runs.runslaunchrail.endpoint.id.is.required.for.2", "Endpoint ID is required for command invokes."),
                                     },
                                   ]}
                                 />
                                 {!draftMode ? (
                                   <ProFormText
                                     name="serviceOverrideId"
-                                    label="Binding override (optional)"
-                                    placeholder="Leave empty to use the workspace default binding."
+                                    label={t("pages.runs.runslaunchrail.binding.override.optional.4", "Binding override (optional)")}
+                                    placeholder={t("pages.runs.runslaunchrail.leave.empty.to.use.the.4", "Leave empty to use the workspace default binding.")}
                                   />
                                 ) : null}
                                 {isChatEndpoint ? (
                                   <ProFormText
                                     name="actorId"
-                                    label="Existing actor ID"
+                                    label={t("pages.runs.runslaunchrail.existing.actor.id.4", "Existing actor ID")}
                                     placeholder="Actor:..."
                                     disabled={draftMode}
                                   />
                                 ) : null}
                                 <ProFormText
                                   name="payloadTypeUrl"
-                                  label="Payload type URL"
+                                  label={t("pages.runs.runslaunchrail.payload.type.url.4", "Payload type URL")}
                                   placeholder="type.googleapis.com/google.protobuf.StringValue"
-                                  extra="When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand."
+                                  extra={t("pages.runs.runslaunchrail.when.payload.base64.is.empty.4", "When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand.")}
                                 />
                                 <ProFormTextArea
                                   name="payloadBase64"
-                                  label="Payload base64 (advanced)"
+                                  label={t("pages.runs.runslaunchrail.payload.base64.advanced.4", "Payload base64 (advanced)")}
                                   fieldProps={{ rows: 3 }}
-                                  placeholder="Required for custom payload types; leave empty only for StringValue or AppScriptCommand."
+                                  placeholder={t("pages.runs.runslaunchrail.required.for.custom.payload.types.4", "Required for custom payload types; leave empty only for StringValue or AppScriptCommand.")}
                                 />
                               </div>
                             ),
@@ -945,7 +935,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
             },
             {
               key: "recent",
-              label: `Recent (${recentRunRows.length})`,
+              label: t("pages.runs.runslaunchrail.recent", "Recent ({value1})", { value1: recentRunRows.length }),
               children: renderRecentRunCards(
                 recentRunRows,
                 onClearRecentRuns,
@@ -953,7 +943,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
             },
             {
               key: "presets",
-              label: `Presets (${visiblePresets.length})`,
+              label: t("pages.runs.runslaunchrail.presets.3", "Presets ({value1})", { value1: visiblePresets.length }),
               children: (
                 <div style={scrollPanelStyle}>
                   {renderPresetCards(visiblePresets, onUsePreset)}

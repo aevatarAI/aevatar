@@ -1,4 +1,5 @@
 import type { ServiceServingTargetInput } from '@/shared/models/services';
+import { t } from "@/shared/i18n/messages";
 
 export type ServingTargetPlanStatus = {
   enabled: boolean;
@@ -26,8 +27,8 @@ export function buildServingTargetPlanStatus(
   if (!targets.length) {
     return {
       enabled: false,
-      reason: '当前没有 serving targets，不能提交空的流量计划。',
-      summary: '没有可提交的 serving targets。',
+      reason: t("pages.deployments.servingtargetplan.there.are.currently.no", "There are currently no serving targets, and you cannot submit an empty traffic plan."),
+      summary: t("pages.deployments.servingtargetplan.there.are.no.serving", "There are no serving targets to submit."),
       totalWeight,
     };
   }
@@ -37,8 +38,8 @@ export function buildServingTargetPlanStatus(
     return {
       enabled: false,
       reason:
-        '每个 serving target 都需要 revision，不能提交缺少 revision 的计划。',
-      summary: `${targets.length} 个 target，权重合计 ${totalWeight}%。`,
+        t("pages.deployments.servingtargetplan.each.serving.target.requires", "Each serving target requires a revision, and a plan that lacks a revision cannot be submitted."),
+      summary: t("pages.deployments.servingtargetplan.targets.with.total.weight", "{value1} targets, with a total weight of {value2}%.", { value1: targets.length, value2: totalWeight }),
       totalWeight,
     };
   }
@@ -53,8 +54,8 @@ export function buildServingTargetPlanStatus(
     return {
       enabled: false,
       reason:
-        'Serving 状态只能选择 active、paused、draining 或 disabled，避免提交后被后端静默改写。',
-      summary: `${targets.length} 个 target，权重合计 ${totalWeight}%。`,
+        t("pages.deployments.servingtargetplan.serving.status.can.only", "serving status can only be selected from active, paused, draining or disabled to avoid being silently rewritten by the backend after submission."),
+      summary: t("pages.deployments.servingtargetplan.targets.with.total.weight.2", "{value1} targets, with a total weight of {value2}%.", { value1: targets.length, value2: totalWeight }),
       totalWeight,
     };
   }
@@ -62,8 +63,8 @@ export function buildServingTargetPlanStatus(
   if (totalWeight !== 100) {
     return {
       enabled: false,
-      reason: `当前权重合计 ${totalWeight}%，需要等于 100% 才能提交。`,
-      summary: `${targets.length} 个 target，权重合计 ${totalWeight}%。`,
+      reason: t("pages.deployments.servingtargetplan.the.current.weight.totals", "The current weight totals {value1}% and needs to be equal to 100% to submit.", { value1: totalWeight }),
+      summary: t("pages.deployments.servingtargetplan.targets.with.total.weight.3", "{value1} targets, with a total weight of {value2}%.", { value1: targets.length, value2: totalWeight }),
       totalWeight,
     };
   }
@@ -71,8 +72,8 @@ export function buildServingTargetPlanStatus(
   return {
     enabled: true,
     reason:
-      '权重计划可提交；提交后仍需等待 serving/traffic readmodel 证据刷新。',
-    summary: `${targets.length} 个 target，权重合计 100%。`,
+      t("pages.deployments.servingtargetplan.the.weight.plan.can", "The weight plan can be submitted; after submission, you still need to wait for the serving/traffic readmodel evidence to be refreshed."),
+    summary: t("pages.deployments.servingtargetplan.targets.with.total.weight.4", "{value1} targets, with a total weight of 100%.", { value1: targets.length }),
     totalWeight,
   };
 }

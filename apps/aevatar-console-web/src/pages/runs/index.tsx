@@ -123,10 +123,12 @@ import {
   type RunSummaryRecord,
   type SelectedRouteRecord,
   type SignalFormValues,
+  getRunStatusLabel,
   trimOptional,
   type WaitingSignalRecord,
   workbenchOverviewGridStyle,
 } from "./runWorkbenchConfig";
+import { t } from "@/shared/i18n/messages";
 
 const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
   alignItems: "center",
@@ -1369,7 +1371,7 @@ const RunsPage: React.FC = () => {
           sourceLabel: "Draft bundle",
           llmStatus: "success",
           description:
-            "Executing the current Studio draft bundle through the scope draft-run endpoint.",
+            t("pages.runs.index.executing.the.current.studio.draft.2", "Executing the current Studio draft bundle through the scope draft-run endpoint."),
         };
       }
 
@@ -1649,11 +1651,9 @@ const RunsPage: React.FC = () => {
     if (waitingSignalRecord) {
       return {
         status: "wait_signal" as const,
-        label: `Waiting for signal ${
-          waitingSignalRecord.signalName || "unknown"
-        }`,
+        label: t("pages.runs.index.waiting.for.signal", "Waiting for signal {value1}", { value1: waitingSignalRecord.signalName || "unknown" }),
         alertType: "warning" as const,
-        title: "Waiting for external signal",
+        title: t("pages.runs.index.waiting.for.external.signal.2", "Waiting for external signal"),
         description:
           waitingSignalRecord.prompt ||
           "The run is paused until the expected signal arrives.",
@@ -1663,41 +1663,41 @@ const RunsPage: React.FC = () => {
     if (streaming) {
       return {
         status: "running" as const,
-        label: `Streaming over ${activeTransport.toUpperCase()}`,
+        label: t("pages.runs.index.streaming.over", "Streaming over {value1}", { value1: activeTransport.toUpperCase() }),
         alertType: "info" as const,
-        title: "Run in progress",
-        description: "Messages and events are still arriving from the backend.",
+        title: t("pages.runs.index.run.in.progress.2", "Run in progress"),
+        description: t("pages.runs.index.messages.and.events.are.still.2", "Messages and events are still arriving from the backend."),
       };
     }
 
     if (session.status === "running") {
       return {
         status: "running" as const,
-        label: "Invocation accepted",
+        label: t("pages.runs.index.invocation.accepted.2", "Invocation accepted"),
         alertType: "info" as const,
-        title: "Awaiting observation",
+        title: t("pages.runs.index.awaiting.observation.2", "Awaiting observation"),
         description:
-          "The backend accepted the command. This console will stay pending until observed events arrive.",
+          t("pages.runs.index.the.backend.accepted.the.command.2", "The backend accepted the command. This console will stay pending until observed events arrive."),
       };
     }
 
     if (session.status === "finished") {
       return {
         status: "finished" as const,
-        label: "Run completed",
+        label: t("pages.runs.index.run.completed.2", "Run completed"),
         alertType: "success" as const,
-        title: "Run finished",
-        description: "The backend reported a completed run.",
+        title: t("pages.runs.index.run.finished.2", "Run finished"),
+        description: t("pages.runs.index.the.backend.reported.completed.run.2", "The backend reported a completed run."),
       };
     }
 
     return {
       status: "idle" as const,
-      label: "Ready to start a run",
+      label: t("pages.runs.index.ready.to.start.run.2", "Ready to start a run"),
       alertType: "info" as const,
       title: "Idle",
       description:
-        "Compose a prompt or payload and start a scoped endpoint run.",
+        t("pages.runs.index.compose.prompt.or.payload.and.2", "Compose a prompt or payload and start a scoped endpoint run."),
     };
   }, [
     activeTransport,
@@ -1754,8 +1754,7 @@ const RunsPage: React.FC = () => {
       selectedRouteName,
     ]
   );
-  const runStatusText =
-    runStatusValueEnum[session.status]?.text ?? session.status;
+  const runStatusText = getRunStatusLabel(session.status);
   const isRunLive =
     streaming ||
     session.status === "running" ||
@@ -2131,7 +2130,7 @@ const RunsPage: React.FC = () => {
       showSubmitActions={!isChatConsole}
       streaming={streaming}
       submitPathLabel={submitPathLabel}
-      transportOptions={[{ label: "Service SSE stream", value: "sse" }]}
+      transportOptions={[{ label: t("pages.runs.index.service.sse.stream.2", "Service SSE stream"), value: "sse" }]}
       variant={isChatConsole ? "chat" : "default"}
       visiblePresets={visiblePresets}
       workflowCatalogLoading={workflowCatalogQuery.isLoading}
@@ -2185,27 +2184,24 @@ const RunsPage: React.FC = () => {
         <div style={runsWorkbenchHeaderBarStyle}>
           <div style={runsWorkbenchHeaderTitleStyle}>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              Run Console
-            </Typography.Title>
+              {t("pages.runs.index.run.console.2", "Run Console")}</Typography.Title>
             <Popover
               content={
                 <Typography.Paragraph
                   style={{ margin: 0, maxWidth: 360 }}
                   type="secondary"
                 >
-                  Start a scoped run over{" "}
+                  {t("pages.runs.index.start.scoped.run.over.2", "Start a scoped run over")}{" "}
                   <Typography.Text code>
                     {submitPathLabel}
                   </Typography.Text>{" "}
-                  and stay in one place for conversation, events, trace, and
-                  operator actions.
-                </Typography.Paragraph>
+                  {t("pages.runs.index.and.stay.in.one.place.2", "and stay in one place for conversation, events, trace, and operator actions.")}</Typography.Paragraph>
               }
               placement="bottomLeft"
               trigger={["hover", "click"]}
             >
               <Button
-                aria-label="Open runtime console guide"
+                aria-label={t("pages.runs.index.open.runtime.console.guide.2", "Open runtime console guide")}
                 icon={<InfoCircleOutlined />}
                 shape="circle"
                 type="text"
@@ -2231,8 +2227,7 @@ const RunsPage: React.FC = () => {
               icon={<AppstoreOutlined />}
               onClick={() => history.push(buildRuntimeWorkflowsHref())}
             >
-              Workflow catalog
-            </Button>
+              {t("pages.runs.index.workflow.catalog.2", "Workflow catalog")}</Button>
             {hasRunInspectorTarget ? (
               <Button
                 className={runsWorkbenchHeaderButtonClassName}
@@ -2248,8 +2243,7 @@ const RunsPage: React.FC = () => {
                   )
                 }
               >
-                Actor explorer
-              </Button>
+                {t("pages.runs.index.actor.explorer.2", "Actor explorer")}</Button>
             ) : null}
             {canOpenMissionControl ? (
               <Button
@@ -2257,8 +2251,7 @@ const RunsPage: React.FC = () => {
                 icon={<ControlOutlined />}
                 onClick={handleOpenMissionControl}
               >
-                Mission Control
-              </Button>
+                {t("pages.runs.index.mission.control.2", "Mission Control")}</Button>
             ) : null}
           </div>
         </div>
@@ -2316,7 +2309,7 @@ const RunsPage: React.FC = () => {
               >
                 <style>{runsChatComposerCss}</style>
                 <div style={runsChatComposerHeaderStyle}>
-                  <div style={runsChatComposerLabelStyle}>Prompt</div>
+                  <div style={runsChatComposerLabelStyle}>{t("pages.runs.index.prompt.2", "Prompt")}</div>
                   <div style={runsChatComposerContextStyle}>
                     <span style={runsChatComposerContextTagStyle}>
                       Workspace: {composerScopeId || "required"}
@@ -2328,8 +2321,7 @@ const RunsPage: React.FC = () => {
                       Endpoint: {composerEndpointLabel}
                     </span>
                     <Typography.Text style={runsChatComposerHintStyle}>
-                      Enter to send
-                    </Typography.Text>
+                      {t("pages.runs.index.enter.to.send.2", "Enter to send")}</Typography.Text>
                   </div>
                 </div>
                 {!composerReady ? (
@@ -2361,7 +2353,7 @@ const RunsPage: React.FC = () => {
                             }
                           }
                         }}
-                        placeholder="Describe the task to run."
+                        placeholder={t("pages.runs.index.describe.the.task.to.run.2", "Describe the task to run.")}
                         style={runsChatComposerTextareaStyle}
                         value={composerPrompt}
                       />
@@ -2379,8 +2371,7 @@ const RunsPage: React.FC = () => {
                       style={runsChatComposerSendButtonStyle}
                       type="primary"
                     >
-                      Send
-                    </Button>
+                      {t("pages.runs.index.send.2", "Send")}</Button>
                   </div>
                 </div>
               </div>
@@ -2437,7 +2428,7 @@ const RunsPage: React.FC = () => {
                       selectedItemKey={selectedTraceItemKey}
                     />
                   }
-                  title="Invocation trace"
+                  title={t("pages.runs.index.invocation.trace.2", "Invocation trace")}
                 />
               </div>
             </div>
@@ -2455,7 +2446,7 @@ const RunsPage: React.FC = () => {
             open
             size={560}
             styles={{ body: drawerBodyStyle }}
-            title="Run setup"
+            title={t("pages.runs.index.run.setup.2", "Run setup")}
             onClose={() => setIsSetupDrawerOpen(false)}
           >
             <div style={drawerScrollStyle}>{launchRailContent}</div>

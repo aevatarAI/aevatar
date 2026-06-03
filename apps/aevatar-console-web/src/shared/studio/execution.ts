@@ -5,6 +5,7 @@ import {
 } from '@xyflow/react';
 import type { StudioGraphEdgeData, StudioGraphNodeData } from './graph';
 import type { StudioExecutionDetail } from './models';
+import { t } from "@/shared/i18n/messages";
 
 export type ExecutionLogItem = {
   readonly tone: 'started' | 'completed' | 'failed' | 'run' | 'pending';
@@ -243,7 +244,7 @@ export function buildExecutionTrace(
       latestStepId = stepId;
       logs.push({
         tone: 'started',
-        title: `${stepId} started`,
+        title: t("shared.studio.execution.started", "{value1} started", { value1: stepId }),
         meta: [
           String(customPayload?.stepType || '').trim(),
           String(customPayload?.targetRole || '').trim(),
@@ -344,9 +345,7 @@ export function buildExecutionTrace(
       latestStepId = stepId;
       logs.push({
         tone: customPayload?.success === false ? 'failed' : 'completed',
-        title: `${stepId} ${
-          customPayload?.success === false ? 'failed' : 'completed'
-        }`,
+        title: t("shared.studio.execution.copy", "{value1} {value2}", { value1: stepId, value2: customPayload?.success === false ? 'failed' : 'completed' }),
         meta: [
           stepState.stepType,
           stepState.branchKey ? `branch ${stepState.branchKey}` : null,
@@ -410,7 +409,7 @@ export function buildExecutionTrace(
     if (customName === 'studio.run.stop.requested') {
       logs.push({
         tone: 'pending',
-        title: 'Stop requested',
+        title: t("shared.studio.execution.stop.requested", "Stop requested"),
         meta: '',
         previewText: buildExecutionLogPreview(customPayload?.reason),
         clipboardText: buildExecutionLogText(customPayload?.reason),
@@ -424,7 +423,7 @@ export function buildExecutionTrace(
     if (customName === 'aevatar.run.stopped') {
       logs.push({
         tone: 'run',
-        title: 'Run stopped',
+        title: t("shared.studio.execution.run.stopped", "Run stopped"),
         meta: '',
         previewText: buildExecutionLogPreview(customPayload?.reason),
         clipboardText: buildExecutionLogText(customPayload?.reason),
@@ -440,7 +439,7 @@ export function buildExecutionTrace(
     if (runError?.message) {
       logs.push({
         tone: 'failed',
-        title: 'Run failed',
+        title: t("shared.studio.execution.run.failed", "Run failed"),
         meta: String(runError.code || ''),
         previewText: buildExecutionLogPreview(runError.message),
         clipboardText: buildExecutionLogText(runError.message),
@@ -456,7 +455,7 @@ export function buildExecutionTrace(
         parsed.runStopped as Record<string, unknown> | undefined;
       logs.push({
         tone: 'run',
-        title: 'Run stopped',
+        title: t("shared.studio.execution.run.stopped.2", "Run stopped"),
         meta: '',
         previewText: buildExecutionLogPreview(runStopped?.reason),
         clipboardText: buildExecutionLogText(runStopped?.reason),
@@ -470,7 +469,7 @@ export function buildExecutionTrace(
     if (parsed.runFinished) {
       logs.push({
         tone: 'run',
-        title: 'Run finished',
+        title: t("shared.studio.execution.run.finished", "Run finished"),
         meta: '',
         previewText: '',
         clipboardText: '',
@@ -484,7 +483,7 @@ export function buildExecutionTrace(
     if (customName === 'aevatar.run.context') {
       logs.push({
         tone: 'run',
-        title: 'Run started',
+        title: t("shared.studio.execution.run.started", "Run started"),
         meta: String(customPayload?.workflowName || detail.workflowName || ''),
         previewText: '',
         clipboardText: '',

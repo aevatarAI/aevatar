@@ -107,7 +107,8 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Temperature.Should().Be(0.2);
         provider.LastRequest.Messages.Should().ContainSingle();
         provider.LastRequest.Messages[0].Content.Should().Be("ping");
-        provider.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
+        provider.LastRequest.RequestId.Should().Be(responseId);
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
         provider.LastRequest.CallerContext.Should().Be(new LLMRequestCallerContext(
             "user-1",
@@ -136,6 +137,47 @@ public sealed class MainnetResponsesEndpointsTests
         var snapshot = await sessions.GetByResponseIdAsync(responseId);
         snapshot!.ActorId.Should().NotContain(responseId);
         sessions.RecordedCompletions.Should().ContainSingle(x => x.Completion.OutputText == "pong");
+    }
+
+    [Fact]
+    public async Task PostResponses_WhenCompletionReadModelLags_ShouldWaitAndReturnCompletedResponse()
+    {
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "eventually visible",
+                    IsLast = true,
+                },
+            ],
+        };
+        var sessions = new RecordingResponseSessionStore
+        {
+            CompletionObservationLagReads = 1,
+        };
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("status").GetString().Should().Be("completed");
+        doc.RootElement.GetProperty("output")[0]
+            .GetProperty("content")[0]
+            .GetProperty("text")
+            .GetString()
+            .Should()
+            .Be("eventually visible");
     }
 
     [Fact]
@@ -350,14 +392,14 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.OwnerSubject] = "owner-1",
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
         };
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
         try
         {
-            AgentToolRequestContext.CurrentMetadata = metadata;
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
             var substituteTools = await provider.GetSubstituteToolsAsync(context);
             var todoTool = substituteTools.Single(x => x.Name == "TodoWrite");
             var todoResult = await todoTool.ExecuteAsync(
@@ -371,7 +413,7 @@ public sealed class MainnetResponsesEndpointsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
 
         commandPort.TodoWrites.Should().ContainSingle();
@@ -397,14 +439,14 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
         try
         {
-            AgentToolRequestContext.CurrentMetadata = metadata;
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
             var fetchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebFetch");
             var result = await fetchTool.ExecuteAsync("""{"url":"https://example.com/docs"}""");
 
@@ -412,7 +454,7 @@ public sealed class MainnetResponsesEndpointsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
 
         commandPort.WebTraces.Should().ContainSingle();
@@ -437,14 +479,14 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
-        var previous = AgentToolRequestContext.CurrentMetadata;
+        var previous = AgentToolRequestContext.Current;
         var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
         try
         {
-            AgentToolRequestContext.CurrentMetadata = metadata;
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(metadata);
             var searchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebSearch");
             var result = await searchTool.ExecuteAsync("""{"query":"aevatar docs","max_results":3}""");
 
@@ -452,7 +494,7 @@ public sealed class MainnetResponsesEndpointsTests
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = previous;
+            AgentToolRequestContext.Current = previous;
         }
 
         commandPort.WebTraces.Should().ContainSingle();
@@ -3138,6 +3180,7 @@ public sealed class MainnetResponsesEndpointsTests
         ILlmSessionQueryPort
     {
         private readonly Dictionary<string, LlmSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _completionObservationLagReads = new(StringComparer.Ordinal);
 
         public List<LlmSessionRecord> Registered { get; } = [];
 
@@ -3150,6 +3193,8 @@ public sealed class MainnetResponsesEndpointsTests
         public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
 
         public List<(string ActorId, string ResponseId, string CallId)> ResolvedToolResults { get; } = [];
+
+        public int CompletionObservationLagReads { get; init; }
 
         public void Seed(LlmSessionSnapshot snapshot)
         {
@@ -3275,6 +3320,10 @@ public sealed class MainnetResponsesEndpointsTests
                                 clone.Usage.TotalTokens)),
                 };
             }
+            if (CompletionObservationLagReads > 0)
+            {
+                _completionObservationLagReads[responseId] = CompletionObservationLagReads;
+            }
 
             return Task.CompletedTask;
         }
@@ -3345,6 +3394,14 @@ public sealed class MainnetResponsesEndpointsTests
             CancellationToken ct = default)
         {
             _snapshots.TryGetValue(responseId, out var snapshot);
+            if (snapshot?.Completion is not null &&
+                _completionObservationLagReads.TryGetValue(responseId, out var remaining) &&
+                remaining > 0)
+            {
+                _completionObservationLagReads[responseId] = remaining - 1;
+                return Task.FromResult<LlmSessionSnapshot?>(snapshot with { Completion = null });
+            }
+
             return Task.FromResult(snapshot);
         }
 

@@ -1,4 +1,5 @@
 import type { ServiceRolloutSnapshot } from '@/shared/models/services';
+import { t } from "@/shared/i18n/messages";
 
 export type RolloutControlAction = 'advance' | 'pause' | 'resume' | 'rollback';
 
@@ -19,7 +20,7 @@ export function buildRolloutActionAvailability(
   rollout: ServiceRolloutSnapshot | null | undefined,
 ): Record<RolloutControlAction, ReleaseActionAvailability> {
   if (!rollout?.rolloutId?.trim()) {
-    const reason = '当前没有活动 rollout，不能提交 rollout 控制动作。';
+    const reason = t("pages.deployments.releaseactionavailability.there.is.currently.no", "There is currently no active rollout and rollout control actions cannot be submitted.");
     return {
       advance: { enabled: false, reason },
       pause: { enabled: false, reason },
@@ -43,7 +44,7 @@ export function buildRolloutActionAvailability(
   const rollbackActive = hasAnyStatus(status, ['rollback', 'rollingback']);
 
   if (terminal) {
-    const reason = `当前 rollout 状态为 ${rollout.status || 'terminal'}，控制动作已不可提交。`;
+    const reason = t("pages.deployments.releaseactionavailability.the.current.rollout.status", "The current rollout status is {value1}, and the control action cannot be submitted.", { value1: rollout.status || 'terminal' });
     return {
       advance: { enabled: false, reason },
       pause: { enabled: false, reason },
@@ -53,7 +54,7 @@ export function buildRolloutActionAvailability(
   }
 
   if (rollbackActive) {
-    const reason = '当前 rollout 已在回滚流程中，等待回滚证据刷新后再操作。';
+    const reason = t("pages.deployments.releaseactionavailability.the.current.rollout.is", "The current rollout is already in the rollback process, wait for the rollback evidence to be refreshed before proceeding.");
     return {
       advance: { enabled: false, reason },
       pause: { enabled: false, reason },
@@ -66,24 +67,24 @@ export function buildRolloutActionAvailability(
     advance: {
       enabled: !paused,
       reason: paused
-        ? '当前 rollout 已暂停；请先恢复，再推进到下一阶段。'
-        : '推进会提交命令，仍需等待 rollout/serving/traffic 证据刷新。',
+        ? t("pages.deployments.releaseactionavailability.the.current.rollout.is.2", "The current rollout is paused; please resume it before advancing to the next stage.")
+        : t("pages.deployments.releaseactionavailability.the.push.will.submit", "The push will submit the command and still need to wait for the rollout/serving/traffic evidence to be refreshed."),
     },
     pause: {
       enabled: !paused,
       reason: paused
-        ? '当前 rollout 已暂停，不需要再次暂停。'
-        : '暂停会提交命令，仍需等待 rollout 状态显示 paused。',
+        ? t("pages.deployments.releaseactionavailability.the.current.rollout.is.3", "The current rollout is paused and does not need to be paused again.")
+        : t("pages.deployments.releaseactionavailability.pause.will.submit.the", "Pause will submit the command, and you still need to wait for the rollout status to show paused."),
     },
     resume: {
       enabled: paused,
       reason: paused
-        ? '恢复会提交命令，仍需等待 rollout 状态重新活动。'
-        : '只有 paused 状态的 rollout 才需要恢复。',
+        ? t("pages.deployments.releaseactionavailability.recovery.will.submit.the", "Recovery will submit the command and still wait for the rollout state to become active again.")
+        : t("pages.deployments.releaseactionavailability.only.rollouts.in.the", "Only rollouts in the paused state need to be restored."),
     },
     rollback: {
       enabled: true,
-      reason: '回滚会提交命令，仍需等待 serving 回到 baseline 证据。',
+      reason: t("pages.deployments.releaseactionavailability.rollback.will.commit.the", "Rollback will commit the command and still need to wait for evidence that serving returns to baseline."),
     },
   };
 }

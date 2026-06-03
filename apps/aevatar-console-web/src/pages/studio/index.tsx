@@ -158,6 +158,7 @@ import {
   dedupeStudioWorkflowSummaries,
   StudioExecutionPage,
 } from './components/StudioWorkbenchSections';
+import { t } from "@/shared/i18n/messages";
 
 type StudioRouteState = {
   scopeId: string;
@@ -307,7 +308,7 @@ export function buildStudioMemberBindingPendingNotice(
         ? ' Read model has not materialized this run yet.'
         : ' Status read model is still catching up.';
   return {
-    message: `${displayName} binding request was accepted and is still running.${status}${freshness} Studio will keep refreshing the status before treating it as bound.`,
+    message: t("pages.studio.index.binding.request.was.accepted.and.is", "{value1} binding request was accepted and is still running.{value2}{value3} Studio will keep refreshing the status before treating it as bound.", { value1: displayName, value2: status, value3: freshness }),
     type: 'info',
   };
 }
@@ -773,7 +774,7 @@ function describeSavedWorkflowLocation(
     return filePath;
   }
 
-  return directoryLabel || fileName || '当前工作区';
+  return directoryLabel || fileName || t("pages.studio.index.copy", "当前工作区");
 }
 
 function hasWorkflowGraphContent(
@@ -3583,11 +3584,11 @@ const StudioPage: React.FC = () => {
     'Config default';
   const workflowDryRunBlockedReason = useMemo(() => {
     if (userLlmSettingsQuery.isLoading) {
-      return 'Studio 正在检查可用 provider，请稍后再运行。';
+      return t("pages.studio.index.studio.provider", "Studio 正在检查可用 provider，请稍后再运行。");
     }
 
     if (readyUserRoutes.length === 0) {
-      return '当前没有 ready 的 AI provider。先连接 provider，再回来运行这个 workflow draft。';
+      return t("pages.studio.index.ready.ai.provider.provider", "当前没有 ready 的 AI provider。先连接 provider，再回来运行这个 workflow draft。");
     }
 
     return '';
@@ -4187,7 +4188,7 @@ const StudioPage: React.FC = () => {
             setSaveNotice({
               type: 'error',
               message:
-                'Resolve Studio YAML validation errors before editing the workflow graph.',
+                t("pages.studio.index.resolve.studio.yaml.validation.errors.4", "Resolve Studio YAML validation errors before editing the workflow graph."),
             });
             return null;
           }
@@ -4213,7 +4214,7 @@ const StudioPage: React.FC = () => {
       if (parseYamlQuery.isLoading) {
         setSaveNotice({
           type: 'error',
-          message: 'Studio is still parsing the current workflow draft.',
+          message: t("pages.studio.index.studio.is.still.parsing.the.2", "Studio is still parsing the current workflow draft."),
         });
         return null;
       }
@@ -4221,14 +4222,14 @@ const StudioPage: React.FC = () => {
       if (hasValidationError(activeWorkflowFindings)) {
         setSaveNotice({
           type: 'error',
-          message: 'Resolve Studio YAML validation errors before editing the workflow graph.',
+          message: t("pages.studio.index.resolve.studio.yaml.validation.errors.5", "Resolve Studio YAML validation errors before editing the workflow graph."),
         });
         return null;
       }
 
       setSaveNotice({
         type: 'error',
-        message: 'Load a workflow draft before editing the workflow graph.',
+        message: t("pages.studio.index.load.workflow.draft.before.editing.3", "Load a workflow draft before editing the workflow graph."),
       });
       return null;
     },
@@ -4595,7 +4596,7 @@ const StudioPage: React.FC = () => {
           kind: 'script' as const,
           displayName: trimOptional(effectiveScriptState.displayName) || scriptId,
           description:
-            'Bind the catalog-applied Script revision as a callable member service. Draft-run remains a Build-only source test.',
+            t("pages.studio.index.bind.the.catalog.applied.script.2", "Bind the catalog-applied Script revision as a callable member service. Draft-run remains a Build-only source test."),
           actionLabel: 'Bind Script member',
           scriptId,
           scriptRevision:
@@ -4619,7 +4620,7 @@ const StudioPage: React.FC = () => {
         kind: 'workflow' as const,
         displayName,
         description:
-          'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
+          t("pages.studio.index.publish.the.current.workflow.revision.2", "Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member."),
         actionLabel: 'Bind current revision',
       };
     }
@@ -4648,7 +4649,7 @@ const StudioPage: React.FC = () => {
         kind: 'gagent' as const,
         displayName,
         description:
-          'Bind the selected typed GAgent as this member service, then Studio can reveal the invoke URL and endpoint contract.',
+          t("pages.studio.index.bind.the.selected.typed.gagent.2", "Bind the selected typed GAgent as this member service, then Studio can reveal the invoke URL and endpoint contract."),
         actionLabel: 'Bind GAgent member',
         actorTypeName,
         endpoints: [
@@ -5411,7 +5412,7 @@ const StudioPage: React.FC = () => {
       if (!currentStepId) {
         setSaveNotice({
           type: 'error',
-          message: 'Select a workflow step before saving its draft changes.',
+          message: t("pages.studio.index.select.workflow.step.before.saving", "Select a workflow step before saving its draft changes."),
         });
         return null;
       }
@@ -5469,7 +5470,7 @@ const StudioPage: React.FC = () => {
     if (!directoryId) {
       setSaveNotice({
         type: 'error',
-        message: 'Add a workflow directory in Config before saving.',
+        message: t("pages.studio.index.add.workflow.directory.in.config.2", "Add a workflow directory in Config before saving."),
       });
       return;
     }
@@ -5478,7 +5479,7 @@ const StudioPage: React.FC = () => {
     if (!workflowName) {
       setSaveNotice({
         type: 'error',
-        message: 'Workflow name is required before saving.',
+        message: t("pages.studio.index.workflow.name.is.required.before.3", "Workflow name is required before saving."),
       });
       return;
     }
@@ -5531,7 +5532,7 @@ const StudioPage: React.FC = () => {
         }));
       }
       void message.success(
-        `已保存到 ${describeSavedWorkflowLocation(savedWorkflow)}。`,
+        t("pages.studio.index.copy.2", "已保存到 {value1}。", { value1: describeSavedWorkflowLocation(savedWorkflow) }),
       );
     } catch (error) {
       setSaveNotice({
@@ -6131,7 +6132,7 @@ const StudioPage: React.FC = () => {
 
       Modal.confirm({
         autoFocusButton: 'cancel',
-        cancelText: 'Keep member',
+        cancelText: t("pages.studio.index.keep.member.2", "Keep member"),
         centered: true,
         content: (
           <div style={{ display: 'grid', gap: 12 }}>
@@ -6142,9 +6143,7 @@ const StudioPage: React.FC = () => {
                 lineHeight: '20px',
               }}
             >
-              Remove <strong>{workflowLabel}</strong> from the current member
-              inventory?
-            </Typography.Text>
+              {t("pages.studio.index.remove.2", "Remove")}<strong>{workflowLabel}</strong> {t("pages.studio.index.from.the.current.member.inventory.2", "from the current member inventory?")}</Typography.Text>
             <div
               style={{
                 background: 'rgba(254, 242, 242, 0.92)',
@@ -6163,8 +6162,7 @@ const StudioPage: React.FC = () => {
                   letterSpacing: '0.02em',
                 }}
               >
-                Draft only
-              </Typography.Text>
+                {t("pages.studio.index.draft.only.2", "Draft only")}</Typography.Text>
               <Typography.Text
                 style={{
                   color: '#7f1d1d',
@@ -6172,9 +6170,7 @@ const StudioPage: React.FC = () => {
                   lineHeight: '18px',
                 }}
               >
-                This only deletes the Studio workflow draft. Published bindings,
-                live revisions, and historical runs stay intact.
-              </Typography.Text>
+                {t("pages.studio.index.this.only.deletes.the.studio.2", "This only deletes the Studio workflow draft. Published bindings, live revisions, and historical runs stay intact.")}</Typography.Text>
             </div>
           </div>
         ),
@@ -6182,8 +6178,8 @@ const StudioPage: React.FC = () => {
         okButtonProps: {
           danger: true,
         },
-        okText: 'Delete member',
-        title: 'Delete workflow member',
+        okText: t("pages.studio.index.delete.member.2", "Delete member"),
+        title: t("pages.studio.index.delete.workflow.member.2", "Delete workflow member"),
         width: 460,
         onOk: async () => {
           setInventoryBusyKey(memberKey);
@@ -6313,7 +6309,7 @@ const StudioPage: React.FC = () => {
     if (!workflowName) {
       setRunNotice({
         type: 'error',
-        message: 'Workflow name is required before starting a draft run.',
+        message: t("pages.studio.index.workflow.name.is.required.before.4", "Workflow name is required before starting a draft run."),
       });
       return;
     }
@@ -6321,7 +6317,7 @@ const StudioPage: React.FC = () => {
     if (!draftYaml.trim()) {
       setRunNotice({
         type: 'error',
-        message: 'Workflow YAML is required before starting a draft run.',
+        message: t("pages.studio.index.workflow.yaml.is.required.before.2", "Workflow YAML is required before starting a draft run."),
       });
       return;
     }
@@ -6329,7 +6325,7 @@ const StudioPage: React.FC = () => {
     if (!prompt) {
       setRunNotice({
         type: 'error',
-        message: 'Execution prompt is required before starting a draft run.',
+        message: t("pages.studio.index.execution.prompt.is.required.before.2", "Execution prompt is required before starting a draft run."),
       });
       return;
     }
@@ -6337,7 +6333,7 @@ const StudioPage: React.FC = () => {
     if (hasValidationError(activeWorkflowFindings)) {
       setRunNotice({
         type: 'error',
-        message: 'Resolve Studio YAML validation errors before starting a draft run.',
+        message: t("pages.studio.index.resolve.studio.yaml.validation.errors.6", "Resolve Studio YAML validation errors before starting a draft run."),
       });
       return;
     }
@@ -6345,7 +6341,7 @@ const StudioPage: React.FC = () => {
     if (!scopeId) {
       setRunNotice({
         type: 'error',
-        message: 'Resolve the current workspace before starting a draft run.',
+        message: t("pages.studio.index.resolve.the.current.workspace.before.2", "Resolve the current workspace before starting a draft run."),
       });
       return;
     }
@@ -6431,7 +6427,7 @@ const StudioPage: React.FC = () => {
     if (!nextWindow) {
       setExecutionNotice({
         type: 'error',
-        message: 'Allow pop-ups to open execution logs in a new window.',
+        message: t("pages.studio.index.allow.pop.ups.to.open.2", "Allow pop-ups to open execution logs in a new window."),
       });
       return;
     }
@@ -6527,7 +6523,7 @@ const StudioPage: React.FC = () => {
       ]);
       setExecutionNotice({
         type: 'info',
-        message: 'Stop requested for the active member run.',
+        message: t("pages.studio.index.stop.requested.for.the.active.2", "Stop requested for the active member run."),
       });
     } catch (error) {
       setExecutionNotice({
@@ -6641,7 +6637,7 @@ const StudioPage: React.FC = () => {
     if (!document) {
       setSaveNotice({
         type: 'error',
-        message: 'Load a workflow draft before editing the description.',
+        message: t("pages.studio.index.load.workflow.draft.before.editing.4", "Load a workflow draft before editing the description."),
       });
       return;
     }
@@ -6710,7 +6706,7 @@ const StudioPage: React.FC = () => {
       if (!currentStepId) {
         setSaveNotice({
           type: 'error',
-          message: 'Select a workflow step before applying changes.',
+          message: t("pages.studio.index.select.workflow.step.before.applying.2", "Select a workflow step before applying changes."),
         });
         return;
       }
@@ -6738,7 +6734,7 @@ const StudioPage: React.FC = () => {
     if (!currentStepId) {
       setSaveNotice({
         type: 'error',
-        message: 'Select a workflow step before removing it.',
+        message: t("pages.studio.index.select.workflow.step.before.removing.2", "Select a workflow step before removing it."),
       });
       return;
     }
@@ -7049,18 +7045,18 @@ const StudioPage: React.FC = () => {
   );
   const pageTitle =
     isBuildEditorSurface
-      ? 'Workflow 构建'
+      ? t("pages.studio.index.workflow", "Workflow 构建")
       : isBuildScriptsSurface
-        ? '脚本行为'
+        ? t("pages.studio.index.copy.3", "脚本行为")
       : isBuildGAgentSurface
-        ? 'GAgent 构建'
+        ? t("pages.studio.index.gagent", "GAgent 构建")
       : isBindSurface
-        ? '成员绑定'
+        ? t("pages.studio.index.copy.4", "成员绑定")
       : isInvokeSurface
-        ? '成员调用'
+        ? t("pages.studio.index.copy.5", "成员调用")
       : isObserveSurface
-        ? '测试运行'
-        : '行为定义';
+        ? t("pages.studio.index.copy.6", "测试运行")
+        : t("pages.studio.index.copy.7", "行为定义");
   const currentLifecycleStep =
     isBindSurface
       ? 'bind'
@@ -7855,11 +7851,11 @@ const StudioPage: React.FC = () => {
           testTeam: options?.test && entryVisible,
           teamId: candidate.teamId,
         });
-        void message.info('Team entry 变更已提交，正在等待同步确认。');
+        void message.info(t("pages.studio.index.team.entry", "Team entry 变更已提交，正在等待同步确认。"));
         if (options?.test) {
           if (!entryVisible) {
             void message.warning(
-              'Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后在 Team Detail 中重试 Test Team。',
+              t("pages.studio.index.team.entry.team.detail", "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后在 Team Detail 中重试 Test Team。"),
             );
           }
           history.push(targetHref);
@@ -8679,28 +8675,26 @@ const StudioPage: React.FC = () => {
 
     if (hasSelectedMemberFocus && !hasInvokeTargetMemberSelection) {
       return {
-        message: '当前选择还不能直接调用。',
+        message: t("pages.studio.index.copy.8", "当前选择还不能直接调用。"),
         description:
-          '调用页面只会固定到已发布的成员。请先为这个成员完成绑定，再回到这里继续调用。',
+          t("pages.studio.index.copy.9", "调用页面只会固定到已发布的成员。请先为这个成员完成绑定，再回到这里继续调用。"),
         type: 'info' as const,
       };
     }
 
     if (!hasInvokeTargetMemberSelection) {
       return {
-        message: '请选择要调用的成员。',
+        message: t("pages.studio.index.copy.10", "请选择要调用的成员。"),
         description:
-          '请先在“团队成员”里选择成员，或从绑定页面继续进入，这样调用页面才会稳定固定到单个成员。',
+          t("pages.studio.index.copy.11", "请先在“团队成员”里选择成员，或从绑定页面继续进入，这样调用页面才会稳定固定到单个成员。"),
         type: 'info' as const,
       };
     }
 
     return {
-      message: `${
-        invokeTargetLabel || '当前成员'
-      } 还不能直接调用。`,
+      message: t("pages.studio.index.copy.12", "{value1} 还不能直接调用。", { value1: invokeTargetLabel || '当前成员' }),
       description:
-        '当前团队上下文里，这个成员还没有暴露可调用的已发布调用契约。',
+        t("pages.studio.index.copy.13", "当前团队上下文里，这个成员还没有暴露可调用的已发布调用契约。"),
       type: 'warning' as const,
     };
   }, [
@@ -8860,7 +8854,7 @@ const StudioPage: React.FC = () => {
           queryKey: ['teams', 'roster', resolvedStudioScopeId],
         }),
       ]);
-      void message.info('Team entry 变更已提交，正在等待同步确认。');
+      void message.info(t("pages.studio.index.team.entry.2", "Team entry 变更已提交，正在等待同步确认。"));
     } catch (error) {
       void message.error(
         error instanceof Error
@@ -9730,14 +9724,14 @@ const StudioPage: React.FC = () => {
         key: 'build',
         label: 'Build',
         description:
-          'Edit the selected member implementation with workflow, script, or GAgent tools.',
+          t("pages.studio.index.edit.the.selected.member.implementation.2", "Edit the selected member implementation with workflow, script, or GAgent tools."),
         status: currentLifecycleStep === 'build' ? 'active' : 'available',
       },
       {
         key: 'bind',
         label: 'Bind',
         description:
-          'Inspect published services, binding revisions, and serving state for the selected member.',
+          t("pages.studio.index.inspect.published.services.binding.revisions.2", "Inspect published services, binding revisions, and serving state for the selected member."),
         status: currentLifecycleStep === 'bind' ? 'active' : 'available',
         disabled: !resolvedStudioScopeId || !selectedMemberCanBind,
       },
@@ -9745,7 +9739,7 @@ const StudioPage: React.FC = () => {
         key: 'invoke',
         label: 'Invoke',
         description:
-          'Invoke the selected member in-place and carry the trace forward into runtime runs.',
+          t("pages.studio.index.invoke.the.selected.member.in.2", "Invoke the selected member in-place and carry the trace forward into runtime runs."),
         status: currentLifecycleStep === 'invoke' ? 'active' : 'available',
         disabled: !resolvedStudioScopeId || !selectedMemberCanInvoke,
       },
@@ -9753,7 +9747,7 @@ const StudioPage: React.FC = () => {
         key: 'observe',
         label: 'Observe',
         description:
-          'Open execution traces and run posture for the selected member.',
+          t("pages.studio.index.open.execution.traces.and.run.2", "Open execution traces and run posture for the selected member."),
         status: currentLifecycleStep === 'observe' ? 'active' : 'available',
       },
     ],
@@ -9793,13 +9787,12 @@ const StudioPage: React.FC = () => {
             textTransform: 'uppercase',
           }}
         >
-          Construction Mode
-        </div>
+          {t("pages.studio.index.construction.mode.2", "Construction Mode")}</div>
         <InlineInfoButton
           ariaLabel="Open construction mode help"
           content={
             <div style={{ display: 'grid', gap: 8 }}>
-              <div>Build 阶段先确定当前 member 采用哪种实现方式，然后在同一块 workbench 里直接完成 authoring 和 dry-run。</div>
+              <div>{t("pages.studio.index.build.member.workbench.authoring", "Build 阶段先确定当前 member 采用哪种实现方式，然后在同一块 workbench 里直接完成 authoring 和 dry-run。")}</div>
               {buildModeDefinitions.map((item) => (
                 <div
                   key={item.key}
@@ -9971,17 +9964,17 @@ const StudioPage: React.FC = () => {
   const observeEmptyState = useMemo(() => {
     if (!hasSelectedMemberFocus) {
       return {
-        title: 'Select a member to observe.',
+        title: t("pages.studio.index.select.member.to.observe.2", "Select a member to observe."),
         description:
-          'Choose a member from Team members first so Observe stays pinned to one member context.',
+          t("pages.studio.index.choose.member.from.team.members.2", "Choose a member from Team members first so Observe stays pinned to one member context."),
       };
     }
 
     if (!workbenchPublishedServiceId) {
       return {
-        title: `${currentMemberLabel || 'Current member'} is not bound yet.`,
+        title: t("pages.studio.index.is.not.bound.yet", "{value1} is not bound yet.", { value1: currentMemberLabel || 'Current member' }),
         description:
-          'Publish or bind this member first, then Studio can load its runtime runs and audit trail here.',
+          t("pages.studio.index.publish.or.bind.this.member.2", "Publish or bind this member first, then Studio can load its runtime runs and audit trail here."),
       };
     }
 
@@ -9990,7 +9983,7 @@ const StudioPage: React.FC = () => {
       currentMemberExecutions.length === 0
     ) {
       return {
-        title: `No runs for ${currentMemberLabel || 'this member'} yet.`,
+        title: t("pages.studio.index.no.runs.for.yet", "No runs for {value1} yet.", { value1: currentMemberLabel || 'this member' }),
         description:
           observeImplementationKind === 'workflow'
             ? 'Invoke this member, or start a workflow draft run, then return here to inspect the current member history.'
@@ -10021,15 +10014,15 @@ const StudioPage: React.FC = () => {
         ? currentMemberLabel
         : 'Select a member'
       : isBuildEditorSurface
-        ? activeWorkflowName || templateWorkflow || 'Workflow 构建'
+        ? activeWorkflowName || templateWorkflow || t("pages.studio.index.workflow.2", "Workflow 构建")
         : isBuildGAgentSurface
           ? hasSelectedMemberFocus
             ? currentMemberLabel
-            : 'GAgent 构建'
+            : t("pages.studio.index.gagent.2", "GAgent 构建")
         : isBuildScriptsSurface
           ? isScriptBuildLaunchpadEmpty
             ? 'Create a script'
-            : selectedScriptId || 'Script 构建'
+            : selectedScriptId || t("pages.studio.index.script", "Script 构建")
         : isObserveSurface
           ? hasSelectedMemberFocus
             ? currentMemberLabel
@@ -10037,32 +10030,32 @@ const StudioPage: React.FC = () => {
         : isBindSurface
           ? hasSelectedMemberFocus
             ? currentMemberLabel
-            : '成员绑定'
+            : t("pages.studio.index.copy.14", "成员绑定")
           : isInvokeSurface
-            ? currentMemberLabel || '成员调用'
+            ? currentMemberLabel || t("pages.studio.index.copy.15", "成员调用")
             : pageTitle;
   const studioContextDescriptor =
     showWorkflowEntryEmptyState
       ? hasSelectedMemberFocus
-        ? '当前 member 还没有可继续编辑的 Build surface。你可以先去 Bind / Invoke，或显式创建新的 member。'
+        ? t("pages.studio.index.member.build.surface.bind", "当前 member 还没有可继续编辑的 Build surface。你可以先去 Bind / Invoke，或显式创建新的 member。")
         : memberItems.length > 0
-        ? '先从左侧选一个已有 member，再继续 Build；如果要新增，再显式点击 Create member。'
-        : '这个 team 还没有 member。显式点击 Create member，再进入新的实现草稿。'
+        ? t("pages.studio.index.member.build.create.member", "先从左侧选一个已有 member，再继续 Build；如果要新增，再显式点击 Create member。")
+        : t("pages.studio.index.team.member.create.member", "这个 team 还没有 member。显式点击 Create member，再进入新的实现草稿。")
       : isBuildEditorSurface
-        ? '围绕当前 member 的 workflow canvas、step detail 和 dry-run 继续构建'
+        ? t("pages.studio.index.member.workflow.canvas.step", "围绕当前 member 的 workflow canvas、step detail 和 dry-run 继续构建")
         : isBuildGAgentSurface
-          ? '在 Build 内定义 GAgent 类型、角色、初始 prompt、工具和状态持久化'
+          ? t("pages.studio.index.build.gagent.prompt", "在 Build 内定义 GAgent 类型、角色、初始 prompt、工具和状态持久化")
         : isBuildScriptsSurface
           ? isScriptBuildLaunchpadEmpty
             ? 'Start a script draft before Studio opens editing, validation, or run controls.'
-            : '围绕 script source、diagnostics 和 dry-run 继续迭代当前 member'
+            : t("pages.studio.index.script.source.diagnostics.dry", "围绕 script source、diagnostics 和 dry-run 继续迭代当前 member")
         : isObserveSurface
-          ? '围绕当前 member 的最近运行、回放和基线继续观察'
+          ? t("pages.studio.index.member", "围绕当前 member 的最近运行、回放和基线继续观察")
           : isBindSurface
-            ? '确认当前 member 的 published contract，并继续去 Invoke'
+            ? t("pages.studio.index.member.published.contract.invoke", "确认当前 member 的 published contract，并继续去 Invoke")
             : isInvokeSurface
-              ? '调用当前成员并保留运行观察上下文'
-              : '成员工作台';
+              ? t("pages.studio.index.copy.16", "调用当前成员并保留运行观察上下文")
+              : t("pages.studio.index.copy.17", "成员工作台");
   const studioBoundServiceLabel =
     hasSelectedMemberFocus
       ? trimOptional(routeState.legacyServiceId) ||
@@ -10100,7 +10093,7 @@ const StudioPage: React.FC = () => {
               undefined,
           }))
     : buildTeamsHref();
-  const studioReturnLabel = '返回团队';
+  const studioReturnLabel = t("pages.studio.index.copy.18", "返回团队");
   const currentStudioReturnTo =
     routeState.returnTo ||
     (typeof window === 'undefined'
@@ -10130,7 +10123,7 @@ const StudioPage: React.FC = () => {
     <div style={inventoryActionsStyle}>
       <div style={inventoryActionRowStyle}>
         <Button
-          aria-label="Create member"
+          aria-label={t("pages.studio.index.create.member.6", "Create member")}
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           disabled={createMemberButtonDisabled}
           loading={inventoryBusyAction === 'create'}
@@ -10141,8 +10134,7 @@ const StudioPage: React.FC = () => {
             opacity: createMemberButtonDisabled ? 0.56 : 1,
           }}
         >
-          Create member
-        </Button>
+          {t("pages.studio.index.create.member.7", "Create member")}</Button>
         <Button
           aria-label={`Rename ${selectedInventoryLabel}`}
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -10165,8 +10157,7 @@ const StudioPage: React.FC = () => {
                 : 1,
           }}
         >
-          Rename
-        </Button>
+          {t("pages.studio.index.rename.2", "Rename")}</Button>
         <Button
           aria-label={`Delete ${selectedInventoryLabel}`}
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -10190,25 +10181,23 @@ const StudioPage: React.FC = () => {
                 : 1,
           }}
         >
-          Delete
-        </Button>
+          {t("pages.studio.index.delete.2", "Delete")}</Button>
       </div>
       {selectedInventoryMemberKey ? (
         <div style={inventorySelectionPillStyle}>
-          <span style={inventorySelectionLabelStyle}>Selected</span>
+          <span style={inventorySelectionLabelStyle}>{t("pages.studio.index.selected.2", "Selected")}</span>
           <span style={inventorySelectionValueStyle}>{selectedInventoryLabel}</span>
         </div>
       ) : (
         <div style={inventoryActionsHintStyle}>
-          Create a Workflow, Script, or GAgent member from this inventory.
-        </div>
+          {t("pages.studio.index.create.workflow.script.or.gagent.2", "Create a Workflow, Script, or GAgent member from this inventory.")}</div>
       )}
       {canSetSelectedInventoryEntryMember ? (
         selectedInventoryIsEntryMember ? (
           <div style={inventoryEntryPillStyle}>
-            <span style={inventorySelectionLabelStyle}>Team invoke</span>
+            <span style={inventorySelectionLabelStyle}>{t("pages.studio.index.team.invoke.2", "Team invoke")}</span>
             <span style={inventorySelectionValueStyle}>
-              Entry member · {selectedInventoryEntryLabel}
+              {t("pages.studio.index.entry.member.2", "Entry member ·")}{selectedInventoryEntryLabel}
             </span>
           </div>
         ) : (
@@ -10222,8 +10211,7 @@ const StudioPage: React.FC = () => {
             onClick={() => void handleSetSelectedInventoryEntryMember()}
             style={inventoryEntryButtonStyle}
           >
-            Set as entry
-          </Button>
+            {t("pages.studio.index.set.as.entry.2", "Set as entry")}</Button>
         )
       ) : null}
     </div>
@@ -10236,22 +10224,22 @@ const StudioPage: React.FC = () => {
       <div style={{ display: 'grid', gap: 8 }}>
         <h2 style={memberEmptyStateTitleStyle}>
           {hasSelectedMemberFocus
-            ? `${currentMemberLabel} is not build-ready here`
+            ? t("pages.studio.index.is.not.build.ready.here", "{value1} is not build-ready here", { value1: currentMemberLabel })
             : memberItems.length > 0
-              ? 'Select a team member'
-              : 'Create your first team member'}
+              ? t("pages.studio.index.select.team.member.2", "Select a team member")
+              : t("pages.studio.index.create.your.first.team.member.2", "Create your first team member")}
         </h2>
         <p style={memberEmptyStateBodyStyle}>
           {hasSelectedMemberFocus
-            ? 'This selected member does not currently expose an editable Build surface in Studio. Continue in Bind or Invoke, or create a new member to start from Build.'
+            ? t("pages.studio.index.this.selected.member.does.not.currently", "This selected member does not currently expose an editable Build surface in Studio. Continue in Bind or Invoke, or create a new member to start from Build.")
             : memberItems.length > 0
-            ? 'Pick an existing member from Team members to continue in Studio, or explicitly create a new member here.'
-            : 'Studio no longer creates an implicit draft on entry. Create a member when you are ready to start building.'}
+            ? t("pages.studio.index.pick.an.existing.member.from.team", "Pick an existing member from Team members to continue in Studio, or explicitly create a new member here.")
+            : t("pages.studio.index.studio.no.longer.creates.an.implicit", "Studio no longer creates an implicit draft on entry. Create a member when you are ready to start building.")}
         </p>
       </div>
       <div style={memberEmptyStateActionsStyle}>
         <Button
-          aria-label="Create member from empty state"
+          aria-label={t("pages.studio.index.create.member.from.empty.state.2", "Create member from empty state")}
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           disabled={createMemberButtonDisabled}
           loading={inventoryBusyAction === 'create'}
@@ -10262,14 +10250,13 @@ const StudioPage: React.FC = () => {
             opacity: createMemberButtonDisabled ? 0.56 : 1,
           }}
         >
-          Create member
-        </Button>
+          {t("pages.studio.index.create.member.8", "Create member")}</Button>
         <span style={inventoryActionsHintStyle}>
           {hasSelectedMemberFocus
-            ? 'Bind and Invoke stay available for this member even when Build is not.'
+            ? t("pages.studio.index.bind.and.invoke.stay.available.for", "Bind and Invoke stay available for this member even when Build is not.")
             : memberItems.length > 0
-            ? 'You can also pick an existing member from the left rail.'
-            : 'Only explicit Create member should open a new implementation draft now.'}
+            ? t("pages.studio.index.you.can.also.pick.an.existing", "You can also pick an existing member from the left rail.")
+            : t("pages.studio.index.only.explicit.create.member.should.open", "Only explicit Create member should open a new implementation draft now.")}
         </span>
       </div>
     </div>
@@ -10454,7 +10441,7 @@ const StudioPage: React.FC = () => {
           gap: 4,
         }}
       >
-        <strong>当前环境暂不支持脚本行为</strong>
+        <strong>{t("pages.studio.index.copy.19", "当前环境暂不支持脚本行为")}</strong>
       </div>
     </div>
   );
@@ -10642,10 +10629,10 @@ const StudioPage: React.FC = () => {
             </StudioShell>
             <Modal
               open={createMemberModalOpen}
-              title="Create member"
+              title={t("pages.studio.index.create.member.9", "Create member")}
               onCancel={closeCreateMemberFlow}
               onOk={() => void handleCreateMember(createMemberKind)}
-              okText="Create member"
+              okText={t("pages.studio.index.create.member.10", "Create member")}
               okButtonProps={{
                 disabled:
                   inventoryBusyAction === 'create' ||
@@ -10668,7 +10655,7 @@ const StudioPage: React.FC = () => {
             >
               <div style={inventoryCreateModalStackStyle}>
                 <div style={inventoryCreateFieldStackStyle}>
-                  <div style={inventoryCreateFieldLabelStyle}>Member type</div>
+                  <div style={inventoryCreateFieldLabelStyle}>{t("pages.studio.index.member.type.2", "Member type")}</div>
                   <div style={inventoryCreateTypeRowStyle}>
                     {(
                       [
@@ -10710,10 +10697,7 @@ const StudioPage: React.FC = () => {
                     ))}
                   </div>
                   <div style={inventoryCreateHintStyle}>
-                    Choose the implementation kind first. Studio creates the
-                    backend member authority, then opens the matching Build
-                    surface for Workflow, Script, or GAgent authoring.
-                  </div>
+                    {t("pages.studio.index.choose.the.implementation.kind.first.2", "Choose the implementation kind first. Studio creates the backend member authority, then opens the matching Build surface for Workflow, Script, or GAgent authoring.")}</div>
                 </div>
                 {createMemberKind === 'workflow' ||
                 createMemberKind === 'script' ||
@@ -10721,10 +10705,10 @@ const StudioPage: React.FC = () => {
                   <label style={inventoryCreateFieldStackStyle}>
                     <span style={inventoryCreateFieldLabelStyle}>
                       {createMemberKind === 'script'
-                        ? 'Script name'
+                        ? t("pages.studio.index.script.name.2", "Script name")
                         : createMemberKind === 'gagent'
-                          ? 'GAgent name'
-                          : 'Member name'}
+                          ? t("pages.studio.index.gagent.name.2", "GAgent name")
+                          : t("pages.studio.index.member.name.2", "Member name")}
                     </span>
                     <input
                       aria-label={
@@ -10749,35 +10733,34 @@ const StudioPage: React.FC = () => {
                     />
                     {createMemberKind === 'script' ? (
                       <div style={inventoryCreateHintStyle}>
-                        Script id: {createScriptId || 'enter-a-script-name'}
+                        {t("pages.studio.index.script.id.2", "Script id:")}{createScriptId || 'enter-a-script-name'}
                         {createScriptIdAlreadyExists
-                          ? ' · already exists in this workspace'
-                          : ' · saved after Validate and Save script'}
+                          ? t("pages.studio.index.already.exists.in.this.workspace", "· already exists in this workspace")
+                          : t("pages.studio.index.saved.after.validate.and.save.script", "· saved after Validate and Save script")}
                       </div>
                     ) : null}
                   </label>
                 ) : null}
                 <div style={inventoryCreateHintStyle}>
                   {createMemberKind === 'workflow'
-                    ? 'Workflow members currently start from a blank workflow draft with an empty canvas, and Studio also registers the member authority in backend once the draft is created.'
+                    ? t("pages.studio.index.workflow.members.currently.start.from.blank", "Workflow members currently start from a blank workflow draft with an empty canvas, and Studio also registers the member authority in backend once the draft is created.")
                     : createMemberKind === 'script'
-                      ? 'Script creates a backend member and opens a stable script draft identity in Build. It becomes callable after Save script is catalog-applied and Bind succeeds.'
+                      ? t("pages.studio.index.script.creates.backend.member.and.opens", "Script creates a backend member and opens a stable script draft identity in Build. It becomes callable after Save script is catalog-applied and Bind succeeds.")
                       : resolvedStudioScopeId
-                        ? 'GAgent creates a backend member and opens Build > GAgent for actor type, role, prompt, tools, and persistence authoring.'
-                        : 'Connect a workspace before creating a GAgent member.'}
+                        ? t("pages.studio.index.gagent.creates.backend.member.and.opens", "GAgent creates a backend member and opens Build > GAgent for actor type, role, prompt, tools, and persistence authoring.")
+                        : t("pages.studio.index.connect.workspace.before.creating.gagent.member", "Connect a workspace before creating a GAgent member.")}
                 </div>
                 {createMemberKind === 'workflow' ? (
                   <label style={inventoryCreateFieldStackStyle}>
-                    <span style={inventoryCreateFieldLabelStyle}>Workflow directory</span>
+                    <span style={inventoryCreateFieldLabelStyle}>{t("pages.studio.index.workflow.directory.3", "Workflow directory")}</span>
                     <select
-                      aria-label="Workflow directory"
+                      aria-label={t("pages.studio.index.workflow.directory.4", "Workflow directory")}
                       onChange={(event) => setCreateMemberDirectoryId(event.target.value)}
                       style={inventoryCreateInputStyle}
                       value={createMemberDirectoryId}
                     >
                       <option value="" disabled>
-                        Select a workflow directory
-                      </option>
+                        {t("pages.studio.index.select.workflow.directory.2", "Select a workflow directory")}</option>
                       {inventoryDirectoryOptions.map((directory) => (
                         <option key={directory.directoryId} value={directory.directoryId}>
                           {directory.label}
@@ -10786,8 +10769,8 @@ const StudioPage: React.FC = () => {
                     </select>
                     <div style={inventoryCreateHintStyle}>
                       {selectedCreateDirectory?.path
-                        ? `${selectedCreateDirectory.label} · ${selectedCreateDirectory.path}`
-                        : 'Add a workflow directory in Config before creating a workflow draft from this entry.'}
+                        ? t("pages.studio.index.copy.20", "{value1} · {value2}", { value1: selectedCreateDirectory.label, value2: selectedCreateDirectory.path })
+                        : t("pages.studio.index.add.workflow.directory.in.config.before", "Add a workflow directory in Config before creating a workflow draft from this entry.")}
                     </div>
                   </label>
                 ) : null}

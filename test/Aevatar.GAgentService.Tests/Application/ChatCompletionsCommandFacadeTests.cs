@@ -21,7 +21,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch);
 
-        var result = await facade.CreateAsync(BuildRequest("gpt-4o-mini"), CallerScopeContext("token"));
+        var result = await facade.CreateAsync(BuildRequest("chrono/gpt-4o-mini"), CallerScopeContext("token"));
 
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
@@ -37,6 +37,13 @@ public sealed class ChatCompletionsCommandFacadeTests
         command.ScopeId.Should().Be("scope-1");
         command.BearerToken.Should().Be("token");
         command.Messages.Should().ContainSingle().Which.Content.Should().Be("hello");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+        toolContext.Request.RequestId.Should().Be(command.ResponseId);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("owner-1");
+        toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
 
     [Theory]
@@ -256,6 +263,9 @@ public sealed class ChatCompletionsCommandFacadeTests
         result.StreamPlan!.LlmRequest.Model.Should().Be("gpt-5-chat");
         result.StreamPlan.LlmRequest.LlmControl!.NyxIdRoutePreference.Should().Be("route-value");
         result.StreamPlan.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
         result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.CompletionId);
         result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
@@ -504,10 +514,20 @@ public sealed class ChatCompletionsCommandFacadeTests
                 RequestId = "chatcmpl_stream",
                 Model = "gpt-4o-mini",
                 Messages = [ChatMessage.User("hello")],
+                ToolContext = BuildToolContext("chatcmpl_stream"),
             },
             new ResponsesToolClassification([], [], [], []),
             ResponsesToolChoiceHintPlan.Empty,
             DateTimeOffset.UtcNow);
+
+    private static AgentToolExecutionContext BuildToolContext(string responseId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(responseId, null),
+            Credentials = new AgentToolCredentials("token", null, null),
+            Caller = new AgentToolCallerContext("scope-1", "owner-1", responseId),
+            Routing = new LLMRequestRoutingContext(null, "route-value", null, null),
+        };
 
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {

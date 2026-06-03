@@ -4,7 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Hosting;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -95,7 +95,7 @@ public static partial class NyxIdChatEndpoints
                     llmControl),
                 async (evt, _) =>
                 {
-                    await NyxIdChatStreamingRunner.WriteAguiEventAsync(evt, messageId, writer);
+                    await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer);
                 },
                 null,
                 ct);
@@ -188,7 +188,7 @@ public static partial class NyxIdChatEndpoints
                     messageId),
                 async (evt, _) =>
                 {
-                    await NyxIdChatStreamingRunner.WriteAguiEventAsync(evt, messageId, writer);
+                    await NyxIdChatAguiSseEventWriter.WriteAsync(evt, messageId, writer);
                 },
                 null,
                 ct);

@@ -21,6 +21,7 @@ import type {
   MissionRunStatus,
   MissionTopologyNodeKind,
 } from './models';
+import { t } from '@/shared/i18n/messages';
 
 export type MissionThemeToken = ReturnType<typeof theme.useToken>['token'];
 
@@ -75,7 +76,10 @@ const missionLabelMap: Record<string, string> = {
 export function formatMissionLabel(value: string) {
   const normalized = value.trim().toLowerCase();
   if (missionLabelMap[normalized]) {
-    return missionLabelMap[normalized];
+    return t(
+      `pages.missioncontrol.presentation.${normalized.replace(/_/g, '.')}`,
+      missionLabelMap[normalized],
+    );
   }
 
   return value
@@ -164,37 +168,39 @@ export function renderMissionKindIcon(kind: MissionTopologyNodeKind) {
 export function formatInterventionLabel(kind: MissionInterventionKind) {
   switch (kind) {
     case 'waiting_signal':
-      return 'Waiting for Signal';
+      return formatMissionLabel('waiting_for_signal');
     case 'human_input':
-      return 'Input Required';
+      return formatMissionLabel('human_input');
     case 'human_approval':
-      return 'Approval Required';
+      return formatMissionLabel('human_approval');
     default:
-      return 'Intervention';
+      return t('pages.missioncontrol.presentation.intervention', 'Intervention');
   }
 }
 
 export function formatConnectionLabel(status: MissionRuntimeConnectionStatus) {
   switch (status) {
     case 'idle':
-      return 'Detached';
+      return formatMissionLabel('idle');
     case 'connecting':
-      return 'Connecting';
+      return formatMissionLabel('connecting');
     case 'live':
-      return 'Live';
+      return t('pages.missioncontrol.presentation.live', 'Live');
     case 'degraded':
-      return 'Fallback Sync';
+      return formatMissionLabel('degraded');
     case 'disconnected':
-      return 'Disconnected';
+      return formatMissionLabel('disconnected');
     default:
-      return 'Runtime';
+      return t('pages.missioncontrol.presentation.runtime', 'Runtime');
   }
 }
 
 export function formatInspectorPresentationLabel(
   presentation: MissionInspectorPresentation,
 ) {
-  return presentation === 'push' ? 'Docked Panel' : 'Overlay Panel';
+  return presentation === 'push'
+    ? t('pages.missioncontrol.presentation.docked.panel', 'Docked Panel')
+    : t('pages.missioncontrol.presentation.overlay.panel', 'Overlay Panel');
 }
 
 export function resolveConnectionTagColor(

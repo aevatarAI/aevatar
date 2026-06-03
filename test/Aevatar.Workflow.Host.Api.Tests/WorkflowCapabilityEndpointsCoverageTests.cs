@@ -1,8 +1,10 @@
+using System.Text.Json;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -16,7 +18,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         {
             Prompt = "hello",
             Workflow = "auto",
-            AgentId = " actor-1 ",
             SessionId = " session-1 ",
             WorkflowYamls = ["name: inline"],
         };
@@ -27,7 +28,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto", "actor-1"),
+                WorkflowChatSource.InlineYamlBundle(["name: inline"], "auto"),
                 SessionId: "session-1",
                 Metadata: new Dictionary<string, string>()));
     }
@@ -38,7 +39,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var input = new ChatInput
         {
             Prompt = "hello",
-            AgentId = " actor-1 ",
             WorkflowYaml = "name: inline",
         };
 
@@ -48,7 +48,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                WorkflowChatSource.InlineYamlBundle(["name: inline"], actorId: "actor-1"),
+                WorkflowChatSource.InlineYamlBundle(["name: inline"]),
                 SessionId: null,
                 Metadata: new Dictionary<string, string>()));
     }
@@ -187,19 +187,15 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Succeeded.Should().BeTrue();
         result.Request!.Source.Should().BeEquivalentTo(
             WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto"));
-        result.Request.LlmControl.Should().Be(new LLMControlContext(
-            "token",
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+        result.Request.LlmControl.Should().Be(new WorkflowLlmControl(
             "model",
-            "route",
             3,
             UserMemoryPrompt: null));
         result.Request.Metadata.Should().BeEmpty();
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldPreserveTypedToolContext()
+    public void ChatRunRequestNormalizer_ShouldKeepToolContextOutOfWorkflowCommand()
     {
         var toolContext = AgentToolExecutionContext.Empty with
         {
@@ -225,8 +221,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.ToolContext.Should().BeSameAs(toolContext);
+        result.Request!.ScopeId.Should().BeNull();
         result.Request.LlmControl.Should().BeNull();
+        result.Request.Metadata.Should().BeEmpty();
     }
 
     [Fact]
@@ -266,7 +263,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldPreferTypedInlineBundleSubmessageOverLegacyAliases()
+    public void ChatRunRequestNormalizer_ShouldPreferTypedInlineBundleSubmessageOverLegacyInlineAliases()
     {
         var input = new ChatInput
         {
@@ -275,7 +272,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             {
                 Kind = "inline-yaml-bundle",
                 WorkflowName = "legacy",
-                ActorId = "legacy-actor",
                 WorkflowYamls = ["name: legacy"],
                 InlineBundle = new WorkflowChatInlineYamlBundleSourceInput
                 {
@@ -428,7 +424,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldPreferTypedDefinitionActorSubmessageOverLegacyAliases()
+    public void ChatRunRequestNormalizer_ShouldPreferTypedDefinitionActorSubmessageOverLegacyWorkflowNameAlias()
     {
         var result = ChatRunRequestNormalizer.Normalize(new ChatInput
         {
@@ -436,7 +432,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             Source = new WorkflowChatSourceInput
             {
                 Kind = "actor",
-                ActorId = "legacy-actor",
                 WorkflowName = "legacy-workflow",
                 DefinitionActor = new WorkflowChatDefinitionActorSourceInput
                 {
@@ -453,86 +448,82 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldNormalizeTypedAndLegacyInputsToEquivalentTypedSource()
+    public void ChatRunRequestNormalizer_ShouldPreserveTypedInlineYamlSubmessageActorId()
     {
-        var typed = ChatRunRequestNormalizer.Normalize(new ChatInput
+        var result = ChatRunRequestNormalizer.Normalize(new ChatInput
         {
             Prompt = "hello",
             Source = new WorkflowChatSourceInput
             {
                 Kind = "inline-yaml-bundle",
-                WorkflowName = " auto ",
-                ActorId = " source-actor-1 ",
-                WorkflowYamls = ["name: auto"],
+                InlineBundle = new WorkflowChatInlineYamlBundleSourceInput
+                {
+                    EntryName = " auto ",
+                    ActorId = " source-actor-1 ",
+                    YamlDocuments =
+                    [
+                        new WorkflowChatInlineYamlDocumentInput
+                        {
+                            Name = "auto",
+                            Yaml = "name: auto",
+                        },
+                    ],
+                },
             },
         });
-        var legacy = ChatRunRequestNormalizer.Normalize(new ChatInput
-        {
-            Prompt = "hello",
-            Workflow = " auto ",
-            AgentId = " source-actor-1 ",
-            WorkflowYamls = ["name: auto"],
-        });
 
-        typed.Succeeded.Should().BeTrue();
-        legacy.Succeeded.Should().BeTrue();
-        typed.Request!.Source.Should().BeEquivalentTo(legacy.Request!.Source);
-        typed.Request.Source.Should().BeEquivalentTo(
-            WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto", "source-actor-1"));
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Should().BeEquivalentTo(
+            WorkflowChatSource.InlineYamlBundle(
+                "auto",
+                [new WorkflowChatInlineYamlDocument("auto", "name: auto")],
+                "source-actor-1"));
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldPreserveTypedInlineYamlSourceActorId()
+    public void ChatRunRequestNormalizer_ShouldNormalizeTopLevelInlineYamlWithoutActorAuthority()
     {
         var input = new ChatInput
         {
             Prompt = "hello",
-            Source = new WorkflowChatSourceInput
-            {
-                Kind = "inline-yaml-bundle",
-                WorkflowName = " auto ",
-                ActorId = " source-actor-1 ",
-                WorkflowYamls = ["name: auto"],
-            },
+            Workflow = " auto ",
+            WorkflowYamls = ["name: auto"],
         };
 
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
         result.Request!.Source.Should().BeEquivalentTo(
-            WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto", "source-actor-1"));
-        result.Request.Source.ActorId.Should().Be("source-actor-1");
+            WorkflowChatSource.InlineYamlBundle(["name: auto"], "auto"));
+        result.Request.Source.ActorId.Should().BeNull();
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldPreserveLegacyWorkflowAgentIdAsSourceActorId()
+    public void ChatRunRequestNormalizer_ShouldNormalizeTopLevelWorkflowAsCatalogSource()
     {
         var input = new ChatInput
         {
             Prompt = "hello",
             Workflow = " direct ",
-            AgentId = " source-actor-1 ",
         };
 
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.Source.Should().BeEquivalentTo(
-            WorkflowChatSource.DefinitionActor("source-actor-1", "direct"));
+        result.Request!.Source.Should().BeEquivalentTo(WorkflowChatSource.CatalogWorkflow("direct"));
         result.Request.Source.WorkflowName.Should().Be("direct");
-        result.Request.Source.ActorId.Should().Be("source-actor-1");
+        result.Request.Source.ActorId.Should().BeNull();
     }
 
     [Theory]
     [InlineData("catalog", WorkflowChatSourceKind.CatalogWorkflow, "auto", null, null)]
     [InlineData("workflow", WorkflowChatSourceKind.CatalogWorkflow, "auto", null, null)]
-    [InlineData("actor", WorkflowChatSourceKind.DefinitionActor, "auto", "actor-1", null)]
     [InlineData("direct", WorkflowChatSourceKind.Direct, null, null, null)]
     public void ChatRunRequestNormalizer_ShouldNormalizeTypedSourceAliases(
         string kind,
         WorkflowChatSourceKind expectedKind,
         string? workflowName,
-        string? actorId,
+        string? expectedActorId,
         string[]? workflowYamls)
     {
         var input = new ChatInput
@@ -542,7 +533,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             {
                 Kind = kind,
                 WorkflowName = workflowName,
-                ActorId = actorId,
                 WorkflowYamls = workflowYamls ?? [],
             },
         };
@@ -552,38 +542,42 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Succeeded.Should().BeTrue();
         result.Request!.Source!.Kind.Should().Be(expectedKind);
         result.Request.Source.WorkflowName.Should().Be(workflowName);
-        result.Request.Source.ActorId.Should().Be(actorId);
+        result.Request.Source.ActorId.Should().Be(expectedActorId);
     }
 
-    [Theory]
-    [InlineData(" actor-1 ")]
-    public void ChatRunRequestNormalizer_ShouldRejectDirectSourceActorId(string actorId)
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldNormalizeDefinitionActorFromTypedSubmessageOnly()
     {
         var input = new ChatInput
         {
             Prompt = "hello",
             Source = new WorkflowChatSourceInput
             {
-                Kind = "direct",
-                ActorId = actorId,
+                Kind = "actor",
+                DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                {
+                    ActorId = " actor-1 ",
+                    WorkflowName = " auto ",
+                },
             },
         };
 
         var result = ChatRunRequestNormalizer.Normalize(input);
 
-        result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
+        result.Request.Source.ActorId.Should().Be("actor-1");
+        result.Request.Source.WorkflowName.Should().Be("auto");
     }
 
     [Theory]
-    [InlineData("catalog", null, null, WorkflowChatRunStartError.WorkflowNotFound)]
-    [InlineData("actor", "auto", null, WorkflowChatRunStartError.AgentNotFound)]
-    [InlineData("inline-yaml", "auto", "actor-1", WorkflowChatRunStartError.InvalidWorkflowYaml)]
-    [InlineData("unknown", "auto", "actor-1", WorkflowChatRunStartError.InvalidWorkflowYaml)]
+    [InlineData("catalog", null, WorkflowChatRunStartError.WorkflowNotFound)]
+    [InlineData("actor", "auto", WorkflowChatRunStartError.AgentNotFound)]
+    [InlineData("inline-yaml", "auto", WorkflowChatRunStartError.InvalidWorkflowYaml)]
+    [InlineData("unknown", "auto", WorkflowChatRunStartError.InvalidWorkflowYaml)]
     public void ChatRunRequestNormalizer_ShouldRejectInvalidTypedSources(
         string kind,
         string? workflowName,
-        string? actorId,
         WorkflowChatRunStartError expectedError)
     {
         var input = new ChatInput
@@ -593,7 +587,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             {
                 Kind = kind,
                 WorkflowName = workflowName,
-                ActorId = actorId,
             },
         };
 
@@ -601,6 +594,16 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(expectedError);
+    }
+
+    [Theory]
+    [InlineData("""{"prompt":"hello","agentId":"actor-1"}""")]
+    [InlineData("""{"prompt":"hello","source":{"kind":"actor","actorId":"actor-1"}}""")]
+    public void ChatJsonContract_ShouldRejectDeletedActorAuthorityFields(string json)
+    {
+        var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
     }
 
     [Fact]
@@ -636,12 +639,12 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 [
                     new WorkflowChatInputPart
                     {
-                        Kind = WorkflowChatInputPartKind.Text,
+                        Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Text,
                         Text = "describe this",
                     },
                     new WorkflowChatInputPart
                     {
-                        Kind = WorkflowChatInputPartKind.Image,
+                        Kind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image,
                         Uri = "https://example.com/cat.png",
                         MediaType = "image/png",
                         Name = "cat",
@@ -798,6 +801,34 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Metadata.Should().NotContainKey("scope_id");
         result.Request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         result.Request.Metadata.Should().Contain("trace", "trace-1");
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldScrubConnectorAuthorizationMetadata_AndUseTrustedTypedCarrier()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Metadata = new Dictionary<string, string>
+            {
+                ["connector.http.authorization"] = "Bearer untrusted",
+                ["trace"] = "trace-1",
+            },
+        };
+        var defaultMetadata = new Dictionary<string, string>
+        {
+            ["connector.http.authorization"] = "Bearer default",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            defaultMetadata: defaultMetadata,
+            trustedConnectorHttpAuthorization: " Bearer trusted ");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ConnectorHttpAuthorization.Should().Be("Bearer trusted");
+        result.Request.Metadata.Should().Contain("trace", "trace-1");
+        result.Request.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]

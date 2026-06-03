@@ -16,8 +16,6 @@ last_updated: 2026-05-11
 当前仓库内的主要前端工作面包括：
 
 - `apps/aevatar-console-web`：控制台 Web 应用，是本文档的首要约束对象。
-- `tools/Aevatar.Tools.Cli/Frontend`：CLI playground React/Vite 源码。
-- `tools/Aevatar.Tools.Cli/wwwroot`：CLI host 分发的静态产物。
 - `demos/Aevatar.Demos.Workflow.Web/wwwroot`：Demo Web 静态 playground。
 
 如果未来新增前端宿主，也默认继承本文档；只有该宿主存在更高优先级的局部设计文档时，才允许局部覆盖。
@@ -334,24 +332,13 @@ Console Web 交互组件默认继承 [组件交互标准](../design/2026-04-23-c
 - 表单、表格、编辑器、图谱、运行面板必须在真实内容密度下可读。
 - 任何展示的状态、payload、metric、health、version 都必须能追溯到公开 API、readmodel 或本地 UI 状态。
 
-### 8.2 CLI Playground
-
-`tools/Aevatar.Tools.Cli/Frontend` 是 playground 的权威源码。
-
-要求：
-
-- 优先从共享 token、排版和 panel 原语入手，不做一次性“补丁式美化”。
-- 修改后必须同步生成 `tools/Aevatar.Tools.Cli/wwwroot`。
-- 必须确保 `demos/Aevatar.Demos.Workflow.Web/wwwroot` 与 CLI playground 产物保持一致。
-- Playground 可以更实验性，但 request、streaming、history 和 observation 语义必须与 Console Web 保持一致。
-
-### 8.3 Demo Web
+### 8.2 Demo Web
 
 `demos/Aevatar.Demos.Workflow.Web/wwwroot` 主要承担演示和体验验证职责。
 
 要求：
 
-- 与 CLI playground 保持资产和核心样式一致。
+- 与 Console Web 的核心状态语义保持一致。
 - 若存在 Demo 特有按钮或壳层差异，必须限制在 demo 边界内，不反向污染主源码结构。
 - Demo 可以简化治理能力，但不能简化到误导用户理解 command、observation、readmodel 的状态边界。
 
@@ -410,14 +397,6 @@ Console Web 相关 PR 在提交前至少自查：
 ```bash
 npm --prefix apps/aevatar-console-web run tsc
 npm --prefix apps/aevatar-console-web run build
-```
-
-修改 `tools/Aevatar.Tools.Cli/Frontend` 后，至少执行：
-
-```bash
-pnpm -C tools/Aevatar.Tools.Cli/Frontend exec tsc -b
-pnpm -C tools/Aevatar.Tools.Cli/Frontend exec vite build --outDir tools/Aevatar.Tools.Cli/wwwroot
-bash tools/ci/playground_asset_drift_guard.sh
 ```
 
 如果任务只涉及文档或规则更新，不需要运行前端构建；至少执行：

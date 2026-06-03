@@ -1,4 +1,5 @@
 import { Button, Space, Typography, theme } from "antd";
+import { useIntl } from "@umijs/max";
 import React from "react";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
 import {
@@ -6,6 +7,7 @@ import {
   FactLine,
   SignalCard,
 } from "../components/TeamDetailPrimitives";
+import { t } from "@/shared/i18n/messages";
 
 type OverviewCompositionRow = {
   readonly key: string;
@@ -92,6 +94,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   onClearEntryMember,
   startupGuidance,
 }) => {
+  const intl = useIntl();
   const { token } = theme.useToken();
   const hasEntryMember = Boolean(entryMemberId?.trim());
 
@@ -110,11 +113,10 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <Space wrap size={8}>
               <Typography.Text strong style={{ fontSize: 16 }}>
-                当前态势
+                {intl.formatMessage({ id: "teams.detail.overview.status.title" })}
               </Typography.Text>
               <Typography.Text type="secondary">
-                启动状态
-              </Typography.Text>
+                {t("pages.teams.tabs.teamoverviewtab.copy", "启动状态")}</Typography.Text>
               <DetailPill
                 style={currentHeaderStatusStyle}
                 text={currentHeaderStatusFriendly}
@@ -144,35 +146,46 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           }}
         >
           <SignalCard
-            label="当前成员"
+            label={intl.formatMessage({
+              defaultMessage: "Current member",
+              id: "teams.detail.overview.cards.currentMember",
+            })}
             value={currentMemberLabel}
             caption={currentMemberCardCaption}
             captionTooltip={currentMemberCardTooltip}
           />
           <SignalCard
-            label="当前服务"
+            label={intl.formatMessage({ id: "teams.detail.overview.cards.currentService" })}
             value={currentServiceFriendly}
             caption={currentServiceCardCaption}
             captionTooltip={currentServiceCardTooltip}
           />
           <SignalCard
-            label="最近运行"
+            label={intl.formatMessage({ id: "teams.detail.overview.cards.currentRun" })}
             value={currentRunFriendly}
             caption={currentRunCardCaption}
             captionTooltip={currentRunCardTooltip}
           />
           <SignalCard
-            label="最近一次更新"
+            label={intl.formatMessage({ id: "teams.detail.overview.cards.latestUpdate" })}
             value={latestVisibleUpdateLabel}
             caption={latestVisibleUpdateNote}
           />
           <SignalCard
-            label="入口成员"
-            value={entryMemberLabel || entryMemberId || "未配置"}
+            label={intl.formatMessage({ id: "teams.detail.overview.cards.entryMember" })}
+            value={
+              entryMemberLabel ||
+              entryMemberId ||
+              intl.formatMessage({ id: "teams.detail.overview.entry.unconfigured" })
+            }
             caption={
               hasEntryMember
-                ? "调用这支 Team 时会先路由到这个成员。"
-                : "测试或调用前，请先设置一个入口成员。"
+                ? intl.formatMessage({
+                    id: "teams.detail.overview.entry.configuredCaption",
+                  })
+                : intl.formatMessage({
+                    id: "teams.detail.overview.entry.unconfiguredCaption",
+                  })
             }
           />
         </div>
@@ -183,7 +196,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               onClick={onClearEntryMember}
               size="small"
             >
-              清除入口成员
+              {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
             </Button>
           </div>
         ) : null}
@@ -200,7 +213,9 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
             <div>
               <Typography.Title level={3} style={{ margin: 0 }}>
-                团队构成
+                {intl.formatMessage({
+                  id: "teams.detail.overview.composition.title",
+                })}
               </Typography.Title>
             </div>
           </div>
@@ -225,8 +240,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             ))
           ) : (
             <AevatarInspectorEmpty
-              title="暂无团队构成"
-              description="当前还没有足够事实来生成团队构成。"
+              title={intl.formatMessage({
+                id: "teams.detail.overview.composition.empty.title",
+              })}
+              description={intl.formatMessage({
+                id: "teams.detail.overview.composition.empty.description",
+              })}
             />
           )}
         </div>
@@ -234,7 +253,9 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
         {configurationDetailRows.length > 0 ? (
           <section style={surfaceStyle(token)}>
             <Typography.Title level={3} style={{ margin: 0 }}>
-              配置明细
+              {intl.formatMessage({
+                id: "teams.detail.overview.configuration.title",
+              })}
             </Typography.Title>
             <div style={{ display: "grid", gap: 12 }}>
               {configurationDetailRows.map((row, index) => (

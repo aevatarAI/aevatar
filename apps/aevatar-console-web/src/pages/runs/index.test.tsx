@@ -591,7 +591,7 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(screen.getByText("Action required")).toBeInTheDocument();
+    expect(screen.getAllByText("Action required").length).toBeGreaterThan(0);
     expect(screen.getByText("Review and continue the run")).toBeInTheDocument();
     expect(
       screen.getByRole("switch", { name: "Approved" })

@@ -15,6 +15,7 @@ import {
   buildScopeHref,
   readScopeQueryDraft,
 } from '../scopes/components/scopeQuery';
+import { t } from "@/shared/i18n/messages";
 
 const primaryActionButtonStyle: React.CSSProperties = {
   background: '#6c5ce7',
@@ -117,7 +118,7 @@ const TeamCreatePage: React.FC = () => {
 
     return describeError(
       authSessionQuery.error,
-      '登录状态暂时不可用，请刷新后重试。',
+      t("pages.teams.new.the.login.status.is", "The login status is temporarily unavailable, please refresh and try again."),
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
   const canCreateTeam = Boolean(scopeId && teamName.trim());
@@ -141,7 +142,7 @@ const TeamCreatePage: React.FC = () => {
       await queryClient.invalidateQueries({
         queryKey: ['teams', 'roster', team.scopeId],
       });
-      void message.success('已创建 Team。');
+      void message.success(t("pages.teams.new.team.created", "team created."));
       history.push(
         buildTeamDetailHref({
           scopeId: team.scopeId,
@@ -152,7 +153,7 @@ const TeamCreatePage: React.FC = () => {
       const errorMessage =
         error instanceof Error && error.message.trim()
           ? error.message
-          : '创建 Team 失败。';
+          : t("pages.teams.new.failed.to.create.team", "Failed to create team.");
       void message.error(errorMessage);
     } finally {
       setIsCreatingTeam(false);
@@ -169,25 +170,24 @@ const TeamCreatePage: React.FC = () => {
             onClick={() => void handleCreateTeam()}
             style={primaryActionButtonStyle}
           >
-            Create Team
-          </Button>
+            {t("pages.teams.new.create.team", "Create Team")}</Button>
         </Space>
       }
-      title="Create Team"
+      title={t("pages.teams.new.create.team.2", "Create Team")}
     >
       {authSessionIssue ? (
         <Alert
           description={
             resolvedScope?.scopeId
-              ? `${authSessionIssue} 已使用本地登录信息继续创建 Team。`
+              ? t("pages.teams.new.has.continued.creating.team", "{value1} has continued creating team using local login information.", { value1: authSessionIssue })
               : authSessionIssue
           }
           showIcon
           style={{ marginBottom: 20 }}
           title={
             resolvedScope?.scopeId
-              ? '当前登录态校验失败，已使用本地登录信息'
-              : '当前登录态校验失败'
+              ? t("pages.teams.new.the.current.login.status", "The current login status verification failed, local login information has been used")
+              : t("pages.teams.new.current.login.status.verification", "Current login status verification failed")
           }
           type="warning"
         />
@@ -197,7 +197,7 @@ const TeamCreatePage: React.FC = () => {
         <Alert
           showIcon
           style={{ marginBottom: 20 }}
-          title="当前登录状态还没有解析出可用的团队范围，请刷新后重试。"
+          title={t("pages.teams.new.the.current.login.status.2", "The current login status has not resolved the available team scope, please refresh and try again.")}
           type="info"
         />
       ) : null}
@@ -205,7 +205,7 @@ const TeamCreatePage: React.FC = () => {
       <AevatarPanel
         layoutMode="document"
         padding={20}
-        title="团队信息"
+        title={t("pages.teams.new.team.information", "team information")}
       >
         <div
           style={{
@@ -216,19 +216,19 @@ const TeamCreatePage: React.FC = () => {
           }}
         >
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>Team name</Typography.Text>
+            <Typography.Text strong>{t("pages.teams.new.team.name", "Team name")}</Typography.Text>
             <Input
-              aria-label="Team name"
-              placeholder="例如：订单助手团队"
+              aria-label={t("pages.teams.new.team.name.2", "Team name")}
+              placeholder={t("pages.teams.new.for.example.order.assistant", "For example: Order Assistant team")}
               value={teamName}
               onChange={(event) => setTeamName(event.target.value)}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Text strong>Description</Typography.Text>
+            <Typography.Text strong>{t("pages.teams.new.description", "Description")}</Typography.Text>
             <Input
-              aria-label="Team description"
-              placeholder="这个 Team 负责什么"
+              aria-label={t("pages.teams.new.team.description", "Team description")}
+              placeholder={t("pages.teams.new.what.is.this.team", "What is this team responsible for?")}
               value={teamDescription}
               onChange={(event) => setTeamDescription(event.target.value)}
             />
@@ -241,11 +241,9 @@ const TeamCreatePage: React.FC = () => {
               onClick={() => void handleCreateTeam()}
               style={primaryActionButtonStyle}
             >
-              Create Team
-            </Button>
+              {t("pages.teams.new.create.team.3", "Create Team")}</Button>
             <Button onClick={() => history.push(buildTeamsHref())}>
-              Back to My Teams
-            </Button>
+              {t("pages.teams.new.back.to.my.teams", "Back to My Teams")}</Button>
           </Space>
         </div>
       </AevatarPanel>

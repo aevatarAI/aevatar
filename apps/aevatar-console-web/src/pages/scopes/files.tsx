@@ -23,6 +23,7 @@ import {
   readScopeQueryDraft,
   type ScopeQueryDraft,
 } from './components/scopeQuery';
+import { t } from "@/shared/i18n/messages";
 
 const filesShellStyle: React.CSSProperties = {
   display: 'flex',
@@ -149,7 +150,7 @@ const ProjectFilesPage: React.FC = () => {
             <Alert
               type="info"
               showIcon
-              message="Files can browse workspace workflows immediately. Script files will appear automatically once Studio resolves a project scope from the current session."
+              message={t("pages.scopes.files.files.can.browse.workspace.workflows", "Files can browse workspace workflows immediately. Script files will appear automatically once Studio resolves a project scope from the current session.")}
             />
           ) : null}
 
@@ -157,8 +158,8 @@ const ProjectFilesPage: React.FC = () => {
             <Alert
               type="warning"
               showIcon
-              message="Studio host context could not be resolved."
-              description="Files will still show workspace-backed resources, but feature-specific affordances may be limited until Studio host context loads again."
+              message={t("pages.scopes.files.studio.host.context.could.not", "Studio host context could not be resolved.")}
+              description={t("pages.scopes.files.files.will.still.show.workspace", "Files will still show workspace-backed resources, but feature-specific affordances may be limited until Studio host context loads again.")}
             />
           ) : null}
 

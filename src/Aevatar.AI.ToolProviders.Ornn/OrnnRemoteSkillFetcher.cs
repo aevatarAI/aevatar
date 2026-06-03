@@ -41,10 +41,15 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
                 associatedFiles = others;
         }
 
+        // 抽出工作流 YAML，从剩余关联文件中剔除
+        var extraction = new SkillWorkflowExtractor().ExtractFromFiles(associatedFiles);
+
         // 尝试从 instructions 解析 frontmatter
         var parser = new SkillFrontmatterParser();
         var parsed = parser.Parse(instructions);
         var workflows = DiscoverWorkflows(skill.Files, parsed.WorkflowEntry);
+        if (workflows.Count == 0)
+            workflows = extraction.Workflows;
 
         return new SkillDefinition
         {
@@ -57,7 +62,7 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
             WhenToUse = parsed.WhenToUse,
             IsModelInvocable = parsed.IsModelInvocable,
             IsUserInvocable = parsed.IsUserInvocable,
-            AssociatedFiles = associatedFiles,
+            AssociatedFiles = extraction.RemainingFiles,
             Workflows = workflows,
         };
     }

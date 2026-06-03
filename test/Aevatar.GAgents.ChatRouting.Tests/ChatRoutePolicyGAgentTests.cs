@@ -59,14 +59,14 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
         {
             OwnerScope = new OwnerScope { RegistrationScopeId = "scope-1" },
             DefaultTarget = ForwardToModelAction("chrono-llm/gpt-5.5"),
-            Rules = { Rule("daily", priority: 10) },
+            Rules = { Rule("summary", priority: 10) },
         });
 
         _agent.State.PolicyId.Should().Be(ActorId);
         _agent.State.Version.Should().Be(1);
         _agent.State.DefaultTarget.ForwardToModel.ModelName.Should().Be("chrono-llm/gpt-5.5");
         _agent.State.OwnerScope.RegistrationScopeId.Should().Be("scope-1");
-        _agent.State.Rules.Should().ContainSingle().Which.RuleId.Should().Be("daily");
+        _agent.State.Rules.Should().ContainSingle().Which.RuleId.Should().Be("summary");
         _agent.State.UpdatedAt.Should().NotBeNull();
     }
 

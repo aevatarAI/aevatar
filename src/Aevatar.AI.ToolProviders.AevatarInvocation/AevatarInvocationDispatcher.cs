@@ -10,7 +10,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
@@ -247,8 +247,7 @@ public sealed class AevatarInvocationDispatcher
             InputParts: ToWorkflowInputParts(request.Inputs),
             Metadata: metadata,
             ScopeId: scope.Value!.ScopeId,
-            LlmControl: ToLlmControlContext(AgentToolRequestContext.Current),
-            ToolContext: AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty);
+            LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current));
 
         var result = await _workflowDispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded || result.Receipt == null)
@@ -945,6 +944,15 @@ public sealed class AevatarInvocationDispatcher
             context.Credentials.SenderNyxIdAccessToken,
             context.Routing.ModelOverride,
             context.Routing.NyxIdRoutePreference,
+            context.Routing.MaxToolRoundsOverride,
+            context.Routing.UserMemoryPrompt);
+    }
+
+    private static WorkflowLlmControl ToWorkflowLlmControl(AgentToolExecutionContext? context)
+    {
+        context ??= AgentToolExecutionContext.Empty;
+        return new WorkflowLlmControl(
+            context.Routing.ModelOverride,
             context.Routing.MaxToolRoundsOverride,
             context.Routing.UserMemoryPrompt);
     }

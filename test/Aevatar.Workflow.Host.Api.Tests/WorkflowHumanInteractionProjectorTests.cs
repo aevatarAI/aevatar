@@ -129,6 +129,39 @@ public sealed class WorkflowHumanInteractionProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldNotDeliverActionableRequest_ForToolApprovalSuspension()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanInteractionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            new EventEnvelope
+            {
+                Id = "evt-tool-approval",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
+                Payload = Any.Pack(new WorkflowSuspendedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "step-tool",
+                    SuspensionType = "tool_approval",
+                    DeliveryTargetId = "agent-delivery-tool",
+                    ToolApproval = new WorkflowToolApprovalSuspension
+                    {
+                        ExecutionId = "exec-tool",
+                        ToolName = "dangerous_tool",
+                        ToolCallId = "call-tool",
+                        ApprovalRequestId = "approval-tool",
+                        ArgumentsJson = "{}",
+                    },
+                }),
+            },
+            CancellationToken.None);
+
+        port.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldIgnoreNonProjectionRoute()
     {
         var port = new RecordingHumanInteractionPort();

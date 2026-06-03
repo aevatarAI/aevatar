@@ -1,6 +1,11 @@
+import { setLocale } from '@umijs/max';
 import { buildDeploymentReleaseHandoff } from './releaseHandoff';
 
 describe('buildDeploymentReleaseHandoff', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
   it('keeps submitted commands separate from observed serving state', () => {
     const handoff = buildDeploymentReleaseHandoff({
       action: 'deploy-candidate',

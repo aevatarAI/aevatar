@@ -1,5 +1,6 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
@@ -476,6 +477,7 @@ function WorkflowBuildHarness({
 
 describe('StudioWorkflowBuildPanel', () => {
   beforeEach(() => {
+    setLocale('en-US', false);
     jest.clearAllMocks();
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({} as Response);
     mockedScriptsApi.validateDraft.mockResolvedValue({
@@ -1199,7 +1201,7 @@ describe('StudioWorkflowBuildPanel', () => {
 
     await waitFor(() => {
       expect(
-        (screen.getByLabelText('定义 YAML') as HTMLTextAreaElement).value,
+        (screen.getByLabelText('Define YAML') as HTMLTextAreaElement).value,
       ).toContain('review_step');
     });
     expect(screen.getByTestId('workflow-step-detail-panel')).toBeInTheDocument();
@@ -1591,7 +1593,7 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
 
     expect(
-      await screen.findByText(/provider 还没有连好/i),
+      await screen.findByText(/provider is not connected yet/i),
     ).toBeInTheDocument();
   });
 
