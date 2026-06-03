@@ -25,7 +25,6 @@ public static class AgentBuilderCardFlow
     private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
 
-    // refactor helper, no behavior change
     private sealed record AgentBuilderCommandSpec(
         string TextCommand,
         string CardAction,
