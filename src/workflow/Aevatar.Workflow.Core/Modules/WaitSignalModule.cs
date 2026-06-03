@@ -17,6 +17,8 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
     private const string ModuleStateKey = "wait_signal";
     private const int DefaultSignalBufferRetentionMs = 600_000;
     private const int MaxSignalBufferRetentionMs = 3_600_000;
+    private const int MaxWaitSignalTimeoutMs = 5_400_000;
+    private const int MaxWaitSignalTimeoutSeconds = MaxWaitSignalTimeoutMs / 1000;
 
     public string Name => "wait_signal";
     public int Priority => 5;
@@ -105,7 +107,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     StepId = stepId,
                     SignalName = signalName,
-                    TimeoutMs = Math.Clamp(timeoutMs, 100, 3_600_000),
+                    TimeoutMs = Math.Clamp(timeoutMs, 100, MaxWaitSignalTimeoutMs),
                 };
                 var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
                     pendingState.TimeoutCallbackId,
@@ -280,7 +282,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             parameters,
             0,
             0,
-            3_600_000,
+            MaxWaitSignalTimeoutMs,
             "timeout_ms");
         if (timeoutMs > 0)
             return timeoutMs;
@@ -289,11 +291,11 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 parameters,
                 out var timeoutSeconds,
                 0,
-                3_600,
+                MaxWaitSignalTimeoutSeconds,
                 "timeout_seconds",
                 "timeout"))
         {
-            return Math.Clamp(timeoutSeconds * 1000, 0, 3_600_000);
+            return Math.Clamp(timeoutSeconds * 1000, 0, MaxWaitSignalTimeoutMs);
         }
 
         return 0;

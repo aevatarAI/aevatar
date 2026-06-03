@@ -556,4 +556,5 @@ message BackpressureQueueState
   int32 active_workers = 2;
   int32 max_concurrent_workers = 3;
   int32 head_index = 4;
+  int32 min_concurrent_workers = 5;
 }

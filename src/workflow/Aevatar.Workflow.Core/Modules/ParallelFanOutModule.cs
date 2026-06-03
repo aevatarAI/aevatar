@@ -103,9 +103,12 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
 
             state.Parents[evt.StepId] = parentState;
 
+            var maxConcurrent = BackpressureHelper.ResolveMaxConcurrent(evt.Parameters);
+            var minConcurrent = BackpressureHelper.ResolveMinConcurrent(evt.Parameters, maxConcurrent);
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
-                BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
+                maxConcurrent,
+                minConcurrent);
 
             // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
             //   Old pattern: Information log included raw value/prompt/input preview
@@ -141,8 +144,11 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     }, TopologyAudience.Self, ct);
                 }
             }
+            var topUpEntries = BackpressureHelper.TopUpToTarget(state.Backpressure);
             // Always save after loop — TryAdmit mutates ActiveWorkers even when no items are queued
             await SaveStateAsync(state, ctx, ct);
+            foreach (var topUpEntry in topUpEntries)
+                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(topUpEntry), TopologyAudience.Self, ct);
         }
         else
         {
@@ -192,7 +198,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
                 BackpressureHelper.DefaultMaxConcurrentWorkers);
-            var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
+            var drained = BackpressureHelper.CompleteAndTopUp(state.Backpressure);
             ctx.Logger.LogInformation("ParallelFanOut: collected {StepId} ({Count}/{Expected})",
                 evt.StepId, parentState.Collected.Count, parentState.Expected);
             if (parentState.Collected.Count >= parentState.Expected)
@@ -246,8 +252,8 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                 await SaveStateAsync(state, ctx, ct);
             }
 
-            if (drained != null)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
+            foreach (var drainedEntry in drained)
+                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drainedEntry), TopologyAudience.Self, ct);
         }
     }
 
