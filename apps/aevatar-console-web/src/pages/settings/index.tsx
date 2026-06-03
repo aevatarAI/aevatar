@@ -454,17 +454,8 @@ const SettingsPage: React.FC = () => {
 
   const routeCatalogOptions = userLlmSettingsQuery.data?.routeOptions ?? [];
   const routeOptions = React.useMemo(
-    () =>
-      buildConversationRouteOptions(
-        userLlmSettingsQuery.data,
-        loadedDraft.preferredLlmRoute,
-        draft.preferredLlmRoute,
-      ),
-    [
-      draft.preferredLlmRoute,
-      loadedDraft.preferredLlmRoute,
-      userLlmSettingsQuery.data,
-    ],
+    () => buildConversationRouteOptions(userLlmSettingsQuery.data),
+    [userLlmSettingsQuery.data],
   );
   const savedRouteOption = React.useMemo(
     () => findConversationRouteOption(userLlmSettingsQuery.data, draft.preferredLlmRoute),
@@ -478,37 +469,42 @@ const SettingsPage: React.FC = () => {
         : draft.preferredLlmRoute,
     [draft, loadedDraft, userLlmSettingsQuery.data?.effectiveRoute],
   );
-  const routeFallbackActive = draftsEqual(draft, loadedDraft)
+  const draftMatchesLoaded = draftsEqual(draft, loadedDraft);
+  const routeFallbackActive = draftMatchesLoaded
     ? Boolean(userLlmSettingsQuery.data?.routeFallbackActive)
     : false;
-  const routeSummaryLabel = describeConversationRoute(effectiveRoute, routeOptions);
-  const preferredRouteLabel = describeConversationRoute(
-    draft.preferredLlmRoute,
-    routeOptions,
+  const backendEffectiveRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.effectiveRouteLabel,
   );
+  const backendSavedRouteLabel = trimConversationValue(
+    userLlmSettingsQuery.data?.savedRouteLabel,
+  );
+  const routeSummaryLabel =
+    draftMatchesLoaded && backendEffectiveRouteLabel
+      ? backendEffectiveRouteLabel
+      : describeConversationRoute(effectiveRoute, routeOptions);
+  const preferredRouteLabel =
+    draftMatchesLoaded && backendSavedRouteLabel
+      ? backendSavedRouteLabel
+      : describeConversationRoute(draft.preferredLlmRoute, routeOptions);
   const modelGroups = React.useMemo(
     () =>
       buildConversationModelGroups({
-        conversationModel: draft.defaultModel,
         effectiveRoute: draft.preferredLlmRoute,
         settings: userLlmSettingsQuery.data,
       }),
-    [draft.defaultModel, draft.preferredLlmRoute, userLlmSettingsQuery.data],
-  );
-  const liveModelGroups = React.useMemo(
-    () => modelGroups.filter((group) => group.id !== "__current__"),
-    [modelGroups],
+    [draft.preferredLlmRoute, userLlmSettingsQuery.data],
   );
   const modelOptions = React.useMemo<SelectProps["options"]>(
     () =>
-      (liveModelGroups.length > 0 ? modelGroups : []).map((group) => ({
+      modelGroups.map((group) => ({
         label: group.label,
         options: group.models.map((model) => ({
           label: model,
           value: model,
         })),
       })),
-    [liveModelGroups.length, modelGroups],
+    [modelGroups],
   );
   const displayedRuntimeBaseUrl = React.useMemo(
     () => userRuntimeQuery.data?.activeRuntimeBaseUrl ?? "",
@@ -590,31 +586,13 @@ const SettingsPage: React.FC = () => {
         label: option.label,
         value: encodeConversationRouteSelectValue(normalizeUserLlmRoute(option.routeValue)),
       }));
-    const hasDraftRoute = readyOptions.some(
-      (option) =>
-        decodeConversationRouteSelectValue(String(option.value)) === draft.preferredLlmRoute,
-    );
-
     return [
       {
         label: "Routes",
         options: readyOptions,
       },
-      ...(draft.preferredLlmRoute && !hasDraftRoute
-        ? [
-            {
-              label: "Current saved route",
-              options: [
-                {
-                  label: `${preferredRouteLabel} (unavailable)`,
-                  value: encodeConversationRouteSelectValue(draft.preferredLlmRoute),
-                },
-              ],
-            },
-          ]
-        : []),
     ];
-  }, [draft.preferredLlmRoute, preferredRouteLabel, routeCatalogOptions]);
+  }, [routeCatalogOptions]);
 
   const advancedItems = React.useMemo<CollapseProps["items"]>(
     () => [
@@ -701,18 +679,14 @@ const SettingsPage: React.FC = () => {
         decodeConversationRouteSelectValue(nextValue),
       );
       const nextRouteGroups = buildConversationModelGroups({
-        conversationModel: draft.defaultModel,
         effectiveRoute: nextRoute,
         settings: userLlmSettingsQuery.data,
       });
       const currentModel = trimConversationValue(draft.defaultModel);
-      const nextLiveRouteGroups = nextRouteGroups.filter(
-        (group) => group.id !== "__current__",
-      );
       const shouldClearModel =
         Boolean(currentModel) &&
-        nextLiveRouteGroups.length > 0 &&
-        !nextLiveRouteGroups.some((group) => group.models.includes(currentModel!));
+        nextRouteGroups.length > 0 &&
+        !nextRouteGroups.some((group) => group.models.includes(currentModel!));
 
       setDraft((currentDraft) => ({
         ...currentDraft,
@@ -811,7 +785,7 @@ const SettingsPage: React.FC = () => {
               <SummaryMetric
                 label="Effective route"
                 tone={routeFallbackActive ? "warning" : "success"}
-                value={routeSummaryLabel || "NyxID Gateway"}
+                value={routeSummaryLabel}
               />
               <SummaryMetric
                 label="Default model"
@@ -945,7 +919,7 @@ const SettingsPage: React.FC = () => {
                         </div>
                         <Typography.Text type="secondary">
                           Current route resolves through{" "}
-                          {routeSummaryLabel || "NyxID Gateway"}.
+                          {routeSummaryLabel}.
                         </Typography.Text>
                         {providerDisplayList.length > 0 ? (
                           <div style={providerRailStyle}>
@@ -970,7 +944,7 @@ const SettingsPage: React.FC = () => {
                           <FieldMetaPill
                             label={
                               modelOptions && modelOptions.length > 0
-                                ? `${liveModelGroups.reduce(
+                                ? `${modelGroups.reduce(
                                     (count, group) => count + group.models.length,
                                     0,
                                   )} live`
@@ -1041,7 +1015,7 @@ const SettingsPage: React.FC = () => {
                       <SummaryField label="Saved route" value={preferredRouteLabel} />
                       <SummaryField
                         label="Effective route"
-                        value={routeSummaryLabel || "NyxID Gateway"}
+                        value={routeSummaryLabel}
                       />
                       <SummaryField label="Runtime mode" value={runtimeModeLabel} />
                       <SummaryField
@@ -1142,7 +1116,7 @@ const SettingsPage: React.FC = () => {
       canEditRoute,
       catalogUnavailable,
       llmLoadError,
-      liveModelGroups,
+      modelGroups,
       modelOptions,
       insetCardStyle,
       preferredRouteAvailable,

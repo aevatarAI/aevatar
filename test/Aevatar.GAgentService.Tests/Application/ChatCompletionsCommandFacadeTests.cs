@@ -269,6 +269,9 @@ public sealed class ChatCompletionsCommandFacadeTests
         result.StreamPlan!.LlmRequest.Model.Should().Be("gpt-5-chat");
         result.StreamPlan.LlmRequest.LlmControl!.NyxIdRoutePreference.Should().Be("route-value");
         result.StreamPlan.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
         result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.CompletionId);
         result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");

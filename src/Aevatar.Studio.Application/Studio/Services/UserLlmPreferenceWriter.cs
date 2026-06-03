@@ -238,21 +238,8 @@ public sealed class UserLlmPreferenceWriter
             string.Equals(candidate.ServiceId, existing.ServiceId, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(candidate.RouteValue, existing.RouteValue, StringComparison.OrdinalIgnoreCase));
         if (option is null)
-        {
-            var serviceId = existing.ServiceId.Trim();
-            var routeValue = UserConfigLlmRoute.Normalize(existing.RouteValue);
-            return new UserLlmOption(
-                ServiceId: serviceId,
-                ServiceSlug: serviceId,
-                DisplayName: serviceId,
-                RouteValue: routeValue,
-                DefaultModel: existing.DefaultModel,
-                AvailableModels: [],
-                Status: UserLlmRouteStatus.Ready,
-                Source: UserLlmRouteSource.UserService,
-                Allowed: true,
-                Description: null);
-        }
+            throw new InvalidOperationException(
+                $"LLM preset service '{existing.ServiceId}' is not routable for this user.");
 
         UserLlmPreferenceWriteCore.EnsureSelectable(option);
         return option with { DefaultModel = existing.DefaultModel ?? option.DefaultModel };

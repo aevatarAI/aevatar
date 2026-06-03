@@ -32,8 +32,6 @@ public sealed class ResponsesCommandFacade(
     IResponsesDirectToolPlanService directToolPlanService,
     ILogger<ResponsesCommandFacade> logger) : IResponsesCommandFacade
 {
-    private const string RegistrationScopeMetadataKey = "scope_id";
-
     public async Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -495,16 +493,11 @@ public sealed class ResponsesCommandFacade(
         ResponsesToolClassification toolClassification,
         AgentToolExecutionContext toolContext)
     {
-        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
-            [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-        };
         return new LLMRequest
         {
             Messages = BuildLlmMessages(normalized, previousSnapshot),
             RequestId = normalized.ResponseId,
-            Metadata = llmMetadata,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
             CallerContext = new LLMRequestCallerContext(
                 callerScope.ScopeId,
                 callerScope.OwnerSubject,

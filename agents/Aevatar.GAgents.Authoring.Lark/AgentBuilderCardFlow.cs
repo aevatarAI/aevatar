@@ -25,6 +25,97 @@ public static class AgentBuilderCardFlow
     private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
 
+    private sealed record AgentBuilderCommandSpec(
+        string TextCommand,
+        string CardAction,
+        string ToolAction,
+        string Usage,
+        bool RequiresAgentId,
+        Func<IReadOnlyList<string>, AgentBuilderCommandSpec, AgentBuilderFlowDecision> BuildFromText,
+        Func<ChannelInboundEvent, AgentBuilderCommandSpec, AgentBuilderFlowDecision> BuildFromCard,
+        Func<JsonElement, MessageContent>? FormatResult);
+
+    private static readonly AgentBuilderCommandSpec[] CommandSpecs =
+    [
+        new(
+            ListAgentsCommand,
+            ListAgentsAction,
+            ListAgentsAction,
+            string.Empty,
+            RequiresAgentId: false,
+            BuildListAgentsTextDecision,
+            BuildListAgentsCardDecision,
+            root => AgentBuilderCardContent.FormatListAgentsResult(root)),
+        new(
+            AgentStatusCommand,
+            AgentStatusAction,
+            AgentStatusAction,
+            $"Usage: {AgentStatusCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildSimpleAgentTextDecision,
+            BuildAgentScopedCardDecision,
+            FormatAgentStatusResult),
+        new(
+            RunAgentCommand,
+            RunAgentAction,
+            RunAgentAction,
+            $"Usage: {RunAgentCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildSimpleAgentTextDecision,
+            BuildAgentScopedCardDecision,
+            FormatRunAgentResult),
+        new(
+            DisableAgentCommand,
+            DisableAgentAction,
+            DisableAgentAction,
+            $"Usage: {DisableAgentCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildSimpleAgentTextDecision,
+            BuildAgentScopedCardDecision,
+            FormatDisableAgentResult),
+        new(
+            EnableAgentCommand,
+            EnableAgentAction,
+            EnableAgentAction,
+            $"Usage: {EnableAgentCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildSimpleAgentTextDecision,
+            BuildAgentScopedCardDecision,
+            FormatEnableAgentResult),
+        new(
+            DeleteAgentCommand,
+            DeleteAgentAction,
+            DeleteAgentAction,
+            $"Usage: {DeleteAgentCommand} <agent_id>",
+            RequiresAgentId: true,
+            BuildDeleteAgentTextDecision,
+            BuildDeleteAgentCardDecision,
+            FormatDeleteAgentResultAsList),
+    ];
+
+    private static readonly AgentBuilderCommandSpec ConfirmDeleteSpec = new(
+        TextCommand: string.Empty,
+        CardAction: ConfirmDeleteAgentAction,
+        ToolAction: ConfirmDeleteAgentAction,
+        Usage: string.Empty,
+        RequiresAgentId: true,
+        BuildFromText: static (_, _) => throw new InvalidOperationException("confirm_delete_agent has no text command."),
+        BuildFromCard: BuildConfirmDeleteCardDecision,
+        FormatResult: null);
+
+    private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByTextCommand =
+        CommandSpecs.ToDictionary(static spec => spec.TextCommand, StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByCardAction =
+        CommandSpecs
+            .Append(ConfirmDeleteSpec)
+            .ToDictionary(static spec => spec.CardAction, StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByToolAction =
+        CommandSpecs
+            .Where(static spec => spec.FormatResult is not null)
+            .ToDictionary(static spec => spec.ToolAction, StringComparer.OrdinalIgnoreCase);
+
     public static bool TryResolve(ChannelInboundEvent evt, out AgentBuilderFlowDecision? decision) =>
         TryResolve(evt, preferredGithubUsername: null, out decision);
 
@@ -59,79 +150,12 @@ public static class AgentBuilderCardFlow
         if (!evt.Extra.TryGetValue("agent_builder_action", out var action))
             return false;
 
-        string? argumentsJson;
-        string? validationError;
-        switch ((action ?? string.Empty).Trim())
-        {
-            case ListAgentsAction:
-                decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
-                return true;
+        var normalizedAction = (action ?? string.Empty).Trim();
+        if (!SpecsByCardAction.TryGetValue(normalizedAction, out var spec))
+            return false;
 
-            case AgentStatusAction:
-                if (!TryBuildAgentActionArguments(evt, "agent_status", out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(AgentStatusAction, argumentsJson!);
-                return true;
-
-            case RunAgentAction:
-                if (!TryBuildAgentActionArguments(evt, "run_agent", out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(RunAgentAction, argumentsJson!);
-                return true;
-
-            case DisableAgentAction:
-                if (!TryBuildAgentActionArguments(evt, "disable_agent", out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(DisableAgentAction, argumentsJson!);
-                return true;
-
-            case EnableAgentAction:
-                if (!TryBuildAgentActionArguments(evt, "enable_agent", out argumentsJson, out validationError))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(EnableAgentAction, argumentsJson!);
-                return true;
-
-            case ConfirmDeleteAgentAction:
-                if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply("agent_id is required for delete confirmation.");
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(
-                    agentId,
-                    evt.Extra.TryGetValue("template", out var template) ? template : null));
-                return true;
-
-            case DeleteAgentAction:
-                if (!TryBuildAgentActionArguments(evt, "delete_agent", out argumentsJson, out validationError, confirm: true))
-                {
-                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
-                    return true;
-                }
-
-                decision = AgentBuilderFlowDecision.ToolCall(DeleteAgentAction, argumentsJson!);
-                return true;
-
-            default:
-                return false;
-        }
+        decision = spec.BuildFromCard(evt, spec);
+        return true;
     }
 
     private static bool TryResolveTextCommand(
@@ -151,80 +175,44 @@ public static class AgentBuilderCardFlow
             return false;
 
         var command = tokens[0];
-        if (!IsKnownTextCommand(command))
+        if (!SpecsByTextCommand.TryGetValue(command, out var spec))
             return false;
 
-        // Refactor (iter9/cluster-1305-hybrid-minimal-delete):
-        // Old pattern: agent-builder routing split across a retired relay flow and AgentBuilderCardFlow.
-        // New principle: single AgentBuilderCardFlow routes all agent-builder slash commands via TryResolveSimpleAgentAction.
         if (!IsPrivateChat(evt.ChatType))
         {
             decision = AgentBuilderFlowDecision.DirectReply(BuildPrivateChatRestrictionReply(command));
             return true;
         }
 
-        return TryResolveKnownTextCommand(command, tokens, out decision);
+        decision = spec.BuildFromText(tokens, spec);
+        return true;
     }
 
-    private static bool IsKnownTextCommand(string command) =>
-        string.Equals(command, ListAgentsCommand, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(command, AgentStatusCommand, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(command, RunAgentCommand, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(command, DisableAgentCommand, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(command, EnableAgentCommand, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(command, DeleteAgentCommand, StringComparison.OrdinalIgnoreCase);
-
-    private static bool TryResolveKnownTextCommand(
-        string command,
+    private static AgentBuilderFlowDecision BuildListAgentsTextDecision(
         IReadOnlyList<string> tokens,
-        out AgentBuilderFlowDecision? decision)
+        AgentBuilderCommandSpec spec)
     {
-        if (string.Equals(command, ListAgentsCommand, StringComparison.OrdinalIgnoreCase))
+        _ = tokens;
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, JsonSerializer.Serialize(new
         {
-            decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
-            return true;
-        }
-
-        if (string.Equals(command, AgentStatusCommand, StringComparison.OrdinalIgnoreCase))
-            return TryResolveSimpleAgentAction(tokens, AgentStatusAction, $"Usage: {AgentStatusCommand} <agent_id>", out decision);
-
-        if (string.Equals(command, RunAgentCommand, StringComparison.OrdinalIgnoreCase))
-            return TryResolveSimpleAgentAction(tokens, RunAgentAction, $"Usage: {RunAgentCommand} <agent_id>", out decision);
-
-        if (string.Equals(command, DisableAgentCommand, StringComparison.OrdinalIgnoreCase))
-            return TryResolveSimpleAgentAction(tokens, DisableAgentAction, $"Usage: {DisableAgentCommand} <agent_id>", out decision);
-
-        if (string.Equals(command, EnableAgentCommand, StringComparison.OrdinalIgnoreCase))
-            return TryResolveSimpleAgentAction(tokens, EnableAgentAction, $"Usage: {EnableAgentCommand} <agent_id>", out decision);
-
-        if (string.Equals(command, DeleteAgentCommand, StringComparison.OrdinalIgnoreCase))
-            return TryResolveDeleteAgentTextCommand(tokens, out decision);
-
-        decision = null;
-        return false;
+            action = spec.ToolAction,
+        }));
     }
 
-    private static bool TryResolveSimpleAgentAction(
+    private static AgentBuilderFlowDecision BuildSimpleAgentTextDecision(
         IReadOnlyList<string> tokens,
-        string action,
-        string usage,
-        out AgentBuilderFlowDecision? decision)
+        AgentBuilderCommandSpec spec)
     {
-        decision = null;
         if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
-        {
-            decision = AgentBuilderFlowDecision.DirectReply(usage);
-            return true;
-        }
+            return AgentBuilderFlowDecision.DirectReply(spec.Usage);
 
-        decision = AgentBuilderFlowDecision.ToolCall(
-            action,
+        return AgentBuilderFlowDecision.ToolCall(
+            spec.ToolAction,
             JsonSerializer.Serialize(new
             {
-                action,
+                action = spec.ToolAction,
                 agent_id = tokens[1].Trim(),
             }));
-        return true;
     }
 
     /// <summary>
@@ -240,16 +228,11 @@ public static class AgentBuilderCardFlow
         try
         {
             using var doc = JsonDocument.Parse(toolResultJson);
-            return decision.ToolAction switch
-            {
-                ListAgentsAction => AgentBuilderCardContent.FormatListAgentsResult(doc.RootElement),
-                AgentStatusAction => FormatAgentStatusResult(doc.RootElement),
-                RunAgentAction => FormatRunAgentResult(doc.RootElement),
-                DisableAgentAction => FormatDisableAgentResult(doc.RootElement),
-                EnableAgentAction => FormatEnableAgentResult(doc.RootElement),
-                DeleteAgentAction => FormatDeleteAgentResultAsList(doc.RootElement),
-                _ => ToTextContent(toolResultJson),
-            };
+            return decision.ToolAction is not null &&
+                   SpecsByToolAction.TryGetValue(decision.ToolAction, out var spec) &&
+                   spec.FormatResult is not null
+                ? spec.FormatResult(doc.RootElement)
+                : ToTextContent(toolResultJson);
         }
         catch (JsonException)
         {
@@ -268,9 +251,53 @@ public static class AgentBuilderCardFlow
             : evt.ChatType;
     }
 
+    private static AgentBuilderFlowDecision BuildListAgentsCardDecision(
+        ChannelInboundEvent evt,
+        AgentBuilderCommandSpec spec)
+    {
+        _ = evt;
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, JsonSerializer.Serialize(new
+        {
+            action = spec.ToolAction,
+        }));
+    }
+
+    private static AgentBuilderFlowDecision BuildAgentScopedCardDecision(
+        ChannelInboundEvent evt,
+        AgentBuilderCommandSpec spec)
+    {
+        if (!TryBuildAgentActionArguments(evt, spec, out var argumentsJson, out var validationError))
+            return AgentBuilderFlowDecision.DirectReply(validationError!);
+
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, argumentsJson!);
+    }
+
+    private static AgentBuilderFlowDecision BuildConfirmDeleteCardDecision(
+        ChannelInboundEvent evt,
+        AgentBuilderCommandSpec spec)
+    {
+        _ = spec;
+        if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
+            return AgentBuilderFlowDecision.DirectReply("agent_id is required for delete confirmation.");
+
+        return AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(
+            agentId,
+            evt.Extra.TryGetValue("template", out var template) ? template : null));
+    }
+
+    private static AgentBuilderFlowDecision BuildDeleteAgentCardDecision(
+        ChannelInboundEvent evt,
+        AgentBuilderCommandSpec spec)
+    {
+        if (!TryBuildAgentActionArguments(evt, spec, out var argumentsJson, out var validationError, confirm: true))
+            return AgentBuilderFlowDecision.DirectReply(validationError!);
+
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, argumentsJson!);
+    }
+
     private static bool TryBuildAgentActionArguments(
         ChannelInboundEvent evt,
-        string action,
+        AgentBuilderCommandSpec spec,
         out string? argumentsJson,
         out string? validationError,
         bool confirm = false)
@@ -278,13 +305,14 @@ public static class AgentBuilderCardFlow
         argumentsJson = null;
         validationError = null;
 
-        if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
+        string? agentId = null;
+        if (spec.RequiresAgentId && !TryGetRequiredExtra(evt, "agent_id", out agentId!))
         {
             validationError = "agent_id is required. Send /agents and retry from the latest card.";
             return false;
         }
 
-        var revisionFeedback = string.Equals(action, "run_agent", StringComparison.Ordinal)
+        var revisionFeedback = string.Equals(spec.ToolAction, RunAgentAction, StringComparison.Ordinal)
             ? NormalizeOptional(evt.Extra.TryGetValue("revision_feedback", out var rawRevisionFeedback)
                 ? rawRevisionFeedback
                 : (evt.Extra.TryGetValue("user_input", out var rawUserInput) ? rawUserInput : null))
@@ -292,7 +320,7 @@ public static class AgentBuilderCardFlow
 
         argumentsJson = JsonSerializer.Serialize(new
         {
-            action,
+            action = spec.ToolAction,
             agent_id = agentId,
             confirm,
             revision_feedback = revisionFeedback,
@@ -304,16 +332,12 @@ public static class AgentBuilderCardFlow
     /// Parses <c>/delete-agent &lt;agent_id&gt; [confirm]</c>. Without the trailing keyword the
     /// card flow keeps its explicit confirmation card; with it, the command dispatches directly.
     /// </summary>
-    private static bool TryResolveDeleteAgentTextCommand(
+    private static AgentBuilderFlowDecision BuildDeleteAgentTextDecision(
         IReadOnlyList<string> tokens,
-        out AgentBuilderFlowDecision? decision)
+        AgentBuilderCommandSpec spec)
     {
-        decision = null;
         if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
-        {
-            decision = AgentBuilderFlowDecision.DirectReply($"Usage: {DeleteAgentCommand} <agent_id>");
-            return true;
-        }
+            return AgentBuilderFlowDecision.DirectReply(spec.Usage);
 
         var agentId = tokens[1].Trim();
         var confirmed = tokens.Count > 2 &&
@@ -321,19 +345,17 @@ public static class AgentBuilderCardFlow
 
         if (confirmed)
         {
-            decision = AgentBuilderFlowDecision.ToolCall(
-                DeleteAgentAction,
+            return AgentBuilderFlowDecision.ToolCall(
+                spec.ToolAction,
                 JsonSerializer.Serialize(new
                 {
-                    action = DeleteAgentAction,
+                    action = spec.ToolAction,
                     agent_id = agentId,
                     confirm = true,
                 }));
-            return true;
         }
 
-        decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId, null));
-        return true;
+        return AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId, null));
     }
 
     private static bool TryGetRequiredExtra(ChannelInboundEvent evt, string key, out string value)

@@ -43,24 +43,20 @@ public sealed class ChatJsonPayloadsTests
     }
 
     [Fact]
-    public void Format_ShouldSerializeAiPayload_WhenCustomPayloadCarriesAiEvent()
+    public void Format_ShouldSerializeWorkflowPayload_WhenCustomPayloadCarriesWorkflowEvent()
     {
         var json = ChatJsonPayloads.Format(new WorkflowRunEventEnvelope
         {
             Custom = new WorkflowCustomEventPayload
             {
                 Name = "aevatar.raw.observed",
-                Payload = Any.Pack(new MediaContentEvent
+                Payload = Any.Pack(new WorkflowLlmInvocationCompletedEvent
                 {
                     SessionId = "session-1",
-                    AgentId = "agent-1",
-                    Part = new ChatContentPart
-                    {
-                        Kind = ChatContentPartKind.Image,
-                        Uri = "https://example.com/cat.png",
-                        MediaType = "image/png",
-                        Name = "cat",
-                    },
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    Content = "reply",
+                    Success = true,
                 }),
             },
         });
@@ -71,12 +67,12 @@ public sealed class ChatJsonPayloadsTests
             .GetProperty("payload");
 
         payload.GetProperty("@type").GetString()
-            .Should().Be("type.googleapis.com/aevatar.ai.MediaContentEvent");
+            .Should().Be("type.googleapis.com/aevatar.workflow.WorkflowLlmInvocationCompletedEvent");
         payload.GetProperty("sessionId").GetString().Should().Be("session-1");
-        payload.GetProperty("agentId").GetString().Should().Be("agent-1");
-        payload.GetProperty("part").GetProperty("uri").GetString().Should().Be("https://example.com/cat.png");
-        payload.GetProperty("part").GetProperty("mediaType").GetString().Should().Be("image/png");
-        payload.GetProperty("part").GetProperty("name").GetString().Should().Be("cat");
+        payload.GetProperty("runId").GetString().Should().Be("run-1");
+        payload.GetProperty("stepId").GetString().Should().Be("step-1");
+        payload.GetProperty("content").GetString().Should().Be("reply");
+        payload.GetProperty("success").GetBoolean().Should().BeTrue();
     }
 
     private static WorkflowRunEventEnvelope BuildFrame() =>

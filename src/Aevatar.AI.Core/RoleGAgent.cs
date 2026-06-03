@@ -951,7 +951,26 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             ContentEmitted: fullContent.Length > 0);
     }
 
-    private Task PersistSessionCompletionAsync(ChatRequestEvent request, SessionReplayRecord replayRecord)
+    private Task PersistSessionCompletionAsync(ChatRequestEvent request, SessionReplayRecord replayRecord) =>
+        PersistRoleChatSessionCompletionAsync(
+            request,
+            replayRecord.Content,
+            replayRecord.ReasoningContent,
+            replayRecord.ToolCalls,
+            replayRecord.ContentParts,
+            replayRecord.ContentEmitted,
+            replayRecord.Usage,
+            replayRecord.Model);
+
+    protected Task PersistRoleChatSessionCompletionAsync(
+        ChatRequestEvent request,
+        string content,
+        string reasoningContent,
+        IReadOnlyList<ToolCall> toolCalls,
+        IReadOnlyList<ContentPart> contentParts,
+        bool contentEmitted,
+        TokenUsage? usage = null,
+        string? model = null)
     {
         if (string.IsNullOrWhiteSpace(request.SessionId))
             return Task.CompletedTask;
@@ -963,14 +982,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             //   New principle: completion events publish RoleId as a typed business fact.
             RoleId = RoleId,
             SessionId = request.SessionId,
-            Content = replayRecord.Content,
-            ReasoningContent = replayRecord.ReasoningContent,
+            Content = content,
+            ReasoningContent = reasoningContent,
             Prompt = request.Prompt,
-            ContentEmitted = replayRecord.ContentEmitted,
-            ToolCalls = { ToToolCallEvents(replayRecord.ToolCalls) },
-            OutputParts = { ContentPartProtoMapper.ToProtoList(replayRecord.ContentParts) },
-            Usage = ToTokenUsagePayload(replayRecord.Usage),
-            Model = replayRecord.Model ?? string.Empty,
+            ContentEmitted = contentEmitted,
+            ToolCalls = { ToToolCallEvents(toolCalls) },
+            OutputParts = { ContentPartProtoMapper.ToProtoList(contentParts) },
+            Usage = ToTokenUsagePayload(usage),
+            Model = model ?? string.Empty,
         });
     }
 

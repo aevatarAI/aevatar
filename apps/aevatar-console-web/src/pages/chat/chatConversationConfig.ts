@@ -9,6 +9,7 @@ export const LLM_ROUTE_HEADER_KEY = "nyxid.route_preference";
 export const LLM_MODEL_HEADER_KEY = "aevatar.model_override";
 export const CONVERSATION_ROUTE_DEFAULT_VALUE = "__config_default__";
 export const CONVERSATION_ROUTE_GATEWAY_VALUE = "__gateway__";
+const USER_LLM_ROUTE_GATEWAY_LABEL = "Gateway";
 
 export type ConversationRouteOption = {
   label: string;
@@ -93,13 +94,13 @@ export function describeConversationRoute(
     return "Config default";
   }
 
-  return routeOptions.find((option) => option.value === route)?.label || route;
+  return routeOptions.find((option) => option.value === route)?.label ||
+    route ||
+    USER_LLM_ROUTE_GATEWAY_LABEL;
 }
 
 export function buildConversationRouteOptions(
-  settings: StudioUserLlmSettings | undefined,
-  globalPreferredRoute?: string,
-  conversationRoute?: string
+  settings: StudioUserLlmSettings | undefined
 ): ConversationRouteOption[] {
   const options: ConversationRouteOption[] = [];
   const seen = new Set<string>();
@@ -111,32 +112,20 @@ export function buildConversationRouteOptions(
 
     seen.add(route);
     options.push({
-      label: option.label.trim() || route || "NyxID Gateway",
+      label: option.label.trim() || route || USER_LLM_ROUTE_GATEWAY_LABEL,
       value: route,
     });
-  }
-
-  for (const route of [globalPreferredRoute, conversationRoute]) {
-    if (route !== undefined) {
-      const normalizedRoute = normalizeUserLlmRoute(route);
-      if (!seen.has(normalizedRoute)) {
-        seen.add(normalizedRoute);
-        options.push({ label: normalizedRoute || "NyxID Gateway", value: normalizedRoute });
-      }
-    }
   }
 
   return options;
 }
 
 export function buildConversationModelGroups(input: {
-  conversationModel?: string;
   effectiveRoute: string;
-  globalDefaultModel?: string;
   settings: StudioUserLlmSettings | undefined;
 }): ConversationLlmModelGroup[] {
   const normalizedRoute = normalizeUserLlmRoute(input.effectiveRoute);
-  const groups = (input.settings?.modelGroupsByRoute ?? [])
+  return (input.settings?.modelGroupsByRoute ?? [])
     .filter((group: StudioUserLlmModelGroup) =>
       normalizeUserLlmRoute(group.routeValue) === normalizedRoute
     )
@@ -146,22 +135,6 @@ export function buildConversationModelGroups(input: {
       models: Array.from(new Set(group.models.filter(Boolean))),
     }))
     .filter((group) => group.models.length > 0);
-  const selectedModel =
-    trimConversationValue(input.conversationModel) ||
-    trimConversationValue(input.globalDefaultModel);
-
-  if (
-    selectedModel &&
-    !groups.some((group) => group.models.includes(selectedModel))
-  ) {
-    groups.unshift({
-      id: "__current__",
-      label: "Current",
-      models: [selectedModel],
-    });
-  }
-
-  return groups;
 }
 
 export function findConversationRouteOption(

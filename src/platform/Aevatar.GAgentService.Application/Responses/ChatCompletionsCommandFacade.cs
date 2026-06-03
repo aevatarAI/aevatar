@@ -31,9 +31,7 @@ public sealed class ChatCompletionsCommandFacade(
     TimeSpan? observationTimeout = null) : IChatCompletionsCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
-    private const string RegistrationScopeMetadataKey = "scope_id";
     private readonly TimeSpan _observationTimeout = observationTimeout ?? DefaultObservationTimeout;
-
     public async Task<ChatCompletionsCreateCommandResult> CreateAsync(
         ChatCompletionsCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -502,16 +500,11 @@ public sealed class ChatCompletionsCommandFacade(
         ResponsesToolClassification toolClassification,
         AgentToolExecutionContext toolContext)
     {
-        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.CompletionId,
-            [RegistrationScopeMetadataKey] = callerScope.ScopeId,
-        };
         return new LLMRequest
         {
             Messages = [.. normalized.ChatMessages],
             RequestId = normalized.CompletionId,
-            Metadata = llmMetadata,
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
             CallerContext = new LLMRequestCallerContext(
                 callerScope.ScopeId,
                 callerScope.OwnerSubject,

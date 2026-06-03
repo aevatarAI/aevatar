@@ -170,9 +170,9 @@ describe('studioApi host-session requests', () => {
       status: 200,
       json: async () => ({
         savedRoute: '',
-        savedRouteLabel: 'NyxID Gateway',
+        savedRouteLabel: 'Company LLM Gateway',
         effectiveRoute: '',
-        effectiveRouteLabel: 'NyxID Gateway',
+        effectiveRouteLabel: 'Company LLM Gateway',
         routeFallbackActive: false,
         fallbackReason: null,
         catalogStatus: 'ready',
@@ -186,7 +186,7 @@ describe('studioApi host-session requests', () => {
         routeOptions: [
           {
             routeValue: '',
-            label: 'NyxID Gateway',
+            label: 'Company LLM Gateway',
             source: 'gateway_provider',
             status: 'ready',
             allowed: true,
@@ -221,9 +221,9 @@ describe('studioApi host-session requests', () => {
 
     await expect(studioApi.getUserLlmSettings()).resolves.toEqual({
       savedRoute: '',
-      savedRouteLabel: 'NyxID Gateway',
+      savedRouteLabel: 'Company LLM Gateway',
       effectiveRoute: '',
-      effectiveRouteLabel: 'NyxID Gateway',
+      effectiveRouteLabel: 'Company LLM Gateway',
       routeFallbackActive: false,
       fallbackReason: null,
       catalogStatus: 'ready',
@@ -237,7 +237,7 @@ describe('studioApi host-session requests', () => {
       routeOptions: [
         {
           routeValue: '',
-          label: 'NyxID Gateway',
+          label: 'Company LLM Gateway',
           source: 'gateway_provider',
           status: 'ready',
           allowed: true,

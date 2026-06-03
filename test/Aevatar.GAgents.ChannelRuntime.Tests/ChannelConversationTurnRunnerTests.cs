@@ -1137,6 +1137,7 @@ public sealed class ChannelConversationTurnRunnerTests
         relayHandler.Requests.Should().ContainSingle();
         relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-runtime-1");
         callerScopeResolver.CapturedMetadata.Should().NotBeNull();
+        callerScopeResolver.CapturedMetadata!.Should().NotContainKey("scope_id");
         callerScopeResolver.CapturedMetadata![LLMRequestMetadataKeys.NyxIdAccessToken]
             .Should().Be("runtime-user-token-1");
         callerScopeResolver.CapturedMetadata[LLMRequestMetadataKeys.NyxIdOrgToken]
@@ -1251,8 +1252,13 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey("scope_id");
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
         var llmControl = LLMControlContextMapper.FromPayload(result.LlmReplyRequest.LlmControl);
+        toolContext.Caller.ScopeId.Should().BeNull();
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
         adapter.Replies.Should().BeEmpty();

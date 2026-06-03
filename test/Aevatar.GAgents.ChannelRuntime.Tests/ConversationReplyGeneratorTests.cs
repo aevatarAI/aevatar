@@ -860,6 +860,55 @@ public sealed class ConversationReplyGeneratorTests
         prefsStore.Lookups.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task GenerateReplyAsync_ShouldNotPromoteMetadataOwnedKeysIntoToolContext()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(providerFactory);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-owned-metadata",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-owned-metadata" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.ScopeId] = "metadata-scope",
+                ["scope_id"] = "metadata-scope-alias",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-access-token",
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = "metadata-org-token",
+                [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "metadata-sender-token",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "metadata-route",
+                [LLMRequestMetadataKeys.ModelOverride] = "metadata-model",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "9",
+                ["channel.platform"] = "lark",
+                ["channel.sender_id"] = "ou_metadata_sender",
+                ["channel.message_id"] = "metadata-message",
+                ["trace-id"] = "trace-1",
+            },
+            Control(model: "typed-model", route: "typed-route", rounds: 6, token: "typed-token"),
+            toolContext: null,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("trace-id", "trace-1"));
+
+        var toolContext = request.ToolContext!;
+        toolContext.Caller.ScopeId.Should().BeNull();
+        toolContext.Channel.Platform.Should().BeNull();
+        toolContext.Channel.SenderId.Should().BeNull();
+        toolContext.Channel.MessageId.Should().BeNull();
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("typed-token");
+        toolContext.Credentials.NyxIdOrgToken.Should().Be("typed-token");
+        toolContext.Routing.ModelOverride.Should().Be("typed-model");
+        toolContext.Routing.NyxIdRoutePreference.Should().Be("typed-route");
+        toolContext.Routing.MaxToolRoundsOverride.Should().Be(6);
+        toolContext.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("trace-id", "trace-1"));
+    }
+
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
     // slash silently consumed.
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;

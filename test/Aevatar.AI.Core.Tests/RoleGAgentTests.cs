@@ -62,12 +62,25 @@ public class RoleGAgentTests
     }
 
     [Fact]
-    public void RoleGAgentSource_DoesNotUseLegacyMetadataContextMapper()
+    public void ProductionSources_ShouldNotCallAgentToolExecutionContextMapperFromMetadata()
     {
-        var source = File.ReadAllText(FindRepoFile("src/Aevatar.AI.Core/RoleGAgent.cs"));
-        var executableSource = StripSingleLineComments(source);
+        var root = FindRepoRoot();
+        var productionFiles = new[] { "src", "agents" }
+            .Select(path => Path.Combine(root, path))
+            .Where(Directory.Exists)
+            .SelectMany(path => Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories))
+            .Where(path => !IsGeneratedOrBuildOutput(path))
+            .Where(path => !Path.GetFileName(path).Equals("AgentToolExecutionContextMapper.cs", StringComparison.Ordinal))
+            .ToArray();
 
-        executableSource.Should().NotContain("AgentToolExecutionContextMapper.FromMetadata(");
+        productionFiles.Should().NotBeEmpty();
+        var offenders = productionFiles
+            .Where(path => StripSingleLineComments(File.ReadAllText(path))
+                .Contains("AgentToolExecutionContextMapper.FromMetadata(", StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(root, path))
+            .ToArray();
+
+        offenders.Should().BeEmpty();
     }
 
     private static AgentToolExecutionContext ResolvePendingToolContext(PendingToolApprovalState pending)
@@ -84,17 +97,35 @@ public class RoleGAgentTests
 
     private static string FindRepoFile(string relativePath)
     {
+        var root = FindRepoRoot();
+        var candidate = Path.Combine(root, relativePath);
+        if (File.Exists(candidate))
+            return candidate;
+
+        throw new FileNotFoundException($"Could not find repository file '{relativePath}'.");
+    }
+
+    private static string FindRepoRoot()
+    {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current != null)
         {
-            var candidate = Path.Combine(current.FullName, relativePath);
-            if (File.Exists(candidate))
-                return candidate;
+            if (File.Exists(Path.Combine(current.FullName, "aevatar.slnx")))
+                return current.FullName;
 
             current = current.Parent;
         }
 
-        throw new FileNotFoundException($"Could not find repository file '{relativePath}'.");
+        throw new DirectoryNotFoundException("Could not find repository root.");
+    }
+
+    private static bool IsGeneratedOrBuildOutput(string path)
+    {
+        var normalized = path.Replace(Path.DirectorySeparatorChar, '/');
+        return normalized.Contains("/bin/", StringComparison.Ordinal)
+               || normalized.Contains("/obj/", StringComparison.Ordinal)
+               || normalized.EndsWith(".g.cs", StringComparison.Ordinal)
+               || normalized.EndsWith(".Designer.cs", StringComparison.Ordinal);
     }
 
     private static string StripSingleLineComments(string source)

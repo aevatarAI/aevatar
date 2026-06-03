@@ -41,6 +41,7 @@ public sealed class ResponsesCommandFacadeTests
         result.Error.Should().BeNull();
         result.Accepted.Should().NotBeNull();
         result.Completed.Should().BeNull();
+        result.Accepted!.Admission.Accepted.Should().BeTrue();
         sessions.Registered.Should().ContainSingle().Which.ResponseId.Should().StartWith("resp_");
         sessions.RecordedCompletions.Should().BeEmpty();
         sessions.UpdatedStatuses.Should().BeEmpty();
@@ -49,6 +50,7 @@ public sealed class ResponsesCommandFacadeTests
         command.RoutePreference.Should().Be("route-value");
         command.ScopeId.Should().Be("scope-1");
         command.BearerToken.Should().Be("token");
+        result.Accepted.Admission.CommandId.Should().NotBeNullOrWhiteSpace();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
         toolContext.Request.RequestId.Should().Be(command.ResponseId);
         toolContext.Caller.ScopeId.Should().Be("scope-1");
@@ -469,6 +471,9 @@ public sealed class ResponsesCommandFacadeTests
         result.Error.Should().BeNull();
         result.StreamPlan.Should().NotBeNull();
         result.StreamPlan!.LlmRequest.ToolContext.Should().NotBeNull();
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
         result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.ResponseId);
         result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");

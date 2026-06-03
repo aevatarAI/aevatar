@@ -1,5 +1,4 @@
 using Aevatar.Workflow.Abstractions.Execution;
-using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -16,13 +15,13 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
         return Task.CompletedTask;
     }
 
-    public static Task SetToolContextAsync(
+    public static Task SetLlmControlAsync(
         IWorkflowExecutionStateHost stateHost,
-        AgentToolExecutionContext? toolContext,
+        WorkflowLlmControlContext? llmControl,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        return WorkflowRunExecutionContextStateAccess.ApplyToolContextAsync(stateHost, toolContext, ct);
+        return WorkflowRunExecutionContextStateAccess.ApplyLlmControlAsync(stateHost, llmControl, ct);
     }
 
     public static async Task RemoveRequestMetadataAsync(

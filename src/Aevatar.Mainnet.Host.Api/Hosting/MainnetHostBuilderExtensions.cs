@@ -137,6 +137,9 @@ public static class MainnetHostBuilderExtensions
             });
         });
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
+        builder.Services.Configure<ResponsesNyxIdIdentityAssertionOptions>(
+            builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
+        builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
