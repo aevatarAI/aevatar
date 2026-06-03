@@ -4,7 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Application;

@@ -39,6 +39,7 @@ import {
   streamMissionControlEvents,
   submitMissionControlIntervention,
 } from '../services/api';
+import { t } from "@/shared/i18n/messages";
 
 const QUERY_KEY_PREFIX = 'mission-control-runtime';
 const STREAM_FLUSH_DELAY_MS = 120;
@@ -143,7 +144,7 @@ function buildAcceptedFeedback(
 ): MissionActionFeedback {
   if (!accepted) {
       return {
-        message: 'Runtime did not accept the intervention request. Please try again.',
+        message: t("pages.missioncontrol.hooks.usemissioncontrolruntime.runtime.did.not.accept.the", "Runtime did not accept the intervention request. Please try again."),
         tone: 'warning',
       };
   }
@@ -151,22 +152,26 @@ function buildAcceptedFeedback(
   switch (kind) {
     case 'signal':
       return {
-        message: `Signal ${signalName || 'continue'} was accepted. Waiting for runtime to continue.`,
+        message: t(
+          "pages.missioncontrol.hooks.usemissioncontrolruntime.signal.accepted.waiting",
+          "Signal {signalName} was accepted. Waiting for runtime to continue.",
+          { signalName: signalName || "continue" },
+        ),
         tone: 'success',
       };
     case 'approve':
       return {
-        message: 'Approval was accepted. Waiting for the run to advance.',
+        message: t("pages.missioncontrol.hooks.usemissioncontrolruntime.approval.was.accepted.waiting.for", "Approval was accepted. Waiting for the run to advance."),
         tone: 'success',
       };
     case 'reject':
       return {
-        message: 'Rejection was submitted. Waiting for runtime to confirm stop or rollback.',
+        message: t("pages.missioncontrol.hooks.usemissioncontrolruntime.rejection.was.submitted.waiting.for", "Rejection was submitted. Waiting for runtime to confirm stop or rollback."),
         tone: 'warning',
       };
     default:
       return {
-        message: 'Resume was accepted. Waiting for the next runtime snapshot.',
+        message: t("pages.missioncontrol.hooks.usemissioncontrolruntime.resume.was.accepted.waiting.for", "Resume was accepted. Waiting for the next runtime snapshot."),
         tone: 'success',
       };
   }

@@ -1,6 +1,7 @@
 import { Button, Card, Result } from 'antd';
 import React from 'react';
 import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
+import { t } from "@/shared/i18n/messages";
 
 const NoFoundPage: React.FC = () => (
   <Card variant="borderless">
@@ -15,8 +16,7 @@ const NoFoundPage: React.FC = () => (
             window.location.href = CONSOLE_HOME_ROUTE;
           }}
         >
-          Return to projects
-        </Button>
+          {t("pages.404.return.to.projects", "Return to projects")}</Button>
       }
     />
   </Card>

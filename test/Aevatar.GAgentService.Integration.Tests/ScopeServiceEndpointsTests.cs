@@ -25,7 +25,7 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -1700,7 +1700,7 @@ public sealed class ScopeServiceEndpointsTests
             await emitAsync(
                 new AGUIEvent
                 {
-                    TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    TextMessageContent = new Aevatar.AGUI.Contracts.TextMessageContentEvent
                     {
                         MessageId = "msg-1",
                         Delta = "hello from static",

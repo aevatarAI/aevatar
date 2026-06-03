@@ -3,7 +3,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Projection.Configuration;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
 

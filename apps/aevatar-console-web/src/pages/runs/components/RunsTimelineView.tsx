@@ -7,12 +7,13 @@ import {
   workbenchConsoleSurfaceStyle,
 } from "../runWorkbenchConfig";
 import {
-  eventCategoryValueEnum,
-  eventStatusValueEnum,
+  getEventCategoryLabel,
+  getEventStatusLabel,
   type RunEventCategory,
   type RunEventRow,
   type RunTimelineGroup,
 } from "../runEventPresentation";
+import { t } from "@/shared/i18n/messages";
 
 type RunsTimelineViewProps = {
   groups: RunTimelineGroup[];
@@ -187,7 +188,7 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
   selectedItemKey,
 }) => (
   <div style={workbenchConsoleSurfaceStyle}>
-    <div style={timelineHeaderStyle}>Execution timeline</div>
+    <div style={timelineHeaderStyle}>{t("pages.runs.runstimelineview.execution.timeline", "Execution timeline")}</div>
     <div style={workbenchConsoleScrollStyle}>
       {groups.length > 0 ? (
         <div style={timelineBodyStyle}>
@@ -198,8 +199,8 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                 const stepTypes = getGroupStepTypes(group);
                 const latestItem = group.items[0];
                 const categoryLabel = latestItem
-                  ? eventCategoryValueEnum[latestItem.eventCategory].text
-                  : "Observed";
+                  ? getEventCategoryLabel(latestItem.eventCategory)
+                  : getEventStatusLabel("default");
                 const progressionLabel = buildProgressionLabel(group);
 
                 return (
@@ -213,7 +214,7 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                   <Badge status={statusBadgeMap[group.status]} />
                   <Typography.Text strong>{group.label}</Typography.Text>
                   <Tag color={statusTagToneMap[group.status]}>
-                    {eventStatusValueEnum[group.status].text}
+                    {getEventStatusLabel(group.status)}
                   </Tag>
                 </Space>
                 <Typography.Text type="secondary">
@@ -222,7 +223,7 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
               </Space>
                     <div style={timelineGroupMetaStyle}>
                       <Space wrap size={[6, 6]}>
-                        <Tag>{group.eventCount} events</Tag>
+                        <Tag>{group.eventCount} {t("pages.runs.runstimelineview.events", "events")}</Tag>
                         <Tag color={categoryTagToneMap[latestItem?.eventCategory ?? "state"]}>
                           {categoryLabel}
                         </Tag>
@@ -231,14 +232,14 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                       <div style={timelineGroupSummaryStyle}>
                         <Space wrap size={[10, 6]}>
                           {agents.length === 1 ? (
-                            <span>Agent {agents[0]}</span>
+                            <span>{t("pages.runs.runstimelineview.agent", "Agent")}{agents[0]}</span>
                           ) : agents.length > 1 ? (
-                            <span>{agents.length} agents</span>
+                            <span>{agents.length} {t("pages.runs.runstimelineview.agents", "agents")}</span>
                           ) : null}
                           {stepTypes.length === 1 ? (
-                            <span>Step type {stepTypes[0]}</span>
+                            <span>{t("pages.runs.runstimelineview.step.type", "Step type")}{stepTypes[0]}</span>
                           ) : stepTypes.length > 1 ? (
-                            <span>{stepTypes.length} step modes</span>
+                            <span>{stepTypes.length} {t("pages.runs.runstimelineview.step.modes", "step modes")}</span>
                           ) : null}
                         </Space>
                       </div>
@@ -293,14 +294,14 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                         </Space>
                         <Typography.Text style={timelineSecondaryMetaStyle}>
                           {index === 0
-                            ? "Latest"
-                            : eventStatusValueEnum[item.eventStatus].text}
+                            ? t("pages.runs.runstimelineview.latest", "Latest")
+                            : getEventStatusLabel(item.eventStatus)}
                         </Typography.Text>
                       </div>
                       <div style={timelineRowBodyStyle}>
                         <div style={timelineRowHeadlineStyle}>
                           <Tag color={statusTagToneMap[item.eventStatus]}>
-                            {eventCategoryValueEnum[item.eventCategory].text}
+                            {getEventCategoryLabel(item.eventCategory)}
                           </Tag>
                           <Typography.Text strong>{item.eventType}</Typography.Text>
                         </div>
@@ -317,8 +318,7 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
                           ) : null}
                           {selected ? (
                             <Typography.Text type="secondary">
-                              Selected in inspector
-                            </Typography.Text>
+                              {t("pages.runs.runstimelineview.selected.in.inspector", "Selected in inspector")}</Typography.Text>
                           ) : null}
                         </div>
                         <Typography.Text>{item.description}</Typography.Text>
@@ -344,7 +344,7 @@ const RunsTimelineView: React.FC<RunsTimelineViewProps> = ({
       ) : (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No timeline events observed yet."
+          description={t("pages.runs.runstimelineview.no.timeline.events.observed.yet", "No timeline events observed yet.")}
         />
       )}
     </div>

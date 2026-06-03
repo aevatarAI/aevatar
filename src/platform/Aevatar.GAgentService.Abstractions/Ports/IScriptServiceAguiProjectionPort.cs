@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 
 namespace Aevatar.GAgentService.Abstractions.Ports;
 

@@ -11,6 +11,7 @@ import {
   helperTextStyle,
   studioInvokeColors,
 } from './studioInvokeUi';
+import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokeComposerPanelProps = {
   readonly canInvoke: boolean;
@@ -78,7 +79,7 @@ const promptKickerStyle: React.CSSProperties = {
   color: studioInvokeColors.accent,
   fontSize: 10.5,
   fontWeight: 800,
-  letterSpacing: 1,
+  letterSpacing: 0,
   lineHeight: '14px',
   textTransform: 'uppercase',
 };
@@ -117,7 +118,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
 }) => {
   const isRunning = invokeStatus === 'running';
   const promptPlaceholder =
-    defaultPrompt || '输入 Prompt，发起一次独立 Invoke。';
+    defaultPrompt || t("pages.studio.studiomemberinvokesetuppanels.enter.prompt.to.initiate", "Enter Prompt to initiate an independent Invoke.");
   const primaryButtonLabel = isRunning ? 'Stop' : 'Invoke';
   const primaryButtonIcon = isRunning ? (
     <StopOutlined />
@@ -132,11 +133,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     >
       <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
         <div style={promptLabelRowStyle}>
-          <span style={promptKickerStyle}>Prompt</span>
+          <span style={promptKickerStyle}>{t("pages.studio.studiomemberinvokesetuppanels.prompt", "Prompt")}</span>
           {layout === 'dock' ? (
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              New run per Invoke
-            </Typography.Text>
+              {t("pages.studio.studiomemberinvokesetuppanels.new.run.per.invoke", "New run per Invoke")}</Typography.Text>
           ) : null}
         </div>
         {layout === 'dock' ? (
@@ -145,7 +145,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={dockComposerRowStyle}
           >
             <Input.TextArea
-              aria-label="调用请求输入"
+              aria-label={t("pages.studio.studiomemberinvokesetuppanels.call.request.input", "call request input")}
               autoSize={{ minRows: 1, maxRows: 4 }}
               placeholder={promptPlaceholder}
               style={dockComposerInputStyle}
@@ -169,8 +169,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                 size="large"
                 style={dockComposerSecondaryButtonStyle}
               >
-                Stop
-              </Button>
+                {t("pages.studio.studiomemberinvokesetuppanels.stop", "Stop")}</Button>
             ) : null}
             {layout === 'dock' ? (
               <Button
@@ -179,13 +178,12 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                 style={dockComposerSecondaryButtonStyle}
                 onClick={onClear}
               >
-                Clear
-              </Button>
+                {t("pages.studio.studiomemberinvokesetuppanels.clear", "Clear")}</Button>
             ) : null}
           </div>
         ) : (
           <Input.TextArea
-            aria-label="调用请求输入"
+            aria-label={t("pages.studio.studiomemberinvokesetuppanels.call.request.input.2", "call request input")}
             autoSize={{ minRows: 4, maxRows: 8 }}
             placeholder={promptPlaceholder}
             value={prompt}
@@ -199,23 +197,19 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
             type="secondary"
           >
-            Sending this prompt will create a new independent Run.
-          </Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.sending.this.prompt.will.create", "Sending this prompt will create a new independent Run.")}</Typography.Text>
         ) : !canInvoke ? (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            请选择可调用的 Team member 和 endpoint。
-          </Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.please.select.callable.team", "Please select a callable team member and endpoint.")}</Typography.Text>
         ) : isChatEndpoint ? (
           <Typography.Text
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
             type="secondary"
           >
-            输入 Prompt，发起一次独立 Invoke。每次 Invoke 都会创建新的 Run。
-          </Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.enter.prompt.to.initiate.2", "Enter Prompt to initiate an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
         ) : (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            输入 Prompt，发起一次独立 Invoke。每次 Invoke 都会创建新的 Run。
-          </Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.enter.prompt.to.initiate.3", "Enter Prompt to initiate an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
         )}
       </div>
 
@@ -226,15 +220,14 @@ export const StudioMemberInvokeComposerPanel: React.FC<
           items={[
             {
               key: 'typed-payload',
-              label: 'Advanced typed payload',
+              label: t("pages.studio.studiomemberinvokesetuppanels.advanced.typed.payload", "Advanced typed payload"),
               children: (
                 <div style={typedPayloadGridStyle}>
                   <div style={typedPayloadGridStyle}>
                     <Typography.Text style={helperTextStyle} type="secondary">
-                      Payload type URL
-                    </Typography.Text>
+                      {t("pages.studio.studiomemberinvokesetuppanels.payload.type.url", "Payload type URL")}</Typography.Text>
                     <Input
-                      aria-label="Payload type URL"
+                      aria-label={t("pages.studio.studiomemberinvokesetuppanels.payload.type.url.2", "Payload type URL")}
                       placeholder="type.googleapis.com/google.protobuf.StringValue"
                       value={payloadTypeUrl}
                       onChange={(event) =>
@@ -244,12 +237,11 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                   </div>
                   <div style={typedPayloadGridStyle}>
                     <Typography.Text style={helperTextStyle} type="secondary">
-                      Payload base64
-                    </Typography.Text>
+                      {t("pages.studio.studiomemberinvokesetuppanels.payload.base64", "Payload base64")}</Typography.Text>
                     <Input.TextArea
-                      aria-label="Payload base64"
+                      aria-label={t("pages.studio.studiomemberinvokesetuppanels.payload.base64.2", "Payload base64")}
                       autoSize={{ minRows: 2, maxRows: 5 }}
-                      placeholder="Paste encoded protobuf payload when this type cannot be built from text."
+                      placeholder={t("pages.studio.studiomemberinvokesetuppanels.paste.encoded.protobuf.payload.when", "Paste encoded protobuf payload when this type cannot be built from text.")}
                       value={payloadBase64}
                       onChange={(event) =>
                         onPayloadBase64Change(event.target.value)
@@ -278,11 +270,9 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             {primaryButtonLabel}
           </Button>
           <Button disabled={!isRunning} icon={<StopOutlined />} onClick={onAbort}>
-            Stop
-          </Button>
+            {t("pages.studio.studiomemberinvokesetuppanels.stop.2", "Stop")}</Button>
           <Button icon={<ClearOutlined />} onClick={onClear}>
-            Clear
-          </Button>
+            {t("pages.studio.studiomemberinvokesetuppanels.clear.2", "Clear")}</Button>
         </div>
       )}
     </div>
@@ -296,8 +286,8 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     <AevatarPanel
       layoutMode="document"
       padding={14}
-      title="调试台"
-      titleHelp="先输入 prompt 或载荷，再直接执行当前成员调用。"
+      title={t("pages.studio.studiomemberinvokesetuppanels.debugging.bench", "Debugging bench")}
+      titleHelp={t("pages.studio.studiomemberinvokesetuppanels.enter.prompt.or.payload", "Enter prompt or payload first, and then directly execute the current member call.")}
     >
       {content}
     </AevatarPanel>
