@@ -16,3 +16,4 @@
 2. 不包含业务 read model、业务 context、DI 装配或具体存储实现。
 3. 仅定义稳定运行时协议，面向跨业务复用。
 4. `Abstractions/Orchestration` must not carry scope GAgent implementations, DI wiring, or store/provider selection.
+5. Activation providers depend only on Foundation.Abstractions committed-state publication contracts; do not add a project reference back to Foundation.Core.

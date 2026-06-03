@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
@@ -480,7 +481,7 @@ public class VoicePresenceSessionResolverTests
         });
         var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
 
-        var plan = provider.GetPlans(new Aevatar.Foundation.Core.EventSourcing.CommittedStatePublicationContext
+        var plan = provider.GetPlans(new CommittedStatePublicationContext
         {
             ActorId = "agent-1",
             ActorType = typeof(object),

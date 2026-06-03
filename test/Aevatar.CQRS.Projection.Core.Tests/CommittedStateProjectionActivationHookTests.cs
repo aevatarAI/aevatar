@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;

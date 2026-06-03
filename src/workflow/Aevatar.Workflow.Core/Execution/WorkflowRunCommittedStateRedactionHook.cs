@@ -1,4 +1,4 @@
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Execution;
