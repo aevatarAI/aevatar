@@ -1,0 +1,21 @@
+# Aevatar frontend-loop protected paths. FKST may inspect but must not modify these paths.
+backend/**
+proto/**
+API/**
+actor/**
+projection/**
+workflow/**
+runtime/**
+database/**
+**/backend/**
+**/proto/**
+**/API/**
+**/actor/**
+**/projection/**
+**/workflow/**
+**/runtime/**
+**/database/**
+**/backend-tests/**
+**/backend-config/**
+docs/architecture/**
+docs/canon/**
