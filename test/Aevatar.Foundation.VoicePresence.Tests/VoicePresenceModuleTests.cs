@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Modules;
@@ -79,6 +80,83 @@ public class VoicePresenceModuleTests
 
         provider.ConnectCalls.ShouldBe(0);
         provider.UpdateSessionCalls.ShouldBe(0);
+    }
+
+    [Theory]
+    [MemberData(nameof(RealtimeProjectionProviderEvents))]
+    public async Task Provider_control_events_should_enter_projection_backed_realtime_stream(
+        VoiceProviderEvent providerEvent,
+        VoiceRealtimeFrame.FrameOneofCase expectedFrameCase)
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var hub = new RecordingProjectionSessionEventHub();
+        var services = new ServiceCollection()
+            .AddSingleton<IProjectionSessionEventHub<VoiceRealtimeFrame>>(hub)
+            .BuildServiceProvider();
+        var ctx = new StubEventHandlerContext(services, CreateRoleAgentWithActiveSession());
+
+        await module.HandleAsync(CreateEnvelope(providerEvent), ctx, CancellationToken.None);
+
+        var published = hub.Events.ShouldHaveSingleItem();
+        published.RootActorId.ShouldBe("voice-agent");
+        published.SessionId.ShouldBe("session-1");
+        published.Frame.FrameCase.ShouldBe(expectedFrameCase);
+    }
+
+    [Fact]
+    public async Task AudioReceived_should_not_enter_projection_backed_realtime_stream()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var hub = new RecordingProjectionSessionEventHub();
+        var services = new ServiceCollection()
+            .AddSingleton<IProjectionSessionEventHub<VoiceRealtimeFrame>>(hub)
+            .BuildServiceProvider();
+        var ctx = new StubEventHandlerContext(services, CreateRoleAgentWithActiveSession());
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            AudioReceived = new VoiceAudioReceived
+            {
+                Pcm16 = ByteString.CopyFrom([1, 2, 3]),
+                SampleRateHz = 24000,
+            },
+        }), ctx, CancellationToken.None);
+
+        hub.Events.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Control_transcript_frame_should_enter_projection_backed_realtime_stream()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var hub = new RecordingProjectionSessionEventHub();
+        var services = new ServiceCollection()
+            .AddSingleton<IProjectionSessionEventHub<VoiceRealtimeFrame>>(hub)
+            .BuildServiceProvider();
+        var ctx = new StubEventHandlerContext(services, CreateRoleAgentWithActiveSession());
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = DefaultModuleName,
+            RemoteControlInputReceived = new VoiceRemoteControlInputReceived
+            {
+                SessionId = "session-1",
+                ControlFrame = new VoiceControlFrame
+                {
+                    DrainAcknowledged = new VoiceDrainAcknowledged
+                    {
+                        ResponseId = 5,
+                    },
+                },
+            },
+        }), ctx, CancellationToken.None);
+
+        var published = hub.Events.ShouldHaveSingleItem();
+        published.Frame.FrameCase.ShouldBe(VoiceRealtimeFrame.FrameOneofCase.TranscriptCompleted);
+        published.Frame.TranscriptCompleted.ResponseId.ShouldBe(5);
     }
 
     [Fact]
@@ -1896,6 +1974,92 @@ public class VoicePresenceModuleTests
         };
     }
 
+    public static TheoryData<VoiceProviderEvent, VoiceRealtimeFrame.FrameOneofCase> RealtimeProjectionProviderEvents()
+    {
+        return new TheoryData<VoiceProviderEvent, VoiceRealtimeFrame.FrameOneofCase>
+        {
+            {
+                new VoiceProviderEvent
+                {
+                    ResponseStarted = new VoiceResponseStarted
+                    {
+                        ProviderResponseId = "provider-response-1",
+                        ResponseId = 1,
+                    },
+                },
+                VoiceRealtimeFrame.FrameOneofCase.ResponseStarted
+            },
+            {
+                new VoiceProviderEvent
+                {
+                    SpeechStarted = new VoiceSpeechStarted(),
+                },
+                VoiceRealtimeFrame.FrameOneofCase.SpeechStarted
+            },
+            {
+                new VoiceProviderEvent
+                {
+                    ResponseDone = new VoiceResponseDone
+                    {
+                        ProviderResponseId = "provider-response-1",
+                        ResponseId = 1,
+                    },
+                },
+                VoiceRealtimeFrame.FrameOneofCase.ResponseDone
+            },
+            {
+                new VoiceProviderEvent
+                {
+                    FunctionCall = new VoiceFunctionCallRequested
+                    {
+                        ProviderResponseId = "provider-response-1",
+                        ResponseId = 1,
+                        CallId = "call-1",
+                        ToolName = "doorbell.open",
+                    },
+                },
+                VoiceRealtimeFrame.FrameOneofCase.FunctionCall
+            },
+            {
+                new VoiceProviderEvent
+                {
+                    Error = new VoiceProviderError
+                    {
+                        ErrorCode = "provider_error",
+                        ErrorMessage = "provider failed",
+                    },
+                },
+                VoiceRealtimeFrame.FrameOneofCase.Error
+            },
+            {
+                new VoiceProviderEvent
+                {
+                    Disconnected = new VoiceProviderDisconnected
+                    {
+                        Reason = "provider_disconnected",
+                    },
+                },
+                VoiceRealtimeFrame.FrameOneofCase.SessionClosed
+            },
+        };
+    }
+
+    private static RecordingRoleAgent CreateRoleAgentWithActiveSession()
+    {
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        roleAgent.State.VoicePresence[DefaultModuleName] = new VoicePresenceRuntimeState
+        {
+            Initialized = true,
+            RemoteSessionId = "session-1",
+            ActiveSessionId = "session-1",
+            Status = VoicePresenceRuntimeStatus.Idle,
+            NextResponseId = 1,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+        };
+        return roleAgent;
+    }
+
     private static EventEnvelope CreateExternalPublication(IMessage payload)
     {
         return new EventEnvelope
@@ -2019,6 +2183,40 @@ public class VoicePresenceModuleTests
 
             public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class RecordingProjectionSessionEventHub : IProjectionSessionEventHub<VoiceRealtimeFrame>
+    {
+        public List<(string RootActorId, string SessionId, VoiceRealtimeFrame Frame)> Events { get; } = [];
+
+        public Task PublishAsync(
+            string rootActorId,
+            string sessionId,
+            VoiceRealtimeFrame evt,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Events.Add((rootActorId, sessionId, evt.Clone()));
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(
+            string rootActorId,
+            string sessionId,
+            Func<VoiceRealtimeFrame, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            _ = rootActorId;
+            _ = sessionId;
+            _ = handler;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IAsyncDisposable>(new NoOpAsyncDisposable());
+        }
+    }
+
+    private sealed class NoOpAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class StaticVoiceToolCatalog(IReadOnlyList<VoiceToolDefinition> tools) : IVoiceToolCatalog
