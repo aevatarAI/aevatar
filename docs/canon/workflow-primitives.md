@@ -231,6 +231,7 @@ steps:
 - 常用参数：`signal_name`、`prompt`、`timeout_ms`。
 - 运行时事件：`WaitingForSignalEvent` 会显式携带 `run_id + step_id + signal_name`，用于无状态 UI 回传。
 - 回传约束：`SignalReceivedEvent` 必须携带 `run_id`；若同一 run 下同名 signal 有多个 waiter，还必须携带 `step_id` 以消歧。
+- 长等待口径：对长时间外部执行（例如 Codex worker、人工审批前置检查、离线作业）不要把一个普通执行步骤硬拉到超过 executor 的 `600s` 单步 timeout；改成“先发起外部工作，再 `wait_signal` 等回调”的 continuation 语义。当前 `wait_signal.timeout_ms` 官方支持到 `5400000`（90 分钟）。
 
 ```yaml
 steps:
@@ -239,7 +240,7 @@ steps:
     parameters:
       signal_name: "release_approved"
       prompt: "Waiting for release approval"
-      timeout_ms: "60000"
+      timeout_ms: "5400000"
 ```
 
 ### `checkpoint`
@@ -324,8 +325,9 @@ steps:
 ### `foreach`（别名：`for_each`、`foreach_llm`）
 
 - 作用：按分隔符拆分输入，对每个条目执行子步骤，再合并结果。
-- 常用参数：`delimiter`、`sub_step_type`、`sub_target_role`、`sub_param_{key}`。
+- 常用参数：`delimiter`、`sub_step_type`、`sub_target_role`、`sub_param_{key}`、`min_concurrent_workers`、`max_concurrent_workers`。
 - Ergonomic 说明：`foreach_llm` 会在解析期归一化为 `foreach`，并在未显式指定时自动补 `sub_step_type=llm_call`。
+- 并发口径：`max_concurrent_workers` 默认安全值为 `20`，显式参数可提升到 `200`；`min_concurrent_workers` 用于声明“保持 >= N 并发”，运行时会按 floor 做 top-up，而不是一次性把所有队列前推完。
 
 ```yaml
 steps:
@@ -336,12 +338,15 @@ steps:
       sub_step_type: "llm_call"
       sub_target_role: "assistant"
       sub_param_prompt_prefix: "Process item:"
+      min_concurrent_workers: "4"
+      max_concurrent_workers: "12"
 ```
 
 ### `parallel`（别名：`parallel_fanout`、`fan_out`）
 
 - 作用：并行扇出到多个 worker，收敛合并，可选接投票步骤。
-- 常用参数：`workers`、`parallel_count`、`vote_step_type`、`vote_param_{key}`。
+- 常用参数：`workers`、`parallel_count`、`vote_step_type`、`vote_param_{key}`、`min_concurrent_workers`、`max_concurrent_workers`。
+- 并发口径：`max_concurrent_workers` 默认安全值为 `20`，显式参数可提升到 `200`；若设置 `min_concurrent_workers`，运行时会保留队列并持续补位到该 floor，适合长尾 worker 任务。
 
 ```yaml
 steps:
@@ -349,6 +354,8 @@ steps:
     type: parallel
     parameters:
       workers: "agent_a,agent_b,agent_c"
+      min_concurrent_workers: "2"
+      max_concurrent_workers: "8"
       vote_step_type: "vote_consensus"
 ```
 
@@ -369,8 +376,9 @@ steps:
 ### `map_reduce`（别名：`mapreduce`、`map_reduce_llm`）
 
 - 作用：先 map（分片并行处理），再 reduce（汇总归并）。
-- 常用参数：`delimiter`、`map_step_type`、`map_target_role`、`reduce_step_type`、`reduce_target_role`、`reduce_prompt_prefix`。
+- 常用参数：`delimiter`、`map_step_type`、`map_target_role`、`reduce_step_type`、`reduce_target_role`、`reduce_prompt_prefix`、`min_concurrent_workers`、`max_concurrent_workers`。
 - Ergonomic 说明：`map_reduce_llm` 会在解析期归一化为 `map_reduce`，并在未显式指定时自动补 `map_step_type=llm_call`、`reduce_step_type=llm_call`。
+- 并发口径：map 阶段复用与 `parallel/foreach` 相同的 floor/top-up 语义，适合控制长尾分片吞吐。
 
 ```yaml
 steps:
@@ -383,6 +391,8 @@ steps:
       reduce_step_type: "llm_call"
       reduce_target_role: "reducer"
       reduce_prompt_prefix: "Merge these chunk summaries:"
+      min_concurrent_workers: "4"
+      max_concurrent_workers: "16"
 ```
 
 ### `workflow_call`（别名：`sub_workflow`）
@@ -565,11 +575,14 @@ POST /api/workflows/signal
 - `stepId`：resume 时必须对应当前挂起步骤；不要用旧步骤 ID 复用请求。
 - `signalName`：建议统一小写蛇形命名，和 YAML `signal_name` 保持一致。
 - 交互端点为无状态契约：服务端不维护 `runId -> actorId` 进程内映射，调用方必须在每次请求里显式传入 `actorId` 与 `runId`。
+- 长运行建议：对预计会 stall `3600-5400s` 的外部工作，优先采用 `emit/connector_call -> wait_signal` 或 `human_approval` continuation，而不是把普通 `llm_call/connector_call` 步骤 timeout 调大到超过 executor 的 `600s` 上限。
 - `human_approval.on_reject`：
   - `fail`：拒绝会终止流程；
   - `skip`：拒绝后继续下一个步骤（输入保持原值）。
 - `wait_signal.timeout_ms`：超时会返回失败 `StepCompletedEvent`，上层可配 `on_error` 做降级。
 - UI 层建议把“待处理交互卡片”与执行日志放在一起，便于审计 run 的人工干预轨迹。
+
+参考示例：`workflows/codex_long_running_handoff.yaml`
 
 ## 8. 引擎内部原语
 
