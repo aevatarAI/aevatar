@@ -2,7 +2,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Projection.Orchestration;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 

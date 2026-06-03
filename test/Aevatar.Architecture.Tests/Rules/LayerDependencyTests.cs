@@ -22,6 +22,27 @@ public class LayerDependencyTests
     }
 
     [Fact]
+    public void GAgentServiceAbstractions_ShouldNot_Reference_PresentationProjects()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "src", "platform", "Aevatar.GAgentService.Abstractions", "Aevatar.GAgentService.Abstractions.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.DoesNotContain(
+            "Aevatar.Presentation.",
+            project,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Presentation.AGUI",
+            project,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Aevatar.AGUI.Contracts",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WorkflowCore_ShouldNot_DependOn_AICore()
     {
         IArchRule rule = Types().That()

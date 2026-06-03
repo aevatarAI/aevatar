@@ -19,7 +19,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

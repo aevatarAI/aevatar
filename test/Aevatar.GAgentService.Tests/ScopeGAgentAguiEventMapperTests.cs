@@ -1,7 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -96,7 +96,7 @@ public sealed class ScopeGAgentAguiEventMapperTests
 
         var agui = ScopeGAgentAguiEventMapper.TryMap(BuildEventEnvelope(new AGUIEvent
         {
-            TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent { MessageId = "m2" },
+            TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent { MessageId = "m2" },
         }));
         agui.Should().NotBeNull();
         agui!.TextMessageEnd.Should().NotBeNull();
@@ -127,7 +127,7 @@ public sealed class ScopeGAgentAguiEventMapperTests
 
         var wrapped = new AGUIEvent
         {
-            TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+            TextMessageContent = new Aevatar.AGUI.Contracts.TextMessageContentEvent
             {
                 MessageId = "m1",
                 Delta = "hello",

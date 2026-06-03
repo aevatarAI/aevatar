@@ -5,14 +5,22 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Orchestration;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
 public sealed class GAgentDraftRunProjectionInfrastructureTests
 {
+    [Fact]
+    public void AGUIEventDescriptor_ShouldKeepWireTypeIdentityStable()
+    {
+        AGUIEvent.Descriptor.FullName.Should().Be("aevatar.presentation.agui.AGUIEvent");
+        Any.Pack(new AGUIEvent()).TypeUrl.Should().Be("type.googleapis.com/aevatar.presentation.agui.AGUIEvent");
+    }
+
     [Fact]
     public void SessionEventCodec_ShouldSerializeDeserializeAndValidateEventType()
     {
