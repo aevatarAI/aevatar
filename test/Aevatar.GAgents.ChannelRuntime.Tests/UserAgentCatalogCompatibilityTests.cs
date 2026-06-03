@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;

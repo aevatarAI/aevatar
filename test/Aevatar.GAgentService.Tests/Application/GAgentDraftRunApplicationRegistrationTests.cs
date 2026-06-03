@@ -5,7 +5,7 @@ using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using DraftRunObservationScopeLeasePreparation = Aevatar.GAgentService.Abstractions.ScopeGAgents.GAgentDraftRunObservationScopeLeasePreparation;
@@ -15,7 +15,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class GAgentDraftRunApplicationRegistrationTests
 {
     [Fact]
-    public async Task AddScopeGAgentDraftRunInteraction_ShouldExposeBusinessPortWithoutGenericLiveInteractionBypass()
+    public async Task AddScopeGAgentDraftRunInteraction_ShouldExposeBusinessPortAndSharedRealtimeSession()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
@@ -29,8 +29,12 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
 
         services.AddScopeGAgentDraftRunInteraction();
 
-        services.Should().NotContain(x =>
-            x.ServiceType == typeof(ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IRealtimeSession<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>) &&
+            x.ImplementationFactory != null);
         services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>) &&
             x.ImplementationFactory != null);
@@ -44,9 +48,10 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
             ValidateScopes = true,
         });
 
-        provider.GetService<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>()
+        var commandInteraction = provider.GetRequiredService<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>();
+        provider.GetRequiredService<IRealtimeSession<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>()
             .Should()
-            .BeNull();
+            .BeSameAs(commandInteraction);
 
         var port = provider.GetRequiredService<IGAgentDraftRunInteractionPort>();
         var emitted = new List<AGUIEvent>();

@@ -1,5 +1,5 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 

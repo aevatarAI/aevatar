@@ -2,6 +2,7 @@ import type {
   WorkflowActorSnapshot,
   WorkflowActorTimelineItem,
 } from "@/shared/models/runtime/actors";
+import { t } from "@/shared/i18n/messages";
 
 export type RuntimeTimelineBlockingSummary = {
   kind: "human_input" | "human_approval" | "wait_signal";
@@ -110,13 +111,16 @@ export function buildTimelineBlockingSummary(
       stage,
       stepId,
       summary:
-        "Runtime is paused at an external signal gate and cannot continue until the signal arrives.",
+        t(
+          "pages.chat.runtimeinspector.runtime.paused.external.signal.gate",
+          "Runtime is paused at an external signal gate and cannot continue until the signal arrives.",
+        ),
       timeoutLabel:
         Number.isFinite(timeoutMs) && timeoutMs > 0
           ? `Times out in ${Math.max(1, Math.round(timeoutMs / 1000))}s`
           : undefined,
       timestamp: latestBlocking.timestamp,
-      title: `Waiting for ${signalName}`,
+      title: t("pages.chat.runtimeinspector.waiting.for.signal.name", "Waiting for {signalName}", { signalName }),
     };
   }
 
@@ -140,14 +144,22 @@ export function buildTimelineBlockingSummary(
     stage,
     stepId,
     summary: isApproval
-      ? "Runtime is paused and waiting for approval before it can enter the execution path."
-      : "Runtime is paused and waiting for additional operator context before it can continue.",
+      ? t(
+          "pages.chat.runtimeinspector.runtime.paused.waiting.approval",
+          "Runtime is paused and waiting for approval before it can enter the execution path.",
+        )
+      : t(
+          "pages.chat.runtimeinspector.runtime.paused.waiting.operator.context",
+          "Runtime is paused and waiting for additional operator context before it can continue.",
+        ),
     timeoutLabel:
       Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
         ? `Times out in ${Math.max(1, Math.round(timeoutSeconds))}s`
         : undefined,
     timestamp: latestBlocking.timestamp,
-    title: isApproval ? "Waiting for approval" : "Waiting for input",
+    title: isApproval
+      ? t("pages.chat.runtimeinspector.waiting.for.approval", "Waiting for approval")
+      : t("pages.chat.runtimeinspector.waiting.for.input", "Waiting for input"),
   };
 }
 
@@ -155,17 +167,19 @@ export function describeActorCompletionStatus(
   snapshot: WorkflowActorSnapshot | null | undefined
 ): string {
   if (!snapshot) {
-    return "Unavailable";
+    return t("pages.chat.runtimeinspector.unavailable", "Unavailable");
   }
 
   switch (snapshot.completionStatusValue) {
     case 1:
-      return "Completed";
+      return t("pages.chat.runtimeinspector.completed", "Completed");
     case 3:
-      return "Failed";
+      return t("pages.chat.runtimeinspector.failed", "Failed");
     case 4:
-      return "Stopped";
+      return t("pages.chat.runtimeinspector.stopped", "Stopped");
     default:
-      return snapshot.lastSuccess === false ? "Error" : "Running";
+      return snapshot.lastSuccess === false
+        ? t("pages.chat.runtimeinspector.error", "Error")
+        : t("pages.chat.runtimeinspector.running", "Running");
   }
 }

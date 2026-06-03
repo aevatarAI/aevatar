@@ -1,13 +1,13 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.NyxidChat;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
-using AguiTextMessageContentEvent = Aevatar.Presentation.AGUI.TextMessageContentEvent;
-using AguiTextMessageEndEvent = Aevatar.Presentation.AGUI.TextMessageEndEvent;
-using AguiTextMessageStartEvent = Aevatar.Presentation.AGUI.TextMessageStartEvent;
+using AguiTextMessageContentEvent = Aevatar.AGUI.Contracts.TextMessageContentEvent;
+using AguiTextMessageEndEvent = Aevatar.AGUI.Contracts.TextMessageEndEvent;
+using AguiTextMessageStartEvent = Aevatar.AGUI.Contracts.TextMessageStartEvent;
 using ProtobufValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.AI.Tests;

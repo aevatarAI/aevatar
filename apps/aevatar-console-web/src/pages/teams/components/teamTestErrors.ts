@@ -15,11 +15,17 @@ export type TeamTestErrorKind =
   | "unknown";
 
 export type TeamTestErrorDescription = {
+  readonly action?: "retry";
   readonly actionLabel?: string;
   readonly description: string;
   readonly kind: TeamTestErrorKind;
   readonly title: string;
 };
+
+export type TeamTestErrorMessageFormatter = (
+  id: string,
+  values?: Record<string, string | number>,
+) => string;
 
 function readErrorStatus(error: unknown): number | undefined {
   if (!error || typeof error !== "object") {
@@ -59,13 +65,14 @@ export function isAbortLikeError(error: unknown): boolean {
 
 export function describeTeamTestError(
   error: unknown,
-  fallback = "Team Test failed."
+  fallback: string,
+  formatMessage: TeamTestErrorMessageFormatter,
 ): TeamTestErrorDescription {
   if (isAbortLikeError(error)) {
     return {
-      description: "本次测试已停止，当前 transcript 会保留在页面内。",
+      description: formatMessage("teams.detail.test.errors.aborted.description"),
       kind: "aborted",
-      title: "测试已停止",
+      title: formatMessage("teams.detail.test.errors.aborted.title"),
     };
   }
 
@@ -76,33 +83,33 @@ export function describeTeamTestError(
 
   if (normalized.includes("TEAM_NOT_FOUND")) {
     return {
-      description: "这支 Team 在当前 Scope 中不可见，请返回 Teams 列表重新选择。",
+      description: formatMessage("teams.detail.test.errors.teamNotFound.description"),
       kind: "team_not_found",
-      title: "Team 不存在",
+      title: formatMessage("teams.detail.test.errors.teamNotFound.title"),
     };
   }
 
   if (normalized.includes("STUDIO_TEAM_NOT_FOUND")) {
     return {
-      description: "这支 Team 在当前 Scope 中不可见，请返回 Teams 列表重新选择。",
+      description: formatMessage("teams.detail.test.errors.teamNotFound.description"),
       kind: "team_not_found",
-      title: "Team 不存在",
+      title: formatMessage("teams.detail.test.errors.teamNotFound.title"),
     };
   }
 
   if (normalized.includes("TEAM_ENTRY_MEMBER_NOT_CONFIGURED")) {
     return {
-      description: "这支 Team 还没有入口成员，请先选择一个已绑定的成员作为入口。",
+      description: formatMessage("teams.detail.test.errors.entryMissing.description"),
       kind: "entry_missing",
-      title: "未设置入口成员",
+      title: formatMessage("teams.detail.test.errors.entryMissing.title"),
     };
   }
 
   if (normalized.includes("TEAM_ENTRY_MEMBER_NOT_READY")) {
     return {
-      description: "入口成员还没有完成 Build / Bind，暂时不能作为 Team Test 的运行入口。",
+      description: formatMessage("teams.detail.test.errors.entryNotReady.description"),
       kind: "entry_not_ready",
-      title: "入口成员尚未就绪",
+      title: formatMessage("teams.detail.test.errors.entryNotReady.title"),
     };
   }
 
@@ -111,43 +118,43 @@ export function describeTeamTestError(
     normalized.includes("STUDIO_MEMBER_NOT_FOUND")
   ) {
     return {
-      description: "当前入口成员不在这支 Team 的成员清单中，请重新选择入口成员。",
+      description: formatMessage("teams.detail.test.errors.entryNotFound.description"),
       kind: "entry_not_found",
-      title: "入口成员不可见",
+      title: formatMessage("teams.detail.test.errors.entryNotFound.title"),
     };
   }
 
   if (normalized.includes("TEAM_ENTRY_MEMBER_MISMATCH")) {
     return {
-      description: "入口成员不属于当前 Team，请从当前 Team 成员中重新选择。",
+      description: formatMessage("teams.detail.test.errors.entryMismatch.description"),
       kind: "entry_mismatch",
-      title: "入口成员不匹配",
+      title: formatMessage("teams.detail.test.errors.entryMismatch.title"),
     };
   }
 
   if (normalized.includes("TEAM_ARCHIVED")) {
     return {
-      description: "归档后的 Team 不能继续发起测试。",
+      description: formatMessage("teams.detail.test.errors.teamArchived.description"),
       kind: "team_archived",
-      title: "Team 已归档",
+      title: formatMessage("teams.detail.test.errors.teamArchived.title"),
     };
   }
 
   if (status === 404 || status === 405) {
     return {
-      actionLabel: "Retry",
-      description:
-        "当前后端还没有部署 Team entry-member 或 Team invoke 接口。前端会保留入口配置和测试草稿，等后端支持后可直接重试。",
+      action: "retry",
+      actionLabel: formatMessage("teams.detail.test.actions.retry"),
+      description: formatMessage("teams.detail.test.errors.backendUnsupported.description"),
       kind: "backend_unsupported",
-      title: "后端暂不支持 Team Test",
+      title: formatMessage("teams.detail.test.errors.backendUnsupported.title"),
     };
   }
 
   if (status === 403) {
     return {
-      description: "当前账号没有修改或测试这支 Team 的权限。",
+      description: formatMessage("teams.detail.test.errors.permissionDenied.description"),
       kind: "permission_denied",
-      title: "权限不足",
+      title: formatMessage("teams.detail.test.errors.permissionDenied.title"),
     };
   }
 
@@ -155,16 +162,17 @@ export function describeTeamTestError(
     return {
       description: message,
       kind: "invalid_entry",
-      title: "入口成员无效",
+      title: formatMessage("teams.detail.test.errors.invalidEntry.title"),
     };
   }
 
   if (status === 409) {
     return {
-      actionLabel: "Retry",
+      action: "retry",
+      actionLabel: formatMessage("teams.detail.test.actions.retry"),
       description: message,
       kind: "conflict",
-      title: "Team 状态已变化",
+      title: formatMessage("teams.detail.test.errors.conflict.title"),
     };
   }
 
@@ -173,15 +181,17 @@ export function describeTeamTestError(
     message.toLowerCase().includes("network")
   ) {
     return {
-      actionLabel: "Retry",
-      description: "网络请求中断，请检查登录状态或稍后重试。",
+      action: "retry",
+      actionLabel: formatMessage("teams.detail.test.actions.retry"),
+      description: formatMessage("teams.detail.test.errors.network.description"),
       kind: "network",
-      title: "网络请求失败",
+      title: formatMessage("teams.detail.test.errors.network.title"),
     };
   }
 
   return {
-    actionLabel: "Retry",
+    action: "retry",
+    actionLabel: formatMessage("teams.detail.test.actions.retry"),
     description: message,
     kind: "unknown",
     title: fallback,

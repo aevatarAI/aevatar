@@ -700,6 +700,15 @@ public sealed class FallbackCommandServiceTests
 
             return Task.FromResult(Result);
         }
+
+        async Task<RealtimeSessionResult<string, string, string>> IRealtimeSession<string, string, string, string, string>.ExecuteAsync(
+            string inbound,
+            Func<string, CancellationToken, ValueTask> emitAsync,
+            Func<string, CancellationToken, ValueTask>? onAcceptedAsync,
+            CancellationToken ct)
+        {
+            return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
+        }
     }
 
     private sealed class RecordingDispatchService : ICommandDispatchService<string, string, string>

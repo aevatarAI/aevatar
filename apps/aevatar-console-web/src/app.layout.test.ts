@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { getLocale, setLocale } from "@umijs/max";
+import React from "react";
 import defaultSettings from "../config/defaultSettings";
 import { layout } from "./app";
 
 describe("layout menu collapse behavior", () => {
   beforeEach(() => {
+    setLocale("en-US", false);
     window.history.replaceState({}, "", "/teams");
   });
 
@@ -92,4 +96,78 @@ describe("layout menu collapse behavior", () => {
     expect(globalStyles).toContain("text-transform: uppercase;");
     expect(globalStyles).toContain("min-width: 20px;");
   });
+
+  it("renders a global language switch in the layout actions", async () => {
+    const runtimeLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+    const actionsRender = runtimeLayout.actionsRender as
+      | ((props: unknown, dom: unknown) => React.ReactNode[])
+      | undefined;
+
+    render(
+      React.createElement(
+        React.Fragment,
+        null,
+        actionsRender?.({}, {}),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch language" }));
+    fireEvent.click(await screen.findByText("中文"));
+
+    await waitFor(() => {
+      expect(getLocale()).toBe("zh-CN");
+    });
+  });
+
+  it("keeps page content in sync when the locale changes without a reload", async () => {
+    window.history.replaceState({}, "", "/studio");
+    const runtimeLayout = layout({
+      initialState: {
+        auth: {} as never,
+        settings: defaultSettings,
+      },
+    });
+    const childrenRender = runtimeLayout.childrenRender as
+      | ((children: React.ReactNode) => React.ReactNode)
+      | undefined;
+
+    render(
+      React.createElement(
+        React.Fragment,
+        null,
+        childrenRender?.(
+          React.createElement(LocalizedRuntimeProbe),
+        ),
+      ),
+    );
+
+    expect(screen.getByText("My AI teams")).toBeTruthy();
+
+    act(() => {
+      setLocale("zh-CN", false);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("我的 AI 团队")).toBeTruthy();
+    });
+    expect(screen.queryByText("My AI teams")).toBeNull();
+  });
 });
+
+const LocalizedRuntimeProbe: React.FC = () => {
+  const { useIntl } = require("@umijs/max") as typeof import("@umijs/max");
+  const intl = useIntl();
+
+  return React.createElement(
+    "div",
+    null,
+    intl.formatMessage({
+        id: "teams.home.title",
+      }),
+  );
+};

@@ -132,6 +132,9 @@ public interface IWorkflowRunProvisioningPort
 
 public interface IWorkflowDefinitionParser
 {
+    /// <summary>
+    /// Parses and validates workflow YAML, returning the validated workflow name declared by the YAML.
+    /// </summary>
     Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
         string workflowYaml,
         CancellationToken ct = default);

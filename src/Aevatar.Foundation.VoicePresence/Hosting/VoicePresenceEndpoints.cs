@@ -1,5 +1,7 @@
 using System.Net.WebSockets;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.Foundation.VoicePresence.Transport.Internal;
 using Microsoft.AspNetCore.Builder;
@@ -12,10 +14,6 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 /// <summary>
 /// Extension methods to map voice-presence WebSocket endpoints onto an ASP.NET host.
 /// </summary>
-// Refactor (iter15/cluster-025-voice-host-session-state-actorization):
-//   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
-//   New principle: media endpoints expose remote audio unavailability honestly.
-//   Remote setup/control remains actor-owned; chunks never cross EventEnvelope.
 public static class VoicePresenceEndpoints
 {
     public static IEndpointConventionBuilder MapVoicePresenceWebSocket(
@@ -23,38 +21,18 @@ public static class VoicePresenceEndpoints
         string pattern) =>
         endpoints.MapVoicePresenceWebSocket(
             pattern,
-            static (actorId, ctx) => ResolveSessionFromServicesAsync(ctx, actorId));
-
-    /// <summary>
-    /// Maps a WebSocket endpoint that bridges user audio to a voice-enabled GAgent.
-    /// <para>
-    /// The <paramref name="resolveSession"/> delegate returns a <see cref="VoicePresenceSession"/>
-    /// containing the module and a self-event dispatcher that routes voice control events
-    /// through the grain inbox (e.g. via <c>SendToAsync(selfId, envelope)</c>). This ensures
-    /// provider callbacks and user control frames are processed in the actor's single-threaded turn.
-    /// </para>
-    /// </summary>
-    public static IEndpointConventionBuilder MapVoicePresenceWebSocket(
-        this IEndpointRouteBuilder endpoints,
-        string pattern,
-        Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession)
-    {
-        ArgumentNullException.ThrowIfNull(resolveSession);
-        return endpoints.MapVoicePresenceWebSocket(
-            pattern,
-            async (actorId, ctx) => ToResolution(await resolveSession(actorId, ctx)));
-    }
+            static (request, ctx) => ResolveSessionFromServicesAsync(ctx, request),
+            static ctx => ctx.RequestServices.GetRequiredService<IVoiceVolatileMediaStreamPort>());
 
     public static IEndpointConventionBuilder MapVoicePresenceWebSocket(
         this IEndpointRouteBuilder endpoints,
         string pattern,
-        Func<string, HttpContext, Task<VoicePresenceSessionResolution>> resolveSession)
+        Func<VoiceRealtimeSessionRequest, HttpContext, Task<RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>>> startSession,
+        Func<HttpContext, IVoiceVolatileMediaStreamPort> resolveMediaPort)
     {
-        ArgumentNullException.ThrowIfNull(resolveSession);
+        ArgumentNullException.ThrowIfNull(startSession);
+        ArgumentNullException.ThrowIfNull(resolveMediaPort);
 
-        // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
-        //   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
-        //   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
         return endpoints.Map(pattern, async (HttpContext ctx) =>
         {
             if (!ctx.WebSockets.IsWebSocketRequest)
@@ -72,22 +50,23 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            var resolution = await resolveSession(actorId, ctx);
-            var session = await WriteNonAcceptedResolutionAsync(ctx, resolution);
-            if (session == null)
+            var result = await startSession(CreateSessionRequest(ctx, actorId, VoiceRealtimeSessionPurpose.Attach), ctx);
+            var accepted = await WriteNonAcceptedResolutionAsync(ctx, result);
+            if (accepted == null)
                 return;
 
             var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             var transport = new WebSocketVoiceTransport(ws);
+            var mediaPort = resolveMediaPort(ctx);
             var attached = false;
 
             try
             {
-                await session.AttachTransportAsync(transport, ctx.RequestAborted);
+                await mediaPort.AttachAsync(accepted.LeaseHandle, transport, ctx.RequestAborted);
                 attached = true;
                 await WaitUntilClosedAsync(transport, ctx.RequestAborted);
             }
-            catch (VoiceRemoteAudioTransportUnavailableException)
+            catch (VoiceVolatileMediaStreamUnavailableException)
             {
                 await TryCloseUnsupportedRemoteAudioAsync(ws);
             }
@@ -98,7 +77,7 @@ public static class VoicePresenceEndpoints
             finally
             {
                 if (attached)
-                    await session.DetachTransportAsync(transport, ctx.RequestAborted);
+                    await mediaPort.DetachAsync(accepted.LeaseHandle, transport, ctx.RequestAborted);
             }
         });
     }
@@ -113,33 +92,19 @@ public static class VoicePresenceEndpoints
         IWebRtcVoiceTransportFactory? transportFactory = null) =>
         endpoints.MapVoicePresenceWhip(
             pattern,
-            static (actorId, ctx) => ResolveSessionFromServicesAsync(ctx, actorId),
+            static (request, ctx) => ResolveSessionFromServicesAsync(ctx, request),
+            static ctx => ctx.RequestServices.GetRequiredService<IVoiceVolatileMediaStreamPort>(),
             transportFactory);
-
-    /// <summary>
-    /// Maps a minimal WHIP-compatible endpoint for browser WebRTC voice sessions.
-    /// Audio uses RTP/Opus and control frames use a WebRTC data channel.
-    /// </summary>
-    public static IEndpointConventionBuilder MapVoicePresenceWhip(
-        this IEndpointRouteBuilder endpoints,
-        string pattern,
-        Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession,
-        IWebRtcVoiceTransportFactory? transportFactory = null)
-    {
-        ArgumentNullException.ThrowIfNull(resolveSession);
-        return endpoints.MapVoicePresenceWhip(
-            pattern,
-            async (actorId, ctx) => ToResolution(await resolveSession(actorId, ctx)),
-            transportFactory);
-    }
 
     public static IEndpointConventionBuilder MapVoicePresenceWhip(
         this IEndpointRouteBuilder endpoints,
         string pattern,
-        Func<string, HttpContext, Task<VoicePresenceSessionResolution>> resolveSession,
+        Func<VoiceRealtimeSessionRequest, HttpContext, Task<RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>>> startSession,
+        Func<HttpContext, IVoiceVolatileMediaStreamPort> resolveMediaPort,
         IWebRtcVoiceTransportFactory? transportFactory = null)
     {
-        ArgumentNullException.ThrowIfNull(resolveSession);
+        ArgumentNullException.ThrowIfNull(startSession);
+        ArgumentNullException.ThrowIfNull(resolveMediaPort);
 
         transportFactory ??= new SipsorceryWebRtcVoiceTransportFactory();
         var group = endpoints.MapGroup(pattern);
@@ -162,39 +127,39 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            var resolution = await resolveSession(actorId, ctx);
-            var session = await WriteNonAcceptedResolutionAsync(ctx, resolution);
-            if (session == null)
+            var result = await startSession(CreateSessionRequest(ctx, actorId, VoiceRealtimeSessionPurpose.Attach), ctx);
+            var accepted = await WriteNonAcceptedResolutionAsync(ctx, result);
+            if (accepted == null)
                 return;
 
             var transportSession = await transportFactory.CreateAsync(
                 offerSdp,
                 new WebRtcVoiceTransportOptions
                 {
-                    PcmSampleRateHz = session.PcmSampleRateHz,
+                    PcmSampleRateHz = accepted.PcmSampleRateHz,
                 },
                 ctx.RequestAborted);
 
             var attached = false;
+            var mediaPort = resolveMediaPort(ctx);
             try
             {
-                var lifetimeCompleted = await session.AttachTransportAsync(transportSession.Transport, ctx.RequestAborted);
+                var lifetimeCompleted = await mediaPort.AttachAsync(accepted.LeaseHandle, transportSession.Transport, ctx.RequestAborted);
                 attached = true;
-                // Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
-                _ = ObserveTransportLifetimeAsync(session, lifetimeCompleted, transportSession.Completion);
+                _ = ObserveTransportLifetimeAsync(mediaPort, accepted.LeaseHandle, lifetimeCompleted, transportSession.Completion);
 
                 ctx.Response.StatusCode = StatusCodes.Status201Created;
                 ctx.Response.ContentType = "application/sdp";
                 ctx.Response.Headers.Location = ctx.Request.Path.ToString();
                 await ctx.Response.WriteAsync(transportSession.AnswerSdp);
             }
-            catch (VoiceRemoteAudioTransportUnavailableException)
+            catch (VoiceVolatileMediaStreamUnavailableException)
             {
                 if (!attached)
                     await transportSession.Transport.DisposeAsync();
 
                 ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await ctx.Response.WriteAsync(VoiceRemoteAudioTransportUnavailableException.Reason);
+                await ctx.Response.WriteAsync(VoiceVolatileMediaStreamUnavailableException.Reason);
             }
             catch
             {
@@ -214,95 +179,76 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            var resolution = await resolveSession(actorId, ctx);
-            if (resolution.Kind == VoicePresenceSessionResolutionKind.PreflightFailed &&
-                resolution.PreflightFailure == VoicePresencePreflightFailureKind.NotFound)
+            var result = await startSession(CreateSessionRequest(ctx, actorId, VoiceRealtimeSessionPurpose.Detach), ctx);
+            if (!result.Succeeded && result.Error == VoiceRealtimeSessionStartError.NotFound)
             {
                 ctx.Response.StatusCode = StatusCodes.Status404NotFound;
                 await ctx.Response.WriteAsync("Voice session not found for this agent.");
                 return;
             }
 
-            var session = resolution.Session;
-            if (session == null)
+            if (!result.Succeeded || result.Receipt == null)
             {
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await ctx.Response.WriteAsync(VoiceRemoteAudioTransportUnavailableException.Reason);
+                await WriteNonAcceptedResolutionAsync(ctx, result);
                 return;
             }
 
-            await session.DetachTransportAsync(ct: ctx.RequestAborted);
+            await resolveMediaPort(ctx).DetachAsync(result.Receipt.LeaseHandle, null, ctx.RequestAborted);
             ctx.Response.StatusCode = StatusCodes.Status204NoContent;
         });
 
         return group;
     }
 
-    private static Task<VoicePresenceSessionResolution> ResolveSessionFromServicesAsync(
+    private static Task<RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion>> ResolveSessionFromServicesAsync(
         HttpContext ctx,
-        string actorId)
+        VoiceRealtimeSessionRequest request)
     {
-        var resolver = ctx.RequestServices.GetRequiredService<IVoicePresenceSessionResolver>();
-        return resolver.ResolveAsync(CreateSessionRequest(ctx, actorId), ctx.RequestAborted);
+        var session = ctx.RequestServices.GetRequiredService<
+            IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>();
+        return session.ExecuteAsync(request, static (_, _) => ValueTask.CompletedTask, ct: ctx.RequestAborted);
     }
 
-    private static VoicePresenceSessionResolution ToResolution(VoicePresenceSession? session)
-    {
-        if (session == null)
-            return VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotFound);
-
-        if (!session.IsInitialized)
-            return VoicePresenceSessionResolution.PreflightFailed(VoicePresencePreflightFailureKind.NotInitialized);
-
-        if (session.IsTransportAttached)
-        {
-            return new VoicePresenceSessionResolution(
-                VoicePresenceSessionResolutionKind.PreflightFailed,
-                session,
-                VoicePresencePreflightFailureKind.TransportAlreadyAttached);
-        }
-
-        return VoicePresenceSessionResolution.LeaseAcceptedAttached(session);
-    }
-
-    private static async Task<VoicePresenceSession?> WriteNonAcceptedResolutionAsync(
+    private static async Task<VoiceRealtimeSessionAccepted?> WriteNonAcceptedResolutionAsync(
         HttpContext ctx,
-        VoicePresenceSessionResolution resolution)
+        RealtimeSessionResult<VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeSessionCompletion> result)
     {
-        switch (resolution.Kind)
+        if (result.Succeeded)
+            return result.Receipt ?? throw new InvalidOperationException("Accepted voice realtime session requires a receipt.");
+
+        switch (result.Error)
         {
-            case VoicePresenceSessionResolutionKind.LeaseAcceptedPendingAttach:
-            case VoicePresenceSessionResolutionKind.LeaseAcceptedAttached:
-                return resolution.Session ?? throw new InvalidOperationException("Accepted voice session resolution requires a session.");
-            case VoicePresenceSessionResolutionKind.Unsupported:
+            case VoiceRealtimeSessionStartError.Unsupported:
                 ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await ctx.Response.WriteAsync(VoiceRemoteAudioTransportUnavailableException.Reason);
+                await ctx.Response.WriteAsync(VoiceVolatileMediaStreamUnavailableException.Reason);
                 return null;
-            case VoicePresenceSessionResolutionKind.PreflightFailed:
-                await WritePreflightFailureAsync(ctx, resolution.PreflightFailure);
+            case VoiceRealtimeSessionStartError.NotFound:
+            case VoiceRealtimeSessionStartError.NotInitialized:
+            case VoiceRealtimeSessionStartError.TransportAlreadyAttached:
+                await WritePreflightFailureAsync(ctx, result.Error);
                 return null;
             default:
                 ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await ctx.Response.WriteAsync("Voice session resolution failed.");
+                await ctx.Response.WriteAsync("Voice realtime session failed.");
                 return null;
         }
     }
 
     private static async Task WritePreflightFailureAsync(
         HttpContext ctx,
-        VoicePresencePreflightFailureKind? failure)
+        VoiceRealtimeSessionStartError failure)
     {
         switch (failure)
         {
-            case VoicePresencePreflightFailureKind.NotFound:
+            case VoiceRealtimeSessionStartError.NotFound:
                 ctx.Response.StatusCode = StatusCodes.Status404NotFound;
                 await ctx.Response.WriteAsync("Voice session not found for this agent.");
                 break;
-            case VoicePresencePreflightFailureKind.NotInitialized:
+            case VoiceRealtimeSessionStartError.NotInitialized:
                 ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 await ctx.Response.WriteAsync("Voice module not initialized.");
                 break;
-            case VoicePresencePreflightFailureKind.TransportAlreadyAttached:
+            case VoiceRealtimeSessionStartError.TransportAlreadyAttached:
                 ctx.Response.StatusCode = StatusCodes.Status409Conflict;
                 await ctx.Response.WriteAsync("Voice transport already attached.");
                 break;
@@ -313,13 +259,14 @@ public static class VoicePresenceEndpoints
         }
     }
 
-    private static VoicePresenceSessionRequest CreateSessionRequest(HttpContext ctx, string actorId) =>
+    private static VoiceRealtimeSessionRequest CreateSessionRequest(
+        HttpContext ctx,
+        string actorId,
+        VoiceRealtimeSessionPurpose purpose) =>
         new(
             actorId,
             ResolveRequestedModuleName(ctx),
-            string.Equals(ctx.Request.Method, HttpMethods.Delete, StringComparison.OrdinalIgnoreCase)
-                ? VoicePresenceSessionRequestPurpose.Detach
-                : VoicePresenceSessionRequestPurpose.Attach);
+            purpose);
 
     private static string? ResolveRequestedModuleName(HttpContext ctx)
     {
@@ -362,7 +309,7 @@ public static class VoicePresenceEndpoints
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             await ws.CloseAsync(
                 WebSocketCloseStatus.PolicyViolation,
-                VoiceRemoteAudioTransportUnavailableException.Reason,
+                VoiceVolatileMediaStreamUnavailableException.Reason,
                 cts.Token);
         }
         catch
@@ -371,9 +318,6 @@ public static class VoicePresenceEndpoints
         }
     }
 
-    // Refactor (iter74/cluster-074-voice-ws-request-polling-close-wait):
-    //   Old pattern: while ws.State == Open { Task.Delay(500) } polling to keep request alive
-    //   New principle: Transport owns close notification; endpoint awaits completion task without periodic sleep
     private static async Task WaitUntilClosedAsync(WebSocketVoiceTransport transport, CancellationToken ct)
     {
         try
@@ -396,7 +340,8 @@ public static class VoicePresenceEndpoints
     }
 
     private static async Task ObserveTransportLifetimeAsync(
-        VoicePresenceSession session,
+        IVoiceVolatileMediaStreamPort mediaPort,
+        VoicePresenceSessionLeaseHandle handle,
         VoiceTransportLifetimeCompleted? lifetimeCompleted,
         Task completion)
     {
@@ -409,15 +354,6 @@ public static class VoicePresenceEndpoints
             // transport completion is best-effort cleanup only
         }
 
-        await session.CompleteTransportLifetimeAsync(lifetimeCompleted);
+        await mediaPort.CompleteTransportLifetimeAsync(handle, lifetimeCompleted, "host_transport_completed");
     }
-}
-
-// Refactor (iter15/cluster-025-voice-host-session-state-actorization):
-//   Old pattern: resolver and endpoints matched duplicated private exception-message constants.
-//   New principle: remote media unavailability is a typed host signal with one shared reason.
-internal sealed class VoiceRemoteAudioTransportUnavailableException()
-    : NotSupportedException(Reason)
-{
-    public const string Reason = "remote_audio_transport_unavailable";
 }

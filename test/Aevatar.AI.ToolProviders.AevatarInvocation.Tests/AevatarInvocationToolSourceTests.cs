@@ -10,7 +10,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;

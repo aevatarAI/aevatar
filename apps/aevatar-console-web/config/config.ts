@@ -114,7 +114,14 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
    * @name 国际化插件
    * @doc https://umijs.org/docs/max/i18n
    */
-  locale: false,
+  locale: {
+    antd: true,
+    baseNavigator: false,
+    baseSeparator: '-',
+    default: 'en-US',
+    title: false,
+    useLocalStorage: true,
+  },
   /**
    * @name antd 插件
    * @description 内置了 babel import 插件

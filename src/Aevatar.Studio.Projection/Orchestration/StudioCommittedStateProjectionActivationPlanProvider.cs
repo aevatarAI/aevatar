@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.Registry;

@@ -4,7 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Application.ScopeGAgents;

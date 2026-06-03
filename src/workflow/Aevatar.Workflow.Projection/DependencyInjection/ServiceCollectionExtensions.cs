@@ -12,7 +12,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;

@@ -1,25 +1,17 @@
-// ─────────────────────────────────────────────────────────────
-// AGUISseWriter — SSE 事件序列化写入器
-// 将 AGUIEvent 序列化为 JSON 并写入 HTTP Response Body
-// 格式: data: {json}\n\n
-// ─────────────────────────────────────────────────────────────
-
 using System.Text;
+using Aevatar.AGUI.Contracts;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 
-namespace Aevatar.Presentation.AGUI;
+namespace Aevatar.GAgentService.Hosting.Sse;
 
 /// <summary>
-/// 向 HTTP Response 写入 SSE 格式的 AG-UI 事件。
-/// 每个事件序列化为 JSON（camelCase），以 data: 前缀写出。
+/// Writes AG-UI events to an HTTP response as SSE frames.
 /// </summary>
 public sealed class AGUISseWriter : IAsyncDisposable
 {
-    // Refactor (iter57/cluster-067-942): old per-request channel/sink removed; new active path writes CQRS/projection AGUI events to SSE.
-    // Refactor (iter98/cluster-790): Old: SSE Any registry only knew AGUI base files, so typed RunFinished.result payloads rendered opaquely. New: register GAgentDraftRunResultPayload for JSON result.output fallback.
     private static readonly TypeRegistry DefaultTypeRegistry = TypeRegistry.FromFiles(
         AGUIEvent.Descriptor.File,
         GAgentDraftRunResultPayload.Descriptor.File,

@@ -853,7 +853,7 @@ bash "${SCRIPT_DIR}/channel_platform_project_reference_guard.sh"
 python3 "${REPO_ROOT}/tools/ci/guards/project_reference_layer_guard.py" \
   --root "${REPO_ROOT}" \
   --allowlist "${REPO_ROOT}/tools/ci/project_reference_layer_allowlist.tsv" \
-  --mode report
+  --mode fail
 bash "${SCRIPT_DIR}/channel_inbox_gagent_guard.sh"
 bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"

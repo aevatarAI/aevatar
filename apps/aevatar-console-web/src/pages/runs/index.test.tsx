@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { Grid } from "antd";
 import React from "react";
+import { setLocale } from "@umijs/max";
 import {
   loadDraftRunPayload,
   saveDraftRunPayload,
@@ -304,6 +305,7 @@ describe("RunsPage", () => {
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
+    setLocale("en-US");
     jest.restoreAllMocks();
     window.history.replaceState({}, "", "/runtime/runs");
     window.sessionStorage.clear();
@@ -370,7 +372,7 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Workflow catalog" })
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "返回团队高级编辑" })
+      screen.queryByRole("button", { name: "Return to team editor" })
     ).toBeNull();
     expect(
       screen.getByRole("button", { name: "Actor explorer" })
@@ -418,7 +420,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "返回团队高级编辑" })
+      await screen.findByRole("button", { name: "Return to team editor" })
     );
 
     expect(window.location.pathname).toBe("/teams");
@@ -437,7 +439,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "返回团队高级编辑" })
+      await screen.findByRole("button", { name: "Return to team editor" })
     );
 
     expect(window.location.pathname).toBe("/studio");

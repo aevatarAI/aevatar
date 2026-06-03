@@ -548,9 +548,12 @@ public sealed class ServiceImplementationAdaptersTests
     }
 
     [Fact]
-    public async Task WorkflowAdapter_ShouldUseProvidedWorkflowNameWithoutParsing()
+    public async Task WorkflowAdapter_ShouldUseProvidedWorkflowNameAndStillParseAndValidate()
     {
-        var workflowPort = new RecordingWorkflowRunActorPort();
+        var workflowPort = new RecordingWorkflowRunActorPort
+        {
+            ParseResult = WorkflowYamlParseResult.Success("provided-workflow"),
+        };
         var adapter = new WorkflowServiceImplementationAdapter(workflowPort);
 
         var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
@@ -572,7 +575,61 @@ public sealed class ServiceImplementationAdaptersTests
 
         artifact.DeploymentPlan.WorkflowPlan.WorkflowName.Should().Be("provided-workflow");
         artifact.DeploymentPlan.WorkflowPlan.InlineWorkflowYamls.Should().ContainKey("child.yaml");
-        workflowPort.ParseCalls.Should().BeEmpty();
+        workflowPort.ParseCalls.Should().ContainSingle("name: ignored");
+    }
+
+    [Fact]
+    public async Task WorkflowAdapter_ShouldRejectInvalidWorkflowYaml_WhenWorkflowNameProvided()
+    {
+        var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort
+        {
+            ParseResult = WorkflowYamlParseResult.Invalid("invalid yaml"),
+        });
+
+        var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "r1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowName = "provided-workflow",
+                    WorkflowYaml = "invalid",
+                },
+            },
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("invalid yaml");
+    }
+
+    [Fact]
+    public async Task WorkflowAdapter_ShouldRejectWorkflowNameMismatch()
+    {
+        var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort
+        {
+            ParseResult = WorkflowYamlParseResult.Success("yaml-workflow"),
+        });
+
+        var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "r1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowName = "provided-workflow",
+                    WorkflowYaml = "name: yaml-workflow",
+                },
+            },
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("workflow_name must match workflow_yaml name.");
     }
 
     [Fact]

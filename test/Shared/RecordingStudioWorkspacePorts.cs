@@ -33,6 +33,8 @@ internal sealed class RecordingStudioWorkspacePorts : IStudioWorkspaceQueryPort,
 
     public List<ScopedWorkflowDelete> DeletedDrafts { get; } = [];
 
+    public List<string> QueriedScopes { get; } = [];
+
     public ScopedWorkflowUpload? LastUpload => SavedDrafts.LastOrDefault();
 
     public IReadOnlyList<ScopedWorkflowUpload> SavedWorkflows => SavedDrafts;
@@ -45,6 +47,7 @@ internal sealed class RecordingStudioWorkspacePorts : IStudioWorkspaceQueryPort,
     public Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default)
     {
         var normalizedScopeId = NormalizeScopeId(scopeId);
+        QueriedScopes.Add(normalizedScopeId);
         _drafts.TryGetValue(normalizedScopeId, out var scopeDrafts);
         return Task.FromResult(new StudioWorkspaceSnapshot(
             $"studio-workspace:{normalizedScopeId}",

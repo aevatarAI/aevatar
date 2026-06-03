@@ -50,6 +50,14 @@ owner: eanzhao
 | Re-key redirect | actor identity/key 改写时，旧 key 到新 key 的显式重定向事实。它用于目标解析与清理窗口，不允许调用方解析 actorId 字符串，也不允许用 commandId/correlationId 代替 actorId。 |
 | Actor replace | 旧 actor owner 被新 actor owner 替换，语义不再是同一 actor 内演进。新 owner 必须提交自己的 domain event；旧 owner 通过 retire cleanup 退出，不能保留双事实源或空壳兼容。 |
 
+### 1.3 Realtime streaming 词汇
+
+| 术语 | 含义与口径 |
+|---|---|
+| Realtime session | 一个入口请求到实时输出生命周期的共享应用层契约。文本/AGUI 与 voice control/transcript 使用 `IRealtimeSession<TInbound,TReceipt,TStartError,TOutboundFrame,TCompletion>` 表达同一组 `start -> accepted/error -> outbound frames -> completion` 语义；它不暴露 actor runtime、projection lease 或 transport socket。 |
+| Projection-backed realtime stream | 由 Projection Session Pipeline 承载的实时控制流。它消费 actor-owned committed/control facts 或同源 session event，并按 `RootActorId + SessionId` fan-out 给 live sink；AGUI text frames 与 voice control/transcript frames 属于这类流。 |
+| Volatile media stream port | 原始媒体字节的临时传输端口，例如 voice PCM WebSocket/WebRTC attachment。它不是 `IEventSink`、不是 projection port、不是 readmodel writer；raw PCM 不进入 committed event、event store、projection document 或 readmodel。 |
+
 ## 2. 关键原则（与 CLAUDE.md 已有规则的映射）
 
 ### 2.1 Deletion test（删除测试）

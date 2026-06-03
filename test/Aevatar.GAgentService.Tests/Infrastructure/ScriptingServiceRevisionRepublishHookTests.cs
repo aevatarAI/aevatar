@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;

@@ -1,5 +1,5 @@
 using Orleans.Runtime;
-using Aevatar.Foundation.Core.Compatibility;
+using Aevatar.Foundation.Abstractions.Compatibility;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 

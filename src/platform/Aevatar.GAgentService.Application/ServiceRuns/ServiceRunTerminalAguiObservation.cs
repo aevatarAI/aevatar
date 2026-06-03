@@ -1,6 +1,6 @@
 using System.Text;
+using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.Presentation.AGUI;
 
 namespace Aevatar.GAgentService.Application.ServiceRuns;
 

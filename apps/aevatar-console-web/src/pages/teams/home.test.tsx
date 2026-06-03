@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { setLocale } from "@umijs/max";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import {
@@ -132,6 +133,7 @@ describe("TeamsHomePage", () => {
     window.sessionStorage.clear();
     clearStoredAuthSession();
     jest.clearAllMocks();
+    setLocale("zh-CN", false);
 
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
       enabled: false,
@@ -177,6 +179,21 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("客服运行时")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
     expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
+  });
+
+  it("renders the Teams homepage from the English catalog when the locale changes", async () => {
+    setLocale("en-US", false);
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByRole("button", { name: "View team" })).toBeTruthy();
+    expect(screen.getByText("My AI teams")).toBeTruthy();
+    expect(screen.getByText("Total AI teams")).toBeTruthy();
+    expect(screen.getByText("Teams needing action")).toBeTruthy();
+    expect(screen.getByText("Team list")).toBeTruthy();
+    expect(screen.getByText("Team ID: t-support")).toBeTruthy();
+    expect(screen.queryByText("我的 AI 团队")).toBeNull();
+    expect(screen.queryByText("组建新团队")).toBeNull();
   });
 
   it("keeps team card actions focused on the Team detail page", async () => {

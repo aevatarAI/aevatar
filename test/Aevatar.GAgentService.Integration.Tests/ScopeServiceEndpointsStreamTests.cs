@@ -11,7 +11,7 @@ using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Projectors;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
@@ -118,7 +118,7 @@ public sealed class ScopeServiceEndpointsStreamTests
                 await emitAsync(
                     new AGUIEvent
                     {
-                        TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                        TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent
                         {
                             MessageId = "msg-1",
                         },
@@ -339,7 +339,7 @@ public sealed class ScopeServiceEndpointsStreamTests
                 },
                 Payload = Any.Pack(new AGUIEvent
                 {
-                    TextMessageContent = new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    TextMessageContent = new Aevatar.AGUI.Contracts.TextMessageContentEvent
                     {
                         MessageId = "msg-1",
                         Delta = "hello",
@@ -875,7 +875,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             {
                 new AGUIEvent
                 {
-                    TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent { MessageId = "msg-1" },
+                    TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent { MessageId = "msg-1" },
                 },
                 new AGUIEvent
                 {
@@ -1488,6 +1488,16 @@ public sealed class ScopeServiceEndpointsStreamTests
             return CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>.Success(
                 receipt,
                 new CommandInteractionFinalizeResult<ScriptServiceRunCompletionStatus>(completion, completed));
+        }
+
+        async Task<RealtimeSessionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>>
+            IRealtimeSession<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>.ExecuteAsync(
+                ScriptServiceRunCommand inbound,
+                Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+                Func<ScriptServiceRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+                CancellationToken ct)
+        {
+            return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
         }
     }
 

@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
@@ -604,6 +605,20 @@ public sealed class WorkflowChatRunInteractionServiceTests
                 new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
                     WorkflowProjectionCompletionStatus.Completed,
                     true)));
+        }
+
+        async Task<RealtimeSessionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>
+            IRealtimeSession<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>.ExecuteAsync(
+                WorkflowChatRunRequest inbound,
+                Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+                Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+                CancellationToken ct)
+        {
+            return await ((ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>)this).ExecuteAsync(
+                inbound,
+                emitAsync,
+                onAcceptedAsync,
+                ct);
         }
 
         private async Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> AcceptAndReturnAsync(

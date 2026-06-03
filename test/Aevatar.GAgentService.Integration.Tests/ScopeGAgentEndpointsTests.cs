@@ -18,7 +18,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Hosting.ExecutionActivity;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -158,7 +158,7 @@ public sealed class ScopeGAgentEndpointsTests
 
                 await emitAsync(new AGUIEvent
                 {
-                    TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                    TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent
                     {
                         MessageId = "session-1",
                     },

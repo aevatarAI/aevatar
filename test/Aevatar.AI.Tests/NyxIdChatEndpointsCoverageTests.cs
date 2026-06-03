@@ -27,7 +27,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
-using Aevatar.Presentation.AGUI;
+using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
@@ -45,9 +45,9 @@ using Microsoft.IdentityModel.Tokens;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Microsoft.AspNetCore.Authorization;
-using AguiTextMessageContentEvent = Aevatar.Presentation.AGUI.TextMessageContentEvent;
-using AguiTextMessageEndEvent = Aevatar.Presentation.AGUI.TextMessageEndEvent;
-using AguiTextMessageStartEvent = Aevatar.Presentation.AGUI.TextMessageStartEvent;
+using AguiTextMessageContentEvent = Aevatar.AGUI.Contracts.TextMessageContentEvent;
+using AguiTextMessageEndEvent = Aevatar.AGUI.Contracts.TextMessageEndEvent;
+using AguiTextMessageStartEvent = Aevatar.AGUI.Contracts.TextMessageStartEvent;
 using AiTextMessageContentEvent = Aevatar.AI.Abstractions.TextMessageContentEvent;
 using AiTextMessageEndEvent = Aevatar.AI.Abstractions.TextMessageEndEvent;
 
@@ -3431,6 +3431,16 @@ public class NyxIdChatEndpointsCoverageTests
                     new CommandInteractionFinalizeResult<NyxIdChatCompletionStatus>(
                         NyxIdChatCompletionStatus.Completed,
                         true));
+        }
+
+        async Task<RealtimeSessionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus>>
+            IRealtimeSession<TCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>.ExecuteAsync(
+                TCommand inbound,
+                Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+                Func<NyxIdChatAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+                CancellationToken ct)
+        {
+            return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
         }
 
         private static (string ActorId, string SessionId) ResolveReceiptParts(TCommand command) =>
