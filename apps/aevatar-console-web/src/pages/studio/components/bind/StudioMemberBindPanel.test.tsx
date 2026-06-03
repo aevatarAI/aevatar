@@ -292,7 +292,7 @@ describe('StudioMemberBindPanel', () => {
     ).toBeNull();
     expect(
       screen.getByRole('button', {
-        name: 'Chat 默认测试 id · chat Chat with the published workflow.',
+        name: 'Chat Default test id ·chat Chat with the published workflow.',
       }),
     ).toHaveAttribute(
       'aria-pressed',
@@ -300,7 +300,7 @@ describe('StudioMemberBindPanel', () => {
     );
     expect(
       screen.getByText(
-        '普通测试直接输入一句话即可；需要固定格式时再选高级输入。',
+        'For ordinary tests, you can directly enter a sentence; when you need a fixed format, choose advanced input.',
       ),
     ).toBeTruthy();
     fireEvent.click(screen.getByText('Contract details'));
@@ -395,7 +395,7 @@ describe('StudioMemberBindPanel', () => {
     expect(
       screen.queryByRole('button', { name: 'Set as Team entry' }),
     ).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '设为入口并测试 Team' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set as portal and test team' }));
 
     expect(handleSetEntryAndTest).toHaveBeenCalledTimes(1);
   });
@@ -450,8 +450,8 @@ describe('StudioMemberBindPanel', () => {
     );
 
     expect(await screen.findByText('This member is the Team entry.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '设为入口并测试 Team' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '测试 Team' }));
+    expect(screen.queryByRole('button', { name: 'Set as portal and test team' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Test team' }));
 
     expect(handleSetEntryAndTest).toHaveBeenCalledTimes(1);
   });

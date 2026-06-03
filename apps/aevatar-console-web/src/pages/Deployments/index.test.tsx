@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { setLocale } from "@umijs/max";
 import React from "react";
 import {
   cleanupTestQueryClients,
@@ -64,6 +65,7 @@ function renderDeploymentsPage(
 }
 
 beforeEach(() => {
+  setLocale("zh-CN", false);
   jest.clearAllMocks();
 
   mockServicesApi.listServices.mockResolvedValue([
@@ -291,6 +293,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setLocale("en-US", false);
   cleanupTestQueryClients();
 });
 
@@ -322,15 +325,15 @@ describe("DeploymentsPage", () => {
       },
     });
 
-    expect(await screen.findByText("范围已编辑但尚未加载")).toBeInTheDocument();
-    expect(screen.getByText("显示上次加载范围")).toBeInTheDocument();
+    expect(await screen.findByText("Scope 已编辑但尚未加载")).toBeInTheDocument();
+    expect(screen.getByText("显示上次加载 Scope")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "加载范围变更" })).toBeInTheDocument();
     expect(screen.getByText("Trade Agent")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /重\s*置/ }));
 
     expect(await screen.findByText("已加载范围已锁定")).toBeInTheDocument();
-    expect(screen.getByText("显示已加载范围")).toBeInTheDocument();
+    expect(screen.getByText("显示已加载 Scope")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "加载发布列表" })).toBeInTheDocument();
   });
 
@@ -404,6 +407,6 @@ describe("DeploymentsPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
 
     expect(await screen.findByText("Deployment 详情")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "停用 deployment" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "停用 Deployment" })).toBeInTheDocument();
   });
 });

@@ -204,10 +204,10 @@ describe('ScriptResultsPanel', () => {
       />,
     );
 
-    expect(screen.getByText('Workspace ID: scope-1')).toBeTruthy();
-    expect(screen.getByText('Catalog: catalog-1')).toBeTruthy();
-    expect(screen.getByText('Previous: rev-0')).toBeTruthy();
-    expect(screen.getByText('History: rev-0 -> rev-1')).toBeTruthy();
+    expect(screen.getByText((_, node) => node?.textContent === 'Workspace ID:scope-1')).toBeTruthy();
+    expect(screen.getByText((_, node) => node?.textContent === 'Catalog: catalog-1')).toBeTruthy();
+    expect(screen.getByText((_, node) => node?.textContent === 'Previous: rev-0')).toBeTruthy();
+    expect(screen.getByText((_, node) => node?.textContent === 'History: rev-0 -> rev-1')).toBeTruthy();
 
     rerender(
       <ScriptResultsPanel

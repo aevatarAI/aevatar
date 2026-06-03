@@ -1,4 +1,5 @@
 import { screen } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { renderWithQueryClient } from '../../../../../tests/reactQueryTestUtils';
 import type { StudioAppContext } from '@/shared/studio/models';
@@ -61,6 +62,14 @@ const draft: ScriptDraft = {
 };
 
 describe('ScriptInspectorPanel', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
+  afterEach(() => {
+    setLocale('en-US', false);
+  });
+
   it('renders draft, contract, actor, and scope details', () => {
     renderWithQueryClient(
       <ScriptInspectorPanel
@@ -72,7 +81,7 @@ describe('ScriptInspectorPanel', () => {
 
     expect(screen.getByText('script-1')).toBeTruthy();
     expect(screen.getByText('rev-2')).toBeTruthy();
-    expect(screen.getByText('工作空间 ID · scope-1')).toBeTruthy();
+    expect(screen.getByText('工作区 ID · scope-1')).toBeTruthy();
     expect(screen.getByText('type.googleapis.com/example.Command')).toBeTruthy();
     expect(screen.getByText('嵌入式 Host')).toBeTruthy();
     expect(screen.getByText('校验, 保存, 发布, 测试运行, AI 辅助')).toBeTruthy();
