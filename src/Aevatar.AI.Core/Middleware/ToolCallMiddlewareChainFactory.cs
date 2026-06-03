@@ -13,11 +13,7 @@ public static class ToolCallMiddlewareChainFactory
     {
         ArgumentNullException.ThrowIfNull(toolMiddlewares);
 
-        return Build(
-            toolMiddlewares,
-            approvalHandler,
-            hooks,
-            failClosedWhenMissingApprovalHandler: false);
+        return Build(toolMiddlewares, approvalHandler, hooks);
     }
 
     public static IReadOnlyList<IToolCallMiddleware> ForPort(
@@ -27,40 +23,19 @@ public static class ToolCallMiddlewareChainFactory
     {
         ArgumentNullException.ThrowIfNull(toolMiddlewares);
 
-        return Build(
-            toolMiddlewares,
-            approvalHandler,
-            hooks,
-            failClosedWhenMissingApprovalHandler: true);
+        return Build(toolMiddlewares, approvalHandler, hooks);
     }
 
     private static IReadOnlyList<IToolCallMiddleware> Build(
         IEnumerable<IToolCallMiddleware> toolMiddlewares,
         IToolApprovalHandler? approvalHandler,
-        AgentHookPipeline? hooks,
-        bool failClosedWhenMissingApprovalHandler)
+        AgentHookPipeline? hooks)
     {
         var effectiveToolMiddlewares = new List<IToolCallMiddleware>();
-        var effectiveApprovalHandler = approvalHandler
-                                       ?? (failClosedWhenMissingApprovalHandler
-                                           ? MissingApprovalHandler.Instance
-                                           : null);
-        if (effectiveApprovalHandler != null)
-            effectiveToolMiddlewares.Add(new ToolApprovalMiddleware(effectiveApprovalHandler, hooks));
+        effectiveToolMiddlewares.Add(new ToolApprovalMiddleware(
+            approvalHandler ?? MissingApprovalHandler.Instance,
+            hooks));
         effectiveToolMiddlewares.AddRange(toolMiddlewares);
         return effectiveToolMiddlewares;
-    }
-
-    private sealed class MissingApprovalHandler : IToolApprovalHandler
-    {
-        public static readonly MissingApprovalHandler Instance = new();
-
-        public Task<ToolApprovalResult> RequestApprovalAsync(
-            ToolApprovalRequest request,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(ToolApprovalResult.Denied("approval handler is not configured"));
-        }
     }
 }

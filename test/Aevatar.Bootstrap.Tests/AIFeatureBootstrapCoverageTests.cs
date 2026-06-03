@@ -15,6 +15,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
@@ -171,14 +172,14 @@ public class AIFeatureBootstrapCoverageTests
             .Single();
         provider.GetRequiredService<IVoiceToolCatalog>()
             .Should().BeOfType<AgentToolVoiceCatalog>();
-        provider.GetRequiredService<IVoicePresenceSessionResolver>()
-            .Should().BeOfType<ActorOwnedVoicePresenceSessionResolver>();
+        provider.GetRequiredService<IRealtimeSession<VoiceRealtimeSessionRequest, VoiceRealtimeSessionAccepted, VoiceRealtimeSessionStartError, VoiceRealtimeFrame, VoiceRealtimeSessionCompletion>>()
+            .Should().BeOfType<ActorOwnedVoiceRealtimeSession>();
         provider.GetRequiredService<IVoicePresenceCapabilityQueryPort>()
             .Should().NotBeNull();
         provider.GetRequiredService<IVoicePresenceSessionLeasePort>()
             .Should().NotBeNull();
-        provider.GetRequiredService<IVoicePresenceTransportAttachmentPort>()
-            .Should().BeOfType<UnavailableVoicePresenceTransportAttachmentPort>();
+        provider.GetRequiredService<IVoiceVolatileMediaStreamPort>()
+            .Should().BeOfType<FailClosedVoiceVolatileMediaStreamPort>();
 
         factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
         defaultModule.Should().BeOfType<VoicePresenceModule>();

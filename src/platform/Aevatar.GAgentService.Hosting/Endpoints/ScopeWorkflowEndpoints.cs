@@ -8,7 +8,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Hosting;
 using Aevatar.AGUI.Contracts;
-using Aevatar.Presentation.AGUI;
+using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;

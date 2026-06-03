@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;

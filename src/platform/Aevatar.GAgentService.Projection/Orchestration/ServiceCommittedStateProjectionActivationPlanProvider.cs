@@ -1,6 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.AI.Abstractions;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Projection.Contexts;

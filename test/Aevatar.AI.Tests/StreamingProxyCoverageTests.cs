@@ -2802,6 +2802,16 @@ public class StreamingProxyCoverageTests
                         true));
         }
 
+        async Task<RealtimeSessionResult<StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyProjectionCompletionStatus>>
+            IRealtimeSession<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>.ExecuteAsync(
+                StreamingProxyRoomChatCommand inbound,
+                Func<StreamingProxyRoomSessionEnvelope, CancellationToken, ValueTask> emitAsync,
+                Func<StreamingProxyRoomChatAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+                CancellationToken ct)
+        {
+            return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
+        }
+
         private static async Task WaitUntilCanceledAsync(CancellationToken ct)
         {
             var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

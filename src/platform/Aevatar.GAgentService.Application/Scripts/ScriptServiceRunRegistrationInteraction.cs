@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeScripts;
@@ -60,5 +61,14 @@ public sealed class ScriptServiceRunRegistrationInteraction
                     await onAcceptedAsync(receipt, token);
             },
             ct);
+    }
+
+    async Task<RealtimeSessionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> IRealtimeSession<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>.ExecuteAsync(
+        ScriptServiceRunCommand inbound,
+        Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+        Func<ScriptServiceRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+        CancellationToken ct)
+    {
+        return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
     }
 }

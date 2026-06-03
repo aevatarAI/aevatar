@@ -2,7 +2,7 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Workflows;
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 

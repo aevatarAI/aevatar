@@ -17,7 +17,6 @@ KNOWN_RULES = {RULE_ABSTRACTIONS_CONTRACTS_PURITY}
 FORBIDDEN_ALLOWLIST_EDGES = {
     ("Aevatar.GAgents.Channel.Abstractions", "Aevatar.CQRS.Projection.Core"),
     ("Aevatar.CQRS.Projection.Core.Abstractions", "Aevatar.Foundation.Core"),
-    ("Aevatar.GAgentService.Abstractions", "Aevatar.Presentation.AGUI"),
 }
 
 

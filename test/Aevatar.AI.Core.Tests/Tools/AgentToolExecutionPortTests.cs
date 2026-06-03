@@ -55,7 +55,7 @@ public sealed class AgentToolExecutionPortTests
         var result = await port.ExecuteAsync(Request(tool), CancellationToken.None);
 
         result.Status.Should().Be(AgentToolExecutionStatus.ApprovalDenied);
-        result.ErrorMessage.Should().Contain("approval handler is not configured");
+        result.ErrorMessage.Should().Contain("No tool approval handler is registered.");
         tool.ExecuteCalls.Should().Be(0);
     }
 
