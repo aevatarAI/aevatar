@@ -34,6 +34,7 @@ public class WorkflowRoleGAgent(
         remoteToolApprovalPort)
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
 
     [EventHandler]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
@@ -133,6 +134,7 @@ public class WorkflowRoleGAgent(
             Prompt = intent.Prompt ?? string.Empty,
             SessionId = intent.SessionId ?? string.Empty,
             TimeoutMs = intent.TimeoutMs,
+            ConnectorHttpAuthorization = intent.ConnectorHttpAuthorization ?? string.Empty,
             LlmControl = new LLMControlContextPayload
             {
                 ModelOverride = intent.Model ?? string.Empty,
@@ -141,11 +143,22 @@ public class WorkflowRoleGAgent(
         };
         if (intent.HasMaxToolRounds)
             request.LlmControl.MaxToolRoundsOverride = intent.MaxToolRounds;
-        foreach (var pair in intent.Headers)
-            request.Metadata[pair.Key] = pair.Value;
-        foreach (var pair in intent.Annotations)
-            request.Metadata[pair.Key] = pair.Value;
+        CopyWorkflowIntentMetadata(intent.Headers, request.Metadata);
+        CopyWorkflowIntentMetadata(intent.Annotations, request.Metadata);
         return request;
+    }
+
+    private static void CopyWorkflowIntentMetadata(
+        IEnumerable<KeyValuePair<string, string>> source,
+        IDictionary<string, string> target)
+    {
+        foreach (var pair in source)
+        {
+            if (string.Equals(pair.Key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal))
+                continue;
+
+            target[pair.Key] = pair.Value;
+        }
     }
 
     private async Task<WorkflowIntentReplayRecord> ExecuteWorkflowIntentStreamingChatAsync(
@@ -155,7 +168,8 @@ public class WorkflowRoleGAgent(
     {
         var inputParts = ResolveWorkflowRequestInputParts(request);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContext.Empty);
+        var toolContext = llmControl.ToToolContext(
+            WorkflowConnectorAuthorizationToolContextMapper.FromAuthorization(request.ConnectorHttpAuthorization));
         var metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))

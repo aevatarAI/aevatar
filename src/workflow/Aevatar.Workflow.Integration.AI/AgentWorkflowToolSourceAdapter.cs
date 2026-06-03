@@ -21,7 +21,7 @@ public sealed class AgentWorkflowToolSourceAdapter(IEnumerable<IAgentToolSource>
         return workflowTools;
     }
 
-    private sealed class AgentWorkflowToolAdapter(IAgentTool tool) : IWorkflowTool
+    private sealed class AgentWorkflowToolAdapter(IAgentTool tool) : IWorkflowContextualTool
     {
         private readonly IAgentTool _tool = tool ?? throw new ArgumentNullException(nameof(tool));
 
@@ -29,5 +29,14 @@ public sealed class AgentWorkflowToolSourceAdapter(IEnumerable<IAgentToolSource>
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             _tool.ExecuteAsync(argumentsJson, ct);
+
+        public async Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            var toolContext = WorkflowConnectorAuthorizationToolContextMapper.FromAuthorization(request.ConnectorHttpAuthorization);
+            using var scope = AgentToolContextScope.Push(toolContext);
+            return await _tool.ExecuteAsync(request.ArgumentsJson, ct).ConfigureAwait(false);
+        }
     }
 }

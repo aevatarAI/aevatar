@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Composition;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
@@ -230,6 +231,69 @@ public sealed class WorkflowRuntimeModuleBranchTests
         failure.Success.Should().BeFalse();
         failure.StepId.Should().BeEmpty();
         failure.Error.Should().Contain("requires non-empty step_id");
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldPopulateConnectorAuthorizationFromActorOwnedExecutionState()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext
+        {
+            ExecutionContextState =
+            {
+                Connector = new WorkflowConnectorExecutionContextState
+                {
+                    HttpAuthorization = " Bearer typed-token ",
+                },
+            },
+        };
+        ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["connector.http.authorization"] = "Bearer metadata-token",
+            ["trace-id"] = "trace-1",
+        });
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reply",
+                StepType = "llm_call",
+                RunId = "run-llm-auth",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = DispatchedLlmIntent(ctx);
+        intent.ConnectorHttpAuthorization.Should().Be("Bearer typed-token");
+        intent.Headers.Should().Contain("trace-id", "trace-1");
+        intent.Headers.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldIgnoreMetadataOnlyConnectorAuthorization()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+        ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["connector.http.authorization"] = "Bearer metadata-token",
+        });
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "reply",
+                StepType = "llm_call",
+                RunId = "run-llm-auth",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = DispatchedLlmIntent(ctx);
+        intent.ConnectorHttpAuthorization.Should().BeEmpty();
+        intent.Headers.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
@@ -836,6 +900,12 @@ public sealed class WorkflowRuntimeModuleBranchTests
         };
     }
 
+    private static WorkflowLlmExecutionIntent DispatchedLlmIntent(RecordingWorkflowContext ctx) =>
+        ctx.Published.Select(x => x.Event)
+            .Concat(ctx.Sent.Select(x => x.Event))
+            .OfType<WorkflowLlmExecutionIntent>()
+            .Single();
+
     private static EnvelopeCallbackContext MetadataFor(
         RecordedCallback callback,
         long? generation = null) =>
@@ -847,7 +917,8 @@ public sealed class WorkflowRuntimeModuleBranchTests
             FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-    private sealed class RecordingWorkflowContext : IWorkflowExecutionContext
+    private sealed class RecordingWorkflowContext
+        : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor, IWorkflowExecutionStateHost
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
         private readonly Dictionary<string, long> _callbackGenerations = new(StringComparer.Ordinal);
@@ -871,6 +942,12 @@ public sealed class WorkflowRuntimeModuleBranchTests
         public IServiceProvider Services => _services;
 
         public ILogger Logger { get; } = NullLogger.Instance;
+
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
 
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
@@ -911,6 +988,61 @@ public sealed class WorkflowRuntimeModuleBranchTests
         {
             ct.ThrowIfCancellationRequested();
             _states.Remove(scopeKey);
+            return Task.CompletedTask;
+        }
+
+        public Any? GetExecutionState(string scopeKey) =>
+            _states.GetValueOrDefault(scopeKey);
+
+        public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
+            _states.ToList();
+
+        public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _states[scopeKey] = state;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default) =>
+            ClearStateAsync(scopeKey, ct);
+
+        public Task UpdateExecutionContextAsync(
+            WorkflowRunExecutionContextDelta delta,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (delta.ClearLlm)
+                ExecutionContextState.Llm = null;
+            if (delta.ClearConnector)
+                ExecutionContextState.Connector = null;
+            if (delta.Llm != null)
+            {
+                ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
+                {
+                    ModelOverride = delta.Llm.ModelOverride,
+                    UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+                };
+                if (delta.Llm.HasMaxToolRoundsOverride)
+                    ExecutionContextState.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
+            }
+
+            if (delta.Connector != null)
+            {
+                ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+                {
+                    HttpAuthorization = delta.Connector.HttpAuthorization,
+                };
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecutionContextState.Llm = null;
+            ExecutionContextState.Connector = null;
             return Task.CompletedTask;
         }
 

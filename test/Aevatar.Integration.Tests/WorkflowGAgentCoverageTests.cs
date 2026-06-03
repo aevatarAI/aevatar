@@ -1596,6 +1596,7 @@ public class WorkflowGAgentCoverageTests
             Model = "model-a",
             MaxToolRounds = 3,
             UserMemoryPrompt = "remember this",
+            ConnectorHttpAuthorization = "Bearer token-123",
             Headers = { ["trace-id"] = "trace-1" },
             Annotations = { ["annotation"] = "value" },
         });
@@ -1607,6 +1608,9 @@ public class WorkflowGAgentCoverageTests
         request.LlmControl!.ModelOverride.Should().Be("model-a");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
         request.LlmControl.UserMemoryPrompt.Should().Be("remember this");
+        request.ToolContext.Should().NotBeNull();
+        request.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-123");
+        request.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-123");
         request.Metadata.Should().NotBeNull();
         request.Metadata!.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
         request.Metadata.Should().ContainKey("annotation").WhoseValue.Should().Be("value");
@@ -1637,6 +1641,39 @@ public class WorkflowGAgentCoverageTests
         completion.Content.Should().Be("workflow answer");
         completion.ReasoningContent.Should().Be("reasoning");
         completion.ToolCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenWorkflowLlmIntentHasMetadataOnlyAuthorization_ShouldNotPromoteToolCredentials()
+    {
+        var eventStore = new InMemoryEventStore();
+        var llm = new RecordingWorkflowIntentLlmProvider();
+        var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+            eventStore,
+            llm,
+            "workflow-role-agent-metadata-auth");
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-metadata-auth",
+            StepId = "step-metadata-auth",
+            SessionId = "session-metadata-auth",
+            Prompt = "hello",
+            Headers =
+            {
+                ["connector.http.authorization"] = "Bearer metadata-token",
+                ["trace-id"] = "trace-1",
+            },
+        });
+
+        llm.Requests.Should().ContainSingle();
+        var request = llm.Requests[0];
+        request.ToolContext.Should().NotBeNull();
+        request.ToolContext!.Credentials.NyxIdAccessToken.Should().BeNull();
+        request.ToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
+        request.Metadata.Should().NotBeNull();
+        request.Metadata!.Should().NotContainKey("connector.http.authorization");
+        request.Metadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
     }
 
     [Fact]

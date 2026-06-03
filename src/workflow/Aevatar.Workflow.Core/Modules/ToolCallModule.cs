@@ -79,7 +79,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
-            var resultJson = await tool.ExecuteAsync(argumentsJson, ct);
+            var resultJson = await ExecuteToolAsync(tool, argumentsJson, request, callId, ctx, ct);
 
             await ctx.PublishAsync(new WorkflowToolCallCompletedEvent
             {
@@ -104,6 +104,32 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             await PublishToolFailureAsync(ctx, request, toolName, ex.Message, ct);
             ctx.Logger.LogWarning(ex, "ToolCall: step={StepId} tool={Tool} execution failed", request.StepId, toolName);
         }
+    }
+
+    private static Task<string> ExecuteToolAsync(
+        IWorkflowTool tool,
+        string argumentsJson,
+        StepRequestEvent request,
+        string callId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (tool is not IWorkflowContextualTool contextualTool)
+            return tool.ExecuteAsync(argumentsJson, ct);
+
+        var connectorAuthorization = WorkflowRunExecutionContextStateAccess.TryGetConnectorAuthorization(ctx, out var authorization)
+            ? authorization
+            : string.Empty;
+        return contextualTool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: argumentsJson,
+                RunId: request.RunId ?? string.Empty,
+                StepId: request.StepId ?? string.Empty,
+                ExecutionId: request.ExecutionId ?? string.Empty,
+                CallId: callId,
+                ScopeId: string.Empty,
+                ConnectorHttpAuthorization: connectorAuthorization),
+            ct);
     }
 
     private static string ComposeWorkflowToolCallId(StepRequestEvent request)

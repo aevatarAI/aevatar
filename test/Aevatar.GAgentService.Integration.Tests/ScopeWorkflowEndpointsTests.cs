@@ -390,6 +390,11 @@ public sealed class ScopeWorkflowEndpointsTests
         var http = CreateHttpContext();
         http.Request.Headers.Authorization = "Bearer token-123";
 
+        var scopedControlInput = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+        scopedControlInput.Should().BeNull();
+
         await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
             http,
             "user-1",
@@ -412,6 +417,7 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
         interactionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        interactionService.LastRequest.LlmControl.Should().BeNull();
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
         interactionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");

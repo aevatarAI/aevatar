@@ -3937,8 +3937,8 @@ public sealed class ScopeServiceEndpointsTests
             successContext,
             CancellationToken.None);
         scopedControl.Should().Be(new LLMControlContext(
-            NyxIdAccessToken: "token-123",
-            NyxIdOrgToken: "token-123",
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: "user-model",
             NyxIdRoutePreference: "/preferred-route",
