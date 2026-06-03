@@ -190,6 +190,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Success = true,
                 Output = evt.Content ?? string.Empty,
                 WorkerId = publisherActorId,
+                Usage = evt.Usage?.Clone(),
             },
             TopologyAudience.Self,
             ct);

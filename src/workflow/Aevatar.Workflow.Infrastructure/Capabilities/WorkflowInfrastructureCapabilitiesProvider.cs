@@ -181,6 +181,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                         "http" => NormalizeDistinct(entry.Http.AllowedInputKeys),
                         "cli" => NormalizeDistinct(entry.Cli.AllowedInputKeys),
                         "mcp" => NormalizeDistinct(entry.MCP.AllowedInputKeys),
+                        "host_callback" => NormalizeDistinct(entry.HostCallback.AllowedInputKeys),
                         _ => [],
                     },
                     AllowedOperations = typeKey switch
@@ -188,6 +189,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                         "http" => NormalizeDistinct(entry.Http.AllowedMethods),
                         "cli" => NormalizeDistinct(entry.Cli.AllowedOperations),
                         "mcp" => NormalizeDistinct(entry.MCP.AllowedTools.Concat([entry.MCP.DefaultTool])),
+                        "host_callback" => NormalizeDistinct(entry.HostCallback.AllowedOperations),
                         _ => [],
                     },
                     FixedArguments = typeKey switch

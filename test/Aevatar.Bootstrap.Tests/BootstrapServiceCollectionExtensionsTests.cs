@@ -34,6 +34,7 @@ public class BootstrapServiceCollectionExtensionsTests
         var connectorBuilders = provider.GetServices<IConnectorBuilder>().ToList();
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HttpConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(CliConnectorBuilder));
+        connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HostCallbackConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(TelegramUserConnectorBuilder));
     }
 
@@ -105,6 +106,7 @@ public class BootstrapServiceCollectionExtensionsTests
         var connectorBuilders = provider.GetServices<IConnectorBuilder>().ToList();
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HttpConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(CliConnectorBuilder));
+        connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HostCallbackConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(TelegramUserConnectorBuilder));
     }
 

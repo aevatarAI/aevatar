@@ -355,6 +355,16 @@ public sealed class WorkflowInfrastructureCoverageTests
                       }
                     },
                     {
+                      "name": "host_router",
+                      "type": "host_callback",
+                      "enabled": true,
+                      "hostCallback": {
+                        "handler": "github_router",
+                        "allowedOperations": ["classify_pr", "sync_labels", "classify_pr"],
+                        "allowedInputKeys": ["issue", "repo", "issue"]
+                      }
+                    },
+                    {
                       "name": "custom_sink",
                       "type": "custom",
                       "enabled": true
@@ -404,7 +414,7 @@ public sealed class WorkflowInfrastructureCoverageTests
                 .GetProperty("ClosedWorldBlocked")
                 .Should().BeNull();
             document.Connectors.Select(connector => connector.Name)
-                .Should().Equal("cli_runner", "custom_sink", "http_news", "mcp_tools");
+                .Should().Equal("cli_runner", "custom_sink", "host_router", "http_news", "mcp_tools");
             document.Connectors.Single(connector => connector.Name == "http_news")
                 .AllowedInputKeys.Should().Equal("limit", "query");
             document.Connectors.Single(connector => connector.Name == "http_news")
@@ -413,6 +423,10 @@ public sealed class WorkflowInfrastructureCoverageTests
                 .FixedArguments.Should().Equal("--json");
             document.Connectors.Single(connector => connector.Name == "mcp_tools")
                 .AllowedOperations.Should().Equal("search");
+            document.Connectors.Single(connector => connector.Name == "host_router")
+                .AllowedOperations.Should().Equal("classify_pr", "sync_labels");
+            document.Connectors.Single(connector => connector.Name == "host_router")
+                .AllowedInputKeys.Should().Equal("issue", "repo");
             document.Connectors.Single(connector => connector.Name == "custom_sink")
                 .AllowedOperations.Should().BeEmpty();
         }
@@ -576,6 +590,15 @@ public sealed class WorkflowInfrastructureCoverageTests
             Input = "input",
             FinalOutput = "done",
             FinalError = "",
+            Usage = new WorkflowRunUsageMetrics
+            {
+                PromptTokens = 12,
+                CompletionTokens = 34,
+                TotalTokens = 46,
+                Model = "gpt-5.4",
+                Cost = 0.56,
+                LatencyMs = 789,
+            },
             Summary = new WorkflowRunStatistics
             {
                 TotalSteps = 1,
