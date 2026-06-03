@@ -1,4 +1,4 @@
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 
 namespace Aevatar.CQRS.Projection.Core.Abstractions;
 

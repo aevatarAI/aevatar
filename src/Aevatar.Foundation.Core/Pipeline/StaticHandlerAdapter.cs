@@ -3,7 +3,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Core.Compatibility;
+using Aevatar.Foundation.Abstractions.Compatibility;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 

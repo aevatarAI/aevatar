@@ -83,6 +83,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt>>()));
+        services.AddSingleton<IRealtimeSession<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>>(sp =>
+            sp.GetRequiredService<ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>>());
         services.TryAddSingleton<ICommandTargetDispatcher<ScriptingActorCommandTarget>, ActorCommandTargetDispatcher<ScriptingActorCommandTarget>>();
         services.TryAddSingleton<ICommandReceiptFactory<ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt>, ScriptingCommandAcceptedReceiptFactory>();
         AddSimpleScriptingCommandDispatch<UpsertScriptDefinitionCommand, UpsertScriptDefinitionCommandTargetResolver, UpsertScriptDefinitionCommandEnvelopeFactory>(services);

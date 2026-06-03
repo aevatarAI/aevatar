@@ -4,7 +4,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.GAgents.StreamingProxy;
 using FluentAssertions;

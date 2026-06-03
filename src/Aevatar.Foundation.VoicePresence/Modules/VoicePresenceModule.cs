@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Events;
 using Aevatar.Foundation.VoicePresence.Transport;
@@ -19,16 +20,6 @@ namespace Aevatar.Foundation.VoicePresence.Modules;
 /// with <see cref="IRealtimeVoiceProvider"/>. Transport attachment is actor-owned;
 /// this module only applies typed actor signals during event turns.
 /// </summary>
-// Refactor (iter56/cluster-927-voice-actor-signal-pcm): old=IAudioFastPath bypass, new=typed actor self-signal PCM
-// Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
-//   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell;违反 Actor 单线程事实源 + 中间层状态约束。
-//   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state);transport handles 仅作 volatile process-local lease(non-fact source);provider callbacks 走 typed self-signals(self-message 到 actor inbox);**删除** disabled remote voice fallback shell。无新 actor type / 新 envelope kind。
-// Refactor (iter106/cluster-106-voice-provider-session-runtime):
-//   Old pattern: Realtime voice providers and the module keep provider session, event channel, cancellation source, dispatch loop, and transport pump as process-local mutable runtime objects.
-//   New principle: Provider callbacks emit typed signals with lease/session keys; session ownership and pump lifecycle are actor-owned or distributed state, while provider objects are disposable transport handles only.
-// Refactor (iter114/cluster-114-voice-presence-session-runtime-state):
-//   Old pattern: VoicePresenceModule stores transport pump, provider session, provider key, dispatcher delegate, and mutable lease epoch in process-local module fields.
-//   New principle: Delete direct VoicePresenceModule attach bridge and route attach through existing actor-owned attachment port; default DI returns honest unsupported.
 public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypassModule
 {
     private static readonly JsonFormatter PayloadJsonFormatter = new(JsonFormatter.Settings.Default);
@@ -178,9 +169,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
     // ── ILifecycleAwareEventModule ────────────────────────────
 
-    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
-    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
-    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
     public async Task InitializeAsync(CancellationToken ct)
     {
         if (IsInitialized)
@@ -200,9 +188,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
 
     // ── State machine dispatch (used by both event pipeline and relay) ──
 
-    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
-    //   Old pattern: provider callbacks normalized ids against process-local dictionaries and volatile module fields.
-    //   New principle: provider turns hydrate and persist the typed RoleGAgent voice runtime sub-state before mutating response/session facts.
     internal async Task HandleProviderEventAsync(
         VoiceProviderEvent providerEvent,
         IEventHandlerContext ctx,
@@ -280,12 +265,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                 break;
         }
 
+        await PublishRealtimeFrameAsync(normalizedEvent, state, ctx, ct);
         await PersistRuntimeStateIfChangedAsync(ctx, state, stateChanged, ct);
     }
 
-    // Refactor (iter15/cluster-026-voice-provider-background-state):
-    //   Old pattern: provider-specific receive loops suppressed and completed response epochs directly.
-    //   New principle: this actor-turn normalizer owns cancellation suppression and response-id materialization.
     private bool TryNormalizeProviderEvent(
         VoicePresenceRuntimeState state,
         VoiceProviderEvent providerEvent,
@@ -351,9 +334,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         }
     }
 
-    // Refactor (iter15/cluster-026-voice-provider-background-state):
-    //   Old pattern: each response-shaped provider event repeated identity normalization inline.
-    //   New principle: message-specific switch arms only select fields and wrappers; actor-turn mapping stays centralized.
     private bool TryNormalizeResponseEvent<TMessage>(
         TMessage source,
         Func<TMessage, string> getProviderResponseId,
@@ -376,9 +356,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         return true;
     }
 
-    // Refactor (iter15/cluster-026-voice-provider-background-state):
-    //   Old pattern: providers allocated fallback response epochs when provider ids were missing.
-    //   New principle: fallback actor response ids are allocated only by the module state machine turn.
     private bool TryNormalizeResponseIdentity(
         VoicePresenceRuntimeState state,
         string providerResponseId,
@@ -408,9 +385,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         return true;
     }
 
-    // Refactor (iter15/cluster-026-voice-provider-background-state):
-    //   Old pattern: OpenAI/MiniCPM adapters owned provider-id to actor-epoch dictionaries and counters.
-    //   New principle: provider-id to actor response-id mapping is actor runtime state owned by this module.
     private int GetOrCreateProviderResponse(
         VoicePresenceRuntimeState state,
         string providerResponseId,
@@ -442,9 +416,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         return responseId;
     }
 
-    // Refactor (iter15/cluster-026-voice-provider-background-state):
-    //   Old pattern: providers retired response epochs from background completion/cancel callbacks.
-    //   New principle: the actor turn retires provider response mappings when committed lifecycle events arrive.
     private void RetireProviderResponse(VoicePresenceRuntimeState state, string providerResponseId)
     {
         if (string.IsNullOrWhiteSpace(providerResponseId))
@@ -611,7 +582,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
-    // Refactor (iter103/cluster-voice-whip): Old pattern: host fire-and-forget background callback calls DetachTransportAsync + lease release directly. New principle: callback publishes typed VoiceTransportLifetimeCompleted; actor reconciles and detaches.
     private async Task HandleTransportLifetimeCompletedAsync(
         VoiceTransportLifetimeCompleted request,
         IEventHandlerContext ctx,
@@ -843,9 +813,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         return true;
     }
 
-    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
-    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
-    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
     internal async Task HandleSessionLeaseRequestedAsync(
         VoicePresenceSessionLeaseRequested request,
         IEventHandlerContext ctx,
@@ -872,9 +839,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
-    // Refactor (iter39/cluster-029-voice-presence-session-runtime-shape):
-    //   Old pattern: InProcessActorVoicePresenceSessionResolver 通过 runtime instance shape 判定 voice session capability(违反"运行时形态不是业务事实")。
-    //   New principle: voice capability/session facts 由 actor-owned VoicePresenceCapabilityReadModel 暴露;host resolver 只 obtain lease/session handle;走 existing typed lease command/event flow,no runtime-shape inspection。
     internal async Task HandleSessionLeaseReleasedAsync(
         VoicePresenceSessionLeaseReleased request,
         IEventHandlerContext ctx,
@@ -895,11 +859,135 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
-    private Task PublishRemoteOutputAsync(
+    private async Task PublishRemoteOutputAsync(
         VoiceRemoteTransportOutput output,
         IEventHandlerContext ctx,
-        CancellationToken ct) =>
-        ctx.PublishAsync(output, TopologyAudience.Self, ct);
+        CancellationToken ct)
+    {
+        var state = HydrateRuntimeStateFromActor(ctx);
+        await PublishRealtimeFrameAsync(output, state, ctx, ct);
+        await ctx.PublishAsync(output, TopologyAudience.Self, ct);
+    }
+
+    private Task PublishRealtimeFrameAsync(
+        VoiceProviderEvent providerEvent,
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var frame = BuildRealtimeFrame(providerEvent, state);
+        return frame == null ? Task.CompletedTask : PublishRealtimeFrameAsync(frame, ctx, ct);
+    }
+
+    private Task PublishRealtimeFrameAsync(
+        VoiceControlFrame controlFrame,
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var frame = BuildRealtimeFrame(controlFrame, state);
+        return frame == null ? Task.CompletedTask : PublishRealtimeFrameAsync(frame, ctx, ct);
+    }
+
+    private Task PublishRealtimeFrameAsync(
+        VoiceRemoteTransportOutput output,
+        VoicePresenceRuntimeState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (output.OutputCase != VoiceRemoteTransportOutput.OutputOneofCase.SessionClosed)
+            return Task.CompletedTask;
+
+        var sessionId = string.IsNullOrWhiteSpace(output.SessionId) ? state.ActiveSessionId : output.SessionId;
+        var frame = CreateRealtimeFrame(sessionId, new VoiceRealtimeFrame
+        {
+            SessionClosed = output.SessionClosed?.Clone(),
+        });
+        return frame == null ? Task.CompletedTask : PublishRealtimeFrameAsync(frame, ctx, ct);
+    }
+
+    private VoiceRealtimeFrame? BuildRealtimeFrame(
+        VoiceProviderEvent providerEvent,
+        VoicePresenceRuntimeState state)
+    {
+        return providerEvent.EventCase switch
+        {
+            VoiceProviderEvent.EventOneofCase.ResponseStarted => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                ResponseStarted = providerEvent.ResponseStarted?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.ResponseDone => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                ResponseDone = providerEvent.ResponseDone?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.ResponseCancelled => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                ResponseCancelled = providerEvent.ResponseCancelled?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.FunctionCall => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                FunctionCall = providerEvent.FunctionCall?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.SpeechStarted => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                SpeechStarted = providerEvent.SpeechStarted?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.SpeechStopped => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                SpeechStopped = providerEvent.SpeechStopped?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.Error => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                Error = providerEvent.Error?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.Disconnected => CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+            {
+                Disconnected = providerEvent.Disconnected?.Clone(),
+            }),
+            VoiceProviderEvent.EventOneofCase.AudioReceived => null,
+            _ => null,
+        };
+    }
+
+    private VoiceRealtimeFrame? BuildRealtimeFrame(
+        VoiceControlFrame controlFrame,
+        VoicePresenceRuntimeState state)
+    {
+        if (controlFrame.FrameCase != VoiceControlFrame.FrameOneofCase.DrainAcknowledged)
+            return null;
+
+        return CreateRealtimeFrame(state.ActiveSessionId, new VoiceRealtimeFrame
+        {
+            TranscriptCompleted = new VoiceTranscriptCompleted
+            {
+                ResponseId = controlFrame.DrainAcknowledged.ResponseId,
+            },
+        });
+    }
+
+    private VoiceRealtimeFrame? CreateRealtimeFrame(string? sessionId, VoiceRealtimeFrame frame)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            frame.FrameCase == VoiceRealtimeFrame.FrameOneofCase.None)
+        {
+            return null;
+        }
+
+        frame.ModuleName = Name;
+        frame.SessionId = sessionId;
+        return frame;
+    }
+
+    private Task PublishRealtimeFrameAsync(
+        VoiceRealtimeFrame frame,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var hub = ctx.Services.GetService<IProjectionSessionEventHub<VoiceRealtimeFrame>>();
+        return hub == null
+            ? Task.CompletedTask
+            : hub.PublishAsync(ctx.AgentId, frame.SessionId, frame, ct);
+    }
 
     private async Task<RealtimeVoiceProviderSession> ConnectProviderSessionAsync(
         VoicePresenceRuntimeState state,
@@ -1036,9 +1124,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
     private static string BuildToolErrorJson(string message) =>
         JsonSerializer.Serialize(new { error = message });
 
-    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
-    //   Old pattern: drain acks only updated the in-memory module state machine, so queued injections were lost after a fresh turn.
-    //   New principle: control frames first hydrate actor-owned voice runtime state, then persist the post-drain injection fence.
     private async Task HandleControlFrameAsync(VoiceControlFrame frame, IEventHandlerContext ctx, CancellationToken ct)
     {
         var state = HydrateRuntimeStateFromActor(ctx);
@@ -1058,6 +1143,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
                     state,
                     frame.DrainAcknowledged.ResponseId,
                     frame.DrainAcknowledged.PlayoutSequence);
+                await PublishRealtimeFrameAsync(frame, state, ctx, ct);
                 await FlushPendingEventInjectionsAsync(state, ct);
                 await PersistRuntimeStateAsync(ctx, state, ct);
                 break;
@@ -1067,9 +1153,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         }
     }
 
-    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
-    //   Old pattern: external publication injection checked only volatile module fields for pending/awaiting state.
-    //   New principle: every injection decision starts from RoleGAgent-owned voice runtime state and persists the updated fence.
     private async Task HandleExternalEventAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
         var state = HydrateRuntimeStateFromActor(ctx);
@@ -1078,7 +1161,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             return;
 
         var now = _options.TimeProvider.GetUtcNow();
-        // Refactor (iter104/cluster-3): Old pattern: VoicePresenceEventPolicy kept module-local in-memory recent-event dedupe set. New principle: dedupe fence in VoicePresenceRuntimeState (actor-owned); policy is pure evaluator over passed-in actor state.
         var verdict = EventPolicy.Evaluate(envelope, now, state.EventDedupeFence);
         var fenceChanged = ReplaceEventDedupeFence(state, EventPolicy.BuildFence(state.EventDedupeFence, verdict, now));
         if (verdict.Decision != VoicePresenceEventPolicyDecision.Admit)
@@ -1281,9 +1363,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
             valueBase64 = payload.Value.IsEmpty ? string.Empty : Convert.ToBase64String(payload.Value.ToByteArray()),
         });
 
-    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
-    //   Old pattern: VoicePresenceModule reflected over local actor State/Persist members to find voice runtime facts.
-    //   New principle: hydrate through the explicit actor-owned voice runtime state contract.
     private VoicePresenceRuntimeState HydrateRuntimeStateFromActor(IEventHandlerContext ctx)
     {
         if (ctx.Agent is not IVoicePresenceRuntimeStateOwner stateOwner ||
@@ -1307,9 +1386,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IRouteBypa
         await PersistRuntimeStateAsync(ctx, state, ct);
     }
 
-    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
-    //   Old pattern: voice response bindings, remote session id, and pending injections lived only in module memory.
-    //   New principle: synchronize runtime facts into the actor-owned protobuf sub-state through a narrow state-owner contract.
     private async Task PersistRuntimeStateAsync(
         IEventHandlerContext ctx,
         VoicePresenceRuntimeState state,

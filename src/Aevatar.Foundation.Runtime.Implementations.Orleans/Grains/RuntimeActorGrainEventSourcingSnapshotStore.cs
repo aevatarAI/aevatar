@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Core.Compatibility;
+using Aevatar.Foundation.Abstractions.Compatibility;
 using Google.Protobuf;
 using Orleans.Runtime;
 

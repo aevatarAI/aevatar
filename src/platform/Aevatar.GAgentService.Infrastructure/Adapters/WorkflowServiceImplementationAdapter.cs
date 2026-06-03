@@ -26,14 +26,18 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
         if (string.IsNullOrWhiteSpace(spec.WorkflowYaml))
             throw new InvalidOperationException("workflow_yaml is required.");
 
-        var resolvedWorkflowName = spec.WorkflowName;
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
+        if (!parse.Succeeded)
+            throw new InvalidOperationException(parse.Error);
+
+        var resolvedWorkflowName = spec.WorkflowName?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(resolvedWorkflowName))
         {
-            var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(spec.WorkflowYaml, ct);
-            if (!parse.Succeeded)
-                throw new InvalidOperationException(parse.Error);
-
             resolvedWorkflowName = parse.WorkflowName;
+        }
+        else if (!string.Equals(resolvedWorkflowName, parse.WorkflowName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
         }
 
         return new PreparedServiceRevisionArtifact

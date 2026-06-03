@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
