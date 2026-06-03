@@ -158,6 +158,16 @@ message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
 message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }
 message ToolResultEvent { string call_id = 1; string result_json = 2; bool success = 3; string error = 4; }
+message TokenUsagePayload {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+message ChatTokenUsageEvent {
+  string session_id = 1;
+  TokenUsagePayload usage = 2;
+  string model = 3;
+}
 message RoleChatSessionStartedEvent {
   string session_id = 1;
   string prompt = 2;
@@ -172,6 +182,8 @@ message RoleChatSessionCompletedEvent {
   bool content_emitted = 6;
   repeated ChatContentPart output_parts = 7;
   string role_id = 8;
+  TokenUsagePayload usage = 9;
+  string model = 10;
 }
 
 message InitializeRoleAgentEvent {
@@ -244,6 +256,8 @@ message RoleChatSessionState {
   bool content_emitted = 7;
   repeated ChatContentPart input_parts = 8;
   repeated ChatContentPart output_parts = 9;
+  TokenUsagePayload usage = 10;
+  string model = 11;
 }
 
 message RoleGAgentState {

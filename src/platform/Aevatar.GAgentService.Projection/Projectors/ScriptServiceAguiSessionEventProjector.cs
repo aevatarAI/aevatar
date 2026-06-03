@@ -60,6 +60,16 @@ public sealed class ScriptServiceAguiSessionEventProjector
                 context.SessionId,
                 new AGUIEvent
                 {
+                    Usage = new UsageEvent
+                    {
+                        Available = false,
+                    },
+                }),
+            new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                new AGUIEvent
+                {
                     RunFinished = new RunFinishedEvent
                     {
                         ThreadId = context.RootActorId,

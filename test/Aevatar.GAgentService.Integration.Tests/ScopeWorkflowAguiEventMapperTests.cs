@@ -52,4 +52,26 @@ public sealed class ScopeWorkflowAguiEventMapperTests
         aguiEvent.RunFinished.ThreadId.Should().Be("thread-1");
         aguiEvent.RunFinished.RunId.Should().Be("thread-1");
     }
+
+    [Fact]
+    public void TryMap_WhenUsage_ShouldEmitTypedAguiUsageEvent()
+    {
+        var mapped = ScopeWorkflowAguiEventMapper.TryMap(
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = 789,
+                Usage = new WorkflowUsageEventPayload
+                {
+                    Available = false,
+                },
+            },
+            out var aguiEvent);
+
+        mapped.Should().BeTrue();
+        aguiEvent.Should().NotBeNull();
+        aguiEvent!.Timestamp.Should().Be(789);
+        aguiEvent.Usage.Should().NotBeNull();
+        aguiEvent.Usage.Available.Should().BeFalse();
+        aguiEvent.Usage.TotalTokens.Should().Be(0);
+    }
 }

@@ -814,6 +814,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         //   New principle: commit RoleChatSessionCompletedEvent first; publish terminal frames only from that committed fact.
         await PersistSessionCompletionAsync(request, replayRecord);
         replayRecord = await PublishMissingDisplayContentAsync(request.SessionId, replayRecord);
+        await PublishUsageAsync(request.SessionId, ToTokenUsagePayload(replayRecord.Usage), replayRecord.Model);
         await PublishCompletionAsync(request.SessionId, replayRecord.Content);
     }
 
@@ -839,6 +840,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
         var contentParts = new List<ContentPart>();
+        TokenUsage? usage = null;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
@@ -850,6 +852,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
         {
+            if (chunk.Usage != null)
+                usage = chunk.Usage;
+
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
                 fullContent.Append(chunk.DeltaContent);
@@ -941,6 +946,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             fullReasoning.ToString(),
             toolCalls.BuildToolCalls(),
             contentParts,
+            Usage: usage,
+            Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0);
     }
 
@@ -962,6 +969,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             ContentEmitted = replayRecord.ContentEmitted,
             ToolCalls = { ToToolCallEvents(replayRecord.ToolCalls) },
             OutputParts = { ContentPartProtoMapper.ToProtoList(replayRecord.ContentParts) },
+            Usage = ToTokenUsagePayload(replayRecord.Usage),
+            Model = replayRecord.Model ?? string.Empty,
         });
     }
 
@@ -1081,6 +1090,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             }, TopologyAudience.Parent);
         }
 
+        await PublishUsageAsync(sessionId, trackedSession.Usage, trackedSession.Model);
         await PublishCompletionAsync(sessionId, trackedSession.FinalContent);
     }
 
@@ -1111,6 +1121,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 SessionId = sessionId,
             },
             TopologyAudience.Parent);
+
+    private Task PublishUsageAsync(string sessionId, TokenUsagePayload? usage, string? model)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || usage == null)
+            return Task.CompletedTask;
+
+        return PublishAsync(
+            new ChatTokenUsageEvent
+            {
+                SessionId = sessionId,
+                Usage = usage.Clone(),
+                Model = model ?? string.Empty,
+            },
+            TopologyAudience.Parent);
+    }
 
     private static bool IsDisplayableCompletionContent(string? content) =>
         !string.IsNullOrWhiteSpace(content) &&
@@ -1245,6 +1270,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.ToolCalls.Add(evt.ToolCalls);
         session.OutputParts.Clear();
         session.OutputParts.Add(evt.OutputParts);
+        session.Usage = evt.Usage?.Clone();
+        session.Model = evt.Model ?? string.Empty;
         next.Sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;
@@ -1396,10 +1423,22 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         string ReasoningContent,
         IReadOnlyList<ToolCall> ToolCalls,
         IReadOnlyList<ContentPart> ContentParts,
+        TokenUsage? Usage,
+        string? Model,
         bool ContentEmitted)
     {
         public static SessionReplayRecord FromFailure(string content) =>
-            new(content, string.Empty, [], [], ContentEmitted: false);
+            new(content, string.Empty, [], [], Usage: null, Model: null, ContentEmitted: false);
     }
+
+    private static TokenUsagePayload? ToTokenUsagePayload(TokenUsage? usage) =>
+        usage == null
+            ? null
+            : new TokenUsagePayload
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+            };
 
 }

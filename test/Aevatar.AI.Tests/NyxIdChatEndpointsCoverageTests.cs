@@ -2574,13 +2574,33 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken.None);
         await projector.ProjectAsync(
             context,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new ChatTokenUsageEvent
+                {
+                    SessionId = "session-1",
+                    Usage = new TokenUsagePayload
+                    {
+                        PromptTokens = 2,
+                        CompletionTokens = 4,
+                        TotalTokens = 6,
+                    },
+                    Model = "nyxid-model",
+                }),
+            },
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
             new EventEnvelope { Payload = Any.Pack(new AiTextMessageEndEvent { Content = "done" }) },
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(3);
+        sessionHub.Published.Should().HaveCount(4);
         sessionHub.Published[0].Event.TextMessageContent.Delta.Should().Be("delta-1");
-        sessionHub.Published[1].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
-        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
+        sessionHub.Published[1].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Usage);
+        sessionHub.Published[1].Event.Usage.Available.Should().BeTrue();
+        sessionHub.Published[1].Event.Usage.TotalTokens.Should().Be(6);
+        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
+        sessionHub.Published[3].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
         sessionHub.Published.Should().OnlyContain(x => x.RootActorId == "actor-1" && x.SessionId == "session-1");
     }
 

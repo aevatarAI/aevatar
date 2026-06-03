@@ -54,6 +54,15 @@ internal static class NyxIdChatAguiSseEventWriter
                     ClassifyError(aguiEvent.RunError.Message ?? string.Empty),
                     CancellationToken.None);
                 return "RUN_ERROR";
+            case AGUIEvent.EventOneofCase.Usage:
+                await writer.WriteUsageAsync(
+                    aguiEvent.Usage.Available,
+                    aguiEvent.Usage.PromptTokens,
+                    aguiEvent.Usage.CompletionTokens,
+                    aguiEvent.Usage.TotalTokens,
+                    aguiEvent.Usage.Model,
+                    CancellationToken.None);
+                return null;
             case AGUIEvent.EventOneofCase.RunFinished:
                 await writer.WriteRunFinishedAsync(CancellationToken.None);
                 return "RUN_FINISHED";

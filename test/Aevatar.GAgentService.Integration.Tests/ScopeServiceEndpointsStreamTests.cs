@@ -405,16 +405,29 @@ public sealed class ScopeServiceEndpointsStreamTests
                     SessionId = "cmd-1",
                     Content = "pong",
                     ContentEmitted = true,
+                    Usage = new Aevatar.AI.Abstractions.TokenUsagePayload
+                    {
+                        PromptTokens = 11,
+                        CompletionTokens = 7,
+                        TotalTokens = 18,
+                    },
+                    Model = "nyxid-model",
                 },
                 correlationId: "cmd-1"),
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(2);
-        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
-        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
-        sessionHub.Published[1].Event.RunFinished!.ThreadId.Should().Be("actor-1");
-        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("cmd-1");
+        sessionHub.Published.Should().HaveCount(3);
+        sessionHub.Published[0].Event.Usage.Should().NotBeNull();
+        sessionHub.Published[0].Event.Usage.Available.Should().BeTrue();
+        sessionHub.Published[0].Event.Usage.PromptTokens.Should().Be(11);
+        sessionHub.Published[0].Event.Usage.CompletionTokens.Should().Be(7);
+        sessionHub.Published[0].Event.Usage.TotalTokens.Should().Be(18);
+        sessionHub.Published[0].Event.Usage.Model.Should().Be("nyxid-model");
+        sessionHub.Published[1].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[1].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
+        sessionHub.Published[2].Event.RunFinished.Should().NotBeNull();
+        sessionHub.Published[2].Event.RunFinished!.ThreadId.Should().Be("actor-1");
+        sessionHub.Published[2].Event.RunFinished.RunId.Should().Be("cmd-1");
     }
 
     [Fact]
@@ -441,18 +454,20 @@ public sealed class ScopeServiceEndpointsStreamTests
                 correlationId: "cmd-1"),
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(4);
+        sessionHub.Published.Should().HaveCount(5);
         sessionHub.Published[0].Event.TextMessageStart.Should().NotBeNull();
         sessionHub.Published[0].Event.TextMessageStart!.MessageId.Should().Be("cmd-1");
         sessionHub.Published[0].Event.TextMessageStart.Role.Should().Be("assistant");
         sessionHub.Published[1].Event.TextMessageContent.Should().NotBeNull();
         sessionHub.Published[1].Event.TextMessageContent!.MessageId.Should().Be("cmd-1");
         sessionHub.Published[1].Event.TextMessageContent.Delta.Should().Be("pong");
-        sessionHub.Published[2].Event.TextMessageEnd.Should().NotBeNull();
-        sessionHub.Published[2].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[3].Event.RunFinished.Should().NotBeNull();
-        sessionHub.Published[3].Event.RunFinished!.ThreadId.Should().Be("actor-1");
-        sessionHub.Published[3].Event.RunFinished.RunId.Should().Be("cmd-1");
+        sessionHub.Published[2].Event.Usage.Should().NotBeNull();
+        sessionHub.Published[2].Event.Usage.Available.Should().BeFalse();
+        sessionHub.Published[3].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[3].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
+        sessionHub.Published[4].Event.RunFinished.Should().NotBeNull();
+        sessionHub.Published[4].Event.RunFinished!.ThreadId.Should().Be("actor-1");
+        sessionHub.Published[4].Event.RunFinished.RunId.Should().Be("cmd-1");
     }
 
     [Fact]
@@ -662,10 +677,12 @@ public sealed class ScopeServiceEndpointsStreamTests
                 correlationId: "cmd-1"),
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(2);
-        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
-        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
-        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
+        sessionHub.Published.Should().HaveCount(3);
+        sessionHub.Published[0].Event.Usage.Should().NotBeNull();
+        sessionHub.Published[0].Event.Usage.Available.Should().BeFalse();
+        sessionHub.Published[1].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[1].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
+        sessionHub.Published[2].Event.RunFinished.Should().NotBeNull();
     }
 
     [Fact]
@@ -796,10 +813,12 @@ public sealed class ScopeServiceEndpointsStreamTests
             },
             CancellationToken.None);
 
-        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published.Should().HaveCount(3);
         sessionHub.Published[0].Event.TextMessageEnd.MessageId.Should().Be("msg-1");
-        sessionHub.Published[1].Event.RunFinished.ThreadId.Should().Be("runtime-1");
-        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("run-1");
+        sessionHub.Published[1].Event.Usage.Should().NotBeNull();
+        sessionHub.Published[1].Event.Usage.Available.Should().BeFalse();
+        sessionHub.Published[2].Event.RunFinished.ThreadId.Should().Be("runtime-1");
+        sessionHub.Published[2].Event.RunFinished.RunId.Should().Be("run-1");
     }
 
     [Fact]

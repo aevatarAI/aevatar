@@ -100,7 +100,7 @@ public sealed class GAgentDraftRunSessionEventProjector
             ? context.SessionId
             : completed.SessionId;
         var content = completed.Content ?? string.Empty;
-        return BuildTerminalEntries(context, messageId, content, completed.ContentEmitted);
+        return BuildTerminalEntries(context, messageId, content, completed.ContentEmitted, completed.Usage, completed.Model);
     }
 
     private static void CompleteRunFinishedFrame(
@@ -157,7 +157,9 @@ public sealed class GAgentDraftRunSessionEventProjector
         GAgentDraftRunProjectionContext context,
         string messageId,
         string output,
-        bool contentEmitted)
+        bool contentEmitted,
+        Aevatar.AI.Abstractions.TokenUsagePayload? usage,
+        string? model)
     {
         var entries = new List<ProjectionSessionEventEntry<AGUIEvent>>();
         if (!contentEmitted && !string.IsNullOrEmpty(output))
@@ -189,6 +191,10 @@ public sealed class GAgentDraftRunSessionEventProjector
         entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
             context.RootActorId,
             context.SessionId,
+            BuildUsageEvent(usage, model)));
+        entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
+            context.RootActorId,
+            context.SessionId,
             BuildTextMessageEnd(messageId)));
         entries.Add(new ProjectionSessionEventEntry<AGUIEvent>(
             context.RootActorId,
@@ -203,6 +209,21 @@ public sealed class GAgentDraftRunSessionEventProjector
             TextMessageEnd = new TextMessageEndEvent
             {
                 MessageId = messageId,
+            },
+        };
+
+    private static AGUIEvent BuildUsageEvent(
+        Aevatar.AI.Abstractions.TokenUsagePayload? usage,
+        string? model) =>
+        new()
+        {
+            Usage = new UsageEvent
+            {
+                Available = usage != null,
+                PromptTokens = usage?.PromptTokens ?? 0,
+                CompletionTokens = usage?.CompletionTokens ?? 0,
+                TotalTokens = usage?.TotalTokens ?? 0,
+                Model = string.IsNullOrWhiteSpace(model) ? null : model,
             },
         };
 
