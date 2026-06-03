@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Device;

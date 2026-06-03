@@ -155,6 +155,12 @@ Both own:
 Per CLAUDE.md §"Actor 即业务实体", these are named for the business entity
 (chat run, voice session), not the technical role.
 
+Issue #1748's first slice does not introduce `VoiceSessionActor`; it only
+removes the Host-owned voice session shell and moves voice control/transcript
+onto the shared realtime/projection path. `ChatRunActor`/`LlmSessionGAgent` and
+the voice `RoleGAgent` remain separate authoritative actors; they must not be
+merged to share implementation convenience.
+
 ### D6 — Voice converges on the same ingress shape
 
 `/ws/voice` may attach to a voice-enabled actor at WebSocket upgrade time only

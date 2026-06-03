@@ -5,7 +5,7 @@ using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 
-namespace Aevatar.Presentation.AGUI;
+namespace Aevatar.GAgentService.Hosting.Sse;
 
 /// <summary>
 /// Writes AG-UI events to an HTTP response as SSE frames.

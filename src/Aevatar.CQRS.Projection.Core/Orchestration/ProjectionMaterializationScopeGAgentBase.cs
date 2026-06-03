@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 

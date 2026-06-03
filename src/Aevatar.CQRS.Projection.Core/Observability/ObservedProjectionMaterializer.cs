@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Runtime.Observability;
 
