@@ -1,23 +1,22 @@
 # Aevatar.Presentation.AGUI
 
-`Aevatar.Presentation.AGUI` 定义 Aevatar 与前端 UI 之间的事件协议和 SSE 写出基础设施。
+`Aevatar.Presentation.AGUI` provides the HTTP/SSE adapter for AG-UI events.
 
-## 职责
+## Responsibilities
 
-- 定义标准 AG-UI 事件模型（运行、步骤、文本流、工具调用、自定义事件）
-- 提供 SSE 序列化写出器 `AGUISseWriter`
-- 作为 HTTP/SSE presentation adapter 消费上游 CQRS/projection 已发布的 `AGUIEvent`
+- Provides the SSE writer `AGUISseWriter`.
+- Consumes `AGUIEvent` frames published by upstream CQRS/projection flows.
 
-## 核心类型
+## Core Types
 
-- `agui_events.proto`：`RunStartedEvent`、`TextMessageContentEvent` 等事件定义
-- `AGUISseWriter`：将 `AGUIEvent` 序列化为 `data: {json}\n\n` 输出
+- `AGUIEvent`: generated from `src/Aevatar.AGUI.Contracts/agui_events.proto`.
+- `AGUISseWriter`: serializes `AGUIEvent` as `data: {json}\n\n` SSE output.
 
-## 使用场景
+## Usage
 
-- API 层从 CQRS/projection interaction stream 收到 `AGUIEvent` 后，通过 SSE 推送给前端
-- 作为协议层被 `Aevatar.Workflow.Host.Api` 引用
+- API layers push `AGUIEvent` frames to clients over SSE after receiving them from CQRS/projection interaction streams.
 
-## 依赖
+## Dependencies
 
-- `Microsoft.AspNetCore.App`（FrameworkReference）
+- `Aevatar.AGUI.Contracts`
+- `Microsoft.AspNetCore.App` framework reference
