@@ -77,14 +77,22 @@ public static class MainnetHostBuilderExtensions
             options.ValidateOnBuild = true;
             options.ValidateScopes = true;
         });
-        builder.Services.Configure<HostOptions>(static options =>
-        {
-            // Mainnet hosts have several startup validators/materializers. Starting hosted
-            // services concurrently lets Kestrel expose liveness while slower background
-            // startup work is still reaching readiness.
-            options.ServicesStartConcurrently = true;
-            options.ServicesStopConcurrently = true;
-        });
+        // Hosted services MUST start sequentially (the Generic Host default).
+        //
+        // 2026-06-03 prod incident: enabling HostOptions.ServicesStartConcurrently
+        // raced the co-hosted Orleans silo reaching the Active lifecycle stage.
+        // Grain-calling startup services (WorkflowDefinitionBootstrap,
+        // ChannelBotRegistration, AevatarOAuthClientBootstrap, HealthProbeStartup,
+        // StreamingProxyChatLifecycleContinuationRunner) fired their grain calls
+        // before the silo could create activations, so every one failed with
+        // "Unable to create local activation. Rejecting now." -> AggregateException
+        // -> CrashLoopBackOff.
+        //
+        // Sequential startup runs hosted services in registration order: Kestrel
+        // (binds the probe port early), then AddMainnetDistributedOrleansHost (silo
+        // to Active), then the grain-calling services above — so grain activations
+        // succeed. Liveness exposure is handled by binding http://+:8080 in the
+        // container (see ConfigureMainnetListenUrls), not by parallelising startup.
 
         builder.AddAevatarDefaultHost(options =>
         {
