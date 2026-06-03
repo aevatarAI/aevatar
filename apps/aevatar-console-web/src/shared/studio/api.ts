@@ -84,6 +84,7 @@ import type {
   ScopeWorkflowSummary,
 } from "@/shared/models/scopes";
 import { getOrnnRuntimeConfig } from "./ornnConfig";
+import { t } from "@/shared/i18n/messages";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -2388,14 +2389,16 @@ export const studioApi = {
         return {
           baseUrl,
           reachable: false,
-          message: `Cannot reach Ornn (${response.status}).`,
+          message: t("shared.studio.api.cannot.reach.ornn.status", "Cannot reach Ornn ({status}).", {
+            status: response.status,
+          }),
         };
       }
 
       return {
         baseUrl,
         reachable: true,
-        message: "Connected to Ornn.",
+        message: t("shared.studio.api.connected.to.ornn", "Connected to Ornn."),
       };
     } catch (error) {
       return {

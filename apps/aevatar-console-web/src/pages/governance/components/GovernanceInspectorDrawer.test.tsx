@@ -1,8 +1,17 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { setLocale } from "@umijs/max";
 import React from "react";
 import GovernanceInspectorDrawer from "./GovernanceInspectorDrawer";
 
 describe("GovernanceInspectorDrawer", () => {
+  beforeEach(() => {
+    setLocale("zh-CN", false);
+  });
+
+  afterEach(() => {
+    setLocale("en-US", false);
+  });
+
   it("submits a new service binding with the current governance identity as fallback scope", async () => {
     const onCreateBinding = jest.fn(async () => undefined);
 
@@ -54,7 +63,7 @@ describe("GovernanceInspectorDrawer", () => {
     fireEvent.change(screen.getByLabelText("目标服务 ID"), {
       target: { value: "orders-service" },
     });
-    fireEvent.change(screen.getByLabelText("目标 endpoint"), {
+    fireEvent.change(screen.getByLabelText("目标 Endpoint"), {
       target: { value: "chat" },
     });
     fireEvent.click(screen.getByRole("button", { name: "创建绑定" }));

@@ -1,9 +1,18 @@
 import { screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
 import GovernanceQueryCard from './GovernanceQueryCard';
 
 describe('GovernanceQueryCard', () => {
+  beforeEach(() => {
+    setLocale('zh-CN', false);
+  });
+
+  afterEach(() => {
+    setLocale('en-US', false);
+  });
+
   it('hydrates missing identity fields from a unique selected service', async () => {
     const onChange = jest.fn();
 

@@ -5,6 +5,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import { message } from 'antd';
 import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
@@ -52,6 +53,7 @@ jest.mock('@/shared/studio/api', () => ({
 
 describe('StudioMemberInvokePanel', () => {
   beforeEach(() => {
+    setLocale('zh-CN', false);
     jest.clearAllMocks();
     Element.prototype.scrollTo = jest.fn();
     Element.prototype.scrollIntoView = jest.fn();
@@ -161,13 +163,13 @@ describe('StudioMemberInvokePanel', () => {
     expect(targetSummary).not.toHaveTextContent('Actor ID');
     expect(targetSummary).not.toHaveTextContent('Member ID');
     expect(screen.queryByText('缺少提示词')).toBeNull();
-    expect(screen.getByText('Run output')).toBeTruthy();
+    expect(screen.getByText('运行输出')).toBeTruthy();
     expect(screen.queryByText('Conversation')).toBeNull();
-    expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Timeline')).toBeTruthy();
-    expect(screen.getByText('Events')).toBeTruthy();
+    expect(screen.getAllByText('输出').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('时间线')).toBeTruthy();
+    expect(screen.getByText('事件')).toBeTruthy();
     expect(screen.getByText('Metadata')).toBeTruthy();
-    expect(screen.getByText('Advanced typed payload')).toBeTruthy();
+    expect(screen.getByText('高级 typed Payload')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
     const invokeWorkspace = screen.getByTestId('studio-invoke-workspace');
     const mainDebugArea = screen.getByTestId('studio-invoke-main-debug-area');
@@ -198,13 +200,13 @@ describe('StudioMemberInvokePanel', () => {
     expect(currentRunViewport.style.overflow).toBe('visible');
     expect(invokeComposerDock.style.flex).toBe('0 0 auto');
     expect(screen.getByRole('button', { name: 'Invoke' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停止' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '清除' })).toBeTruthy();
     expect(
-      screen.getByText('Send a prompt above to create the first run.'),
+      screen.getByText('发送上面的 Prompt 创建第一次运行。'),
     ).toBeTruthy();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
-    expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('运行历史记录（0)')).toBeTruthy();
+    expect(screen.getAllByText('还没有运行').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();
     expect(screen.queryByText('调用契约')).toBeNull();
@@ -247,13 +249,13 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('调用契约')).toBeNull();
     expect(screen.queryByText('缺少提示词')).toBeNull();
     expect(screen.queryByText('Conversation')).toBeNull();
-    expect(screen.getByText('Run output')).toBeTruthy();
+    expect(screen.getByText('运行输出')).toBeTruthy();
     expect(
-      screen.getByText('Send a prompt above to create the first run.'),
+      screen.getByText('发送上面的 Prompt 创建第一次运行。'),
     ).toBeTruthy();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
-    expect(screen.getAllByText('No runs yet').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText('Run failed')).toBeNull();
+    expect(screen.getByText('运行历史记录（0)')).toBeTruthy();
+    expect(screen.getAllByText('还没有运行').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('运行失败')).toBeNull();
   });
 
   it('prefers final run output over intermediate assistant text for chat invoke results', async () => {
@@ -396,12 +398,12 @@ describe('StudioMemberInvokePanel', () => {
     expect(historyScroll.style.minHeight).toBe('0');
     expect(historyScroll.style.display).toBe('flex');
     expect(screen.getByText('Run prompt 11')).toBeTruthy();
-    expect(screen.getByText('Run history (12)')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy output' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeTruthy();
+    expect(screen.getByText('运行历史记录（12)')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制输入' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制输出' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制运行 ID' })).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Retry as new run' }),
+      screen.getByRole('button', { name: '作为新运行重试' }),
     ).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
     expect(screen.queryByText('Member ID')).toBeNull();
@@ -456,15 +458,15 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy input' }));
+    fireEvent.click(screen.getByRole('button', { name: '复制输入' }));
     expect(copyInput).toHaveBeenCalledWith('failed-run');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy output' }));
+    fireEvent.click(screen.getByRole('button', { name: '复制输出' }));
     expect(copyOutput).toHaveBeenCalledWith('failed-run');
 
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '复制运行 ID' })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry as new run' }));
+    fireEvent.click(screen.getByRole('button', { name: '作为新运行重试' }));
     expect(retryAsNewRun).toHaveBeenCalledWith('failed-run');
   });
 
@@ -545,6 +547,10 @@ describe('StudioMemberInvokePanel', () => {
         },
       );
     });
+  });
+
+  afterEach(() => {
+    setLocale('en-US', false);
   });
 
   it('routes workflow chat invokes through the team stream endpoint when team context is present', async () => {
@@ -697,7 +703,7 @@ describe('StudioMemberInvokePanel', () => {
       );
     });
 
-    expect(await screen.findByText('Run history (1)')).toBeTruthy();
+    expect(await screen.findByText('运行历史记录（1)')).toBeTruthy();
     expect(
       screen.getByTestId('studio-invoke-history-scroll').style.overflow,
     ).toBe('visible');
@@ -705,9 +711,9 @@ describe('StudioMemberInvokePanel', () => {
       screen.getAllByText('Route this escalation to billing review.').length,
     ).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Latest run')).toBeTruthy();
-    expect(screen.getByText('Status summary')).toBeTruthy();
-    expect(screen.getByText('Input')).toBeTruthy();
-    expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('状态摘要')).toBeTruthy();
+    expect(screen.getByText('输入')).toBeTruthy();
+    expect(screen.getAllByText('输出').length).toBeGreaterThanOrEqual(1);
     expect(
       screen.getByText('没有返回可展示内容。'),
     ).toBeTruthy();
@@ -716,20 +722,20 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.queryByText('最新输出')).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));
-    expect(screen.getByText('Full Run ID')).toBeTruthy();
+    expect(screen.getByText('完整运行 ID')).toBeTruthy();
     expect(screen.getByText('run-1')).toBeTruthy();
-    expect(screen.getByText('Command ID')).toBeTruthy();
+    expect(screen.getByText('命令 ID')).toBeTruthy();
     expect(screen.getByText('cmd-1')).toBeTruthy();
     expect(screen.getByText('Actor ID')).toBeTruthy();
     expect(screen.getByText('actor-1')).toBeTruthy();
-    expect(screen.getByText('Member ID')).toBeTruthy();
+    expect(screen.getByText('成员 ID')).toBeTruthy();
     expect(screen.getByText('default')).toBeTruthy();
-    expect(screen.getByText('Advanced details')).toBeTruthy();
+    expect(screen.getByText('高级细节')).toBeTruthy();
     expect(screen.queryByTestId('studio-invoke-selected-run-detail')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    fireEvent.click(screen.getByRole('button', { name: '清除' }));
     expect(
-      screen.getByText('Send a prompt above to create the first run.'),
+      screen.getByText('发送上面的 Prompt 创建第一次运行。'),
     ).toBeTruthy();
 
     const historyScroll = screen.getByTestId('studio-invoke-history-scroll');
@@ -740,27 +746,27 @@ describe('StudioMemberInvokePanel', () => {
     );
     expect(historyScroll).toBeTruthy();
     expect(screen.getByText('Historical run · Read-only')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy input' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy output' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy run id' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制输入' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制输出' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制运行 ID' })).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Retry as new run' }),
+      screen.getByRole('button', { name: '作为新运行重试' }),
     ).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Continue|Resume|Edit/ })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy input' }));
+    fireEvent.click(screen.getByRole('button', { name: '复制输入' }));
     expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith(
       'Route this escalation to billing review.',
     );
     expect(message.success).toHaveBeenCalledWith('Input copied.');
 
-    expect(screen.getByRole('button', { name: 'Copy output' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '复制输出' })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy run id' }));
+    fireEvent.click(screen.getByRole('button', { name: '复制运行 ID' }));
     expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith('run-1');
     expect(message.success).toHaveBeenCalledWith('Run id copied.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry as new run' }));
+    fireEvent.click(screen.getByRole('button', { name: '作为新运行重试' }));
     expect(screen.getByLabelText('调用请求输入')).toHaveValue(
       'Route this escalation to billing review.',
     );
@@ -837,10 +843,10 @@ describe('StudioMemberInvokePanel', () => {
     );
 
     expect(
-      await screen.findByText('Advanced typed payload'),
+      await screen.findByText('高级 typed Payload'),
     ).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByLabelText('Payload type URL')).toHaveValue(
+      expect(screen.getByLabelText('Payload Type URL')).toHaveValue(
         'type.googleapis.com/example.ContractSubmit',
       );
     });
@@ -858,7 +864,7 @@ describe('StudioMemberInvokePanel', () => {
       ),
     ).toBeTruthy();
     expect(runtimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
-    expect(screen.getByText('Run history (0)')).toBeTruthy();
+    expect(screen.getByText('运行历史记录（0)')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Payload base64'), {
       target: {
@@ -924,17 +930,17 @@ describe('StudioMemberInvokePanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
 
-    expect(await screen.findByText('Run failed')).toBeTruthy();
+    expect(await screen.findByText('运行失败')).toBeTruthy();
     const errorNode = screen.getByText(/telegram_chats_tool_with_a_really_long/);
     expect(errorNode).toHaveStyle({
       overflowWrap: 'anywhere',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
     });
-    expect(screen.getByRole('button', { name: 'View events' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy error' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '查看事件' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制错误' })).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Retry as new run' }),
+      screen.getByRole('button', { name: '作为新运行重试' }),
     ).toBeTruthy();
   });
 
@@ -983,9 +989,9 @@ describe('StudioMemberInvokePanel', () => {
       expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalled();
     });
 
-    expect(screen.getByText('Run history (1)')).toBeTruthy();
+    expect(screen.getByText('运行历史记录（1)')).toBeTruthy();
     fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));
-    expect(screen.getByText('Command ID')).toBeTruthy();
+    expect(screen.getByText('命令 ID')).toBeTruthy();
     expect(screen.getByText('cmd-only')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '打开运行记录' })).toBeNull();
   });

@@ -13,6 +13,7 @@ import {
   AEVATAR_INTERACTIVE_CHIP_CLASS,
   AEVATAR_PRESSABLE_CARD_CLASS,
 } from '@/shared/ui/interactionStandards';
+import { t } from "@/shared/i18n/messages";
 
 export type StudioShellMemberKind =
   | 'workflow'
@@ -108,7 +109,7 @@ const railSectionHeaderStyle: React.CSSProperties = {
   fontSize: 10,
   fontWeight: 700,
   gap: 6,
-  letterSpacing: '0.08em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -368,9 +369,22 @@ function formatMemberKindLabel(kind: StudioShellMemberKind | undefined): string 
     case 'gagent':
       return 'GAgent';
     case 'member':
-      return 'Member';
+      return t("pages.studio.studioshell.member", "Member");
     default:
-      return 'Focus';
+      return t("pages.studio.studioshell.focus", "Focus");
+  }
+}
+
+function formatMemberToneLabel(tone: StudioShellMemberTone | undefined): string {
+  switch (tone) {
+    case 'live':
+      return t("pages.studio.studioshell.live", "live");
+    case 'draft':
+      return t("pages.studio.studioshell.draft", "draft");
+    case 'planned':
+      return t("pages.studio.studioshell.planned", "planned");
+    default:
+      return t("pages.studio.studioshell.idle", "idle");
   }
 }
 
@@ -432,7 +446,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
     return [
       {
         key: 'all' as const,
-        label: 'All',
+        label: t("pages.studio.studioshell.all", "All"),
         count: members.length,
       },
       {
@@ -452,7 +466,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
       },
       {
         key: 'member' as const,
-        label: 'Member',
+        label: t("pages.studio.studioshell.member", "Member"),
         count: counts.member ?? 0,
       },
     ].filter((item) => item.key === 'all' || item.count > 0);
@@ -501,7 +515,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
 
   return (
     <div style={shellRootStyle}>
-      <aside style={railStyle} aria-label="Team members">
+      <aside style={railStyle} aria-label={t("pages.studio.studioshell.team.members", "Team members")}>
         <div style={railHeaderStyle}>
           <div
             style={{
@@ -521,19 +535,18 @@ const StudioShell: React.FC<StudioShellProps> = ({
                 lineHeight: '20px',
               }}
             >
-              Team members
-            </Typography.Title>
+              {t("pages.studio.studioshell.team.members.2", "Team members")}</Typography.Title>
             <span style={railPillStyle}>{members.length}</span>
             <InlineInfoButton
-              ariaLabel="Open team members help"
-              content="Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench."
+              ariaLabel={t("pages.studio.studioshell.open.team.members.help", "Open team members help")}
+              content={t("pages.studio.studioshell.keep.one.member.in", "Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench.")}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
             <input
-              aria-label="Search team members"
+              aria-label={t("pages.studio.studioshell.search.team.members", "Search team members")}
               onChange={(event) => setMemberSearch(event.target.value)}
-              placeholder="Search members or revisions"
+              placeholder={t("pages.studio.studioshell.search.members.or.revisions", "Search members or revisions")}
               style={railSearchInputStyle}
               type="search"
               value={memberSearch}
@@ -574,7 +587,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
           <div style={railSectionHeaderStackStyle}>
             <div style={railSectionHeaderRowStyle}>
               <div style={railSectionHeaderStyle}>
-                <span>Member inventory</span>
+                <span>{t("pages.studio.studioshell.member.inventory", "Member inventory")}</span>
               </div>
             </div>
             {inventoryActions}
@@ -737,7 +750,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                             width: 7,
                           }}
                         />
-                        {member.tone ?? 'idle'}
+                        {formatMemberToneLabel(member.tone)}
                       </div>
                     </div>
                   </div>
@@ -753,8 +766,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
               }}
             >
               {members.length > 0
-                ? 'No members match the current search or filter. Try clearing the rail controls.'
-                : 'No team members yet. Create a member to start building in Studio.'}
+                ? t("pages.studio.studioshell.no.members.match", "No members match the current search or filter. Try clearing the rail controls.")
+                : t("pages.studio.studioshell.no.team.members", "No team members yet. Create a member to start building in Studio.")}
             </Typography.Text>
           )}
         </div>
@@ -771,19 +784,18 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   color: '#6b7280',
                   fontSize: 10,
                   fontWeight: 700,
-                  letterSpacing: '0.08em',
+                  letterSpacing: 0,
                   textTransform: 'uppercase',
                 }}
               >
-                Member lifecycle
-              </Typography.Text>
+                {t("pages.studio.studioshell.member.lifecycle", "Member lifecycle")}</Typography.Text>
               <InlineInfoButton
-                ariaLabel="Open lifecycle help"
-                content="Keep the selected member in one shell while Build, Bind, Invoke, and Observe stay aligned to the same workbench."
+                ariaLabel={t("pages.studio.studioshell.open.lifecycle.help", "Open lifecycle help")}
+                content={t("pages.studio.studioshell.keep.the.selected.member", "Keep the selected member in one shell while Build, Bind, Invoke, and Observe stay aligned to the same workbench.")}
               />
             </div>
             <nav
-              aria-label="Member lifecycle"
+              aria-label={t("pages.studio.studioshell.member.lifecycle.2", "Member lifecycle")}
               data-testid="studio-lifecycle-stepper"
               style={lifecycleRowStyle}
             >
