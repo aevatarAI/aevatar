@@ -176,6 +176,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceRolloutCommandObservationQueryReader, ServiceRolloutCommandObservationQueryReader>();
         services.TryAddSingleton<IServiceTrafficViewQueryReader, ServiceTrafficViewQueryReader>();
         services.TryAddSingleton<IServiceRevisionCatalogQueryReader, ServiceRevisionCatalogQueryReader>();
+        services.TryAddSingleton<IServiceScriptingRepublishCandidateQueryReader, ServiceScriptingRepublishCandidateQueryReader>();
         services.TryAddSingleton<IServiceRunQueryPort, ServiceRunQueryReader>();
         services.TryAddSingleton<IGAgentRunTerminalQueryPort, GAgentRunTerminalQueryReader>();
         services.TryAddSingleton<ILlmSessionQueryPort, LlmSessionQueryReader>();
