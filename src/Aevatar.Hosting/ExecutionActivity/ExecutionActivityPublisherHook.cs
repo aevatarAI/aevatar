@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Threading.Channels;
 
 namespace Aevatar.Hosting.ExecutionActivity;
@@ -24,11 +25,11 @@ public sealed class ExecutionActivityPublisherHook : IGAgentExecutionHook
     public ExecutionActivityPublisherHook(
         IStreamProvider streamProvider,
         IExecutionActivityScopeResolver scopeResolver,
-        ILogger<ExecutionActivityPublisherHook> logger)
+        ILogger<ExecutionActivityPublisherHook>? logger = null)
     {
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _logger = logger ?? NullLogger<ExecutionActivityPublisherHook>.Instance;
         _drainTask = Task.Run(DrainAsync);
     }
 
