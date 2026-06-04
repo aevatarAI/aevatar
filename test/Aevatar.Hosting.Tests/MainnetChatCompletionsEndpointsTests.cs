@@ -370,6 +370,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
             [
                 new ChatCompletionsStubAgentTool("use_skill", "load a skill"),
                 new ChatCompletionsStubAgentTool("ornn_search_skills", "search Ornn skills"),
+                new ChatCompletionsStubAgentTool("ornn_publish_skill", "publish Ornn skills"),
             ]);
         await using var app = await CreateAppAsync(
             provider,
@@ -404,7 +405,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
         var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.SubstitutedToolNames.Should().Contain("WebSearch");
-        command.ToolSelection.AdditiveToolNames.Should().Contain(["use_skill", "ornn_search_skills"]);
+        command.ToolSelection.AdditiveToolNames.Should().Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill"]);
     }
 
     [Fact]

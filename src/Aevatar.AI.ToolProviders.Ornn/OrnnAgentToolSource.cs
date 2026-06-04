@@ -12,15 +12,18 @@ public sealed class OrnnAgentToolSource : IAgentToolSource
 {
     private readonly OrnnOptions _options;
     private readonly OrnnSkillClient _client;
+    private readonly OrnnPublishSkillTool _publishTool;
     private readonly ILogger _logger;
 
     public OrnnAgentToolSource(
         OrnnOptions options,
         OrnnSkillClient client,
+        OrnnPublishSkillTool publishTool,
         ILogger<OrnnAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
+        _publishTool = publishTool;
         _logger = logger ?? NullLogger<OrnnAgentToolSource>.Instance;
     }
 
@@ -31,10 +34,10 @@ public sealed class OrnnAgentToolSource : IAgentToolSource
         // point and resorts to nyxid_proxy path-guessing (issue #530). OrnnSkillClient
         // routes through NyxID's proxy, so the slug — not a hardcoded base URL — is what
         // determines reachability.
-        IReadOnlyList<IAgentTool> tools = [new OrnnSearchSkillsTool(_client)];
+        IReadOnlyList<IAgentTool> tools = [new OrnnSearchSkillsTool(_client), _publishTool];
 
         _logger.LogInformation(
-            "Ornn search tool registered (NyxID slug: {Slug})", _options.NyxIdSlug);
+            "Ornn tools registered (NyxID slug: {Slug})", _options.NyxIdSlug);
         return Task.FromResult(tools);
     }
 }

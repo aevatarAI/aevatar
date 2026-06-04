@@ -30,6 +30,7 @@
     <ProjectReference Include="..\Aevatar.Foundation.VoicePresence.MiniCPM\Aevatar.Foundation.VoicePresence.MiniCPM.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Integration.AI\Aevatar.Workflow.Integration.AI.csproj" />
+    <ProjectReference Include="..\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
   </ItemGroup>
   <ItemGroup>
