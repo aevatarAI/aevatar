@@ -127,6 +127,20 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ShouldFallbackToEmptyScopeIdWhenContextScopeIdIsNull()
+    {
+        var tool = new CapturingWorkflowTool("nyxid_tool");
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext { ScopeIdOverride = null };
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name);
+
+        tool.LastRequest.Should().NotBeNull();
+        tool.LastRequest!.ScopeId.Should().BeEmpty();
+        LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldNotUseRequestMetadataAsCallerCredential()
     {
         var tool = new CapturingWorkflowTool("nyxid_tool");
@@ -261,7 +275,9 @@ public sealed class ToolCallModuleContextTests
 
         public string RunId => "run-1";
 
-        public string ScopeId => "scope-1";
+        public string? ScopeIdOverride { get; init; } = "scope-1";
+
+        public string ScopeId => ScopeIdOverride!;
 
         public IServiceProvider Services { get; } = new EmptyServiceProvider();
 

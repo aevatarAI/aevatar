@@ -56,6 +56,17 @@ public sealed class WorkflowExecutionContextAdapterTests
     }
 
     [Fact]
+    public void ScopeId_ShouldDefaultToEmptyWhenStateHostDoesNotOverride()
+    {
+        IWorkflowExecutionStateHost host = new DefaultScopeStateHost();
+
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        host.ScopeId.Should().BeEmpty();
+        adapter.ScopeId.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ScopeId_ShouldFlowFromWorkflowRunStateHostToAdapter()
     {
         var agent = new WorkflowRunGAgent(
@@ -67,6 +78,11 @@ public sealed class WorkflowExecutionContextAdapterTests
             EventSourcingBehaviorFactory = new InMemoryEventSourcingBehaviorFactory<WorkflowRunState>(),
         };
         SetAgentId(agent, "workflow-run-scope-bridge");
+        var stateHost = (IWorkflowExecutionStateHost)agent;
+        var adapterBeforeBind = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);
+
+        stateHost.ScopeId.Should().BeEmpty();
+        adapterBeforeBind.ScopeId.Should().BeEmpty();
 
         await agent.BindWorkflowRunDefinitionAsync(
             definitionActorId: "definition-1",
@@ -74,7 +90,6 @@ public sealed class WorkflowExecutionContextAdapterTests
             workflowName: "wf_scope",
             runId: "run-1",
             scopeId: " scope-1 ");
-        var stateHost = (IWorkflowExecutionStateHost)agent;
         var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);
 
         stateHost.ScopeId.Should().Be("scope-1");
@@ -361,6 +376,51 @@ public sealed class WorkflowExecutionContextAdapterTests
         {
             ct.ThrowIfCancellationRequested();
             States.Remove(scopeKey);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class DefaultScopeStateHost : IWorkflowExecutionStateHost
+    {
+        public string RunId => "run-1";
+
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
+        public WorkflowRunExecutionContextState ExecutionContextSnapshot { get; } = new();
+
+        public Task UpdateExecutionContextAsync(WorkflowRunExecutionContextDelta delta, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = delta;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionContextAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Any? GetExecutionState(string scopeKey)
+        {
+            _ = scopeKey;
+            return null;
+        }
+
+        public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() => [];
+
+        public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = scopeKey;
+            _ = state;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = scopeKey;
             return Task.CompletedTask;
         }
     }

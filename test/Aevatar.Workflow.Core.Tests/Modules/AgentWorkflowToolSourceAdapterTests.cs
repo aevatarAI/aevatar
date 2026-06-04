@@ -37,6 +37,37 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Theory]
+    [InlineData(null, null, null, null)]
+    [InlineData("", "", null, null)]
+    [InlineData("  ", "\t", null, null)]
+    [InlineData(" call-1 ", " scope-1 ", "call-1", "scope-1")]
+    public async Task WorkflowTool_ShouldNormalizeWorkflowCallAndScopeIdsForAgentToolContext(
+        string? callId,
+        string? scopeId,
+        string? expectedCallId,
+        string? expectedScopeId)
+    {
+        var agentTool = new CapturingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: callId!,
+                ScopeId: scopeId!,
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        agentTool.ObservedCallId.Should().Be(expectedCallId);
+        agentTool.ObservedScopeId.Should().Be(expectedScopeId);
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("Basic token-123")]
     [InlineData("Bearer token-123")]
