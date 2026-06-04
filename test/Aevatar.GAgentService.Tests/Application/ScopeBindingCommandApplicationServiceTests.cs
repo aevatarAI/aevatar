@@ -524,6 +524,30 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldRejectGAgentActorTypeName_WhenAgentKindIsMissing()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+        var actorTypeName = typeof(TestStaticServiceAgent).AssemblyQualifiedName!;
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.GAgent,
+            GAgent: new ScopeBindingGAgentSpec(
+                " ",
+                [],
+                actorTypeName)));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"gagent actor_type_name '{actorTypeName}' is deprecated and cannot be used for identity. Provide gagent agentKind.");
+        commandPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldInsertDefaultChatEndpoint_WhenEndpointsAreMissing()
     {
         var commandPort = new RecordingServiceCommandPort();
