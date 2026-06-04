@@ -459,7 +459,7 @@ public class WorkflowGAgentCoverageTests
             },
             CallerCredential = new WorkflowCallerCredential
             {
-                NyxIdBearer = " Bearer secret ",
+                BearerToken = " secret ",
             },
             LlmControl = new WorkflowLlmControlContext
             {
@@ -469,7 +469,7 @@ public class WorkflowGAgentCoverageTests
             },
         });
 
-        agent1.State.ExecutionContext.CallerCredential!.NyxIdBearer.Should().Be("Bearer secret");
+        agent1.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
         agent1.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model-main");
         await agent1.DeactivateAsync();
 
@@ -480,7 +480,7 @@ public class WorkflowGAgentCoverageTests
         SetAgentId(agent2, "workflow-run-context-replay");
         await agent2.ActivateAsync();
 
-        agent2.State.ExecutionContext.CallerCredential!.NyxIdBearer.Should().Be("Bearer secret");
+        agent2.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
         agent2.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model-main");
         agent2.State.ExecutionContext.Llm.MaxToolRoundsOverride.Should().Be(4);
         agent2.State.ExecutionContext.Llm.UserMemoryPrompt.Should().Be("memory-main");
@@ -507,7 +507,7 @@ public class WorkflowGAgentCoverageTests
             agent,
             new WorkflowCallerCredential
             {
-                NyxIdBearer = "Bearer secret",
+                BearerToken = "secret",
             });
         await WorkflowRequestMetadataRuntimeContextAccess.SetLlmControlAsync(
             agent,
@@ -535,7 +535,7 @@ public class WorkflowGAgentCoverageTests
             }));
 
         agent.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model");
-        agent.State.ExecutionContext.CallerCredential!.NyxIdBearer.Should().Be("Bearer secret");
+        agent.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
         agent.State.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
             .Unpack<SecureInputModuleState>()
             .Captured["run-redaction::api_key"]
@@ -551,7 +551,7 @@ public class WorkflowGAgentCoverageTests
         observedState.ExecutionContext.Llm!.ModelOverride.Should().Be("model");
         observedState.ExecutionContext.Llm.MaxToolRoundsOverride.Should().Be(2);
         observedState.ExecutionContext.Llm.UserMemoryPrompt.Should().Be("memory");
-        observedState.ExecutionContext.CallerCredential!.NyxIdBearer.Should().BeEmpty();
+        observedState.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
         observedState.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
             .Unpack<SecureInputModuleState>()
             .Captured["run-redaction::api_key"]
@@ -576,7 +576,7 @@ public class WorkflowGAgentCoverageTests
             .Select(x => x.Unpack<WorkflowRunExecutionContextUpdatedEvent>())
             .ToList();
         observedContextEvent.Should().HaveCount(2);
-        observedContextEvent[0].ExecutionContextDelta.CallerCredential!.NyxIdBearer.Should().BeEmpty();
+        observedContextEvent[0].ExecutionContextDelta.CallerCredential!.BearerToken.Should().BeEmpty();
         observedContextEvent[1].ExecutionContextDelta.Llm!.ModelOverride.Should().Be("model");
         observedContextEvent[1].ExecutionContextDelta.Llm.MaxToolRoundsOverride.Should().Be(2);
         observedContextEvent[1].ExecutionContextDelta.Llm.UserMemoryPrompt.Should().Be("memory");
@@ -1604,7 +1604,7 @@ public class WorkflowGAgentCoverageTests
             UserMemoryPrompt = "remember this",
             CallerCredential = new WorkflowCallerCredential
             {
-                NyxIdBearer = "Bearer token-123",
+                BearerToken = "token-123",
             },
             Headers = { ["trace-id"] = "trace-1" },
             Annotations = { ["annotation"] = "value" },
@@ -2141,7 +2141,7 @@ public class WorkflowGAgentCoverageTests
                 },
                 CallerCredential = new WorkflowCallerCredential
                 {
-                    NyxIdBearer = "Bearer secret",
+                    BearerToken = "secret",
                 },
             });
         host.RuntimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");

@@ -119,7 +119,7 @@ public sealed class ToolCallModuleContextTests
         var ctx = new RecordingWorkflowContext();
         ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
         {
-            NyxIdBearer = " Bearer typed-token ",
+            BearerToken = " typed-token ",
         };
         ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -139,7 +139,7 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.StepId.Should().Be("call_proxy");
         tool.LastRequest.ExecutionId.Should().Be("exec-1");
         tool.LastRequest.CallId.Should().Be("workflow:run-1:call_proxy:exec-1");
-        tool.LastRequest.CallerCredential.NyxIdBearer.Should().Be("Bearer typed-token");
+        tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 
@@ -157,7 +157,7 @@ public sealed class ToolCallModuleContextTests
         await ExecuteToolCallAsync(module, ctx, tool.Name);
 
         tool.LastRequest.Should().NotBeNull();
-        tool.LastRequest!.CallerCredential.NyxIdBearer.Should().BeEmpty();
+        tool.LastRequest!.CallerCredential.BearerToken.Should().BeEmpty();
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 
@@ -352,7 +352,7 @@ public sealed class ToolCallModuleContextTests
             {
                 ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
                 {
-                    NyxIdBearer = delta.CallerCredential.NyxIdBearer,
+                    BearerToken = delta.CallerCredential.BearerToken,
                 };
             }
 

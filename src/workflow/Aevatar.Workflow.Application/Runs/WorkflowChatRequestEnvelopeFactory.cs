@@ -88,7 +88,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         Application.Abstractions.Runs.WorkflowCallerCredential? source) =>
         new()
         {
-            NyxIdBearer = Normalize(source?.NyxIdBearer),
+            BearerToken = Normalize(source?.BearerToken),
         };
 
     private static void AppendMetadata(

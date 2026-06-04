@@ -823,10 +823,10 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = ChatRunRequestNormalizer.Normalize(
             input,
             defaultMetadata: defaultMetadata,
-            trustedCallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(" Bearer trusted "));
+            trustedCallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(" trusted "));
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.CallerCredential!.NyxIdBearer.Should().Be("Bearer trusted");
+        result.Request!.CallerCredential!.BearerToken.Should().Be("trusted");
         result.Request.Metadata.Should().Contain("trace", "trace-1");
         result.Request.Metadata.Should().NotContainKey("connector.http.authorization");
     }

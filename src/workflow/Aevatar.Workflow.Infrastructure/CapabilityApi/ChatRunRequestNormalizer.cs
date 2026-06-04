@@ -69,7 +69,7 @@ internal static class ChatRunRequestNormalizer
 
     private static WorkflowCallerCredential? NormalizeCallerCredential(WorkflowCallerCredential? source)
     {
-        var bearer = NormalizeOptional(source?.NyxIdBearer);
+        var bearer = NormalizeOptional(source?.BearerToken);
         return bearer == null ? null : new WorkflowCallerCredential(bearer);
     }
 

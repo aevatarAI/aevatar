@@ -162,7 +162,7 @@ message WorkflowLlmExecutionContextState
 
 message WorkflowCallerCredentialState
 {
-  string nyx_id_bearer = 1;
+  string bearer_token = 1;
 }
 
 enum WorkflowRuntimeCallbackBackendState

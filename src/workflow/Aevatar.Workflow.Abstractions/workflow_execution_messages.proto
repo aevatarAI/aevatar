@@ -28,7 +28,7 @@ message WorkflowLlmControlContext {
 }
 
 message WorkflowCallerCredential {
-  string nyx_id_bearer = 1;
+  string bearer_token = 1;
 }
 
 message WorkflowChatRequestEvent {

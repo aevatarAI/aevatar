@@ -69,7 +69,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         var host = new RecordingStateHost();
         await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             host,
-            new WorkflowCallerCredential { NyxIdBearer = "Bearer typed" });
+            new WorkflowCallerCredential { BearerToken = "typed" });
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
@@ -80,7 +80,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
 
-        host.ExecutionContextState.CallerCredential!.NyxIdBearer.Should().Be("Bearer typed");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
@@ -90,7 +90,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [" "] = " ",
             });
 
-        host.ExecutionContextState.CallerCredential!.NyxIdBearer.Should().Be("Bearer typed");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
@@ -156,13 +156,13 @@ public sealed class WorkflowExecutionRuntimeContextTests
     public void BuildCallerCredentialDelta_ShouldPromoteOnlyTypedCallerCredential()
     {
         var delta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
-            new WorkflowCallerCredential { NyxIdBearer = " Bearer secret " });
+            new WorkflowCallerCredential { BearerToken = " secret " });
 
         delta.ClearCallerCredential.Should().BeTrue();
-        delta.CallerCredential!.NyxIdBearer.Should().Be("Bearer secret");
+        delta.CallerCredential!.BearerToken.Should().Be("secret");
 
         var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
-            new WorkflowCallerCredential { NyxIdBearer = " " });
+            new WorkflowCallerCredential { BearerToken = " " });
         emptyDelta.ClearCallerCredential.Should().BeTrue();
         emptyDelta.CallerCredential.Should().BeNull();
     }
@@ -174,25 +174,25 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             host,
-            new WorkflowCallerCredential { NyxIdBearer = " Bearer secret " });
+            new WorkflowCallerCredential { BearerToken = " secret " });
 
-        host.ExecutionContextState.CallerCredential!.NyxIdBearer.Should().Be("Bearer secret");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("secret");
 
         await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             host,
-            new WorkflowCallerCredential { NyxIdBearer = " " });
+            new WorkflowCallerCredential { BearerToken = " " });
 
         host.ExecutionContextState.CallerCredential.Should().BeNull();
 
         await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             host,
-            new WorkflowCallerCredential { NyxIdBearer = "Bearer secret" });
+            new WorkflowCallerCredential { BearerToken = "secret" });
         await WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(host);
 
         host.ExecutionContextState.CallerCredential.Should().BeNull();
         await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
                 null!,
-                new WorkflowCallerCredential { NyxIdBearer = "secret" }))
+                new WorkflowCallerCredential { BearerToken = "secret" }))
             .Should()
             .ThrowAsync<ArgumentNullException>();
         await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(null!))
@@ -206,24 +206,24 @@ public sealed class WorkflowExecutionRuntimeContextTests
         var context = new RecordingWorkflowExecutionContext();
         context.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
         {
-            NyxIdBearer = " Bearer secret ",
+            BearerToken = " secret ",
         };
 
         WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out var credential)
             .Should()
             .BeTrue();
-        credential.NyxIdBearer.Should().Be("Bearer secret");
+        credential.BearerToken.Should().Be("secret");
 
-        context.ExecutionContextState.CallerCredential.NyxIdBearer = " ";
+        context.ExecutionContextState.CallerCredential.BearerToken = " ";
         WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out credential)
             .Should()
             .BeFalse();
-        credential.NyxIdBearer.Should().BeEmpty();
+        credential.BearerToken.Should().BeEmpty();
 
         WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(new ContextWithoutRuntimeAccessor(), out credential)
             .Should()
             .BeFalse();
-        credential.NyxIdBearer.Should().BeEmpty();
+        credential.BearerToken.Should().BeEmpty();
         FluentActions.Invoking(() => WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(null!, out _))
             .Should()
             .Throw<ArgumentNullException>();
@@ -470,7 +470,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         {
             state.CallerCredential = new WorkflowCallerCredentialState
             {
-                NyxIdBearer = delta.CallerCredential.NyxIdBearer,
+                BearerToken = delta.CallerCredential.BearerToken,
             };
         }
     }

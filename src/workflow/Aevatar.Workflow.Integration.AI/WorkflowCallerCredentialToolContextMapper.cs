@@ -5,11 +5,9 @@ namespace Aevatar.Workflow.Integration.AI;
 
 internal static class WorkflowCallerCredentialToolContextMapper
 {
-    private const string BearerPrefix = "Bearer ";
-
     public static AgentToolExecutionContext FromCredential(WorkflowCallerCredential? credential)
     {
-        var token = ExtractBearerToken(credential?.NyxIdBearer);
+        var token = NormalizeToken(credential?.BearerToken);
         if (token == null)
             return AgentToolExecutionContext.Empty;
 
@@ -23,13 +21,28 @@ internal static class WorkflowCallerCredentialToolContextMapper
         };
     }
 
-    private static string? ExtractBearerToken(string? authorization)
+    private static string? NormalizeToken(string? rawToken)
     {
-        var normalized = string.IsNullOrWhiteSpace(authorization) ? string.Empty : authorization.Trim();
-        if (!normalized.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
+        var normalized = string.IsNullOrWhiteSpace(rawToken) ? string.Empty : rawToken.Trim();
+        if (normalized.Length == 0 ||
+            string.Equals(normalized, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
+            ContainsWhitespace(normalized))
+        {
             return null;
+        }
 
-        var token = normalized[BearerPrefix.Length..].Trim();
-        return string.IsNullOrWhiteSpace(token) ? null : token;
+        return normalized;
+    }
+
+    private static bool ContainsWhitespace(string value)
+    {
+        foreach (var c in value)
+        {
+            if (char.IsWhiteSpace(c))
+                return true;
+        }
+
+        return false;
     }
 }

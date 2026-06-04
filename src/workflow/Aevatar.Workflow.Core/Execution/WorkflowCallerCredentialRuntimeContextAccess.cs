@@ -10,7 +10,7 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        if (string.IsNullOrWhiteSpace(credential?.NyxIdBearer))
+        if (string.IsNullOrWhiteSpace(credential?.BearerToken))
         {
             return stateHost.UpdateExecutionContextAsync(
                 new WorkflowRunExecutionContextDelta
@@ -26,7 +26,7 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
                 ClearCallerCredential = true,
                 CallerCredential = new WorkflowCallerCredential
                 {
-                    NyxIdBearer = credential.NyxIdBearer.Trim(),
+                    BearerToken = credential.BearerToken.Trim(),
                 },
             },
             ct);

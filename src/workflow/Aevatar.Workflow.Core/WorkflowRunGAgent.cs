@@ -866,7 +866,7 @@ public sealed class WorkflowRunGAgent
         {
             state.CallerCredential = new WorkflowCallerCredentialState
             {
-                NyxIdBearer = delta.CallerCredential.NyxIdBearer?.Trim() ?? string.Empty,
+                BearerToken = delta.CallerCredential.BearerToken?.Trim() ?? string.Empty,
             };
         }
     }

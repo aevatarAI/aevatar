@@ -9,7 +9,7 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class AgentWorkflowToolSourceAdapterTests
 {
     [Fact]
-    public async Task ContextualTool_ShouldMapWorkflowBearerToTokenOnlyAgentToolContext()
+    public async Task ContextualTool_ShouldMapWorkflowCallerTokenToAgentToolContext()
     {
         var agentTool = new CapturingAgentTool();
         var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
@@ -24,7 +24,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential { NyxIdBearer = "Bearer token-123" }),
+                CallerCredential: new WorkflowCallerCredential { BearerToken = "token-123" }),
             CancellationToken.None);
 
         result.Should().Be("""{"observed":true}""");
@@ -36,10 +36,10 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
     [Theory]
     [InlineData("")]
-    [InlineData("token-123")]
     [InlineData("Basic token-123")]
+    [InlineData("Bearer token-123")]
     [InlineData("Bearer ")]
-    public async Task ContextualTool_ShouldIgnoreMalformedWorkflowAuthorization(string authorization)
+    public async Task ContextualTool_ShouldIgnoreMalformedWorkflowCredential(string authorization)
     {
         var agentTool = new CapturingAgentTool();
         var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
@@ -53,7 +53,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                CallerCredential: new WorkflowCallerCredential { NyxIdBearer = authorization }),
+                CallerCredential: new WorkflowCallerCredential { BearerToken = authorization }),
             CancellationToken.None);
 
         agentTool.ObservedAccessToken.Should().BeNull();

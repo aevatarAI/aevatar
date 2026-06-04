@@ -1385,7 +1385,7 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(1);
-        host.InteractionService.LastRequest.CallerCredential!.NyxIdBearer.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.CallerCredential!.BearerToken.Should().Be("token-123");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
@@ -1516,7 +1516,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.CallerCredential!.NyxIdBearer.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.CallerCredential!.BearerToken.Should().Be("token-123");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("source").WhoseValue.Should().Be("tests");
@@ -2194,7 +2194,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.CallerCredential!.NyxIdBearer.Should().Be("Bearer token-orders");
+        host.InteractionService.LastRequest.CallerCredential!.BearerToken.Should().Be("token-orders");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
@@ -4173,7 +4173,7 @@ public sealed class ScopeServiceEndpointsTests
             " chat ",
             "prompt",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
-            new WorkflowCallerCredential("Bearer connector-token"),
+            new WorkflowCallerCredential("connector-token"),
             " rev-1 ",
             " app-x ");
         invocation.Identity.AppId.Should().Be("app-x");

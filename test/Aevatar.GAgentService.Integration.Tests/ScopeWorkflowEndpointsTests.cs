@@ -416,7 +416,7 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
-        interactionService.LastRequest.CallerCredential!.NyxIdBearer.Should().Be("Bearer token-123");
+        interactionService.LastRequest.CallerCredential!.BearerToken.Should().Be("token-123");
         interactionService.LastRequest.LlmControl.Should().BeNull();
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");

@@ -2045,7 +2045,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             (IWorkflowExecutionStateHost)ctx.Agent,
             new WorkflowCallerCredential
             {
-                NyxIdBearer = " Bearer token-123 ",
+                BearerToken = " token-123 ",
             });
 
         await module.HandleAsync(

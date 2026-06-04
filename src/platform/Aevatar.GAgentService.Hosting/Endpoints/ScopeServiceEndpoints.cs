@@ -2866,7 +2866,7 @@ const response = await fetch("{{invokePath}}", {
         {
             Prompt = prompt,
             ScopeId = scopeId,
-            ConnectorHttpAuthorization = callerCredential?.NyxIdBearer ?? string.Empty,
+            ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential),
         };
         if (headers != null)
         {
@@ -2887,6 +2887,12 @@ const response = await fetch("{{invokePath}}", {
                 AppId = string.Empty,
             },
         };
+    }
+
+    private static string ToConnectorHttpAuthorization(WorkflowCallerCredential? callerCredential)
+    {
+        var token = callerCredential?.BearerToken?.Trim();
+        return string.IsNullOrWhiteSpace(token) ? string.Empty : $"Bearer {token}";
     }
 
     private static void EnsureWorkflowStreamTarget(

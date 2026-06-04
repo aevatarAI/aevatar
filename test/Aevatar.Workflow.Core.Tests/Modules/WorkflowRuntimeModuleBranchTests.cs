@@ -243,7 +243,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             {
                 CallerCredential = new WorkflowCallerCredentialState
                 {
-                    NyxIdBearer = " Bearer typed-token ",
+                    BearerToken = " typed-token ",
                 },
             },
         };
@@ -265,7 +265,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             CancellationToken.None);
 
         var intent = DispatchedLlmIntent(ctx);
-        intent.CallerCredential.NyxIdBearer.Should().Be("Bearer typed-token");
+        intent.CallerCredential.BearerToken.Should().Be("typed-token");
         intent.Headers.Should().Contain("trace-id", "trace-1");
         intent.Headers.Should().NotContainKey("connector.http.authorization");
     }
@@ -292,7 +292,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             CancellationToken.None);
 
         var intent = DispatchedLlmIntent(ctx);
-        intent.CallerCredential.NyxIdBearer.Should().BeEmpty();
+        intent.CallerCredential.BearerToken.Should().BeEmpty();
         intent.Headers.Should().NotContainKey("connector.http.authorization");
     }
 
@@ -1031,7 +1031,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             {
                 ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
                 {
-                    NyxIdBearer = delta.CallerCredential.NyxIdBearer,
+                    BearerToken = delta.CallerCredential.BearerToken,
                 };
             }
 

@@ -16,6 +16,6 @@ public static class WorkflowCallerCredentialExtractor
         var bearerToken = auth[BearerPrefix.Length..].Trim();
         return string.IsNullOrWhiteSpace(bearerToken)
             ? null
-            : new WorkflowCallerCredential($"{BearerPrefix}{bearerToken}");
+            : new WorkflowCallerCredential(bearerToken);
     }
 }

@@ -38,13 +38,13 @@ internal static class WorkflowRunExecutionContextStateAccess
         {
             ClearCallerCredential = true,
         };
-        var normalized = Normalize(credential?.NyxIdBearer);
+        var normalized = Normalize(credential?.BearerToken);
         if (string.IsNullOrWhiteSpace(normalized))
             return delta;
 
         delta.CallerCredential = new WorkflowCallerCredential
         {
-            NyxIdBearer = normalized,
+            BearerToken = normalized,
         };
 
         return delta;
@@ -93,11 +93,11 @@ internal static class WorkflowRunExecutionContextStateAccess
         out WorkflowCallerCredential credential)
     {
         var callerCredential = Get(ctx).CallerCredential;
-        if (!string.IsNullOrWhiteSpace(callerCredential?.NyxIdBearer))
+        if (!string.IsNullOrWhiteSpace(callerCredential?.BearerToken))
         {
             credential = new WorkflowCallerCredential
             {
-                NyxIdBearer = callerCredential.NyxIdBearer.Trim(),
+                BearerToken = callerCredential.BearerToken.Trim(),
             };
             return true;
         }
@@ -119,8 +119,8 @@ internal static class WorkflowRunExecutionContextStateAccess
     public static WorkflowRunExecutionContextState RedactedClone(WorkflowRunExecutionContextState? source)
     {
         var clone = source?.Clone() ?? new WorkflowRunExecutionContextState();
-        if (!string.IsNullOrWhiteSpace(clone.CallerCredential?.NyxIdBearer))
-            clone.CallerCredential.NyxIdBearer = string.Empty;
+        if (!string.IsNullOrWhiteSpace(clone.CallerCredential?.BearerToken))
+            clone.CallerCredential.BearerToken = string.Empty;
         return clone;
     }
 

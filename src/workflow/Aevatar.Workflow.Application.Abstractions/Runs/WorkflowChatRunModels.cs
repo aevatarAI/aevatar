@@ -27,7 +27,7 @@ public sealed record WorkflowLlmControl(
     int? MaxToolRoundsOverride = null,
     string? UserMemoryPrompt = null);
 
-public sealed record WorkflowCallerCredential(string? NyxIdBearer = null);
+public sealed record WorkflowCallerCredential(string? BearerToken = null);
 
 public enum WorkflowChatSourceKind
 {

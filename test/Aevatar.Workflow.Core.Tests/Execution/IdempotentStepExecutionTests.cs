@@ -469,7 +469,7 @@ public sealed class IdempotentStepExecutionTests
         {
             state.CallerCredential = new WorkflowCallerCredentialState
             {
-                NyxIdBearer = delta.CallerCredential.NyxIdBearer,
+                BearerToken = delta.CallerCredential.BearerToken,
             };
         }
     }

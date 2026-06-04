@@ -357,7 +357,7 @@ public sealed class ChatEndpointsInternalTests
             CancellationToken.None);
 
         capturedCommand.Should().NotBeNull();
-        capturedCommand!.CallerCredential!.NyxIdBearer.Should().Be("Bearer trusted-token");
+        capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
         capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 

@@ -827,9 +827,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         IWorkflowExecutionContext ctx)
     {
         if (WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(ctx, out var credential) &&
-            !string.IsNullOrWhiteSpace(credential.NyxIdBearer))
+            !string.IsNullOrWhiteSpace(credential.BearerToken))
         {
-            return credential.NyxIdBearer.Trim();
+            return $"Bearer {credential.BearerToken.Trim()}";
         }
 
         return string.Empty;
