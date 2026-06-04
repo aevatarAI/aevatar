@@ -28,7 +28,7 @@ message ScheduledDispatchState
   int32 failure_count = 17;
   map<string, string> headers = 18;
   string payload_type_url = 19;
-  string last_admission_actor_id = 20;
+  reserved 20;
   ScheduledDispatchRuntimeCallbackLeaseState next_fire_lease = 21;
   map<string, ScheduledDispatchFireRecordState> fire_records = 22;
   ScheduledDispatchTargetState target = 23;
@@ -116,7 +116,7 @@ message ScheduledDispatchConfiguredEvent
   map<string, string> headers = 9;
   string payload_type_url = 10;
   ScheduledDispatchTargetState target = 11;
-  bool created = 12;
+  reserved 12;
 }
 
 message ScheduledDispatchEnableCommand

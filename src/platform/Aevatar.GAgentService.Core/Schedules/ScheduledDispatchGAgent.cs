@@ -117,7 +117,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
             PayloadTypeUrl = ResolvePayloadTypeUrl(triggerEnvelope),
             Target = NormalizeTarget(target),
-            Created = isCreate,
         };
         foreach (var (key, value) in NormalizeHeaders(headers))
             configured.Headers[key] = value;
@@ -609,7 +608,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var next = current.Clone();
         next.LastFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
         next.LastTargetActorId = evt.TargetActorId ?? string.Empty;
-        next.LastAdmissionActorId = evt.TargetActorId ?? string.Empty;
         next.LastCommandId = evt.CommandId ?? string.Empty;
         next.LastCorrelationId = evt.CorrelationId ?? string.Empty;
         next.LastError = string.Empty;

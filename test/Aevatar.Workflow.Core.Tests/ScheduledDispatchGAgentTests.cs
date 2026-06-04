@@ -750,7 +750,6 @@ public sealed class ScheduledDispatchGAgentTests
             request => new ScheduledServiceInvocationDispatchReceipt(
                 true,
                 request.CommandId,
-                DateTimeOffset.UtcNow,
                 "service-run-actor",
                 request.CorrelationId);
 

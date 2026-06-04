@@ -23,7 +23,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         return new ScheduledServiceInvocationDispatchReceipt(
             true,
             receipt.CommandId ?? string.Empty,
-            DateTimeOffset.UtcNow,
             receipt.TargetActorId ?? string.Empty,
             receipt.CorrelationId ?? string.Empty);
     }

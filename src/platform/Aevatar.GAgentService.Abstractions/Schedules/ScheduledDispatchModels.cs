@@ -155,7 +155,6 @@ public interface IScheduledDispatchQueryPort
 public sealed record ScheduledServiceInvocationDispatchReceipt(
     bool Accepted,
     string CommandId,
-    DateTimeOffset AcceptedAt,
     string TargetActorId,
     string CorrelationId);
 
