@@ -1,13 +1,19 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
 
 namespace Aevatar.Workflow.Core.Tests.Execution;
 
@@ -37,6 +43,42 @@ public sealed class WorkflowExecutionContextAdapterTests
 
         adapter.RuntimeContext.Should().BeSameAs(host.RuntimeContext);
         adapter.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
+    }
+
+    [Fact]
+    public void ScopeId_ShouldExposeStateHostScopeId()
+    {
+        var host = new RecordingStateHost { ScopeId = "scope-1" };
+
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        adapter.ScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task ScopeId_ShouldFlowFromWorkflowRunStateHostToAdapter()
+    {
+        var agent = new WorkflowRunGAgent(
+            new UnsupportedActorRuntime(),
+            new UnsupportedActorRuntime(),
+            new EmptyEventModuleFactory(),
+            [])
+        {
+            EventSourcingBehaviorFactory = new InMemoryEventSourcingBehaviorFactory<WorkflowRunState>(),
+        };
+        SetAgentId(agent, "workflow-run-scope-bridge");
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            definitionActorId: "definition-1",
+            workflowYaml: "",
+            workflowName: "wf_scope",
+            runId: "run-1",
+            scopeId: " scope-1 ");
+        var stateHost = (IWorkflowExecutionStateHost)agent;
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), stateHost);
+
+        stateHost.ScopeId.Should().Be("scope-1");
+        adapter.ScopeId.Should().Be("scope-1");
     }
 
     [Fact]
@@ -279,6 +321,8 @@ public sealed class WorkflowExecutionContextAdapterTests
     {
         public string RunId { get; set; } = "run-1";
 
+        public string ScopeId { get; set; } = string.Empty;
+
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
@@ -406,4 +450,116 @@ public sealed class WorkflowExecutionContextAdapterTests
         TimeSpan Period,
         Any Event,
         EventEnvelopePublishOptions? Options);
+
+    private static void SetAgentId(GAgentBase agent, string agentId)
+    {
+        var setIdMethod = typeof(GAgentBase).GetMethod(
+            "SetId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        setIdMethod.Should().NotBeNull();
+        setIdMethod!.Invoke(agent, [agentId]);
+    }
+
+    private sealed class InMemoryEventSourcingBehaviorFactory<TState>
+        : IEventSourcingBehaviorFactory<TState>
+        where TState : class, IMessage<TState>, new()
+    {
+        public IEventSourcingBehavior<TState> Create(
+            string agentId,
+            global::System.Type actorType,
+            Func<TState, IMessage, TState> transitionState)
+        {
+            _ = actorType;
+            return new InMemoryEventSourcingBehavior<TState>(agentId, transitionState);
+        }
+    }
+
+    private sealed class InMemoryEventSourcingBehavior<TState>(
+        string agentId,
+        Func<TState, IMessage, TState> transitionState)
+        : IEventSourcingBehavior<TState>
+        where TState : class, IMessage<TState>, new()
+    {
+        private readonly List<IMessage> _pending = [];
+        private TState _state = new();
+
+        public long CurrentVersion { get; private set; }
+
+        public void RaiseEvent<TEvent>(TEvent evt)
+            where TEvent : IMessage =>
+            _pending.Add(evt);
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var evt in _pending)
+            {
+                _state = transitionState(_state, evt);
+                CurrentVersion++;
+            }
+
+            var result = new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = CurrentVersion,
+            };
+            _pending.Clear();
+            return Task.FromResult(result);
+        }
+
+        public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<TState?> ReplayAsync(string replayAgentId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<TState?>(_state.Clone());
+        }
+
+        public void DiscardPendingEvents() => _pending.Clear();
+
+        public TState TransitionState(TState current, IMessage evt) =>
+            transitionState(current, evt);
+    }
+
+    private sealed class EmptyEventModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>
+    {
+        public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? module)
+        {
+            _ = name;
+            module = null;
+            return false;
+        }
+    }
+
+    private sealed class UnsupportedActorRuntime : IActorRuntime, IActorDispatchPort
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(global::System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor?> GetAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
 }
