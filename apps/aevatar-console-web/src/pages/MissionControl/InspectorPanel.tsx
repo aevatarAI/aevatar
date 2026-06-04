@@ -22,14 +22,17 @@ import type {
   MissionRuntimeConnectionStatus,
   MissionTopologyNode,
 } from './models';
+import type { MissionOperatorHandoff } from './operatorHandoff';
 import {
   formatConnectionLabel,
+  formatHandoffSeverityLabel,
   formatInspectorPresentationLabel,
   formatInterventionLabel,
   formatMissionLabel,
   renderMissionKindIcon,
   resolveConnectionTagColor,
   resolveFeedbackTagColor,
+  resolveHandoffTagColor,
   resolveMissionStatusTone,
   resolveObservationTone,
 } from './presentation';
@@ -45,6 +48,7 @@ type InspectorPanelProps = {
   connectionStatus: MissionRuntimeConnectionStatus;
   mode: MissionInspectorMode;
   onSubmitAction?: (action: MissionInterventionActionRequest) => Promise<void>;
+  operatorHandoff: MissionOperatorHandoff;
   presentation: MissionInspectorPresentation;
   selectedNode?: MissionTopologyNode;
   snapshot: MissionControlSnapshot;
@@ -56,6 +60,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
   connectionStatus,
   mode,
   onSubmitAction,
+  operatorHandoff,
   presentation,
   selectedNode,
   snapshot,
@@ -129,6 +134,9 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
         <Tag color={resolveConnectionTagColor(connectionStatus)}>
           Connection: {formatConnectionLabel(connectionStatus)}
         </Tag>
+        <Tag color={operatorHandoff.isActionable ? 'gold' : 'default'}>
+          {operatorHandoff.actionLabel}
+        </Tag>
         {actionFeedback ? (
           <Tag color={resolveFeedbackTagColor(actionFeedback.tone)}>
             {actionFeedback.message}
@@ -181,6 +189,30 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <Typography.Text style={{ color: token.colorTextSecondary }}>
                 {showIntervention.summary}
               </Typography.Text>
+              <div
+                aria-label={t("pages.missioncontrol.inspectorpanel.mission.control.intervention.handoff", "Mission Control intervention handoff")}
+                style={{
+                  background: token.colorBgContainer,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: 4,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                  padding: 12,
+                }}
+              >
+                <Typography.Text strong style={{ color: token.colorTextHeading }}>
+                  {t("pages.missioncontrol.inspectorpanel.operator.handoff", "Operator handoff")}</Typography.Text>
+                <Typography.Text style={{ color: token.colorTextSecondary }}>
+                  {operatorHandoff.inputLabel}
+                </Typography.Text>
+                <Typography.Text style={{ color: token.colorTextTertiary }}>
+                  {operatorHandoff.connectionDetail}
+                </Typography.Text>
+                <Typography.Text style={{ color: token.colorTextTertiary }}>
+                  {operatorHandoff.expectedResult}
+                </Typography.Text>
+              </div>
               <div
                 style={{
                   background: token.colorBgContainer,
@@ -291,6 +323,9 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   <Tag color={resolveObservationTone(token, focusNode.observationStatus)}>
                     Observation: {formatMissionLabel(focusNode.observationStatus)}
                   </Tag>
+                  <Tag color={resolveHandoffTagColor(focusNode.handoff.severity)}>
+                    Handoff: {formatHandoffSeverityLabel(focusNode.handoff.severity)}
+                  </Tag>
                 </Space>
                 <div
                   style={{
@@ -329,6 +364,31 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 <Typography.Text style={{ color: token.colorTextSecondary }}>
                   {focusNode.summary}
                 </Typography.Text>
+                <div
+                  aria-label={t("pages.missioncontrol.inspectorpanel.mission.control.node.handoff", "Mission Control node handoff")}
+                  style={{
+                    background: token.colorFillQuaternary,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    borderRadius: 4,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                    padding: 12,
+                  }}
+                >
+                  <Typography.Text strong style={{ color: token.colorTextHeading }}>
+                    {focusNode.handoff.title}
+                  </Typography.Text>
+                  <Typography.Text style={{ color: token.colorTextSecondary }}>
+                    {focusNode.handoff.detail}
+                  </Typography.Text>
+                  <Typography.Text style={{ color: token.colorTextTertiary }}>
+                    Evidence: {focusNode.handoff.evidence}
+                  </Typography.Text>
+                  <Typography.Text style={{ color: token.colorTextTertiary }}>
+                    Next: {focusNode.handoff.nextStep}
+                  </Typography.Text>
+                </div>
               </Space>
             </Card>
 

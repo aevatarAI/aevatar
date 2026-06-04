@@ -31,11 +31,11 @@ describe("RunsMessagesView", () => {
     expect(screen.getByText("Message stream")).toBeInTheDocument();
     expect(screen.getByText("2 observed")).toBeInTheDocument();
     expect(screen.getByText("assistant")).toBeInTheDocument();
-    expect(screen.getByText("streaming")).toBeInTheDocument();
+    expect(screen.getByText("Streaming")).toBeInTheDocument();
     expect(screen.getByText("msg-1")).toBeInTheDocument();
     expect(screen.getByText("Streaming reply chunk")).toBeInTheDocument();
     expect(screen.getByText("user")).toBeInTheDocument();
-    expect(screen.getByText("complete")).toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
     expect(screen.getByText("Operator prompt")).toBeInTheDocument();
   });
 

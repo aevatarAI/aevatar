@@ -2595,8 +2595,8 @@ export function ChatAdvancedConsole({
                               }}
                             >
                               {formatDateTime(row.timestamp)}
-                              {row.stepType ? ` · ${row.stepType}` : ""}
-                              {row.agentId ? ` · ${row.agentId}` : ""}
+                              {row.stepType ? t("pages.chat.chatadvancedconsole.copy.4", "· {value1}", { value1: row.stepType }) : ""}
+                              {row.agentId ? t("pages.chat.chatadvancedconsole.copy.5", "· {value1}", { value1: row.agentId }) : ""}
                             </div>
                           </button>
                         );

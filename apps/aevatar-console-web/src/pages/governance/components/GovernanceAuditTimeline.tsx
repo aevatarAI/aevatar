@@ -87,6 +87,68 @@ function renderEventIcon(kind: GovernanceAuditEventTargetKind) {
   return <ClockCircleOutlined />;
 }
 
+function renderEventCard(
+  surfaceToken: AevatarThemeSurfaceToken,
+  event: GovernanceAuditEvent,
+) {
+  return (
+    <div
+      style={{
+        ...buildAevatarPanelStyle(surfaceToken, {
+          background: surfaceToken.colorFillAlter,
+          padding: 14,
+        }),
+        boxShadow: "none",
+      }}
+    >
+      <Space
+        align="start"
+        orientation="vertical"
+        size={10}
+        style={{ display: "flex" }}
+      >
+        <Space
+          align="center"
+          style={{
+            justifyContent: "space-between",
+            width: "100%",
+          }}
+          wrap
+        >
+          <Space size={[8, 8]} wrap>
+            <Typography.Text strong>{event.action}</Typography.Text>
+            <span
+              style={buildAevatarTagStyle(
+                surfaceToken,
+                "governance" as AevatarStatusDomain,
+                event.status,
+              )}
+            >
+              {formatAevatarStatusLabel(event.status)}
+            </span>
+          </Space>
+          <Typography.Text type="secondary">
+            {formatDateTime(event.at)}
+          </Typography.Text>
+        </Space>
+
+        <Typography.Paragraph style={{ margin: 0 }}>
+          {event.summary}
+        </Typography.Paragraph>
+
+        <Space size={[8, 8]} wrap>
+          <Typography.Text type="secondary">
+            {t("pages.governance.governanceaudittimeline.source.2", "source:")}{event.actor}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            {t("pages.governance.governanceaudittimeline.object.2", "Object:")}{event.targetLabel}
+          </Typography.Text>
+        </Space>
+      </Space>
+    </div>
+  );
+}
+
 const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
   events,
   loading = false,
@@ -108,7 +170,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         }}
       >
         <Empty
-          description={t("pages.governance.governanceaudittimeline.no.change.record.yet", "No change record yet")}
+          description={t("pages.governance.governanceaudittimeline.no.change.record.yet.2", "No change record yet")}
           style={{ margin: "auto" }}
         />
       </div>
@@ -130,14 +192,14 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         size={16}
         style={{ display: "flex", minHeight: 0 }}
       >
-        <Typography.Text strong>{t("pages.governance.governanceaudittimeline.change.history", "Change history")}</Typography.Text>
+        <Typography.Text strong>{t("pages.governance.governanceaudittimeline.change.history.2", "Change history")}</Typography.Text>
 
         <div style={{ minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
           <Timeline
-            pending={loading ? t("pages.governance.governanceaudittimeline.loading", "loading...") : null}
+            pending={loading ? t("pages.governance.governanceaudittimeline.loading.2", "loading...") : null}
             items={events.map((event) => ({
               color: buildEventDotColor(surfaceToken, event.status),
-              dot: (
+              icon: (
                 <span
                   style={{
                     alignItems: "center",
@@ -150,14 +212,14 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
                   {renderEventIcon(event.targetKind)}
                 </span>
               ),
-              children: (
+              content: onSelect ? (
                 <button
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                  onClick={() => onSelect?.(event)}
+                  onClick={() => onSelect(event)}
                   style={{
                     background: "transparent",
                     border: "none",
-                    cursor: onSelect ? "pointer" : "default",
+                    cursor: "pointer",
                     display: "block",
                     padding: 0,
                     textAlign: "left",
@@ -165,61 +227,10 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
                   }}
                   type="button"
                 >
-                  <div
-                    style={{
-                      ...buildAevatarPanelStyle(surfaceToken, {
-                        background: surfaceToken.colorFillAlter,
-                        padding: 14,
-                      }),
-                      boxShadow: "none",
-                    }}
-                  >
-                    <Space
-                      align="start"
-                      orientation="vertical"
-                      size={10}
-                      style={{ display: "flex" }}
-                    >
-                      <Space
-                        align="center"
-                        style={{
-                          justifyContent: "space-between",
-                          width: "100%",
-                        }}
-                        wrap
-                      >
-                        <Space size={[8, 8]} wrap>
-                          <Typography.Text strong>{event.action}</Typography.Text>
-                          <span
-                            style={buildAevatarTagStyle(
-                              surfaceToken,
-                              "governance" as AevatarStatusDomain,
-                              event.status,
-                            )}
-                          >
-                            {formatAevatarStatusLabel(event.status)}
-                          </span>
-                        </Space>
-                        <Typography.Text type="secondary">
-                          {formatDateTime(event.at)}
-                        </Typography.Text>
-                      </Space>
-
-                      <Typography.Paragraph style={{ margin: 0 }}>
-                        {event.summary}
-                      </Typography.Paragraph>
-
-                      <Space size={[8, 8]} wrap>
-                        <Typography.Text type="secondary">
-                          {t("pages.governance.governanceaudittimeline.source", "source:")}{event.actor}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          {t("pages.governance.governanceaudittimeline.object", "Object:")}{event.targetLabel}
-                        </Typography.Text>
-                      </Space>
-                    </Space>
-                  </div>
+                  {renderEventCard(surfaceToken, event)}
                 </button>
+              ) : (
+                renderEventCard(surfaceToken, event)
               ),
             }))}
           />

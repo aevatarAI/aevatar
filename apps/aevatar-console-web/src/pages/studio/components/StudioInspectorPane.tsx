@@ -735,7 +735,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
                 placeholder={t("pages.studio.studioinspectorpane.select.connector", "Select connector")}
                 value={selectedConnectorName || undefined}
                 options={connectors.map((connector) => ({
-                  label: `${connector.name} · ${connector.type}`,
+                  label: t("pages.studio.studioinspectorpane.copy.2", "{value1} · {value2}", { value1: connector.name, value2: connector.type }),
                   value: connector.name,
                 }))}
                 onChange={(value) => {
