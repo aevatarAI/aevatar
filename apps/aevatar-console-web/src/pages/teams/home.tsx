@@ -176,31 +176,54 @@ function resolveAttentionPillStyle(
   switch (attention) {
     case "healthy":
       return {
-        background: "rgba(24, 144, 255, 0.08)",
-        color: token.colorInfo,
+        background: token.colorSuccessBg,
+        border: `1px solid ${token.colorSuccessBorder}`,
+        color: token.colorSuccessText,
       };
     case "waiting":
     case "no-bound-service":
     case "no-recent-runs":
       return {
-        background: "rgba(250, 173, 20, 0.12)",
-        color: token.colorWarning,
+        background: token.colorWarningBg,
+        border: `1px solid ${token.colorWarningBorder}`,
+        color: token.colorWarningText,
       };
     case "failed":
       return {
-        background: "rgba(255, 77, 79, 0.12)",
-        color: token.colorError,
+        background: token.colorErrorBg,
+        border: `1px solid ${token.colorErrorBorder}`,
+        color: token.colorErrorText,
       };
     case "draft":
       return {
         background: token.colorFillQuaternary,
+        border: `1px solid ${token.colorBorderSecondary}`,
         color: token.colorTextSecondary,
       };
     default:
       return {
         background: token.colorFillQuaternary,
+        border: `1px solid ${token.colorBorderSecondary}`,
         color: token.colorTextSecondary,
       };
+  }
+}
+
+function resolveAttentionRailColor(
+  token: ReturnType<typeof theme.useToken>["token"],
+  attention: TeamOperationalAttention,
+): string {
+  switch (attention) {
+    case "healthy":
+      return token.colorSuccess;
+    case "waiting":
+    case "no-bound-service":
+    case "no-recent-runs":
+      return token.colorWarning;
+    case "failed":
+      return token.colorError;
+    default:
+      return token.colorBorder;
   }
 }
 
@@ -292,22 +315,24 @@ const SummaryStatCard: React.FC<{
   return (
     <div
       style={{
-        background: token.colorBgContainer,
+        background: accent
+          ? `linear-gradient(180deg, ${token.colorPrimaryBg} 0%, ${token.colorBgContainer} 62%)`
+          : token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 22,
-        boxShadow: token.boxShadowTertiary,
+        borderRadius: token.borderRadiusLG,
+        boxShadow: token.boxShadowSecondary,
         display: "flex",
         flexDirection: "column",
-        gap: 8,
-        minHeight: 104,
-        padding: 18,
+        gap: 6,
+        minHeight: 86,
+        padding: 14,
       }}
     >
       <Typography.Title
         level={2}
         style={{
           color: accent ? token.colorPrimary : token.colorText,
-          fontSize: 24,
+          fontSize: 22,
           margin: 0,
         }}
       >
@@ -316,7 +341,8 @@ const SummaryStatCard: React.FC<{
       <Typography.Text
         style={{
           color: token.colorTextSecondary,
-          fontSize: 14,
+          fontSize: 13,
+          fontWeight: 600,
         }}
       >
         {label}
@@ -643,13 +669,14 @@ const TeamRosterCard: React.FC<{
       style={{
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 24,
-        boxShadow: token.boxShadowTertiary,
+        borderLeft: `3px solid ${resolveAttentionRailColor(token, preview.attention)}`,
+        borderRadius: token.borderRadiusLG,
+        boxShadow: token.boxShadowSecondary,
         display: "flex",
         flexDirection: "column",
-        gap: 14,
+        gap: 12,
         minWidth: 0,
-        padding: 18,
+        padding: 16,
       }}
     >
       <div
@@ -684,7 +711,7 @@ const TeamRosterCard: React.FC<{
             fontSize: 12,
             fontWeight: 600,
             lineHeight: 1,
-            padding: "8px 12px",
+            padding: "6px 10px",
             whiteSpace: "nowrap",
           }}
         >
@@ -770,13 +797,14 @@ const TeamRosterRow: React.FC<{
       style={{
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 20,
-        boxShadow: token.boxShadowTertiary,
+        borderLeft: `3px solid ${resolveAttentionRailColor(token, preview.attention)}`,
+        borderRadius: token.borderRadiusLG,
+        boxShadow: token.boxShadowSecondary,
         display: "flex",
         flexDirection: "column",
-        gap: 14,
+        gap: 12,
         minWidth: 0,
-        padding: 16,
+        padding: 14,
       }}
     >
       <div
@@ -801,7 +829,7 @@ const TeamRosterRow: React.FC<{
                 fontSize: 12,
                 fontWeight: 600,
                 lineHeight: 1,
-                padding: "7px 10px",
+                padding: "5px 9px",
                 whiteSpace: "nowrap",
               }}
             >
@@ -1091,7 +1119,7 @@ const TeamsHomePage: React.FC = () => {
             onClick={() =>
               history.push(buildScopeHref("/teams/new", { scopeId }))
             }
-            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
+            style={{ height: 36, paddingInline: 14 }}
             type="primary"
           >
             {t("pages.teams.home.copy.46", "Create team")}</Button>
@@ -1104,7 +1132,7 @@ const TeamsHomePage: React.FC = () => {
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: 20,
+          gap: 14,
         }}
       >
         {!scopeId ? (
@@ -1146,7 +1174,7 @@ const TeamsHomePage: React.FC = () => {
             <div
               style={{
                 display: "grid",
-                gap: 16,
+                gap: 12,
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
@@ -1198,7 +1226,7 @@ const TeamsHomePage: React.FC = () => {
                           aria-label={t("pages.teams.home.copy.57", "Switch to card view")}
                           icon={<AppstoreOutlined />}
                           onClick={() => setManualRosterView("cards")}
-                          style={{ height: 44, width: 44 }}
+                          style={{ height: 36, width: 36 }}
                           type={resolvedRosterView === "cards" ? "primary" : "default"}
                         />
                       </Tooltip>
@@ -1207,7 +1235,7 @@ const TeamsHomePage: React.FC = () => {
                           aria-label={t("pages.teams.home.copy.59", "Switch to list view")}
                           icon={<BarsOutlined />}
                           onClick={() => setManualRosterView("list")}
-                          style={{ height: 44, width: 44 }}
+                          style={{ height: 36, width: 36 }}
                           type={resolvedRosterView === "list" ? "primary" : "default"}
                         />
                       </Tooltip>
@@ -1220,7 +1248,7 @@ const TeamsHomePage: React.FC = () => {
                     style={{
                       display: "flex",
                       flexDirection: "column",
-                      gap: 14,
+                      gap: 10,
                       listStyle: "none",
                       margin: 0,
                       padding: 0,
@@ -1237,7 +1265,7 @@ const TeamsHomePage: React.FC = () => {
                     aria-label={t("pages.teams.home.copy.61", "Team card view")}
                     style={{
                       display: "grid",
-                      gap: 16,
+                      gap: 12,
                       gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
                       listStyle: "none",
                       margin: 0,

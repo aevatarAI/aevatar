@@ -30,8 +30,6 @@ import {
   renderMissionKindIcon,
   resolveConnectionTagColor,
   resolveHandoffTagColor,
-  resolveMissionStatusTone,
-  resolveObservationTone,
   type MissionThemeToken,
 } from './presentation';
 import { t } from "@/shared/i18n/messages";
@@ -110,20 +108,71 @@ function buildTopologyStyles(_token: MissionThemeToken) {
 }
 
 function edgeTone(
-  token: MissionThemeToken,
+  _token: MissionThemeToken,
   observationStatus: MissionObservationStatus,
 ) {
-  return resolveObservationTone(token, observationStatus);
+  return resolveMissionCanvasObservationTone(observationStatus);
+}
+
+function resolveMissionCanvasStatusTone(
+  status: MissionRunStatus | MissionTopologyNode['status'],
+) {
+  if (status === 'completed') {
+    return '#22c55e';
+  }
+
+  if (status === 'failed' || status === 'stopped') {
+    return '#f87171';
+  }
+
+  if (
+    status === 'waiting' ||
+    status === 'waiting_signal' ||
+    status === 'human_input' ||
+    status === 'waiting_approval' ||
+    status === 'suspended'
+  ) {
+    return '#f59e0b';
+  }
+
+  if (status === 'active' || status === 'running') {
+    return '#22d3ee';
+  }
+
+  return '#94a3b8';
+}
+
+function resolveMissionCanvasObservationTone(
+  status: MissionObservationStatus,
+) {
+  if (status === 'projection_settled') {
+    return '#22c55e';
+  }
+
+  if (status === 'delayed') {
+    return '#f87171';
+  }
+
+  if (status === 'snapshot_available') {
+    return '#f59e0b';
+  }
+
+  if (status === 'unavailable') {
+    return '#64748b';
+  }
+
+  return '#22d3ee';
 }
 
 function TopologyNodeCard({
   data,
   selected,
 }: NodeProps<Node<TopologyNodeData>>) {
-  const { token } = theme.useToken();
   const node = data.node;
-  const observationTone = resolveObservationTone(token, node.observationStatus);
-  const statusTone = resolveMissionStatusTone(token, node.status);
+  const observationTone = resolveMissionCanvasObservationTone(
+    node.observationStatus,
+  );
+  const statusTone = resolveMissionCanvasStatusTone(node.status);
   const freshnessAlert =
     node.observationStatus === 'delayed' ||
     node.observationStatus === 'snapshot_available';
@@ -132,12 +181,15 @@ function TopologyNodeCard({
     <div
       className={data.shouldPulse ? 'mission-topology-node-breathing' : undefined}
       style={{
-        background: token.colorBgContainer,
-        border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
+        background:
+          'linear-gradient(180deg, rgba(15, 23, 42, 0.94) 0%, rgba(17, 24, 39, 0.98) 100%)',
+        border: `1px solid ${selected ? '#22d3ee' : 'rgba(148, 163, 184, 0.24)'}`,
         borderLeft: `3px solid ${statusTone}`,
         borderRadius: 4,
-        boxShadow: token.boxShadowSecondary,
-        color: token.colorText,
+        boxShadow: selected
+          ? '0 0 0 1px rgba(34, 211, 238, 0.24), 0 18px 38px rgba(2, 6, 23, 0.38)'
+          : '0 14px 30px rgba(2, 6, 23, 0.26)',
+        color: '#dbe4f0',
         minHeight: 148,
         padding: 14,
         position: 'relative',
@@ -147,7 +199,7 @@ function TopologyNodeCard({
       <Handle
         position={Position.Left}
         style={{
-          background: token.colorBorder,
+          background: '#64748b',
           border: 'none',
           height: 8,
           width: 8,
@@ -162,7 +214,7 @@ function TopologyNodeCard({
           style={{
             alignItems: 'center',
             background: observationTone,
-            border: `2px solid ${token.colorBgContainer}`,
+            border: '2px solid #0f172a',
             borderRadius: 999,
             display: 'flex',
             height: 10,
@@ -185,10 +237,10 @@ function TopologyNodeCard({
         <div
           style={{
             alignItems: 'center',
-            background: token.colorFillTertiary,
-            border: `1px solid ${token.colorBorderSecondary}`,
+            background: 'rgba(34, 211, 238, 0.1)',
+            border: '1px solid rgba(148, 163, 184, 0.22)',
             borderRadius: 4,
-            color: token.colorPrimary,
+            color: '#22d3ee',
             display: 'flex',
             flex: '0 0 auto',
             fontSize: 16,
@@ -203,7 +255,7 @@ function TopologyNodeCard({
           <Typography.Text
             strong
             style={{
-              color: token.colorTextHeading,
+              color: '#f8fafc',
               display: 'block',
               lineHeight: 1.25,
             }}
@@ -212,7 +264,7 @@ function TopologyNodeCard({
           </Typography.Text>
           <Typography.Text
             style={{
-              color: token.colorTextTertiary,
+              color: '#94a3b8',
               display: 'block',
               fontSize: 12,
               lineHeight: 1.35,
@@ -225,7 +277,7 @@ function TopologyNodeCard({
       <Typography.Paragraph
         ellipsis={{ rows: 3 }}
         style={{
-          color: token.colorTextSecondary,
+          color: '#cbd5e1',
           fontSize: 12,
           lineHeight: 1.5,
           marginBottom: 12,
@@ -236,10 +288,9 @@ function TopologyNodeCard({
       </Typography.Paragraph>
       <Tooltip title={node.handoff.nextStep}>
         <div
-          aria-label={t("pages.missioncontrol.topologycanvas.mission.control.node.handoff", "Mission Control node handoff")}
           style={{
-            background: token.colorFillQuaternary,
-            border: `1px solid ${token.colorBorderSecondary}`,
+            background: 'rgba(15, 23, 42, 0.52)',
+            border: '1px solid rgba(148, 163, 184, 0.16)',
             borderRadius: 4,
             display: 'flex',
             flexDirection: 'column',
@@ -250,7 +301,7 @@ function TopologyNodeCard({
         >
           <Typography.Text
             style={{
-              color: token.colorTextHeading,
+              color: '#f8fafc',
               display: 'block',
               fontSize: 12,
               fontWeight: 700,
@@ -261,7 +312,7 @@ function TopologyNodeCard({
           </Typography.Text>
           <Typography.Text
             ellipsis
-            style={{ color: token.colorTextTertiary, fontSize: 11 }}
+            style={{ color: '#94a3b8', fontSize: 11 }}
           >
             {node.handoff.evidence}
           </Typography.Text>
@@ -269,7 +320,7 @@ function TopologyNodeCard({
       </Tooltip>
       <div
         style={{
-          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          borderTop: '1px solid rgba(148, 163, 184, 0.16)',
           display: 'grid',
           gap: 8,
           gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
@@ -277,7 +328,7 @@ function TopologyNodeCard({
         }}
       >
         <div>
-          <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
+          <Typography.Text style={{ color: '#94a3b8', fontSize: 11 }}>
             {t("pages.missioncontrol.topologycanvas.status", "Status")}</Typography.Text>
           <Typography.Text
             style={{
@@ -291,7 +342,7 @@ function TopologyNodeCard({
           </Typography.Text>
         </div>
         <div>
-          <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
+          <Typography.Text style={{ color: '#94a3b8', fontSize: 11 }}>
             {t("pages.missioncontrol.topologycanvas.freshness", "Freshness")}</Typography.Text>
           <Typography.Text
             style={{
@@ -305,7 +356,7 @@ function TopologyNodeCard({
           </Typography.Text>
         </div>
         <div>
-          <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 11 }}>
+          <Typography.Text style={{ color: '#94a3b8', fontSize: 11 }}>
             {t("pages.missioncontrol.topologycanvas.handoff", "Handoff")}</Typography.Text>
           <Tag
             color={resolveHandoffTagColor(node.handoff.severity)}
@@ -318,7 +369,7 @@ function TopologyNodeCard({
       <Handle
         position={Position.Right}
         style={{
-          background: token.colorBorder,
+          background: '#64748b',
           border: 'none',
           height: 8,
           width: 8,
@@ -480,12 +531,14 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
   return (
     <div
       style={{
-        ['--mission-topology-card-shadow' as string]: token.boxShadowSecondary,
-        ['--mission-topology-primary' as string]: token.colorPrimary,
-        ['--mission-topology-warning' as string]: token.colorWarning,
-        ['--mission-topology-warning-glow' as string]: token.colorWarningBorder,
-        background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorBgElevated} 100%)`,
-        border: `1px solid ${token.colorBorderSecondary}`,
+        ['--mission-topology-card-shadow' as string]:
+          '0 14px 30px rgba(2, 6, 23, 0.26)',
+        ['--mission-topology-primary' as string]: '#22d3ee',
+        ['--mission-topology-warning' as string]: '#f59e0b',
+        ['--mission-topology-warning-glow' as string]: 'rgba(245, 158, 11, 0.38)',
+        background:
+          'radial-gradient(circle at 18% 12%, rgba(8, 145, 178, 0.18), transparent 28%), linear-gradient(180deg, #111827 0%, #0f172a 100%)',
+        border: '1px solid rgba(148, 163, 184, 0.2)',
         borderRadius: 4,
         height: '100%',
         minHeight: 0,
@@ -526,7 +579,7 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
           proOptions={{ hideAttribution: true }}
         >
           <Background
-            color={token.colorFillSecondary}
+            color="rgba(148, 163, 184, 0.2)"
             gap={22}
             size={1}
             variant={BackgroundVariant.Dots}
@@ -534,8 +587,8 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
           <MiniMap
             pannable
             style={{
-              background: token.colorBgContainer,
-              border: `1px solid ${token.colorBorderSecondary}`,
+              background: 'rgba(15, 23, 42, 0.84)',
+              border: '1px solid rgba(148, 163, 184, 0.2)',
               borderRadius: 4,
               height: 104,
               width: 164,
@@ -545,10 +598,10 @@ const TopologyCanvas: React.FC<TopologyCanvasProps> = ({
           <Controls
             position="bottom-left"
             style={{
-              background: token.colorBgContainer,
-              border: `1px solid ${token.colorBorderSecondary}`,
+              background: 'rgba(15, 23, 42, 0.86)',
+              border: '1px solid rgba(148, 163, 184, 0.2)',
               borderRadius: 4,
-              boxShadow: token.boxShadowSecondary,
+              boxShadow: '0 14px 30px rgba(2, 6, 23, 0.26)',
             }}
             showInteractive={false}
           />
