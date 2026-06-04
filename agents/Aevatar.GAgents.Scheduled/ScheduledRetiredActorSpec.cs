@@ -31,6 +31,13 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
 
     public override string SpecId => "scheduled";
 
+    // Retire only the legacy catalog actor body left by the deleted
+    // Aevatar.GAgents.ChannelRuntime assembly. The durable materialization scopes MUST NOT
+    // be retired targets: a scope's runtime kind is derived from the context's simple type
+    // name, so the legacy and current UserAgentCatalog/AgentRegistry materialization contexts
+    // collapse to the same "projection.materialization-scope.*" kinds. Retiring them would
+    // destroy the live projection scope on every startup cleanup pass and leave the
+    // user-agent-catalog / agent-registry read models un-materialized (#1763 regression).
     public override IReadOnlyList<RetiredActorTarget> Targets { get; } =
     [
         new(
@@ -40,26 +47,6 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
                 "channel-runtime.agent-registry",
             ],
             CleanupReadModels: true),
-        new(
-            $"projection.durable.scope:{UserAgentCatalogStorageContracts.LegacyDurableProjectionKind}:{UserAgentCatalogGAgent.WellKnownId}",
-            [
-                "projection.materialization-scope.user-agent-catalog-materialization-context",
-                "projection.materialization-scope.agent-registry-materialization-context",
-            ],
-            SourceStreamId: UserAgentCatalogGAgent.WellKnownId),
-        // Mid-migration deploys may have created the durable projection scope at
-        // the new scope key (DurableProjectionKind) while still bound to the old
-        // ChannelRuntime materialization context type, leaving the new
-        // Aevatar.GAgents.Scheduled scope unable to recreate. Cover that case
-        // explicitly so retired cleanup wipes the actor + its stream pub/sub
-        // rendezvous state on next startup.
-        new(
-            $"projection.durable.scope:{UserAgentCatalogStorageContracts.DurableProjectionKind}:{UserAgentCatalogGAgent.WellKnownId}",
-            [
-                "projection.materialization-scope.user-agent-catalog-materialization-context",
-                "projection.materialization-scope.agent-registry-materialization-context",
-            ],
-            SourceStreamId: UserAgentCatalogGAgent.WellKnownId),
     ];
 
     public override async IAsyncEnumerable<RetiredActorTarget> DiscoverDynamicTargetsAsync(
