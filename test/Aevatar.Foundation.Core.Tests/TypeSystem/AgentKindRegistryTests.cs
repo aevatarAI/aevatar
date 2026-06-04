@@ -68,6 +68,23 @@ public class AgentKindRegistryTests
     }
 
     [Fact]
+    public void TryResolve_LooksUpPrimaryAndLegacyKindWithoutThrowing()
+    {
+        var registry = BuildRegistry(new AgentKindRegistryBuilder().Register<KindRegistryFixtureSplit>());
+
+        var primaryFound = registry.TryResolve("test.split-new", out var primary);
+        var legacyFound = registry.TryResolve("test.split-old", out var legacy);
+        var missingFound = registry.TryResolve("test.missing", out var missing);
+
+        primaryFound.Should().BeTrue();
+        primary.Metadata.Kind.Should().Be("test.split-new");
+        legacyFound.Should().BeTrue();
+        legacy.Metadata.Kind.Should().Be("test.split-new");
+        missingFound.Should().BeFalse();
+        missing.Should().BeNull();
+    }
+
+    [Fact]
     public void Resolve_ThrowsUnknownAgentKindException_ForUnregisteredKind()
     {
         var registry = BuildRegistry(new AgentKindRegistryBuilder());

@@ -628,11 +628,10 @@ public sealed class WorkflowRunGAgent
     //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
     private async Task<IActor> CreateRoleActorAsync(RoleDefinition role, string childActorId)
     {
-        if (!string.IsNullOrWhiteSpace(role.AgentKind))
-            return await _runtime.CreateByKindAsync(role.AgentKind.Trim(), childActorId);
-
-        throw new InvalidOperationException(
-            $"Role '{role.Id}' must declare agent_kind because Workflow.Core no longer depends on AI role implementations.");
+        var agentKind = string.IsNullOrWhiteSpace(role.AgentKind)
+            ? WorkflowRoleConventions.DefaultAgentKind
+            : role.AgentKind.Trim();
+        return await _runtime.CreateByKindAsync(agentKind, childActorId);
     }
 
     private string BuildChildActorId(string roleId)

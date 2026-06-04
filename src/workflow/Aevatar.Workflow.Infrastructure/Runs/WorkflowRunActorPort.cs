@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -24,17 +25,20 @@ internal sealed class WorkflowRunActorPort :
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IWorkflowActorBindingReader _bindingReader;
     private readonly ISet<string> _knownStepTypes;
+    private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowRunActorPort(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         IWorkflowActorBindingReader bindingReader,
-        IEnumerable<IWorkflowModulePack> modulePacks)
+        IEnumerable<IWorkflowModulePack> modulePacks,
+        IAgentKindRegistry? agentKindRegistry = null)
     {
         _runtime = runtime;
         _dispatchPort = dispatchPort;
         _bindingReader = bindingReader;
+        _agentKindRegistry = agentKindRegistry;
         var packs = modulePacks?.ToList()
             ?? throw new ArgumentNullException(nameof(modulePacks));
         if (packs.Count == 0)
@@ -172,6 +176,20 @@ internal sealed class WorkflowRunActorPort :
                 availableWorkflowNames: null);
             if (errors.Count > 0)
                 return Task.FromResult(WorkflowYamlParseResult.Invalid(string.Join("; ", errors)));
+
+            if (_agentKindRegistry != null)
+            {
+                foreach (var role in workflow.Roles)
+                {
+                    var agentKind = role.AgentKind?.Trim() ?? string.Empty;
+                    if (!_agentKindRegistry.TryResolve(agentKind, out _))
+                    {
+                        return Task.FromResult(WorkflowYamlParseResult.Invalid(
+                            $"Role '{role.Id}' declares unknown agent_kind '{agentKind}'. " +
+                            $"Register an agent for that kind or use the default '{WorkflowRoleConventions.DefaultAgentKind}'."));
+                    }
+                }
+            }
 
             var workflowName = string.IsNullOrWhiteSpace(workflow.Name)
                 ? string.Empty

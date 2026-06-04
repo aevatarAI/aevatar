@@ -47,14 +47,35 @@ public sealed class AgentKindRegistry : IAgentKindRegistry
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
 
+        if (TryResolve(kind, out var implementation))
+            return implementation;
+
+        throw new UnknownAgentKindException(kind);
+    }
+
+    public bool TryResolve(string kind, out AgentImplementation implementation)
+    {
+        if (string.IsNullOrWhiteSpace(kind))
+        {
+            implementation = null!;
+            return false;
+        }
+
         if (_implByKind.TryGetValue(kind, out var direct))
-            return direct;
+        {
+            implementation = direct;
+            return true;
+        }
 
         if (_legacyKindToKind.TryGetValue(kind, out var canonical) &&
             _implByKind.TryGetValue(canonical, out var aliased))
-            return aliased;
+        {
+            implementation = aliased;
+            return true;
+        }
 
-        throw new UnknownAgentKindException(kind);
+        implementation = null!;
+        return false;
     }
 
     public bool TryResolveKindByClrTypeName(string clrFullName, out string kind)

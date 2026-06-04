@@ -61,6 +61,7 @@ public static class WorkflowImplicitLlmRolePolicy
         {
             Id = DefaultRoleId,
             Name = DefaultRoleName,
+            AgentKind = WorkflowRoleConventions.DefaultAgentKind,
         };
         return true;
     }

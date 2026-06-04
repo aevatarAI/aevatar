@@ -144,6 +144,28 @@ public sealed class WorkflowParserCoverageTests
         workflow.Roles[0].AgentKind.Should().Be("workflow.assistant-role");
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("agent_kind: \" \"")]
+    public void Parse_WhenRoleAgentKindIsMissingOrBlank_ShouldDefaultToPublicRoleAgentKind(string agentKindLine)
+    {
+        var workflow = new WorkflowParser().Parse(
+            $$"""
+              name: role_agent_kind_default
+              roles:
+                - id: assistant
+                  name: Assistant
+                  {{agentKindLine}}
+              steps:
+                - id: step_1
+                  type: llm_call
+                  target_role: assistant
+              """);
+
+        workflow.Roles.Should().ContainSingle();
+        workflow.Roles[0].AgentKind.Should().Be(WorkflowRoleConventions.DefaultAgentKind);
+    }
+
     [Fact]
     public void Parse_WhenRetryAndOnErrorUseDefaultsAndFallbackAlias_ShouldNormalizePolicies()
     {

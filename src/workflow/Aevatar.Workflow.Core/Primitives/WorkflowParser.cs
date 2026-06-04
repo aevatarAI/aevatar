@@ -84,7 +84,7 @@ public sealed class WorkflowParser
         {
             Id = roleId ?? throw new InvalidOperationException("role 缺 id"),
             Name = roleName ?? roleId ?? throw new InvalidOperationException("role 缺 name"),
-            AgentKind = NormalizeText(role.AgentKind),
+            AgentKind = NormalizeText(role.AgentKind) ?? WorkflowRoleConventions.DefaultAgentKind,
             SystemPrompt = NormalizeText(role.SystemPrompt) ?? string.Empty,
             Provider = NormalizeText(role.Provider),
             Model = NormalizeText(role.Model),

@@ -17,6 +17,12 @@ public interface IAgentKindRegistry
     AgentImplementation Resolve(string kind);
 
     /// <summary>
+    /// Resolves a primary or legacy kind token to its current
+    /// implementation without throwing when no implementation is registered.
+    /// </summary>
+    bool TryResolve(string kind, out AgentImplementation implementation);
+
+    /// <summary>
     /// Best-effort reverse lookup used during the Phase 1 transition: given
     /// a persisted CLR full name (from legacy <c>RuntimeActorGrainState.AgentTypeName</c>),
     /// return the canonical kind that currently owns it. Matches both the

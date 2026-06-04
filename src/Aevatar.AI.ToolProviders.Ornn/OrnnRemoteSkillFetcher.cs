@@ -85,19 +85,47 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         if (workflowFiles.Length == 0)
             return [];
 
-        var defaultWorkflowId = Path.GetFileNameWithoutExtension(workflowFiles[0].Key);
+        var defaultWorkflowId = GetWorkflowFileId(workflowFiles[0].Key);
         var workflowId = string.IsNullOrWhiteSpace(workflowEntry)
             ? defaultWorkflowId
-            : Path.GetFileNameWithoutExtension(workflowEntry.Trim());
+            : GetWorkflowFileId(workflowEntry.Trim());
+        var orderedWorkflowFiles = OrderWorkflowFilesByEntry(workflowFiles, workflowId);
 
         return
         [
             new SkillWorkflowDescriptor
             {
                 WorkflowId = workflowId,
-                WorkflowYamls = workflowFiles.Select(static file => file.Value.Trim()).ToArray(),
+                WorkflowYamls = orderedWorkflowFiles.Select(static file => file.Value.Trim()).ToArray(),
             }
         ];
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, string>> OrderWorkflowFilesByEntry(
+        IReadOnlyList<KeyValuePair<string, string>> workflowFiles,
+        string workflowId)
+    {
+        if (string.IsNullOrWhiteSpace(workflowId))
+            return workflowFiles;
+
+        var entry = workflowFiles.FirstOrDefault(file =>
+            string.Equals(
+                GetWorkflowFileId(file.Key),
+                workflowId,
+                StringComparison.Ordinal));
+        if (entry.Key == null)
+            return workflowFiles;
+
+        return workflowFiles
+            .OrderByDescending(file => string.Equals(file.Key, entry.Key, StringComparison.Ordinal))
+            .ThenBy(static file => file.Key, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string GetWorkflowFileId(string path)
+    {
+        var fileName = path.Split(PathSeparators, StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? path;
+        return Path.GetFileNameWithoutExtension(fileName);
     }
 
     private static bool IsWorkflowYamlPath(string path)

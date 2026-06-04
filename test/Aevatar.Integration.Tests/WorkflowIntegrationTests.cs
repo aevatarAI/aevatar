@@ -88,12 +88,7 @@ public class WorkflowIntegrationTests
     }
 
     private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
-        builder.Register(new AgentRegistration(
-            "workflow.assistant-role",
-            typeof(WorkflowRoleGAgent),
-            typeof(RoleGAgentState),
-            [],
-            []));
+        builder.Register<WorkflowRoleGAgent>();
 
     // ═══════════════════════════════════════════════════════════
     //  Scenario 1: YAML 解析 + 验证
@@ -300,6 +295,78 @@ public class WorkflowIntegrationTests
             $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
             CancellationToken.None);
         researcher!.RoleName.Should().Be("Researcher");
+    }
+
+    [Fact(DisplayName = "给定 public role agent kind alias，WorkflowRunGAgent 应通过 registry 创建 RoleGAgent")]
+    [Trait("Feature", "AgentTree")]
+    public async Task Scenario2b_PublicRoleAgentKindAliasCreatesRoleActor()
+    {
+        var (sp, runtime, _) = BuildTestEnvironment();
+        await using var _ = sp;
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var definitionActorId = $"wf-public-alias-{suffix}";
+        var runActorId = $"{definitionActorId}-run";
+        var roleActorId = $"{runActorId}:assistant";
+        const string workflowYaml = """
+            name: public_alias_workflow
+            roles:
+              - id: assistant
+                name: Assistant
+                agent_kind: aevatar.role-agent
+                system_prompt: "You are an assistant"
+            steps:
+              - id: answer
+                type: llm_call
+                target_role: assistant
+            """;
+
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>(definitionActorId);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>(runActorId);
+        await definitionActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowDefinitionEvent
+            {
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "public_alias_workflow",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
+        });
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "public_alias_workflow",
+                RunId = runActorId,
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
+        });
+
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new WorkflowChatRequestEvent
+            {
+                Prompt = "hello",
+                SessionId = "public-alias-session",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
+        });
+
+        (await runtime.ExistsAsync(roleActorId)).Should().BeTrue();
+        var children = await runActor.GetChildrenIdsAsync();
+        children.Should().ContainSingle().Which.Should().Be(roleActorId);
+        var roleActor = await runtime.GetAsync(roleActorId);
+        roleActor!.Agent.Should().BeOfType<WorkflowRoleGAgent>();
     }
 
     // ═══════════════════════════════════════════════════════════

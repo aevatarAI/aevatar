@@ -90,12 +90,7 @@ public class MakerRecursiveRegressionTests
     }
 
     private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
-        builder.Register(new AgentRegistration(
-            "workflow.assistant-role",
-            typeof(WorkflowRoleGAgent),
-            typeof(RoleGAgentState),
-            [],
-            []));
+        builder.Register<WorkflowRoleGAgent>();
 
     private static async Task<WorkflowRunResult> RunWorkflowAsync(
         ServiceProvider provider,

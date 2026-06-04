@@ -263,7 +263,7 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_WhenRoleAgentKindMissing_ShouldRejectExecution()
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindMissing_ShouldUseDefaultRoleAgentKindAndRun()
     {
         var runtime = new RecordingActorRuntime();
         var agent = CreateRunAgent(runtime: runtime);
@@ -274,13 +274,56 @@ public class WorkflowGAgentCoverageTests
             "wf_default_role",
             runId: "run-default-role");
 
-        var act = () => agent.HandleChatRequest(new WorkflowChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+        await agent.HandleChatRequest(new WorkflowChatRequestEvent { Prompt = "hello", SessionId = "s1" });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*must declare agent_kind*");
-        runtime.CreateByKindCalls.Should().BeEmpty();
+        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
+            WorkflowRoleConventions.DefaultAgentKind,
+            "workflow-run-default-role:role_a"));
         runtime.CreateCalls.Should().Be(0);
-        runtime.CreatedActors.Should().BeEmpty();
+        runtime.Linked.Should().ContainSingle()
+            .Which.Should().Be(("workflow-run-default-role", "workflow-run-default-role:role_a"));
+
+        var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
+        roleAgent.LastInitializeEvent.Should().NotBeNull();
+        roleAgent.LastInitializeEvent!.RoleId.Should().Be("role_a");
+        roleAgent.LastInitializeEvent.RoleName.Should().Be("RoleA");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindIsPublicAlias_ShouldCreateRoleActorByAliasAndInitializeIt()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-public-alias");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            """
+            name: wf_public_alias
+            roles:
+              - id: assistant
+                name: Assistant
+                agent_kind: aevatar.role-agent
+            steps:
+              - id: step_1
+                type: llm_call
+                target_role: assistant
+            """,
+            "wf_public_alias",
+            runId: "run-public-alias");
+
+        await agent.HandleChatRequest(new WorkflowChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
+            WorkflowRoleConventions.DefaultAgentKind,
+            "workflow-run-public-alias:assistant"));
+        runtime.CreateCalls.Should().Be(0);
+        runtime.Linked.Should().ContainSingle()
+            .Which.Should().Be(("workflow-run-public-alias", "workflow-run-public-alias:assistant"));
+
+        var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
+        roleAgent.LastInitializeEvent.Should().NotBeNull();
+        roleAgent.LastInitializeEvent!.RoleId.Should().Be("assistant");
+        roleAgent.LastInitializeEvent.RoleName.Should().Be("Assistant");
     }
 
     [Fact]

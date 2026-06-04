@@ -9,11 +9,14 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Integration.AI;
 
 [GAgent(WorkflowAssistantRoleAgentKind)]
+// The "legacy" alias is the canonical public workflow token; the primary kind remains the internal persisted kind.
+[LegacyAgentKind(WorkflowRoleConventions.DefaultAgentKind)]
 public class WorkflowRoleGAgent(
     ILLMProviderFactory? llmProviderFactory = null,
     IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,

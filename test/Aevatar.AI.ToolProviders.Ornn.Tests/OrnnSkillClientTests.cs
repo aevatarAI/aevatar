@@ -166,6 +166,36 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task RemoteSkillFetcher_WhenFrontmatterEntryMatchesWorkflowFile_ShouldPutEntryYamlFirst()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Workflow Skill",
+                "description": "Runs a workflow",
+                "files": {
+                  "SKILL.md": "---\nname: wf-skill\nworkflow: z-entry\n---\nRun it.",
+                  "workflows/a-helper.yaml": "name: a-helper\nsteps: []\n",
+                  "workflows/m-middle.yaml": "name: m-middle\nsteps: []\n",
+                  "workflows/z-entry.yaml": "name: z-entry\nsteps: []\n"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Workflow Skill");
+
+        skill.Should().NotBeNull();
+        var workflow = skill!.Workflows.Should().ContainSingle().Subject;
+        workflow.WorkflowId.Should().Be("z-entry");
+        workflow.WorkflowYamls.Should().Equal(
+            "name: z-entry\nsteps: []",
+            "name: a-helper\nsteps: []",
+            "name: m-middle\nsteps: []");
+    }
+
+    [Fact]
     public async Task RemoteSkillFetcher_DefaultsWorkflowIdToFirstSortedWorkflowFileNameWithoutFrontmatterEntry()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""

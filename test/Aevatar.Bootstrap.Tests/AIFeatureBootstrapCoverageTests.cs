@@ -18,6 +18,7 @@ using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.VoicePresence.Abstractions;
@@ -25,6 +26,8 @@ using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -118,6 +121,28 @@ public class AIFeatureBootstrapCoverageTests
         var skillOptions = provider.GetRequiredService<SkillsOptions>();
         skillOptions.Directories.Should().ContainSingle().Which.Should().Be("./skills-a");
         provider.GetServices<IAgentToolSource>().Should().ContainSingle(x => x is SkillsAgentToolSource);
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_ShouldRegisterWorkflowRolePrimaryKindAndPublicAlias()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IAgentKindRegistry>();
+
+        var primary = registry.Resolve(WorkflowRoleGAgent.WorkflowAssistantRoleAgentKind);
+        var aliasFound = registry.TryResolve(WorkflowRoleConventions.DefaultAgentKind, out var alias);
+
+        primary.Metadata.Kind.Should().Be(WorkflowRoleGAgent.WorkflowAssistantRoleAgentKind);
+        primary.Metadata.ImplementationClrTypeName.Should().Be(typeof(WorkflowRoleGAgent).FullName);
+        aliasFound.Should().BeTrue();
+        alias.Metadata.Kind.Should().Be(WorkflowRoleGAgent.WorkflowAssistantRoleAgentKind);
+        alias.Metadata.LegacyKinds.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRoleConventions.DefaultAgentKind);
     }
 
     [Fact]

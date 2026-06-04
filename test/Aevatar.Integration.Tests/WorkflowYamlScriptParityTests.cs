@@ -127,12 +127,7 @@ public class WorkflowYamlScriptParityTests
     }
 
     private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
-        builder.Register(new AgentRegistration(
-            "workflow.assistant-role",
-            typeof(WorkflowRoleGAgent),
-            typeof(RoleGAgentState),
-            [],
-            []));
+        builder.Register<WorkflowRoleGAgent>();
 
     private static async Task<string> RunScriptUppercaseAsync(string prompt)
     {
