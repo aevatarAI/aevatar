@@ -691,6 +691,59 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_WhenLeaseStateMissingAfterSchedulerCommit_ShouldAcceptMatchingCallbackId()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: true));
+        var scheduledEvent = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchNextFireScheduledEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Select(x => x.EventData.Unpack<ScheduledDispatchNextFireScheduledEvent>())
+            .Single();
+        var inbound = new EventEnvelope
+        {
+            Payload = Any.Pack(new ScheduledDispatchFireCommand
+            {
+                ScheduledFireAt = scheduledEvent.NextFireAt,
+                Manual = false,
+            }),
+            Runtime = new EnvelopeRuntime
+            {
+                Callback = new EnvelopeCallbackContext
+                {
+                    CallbackId = NextFireCallbackId,
+                    Generation = scheduledEvent.Lease.Generation,
+                    FireIndex = 1,
+                    FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    SlotEpoch = scheduledEvent.Lease.SlotEpoch,
+                },
+            },
+        };
+        agent.State.NextFireLease = null;
+
+        var handleFire = typeof(ScheduledDispatchGAgent)
+            .GetMethod("HandleFireAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+        handleFire.Should().NotBeNull();
+        var task = handleFire!.Invoke(agent,
+        [
+            new ScheduledDispatchFireCommand
+            {
+                ScheduledFireAt = scheduledEvent.NextFireAt,
+                Manual = false,
+            },
+            inbound,
+            CancellationToken.None,
+        ]) as Task;
+        task.Should().NotBeNull();
+        await task!;
+
+        dispatch.Dispatches.Should().ContainSingle();
+    }
+
+    [Fact]
     public void ScheduledDispatchStateReplay_ShouldUsePersistedNextFireScheduledAtForUpdatedAt()
     {
         var eventStore = new TestEventStore();

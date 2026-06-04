@@ -51,6 +51,7 @@ public static class ScheduledDispatchRuntimeCallbackLeaseStateCodec
             Backend = lease.Backend == RuntimeCallbackBackend.Dedicated
                 ? ScheduledDispatchRuntimeCallbackBackendState.Dedicated
                 : ScheduledDispatchRuntimeCallbackBackendState.InMemory,
+            SlotEpoch = lease.SlotEpoch,
         };
     }
 
@@ -65,6 +66,9 @@ public static class ScheduledDispatchRuntimeCallbackLeaseStateCodec
             state.Generation,
             state.Backend == ScheduledDispatchRuntimeCallbackBackendState.Dedicated
                 ? RuntimeCallbackBackend.Dedicated
-                : RuntimeCallbackBackend.InMemory);
+                : RuntimeCallbackBackend.InMemory)
+        {
+            SlotEpoch = state.SlotEpoch,
+        };
     }
 }

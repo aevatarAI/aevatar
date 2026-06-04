@@ -43,7 +43,7 @@ public static class WorkflowScheduleEndpoints
             .Produces(StatusCodes.Status404NotFound);
         group.MapPost("/workflow-schedules/preview", Preview)
             .WithTags("Workflow schedules")
-            .Produces<ScheduledDispatchPreview>(StatusCodes.Status200OK)
+            .Produces<WorkflowSchedulePreview>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapPost("/workflow-schedules/{scheduleId}/run-now", RunNow)
             .WithTags("Workflow schedules")

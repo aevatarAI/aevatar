@@ -418,7 +418,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return false;
 
         var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
-        return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
+        if (lease == null)
+            return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var state) &&
+                   string.Equals(state.CallbackId, NextFireCallbackId, StringComparison.Ordinal);
+
+        return RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
     }
 
     private bool HasTerminalFireRecord(string idempotencyKey)

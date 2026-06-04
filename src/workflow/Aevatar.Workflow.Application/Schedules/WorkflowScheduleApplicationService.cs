@@ -80,13 +80,16 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             result.TotalCount);
     }
 
-    public Task<ScheduledDispatchPreview> PreviewAsync(
+    public async Task<WorkflowSchedulePreview> PreviewAsync(
         string cronExpression,
         string? timezone,
         int count,
         DateTimeOffset? fromUtc = null,
-        CancellationToken ct = default) =>
-        _scheduledDispatches.PreviewAsync(cronExpression, timezone, count, fromUtc, ct);
+        CancellationToken ct = default)
+    {
+        var preview = await _scheduledDispatches.PreviewAsync(cronExpression, timezone, count, fromUtc, ct);
+        return new WorkflowSchedulePreview(preview.CronExpression, preview.Timezone, preview.NextFireTimes);
+    }
 
     public async Task<WorkflowScheduleRunNowReceipt> RunNowAsync(
         string scheduleId,

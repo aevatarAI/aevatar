@@ -1,5 +1,3 @@
-using Aevatar.GAgentService.Abstractions.Schedules;
-
 namespace Aevatar.Workflow.Application.Abstractions.Schedules;
 
 public sealed record WorkflowScheduleConfiguration(
@@ -71,6 +69,11 @@ public sealed record WorkflowScheduleListResult(
     string? NextCursor,
     long? TotalCount);
 
+public sealed record WorkflowSchedulePreview(
+    string CronExpression,
+    string Timezone,
+    IReadOnlyList<DateTimeOffset> NextFireTimes);
+
 public interface IWorkflowScheduleApplicationService
 {
     Task<WorkflowScheduleMutationReceipt> CreateAsync(
@@ -102,7 +105,7 @@ public interface IWorkflowScheduleApplicationService
         bool includeTotalCount = false,
         CancellationToken ct = default);
 
-    Task<ScheduledDispatchPreview> PreviewAsync(
+    Task<WorkflowSchedulePreview> PreviewAsync(
         string cronExpression,
         string? timezone,
         int count,

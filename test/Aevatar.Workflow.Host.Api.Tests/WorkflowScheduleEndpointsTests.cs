@@ -451,7 +451,7 @@ public sealed class WorkflowScheduleEndpointsTests
 
     private sealed class ThrowingPreviewScheduleService : EmptyWorkflowScheduleApplicationService
     {
-        public override Task<ScheduledDispatchPreview> PreviewAsync(
+        public override Task<WorkflowSchedulePreview> PreviewAsync(
             string cronExpression,
             string? timezone,
             int count,
@@ -465,7 +465,7 @@ public sealed class WorkflowScheduleEndpointsTests
         public int LastCount { get; private set; }
         public DateTimeOffset? LastFromUtc { get; private set; }
 
-        public override Task<ScheduledDispatchPreview> PreviewAsync(
+        public override Task<WorkflowSchedulePreview> PreviewAsync(
             string cronExpression,
             string? timezone,
             int count,
@@ -474,7 +474,7 @@ public sealed class WorkflowScheduleEndpointsTests
         {
             LastCount = count;
             LastFromUtc = fromUtc;
-            return Task.FromResult(new ScheduledDispatchPreview(
+            return Task.FromResult(new WorkflowSchedulePreview(
                 cronExpression,
                 timezone ?? "UTC",
                 [
@@ -771,7 +771,7 @@ public sealed class WorkflowScheduleEndpointsTests
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public virtual Task<ScheduledDispatchPreview> PreviewAsync(
+        public virtual Task<WorkflowSchedulePreview> PreviewAsync(
             string cronExpression,
             string? timezone,
             int count,
