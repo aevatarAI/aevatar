@@ -108,6 +108,8 @@ message AgentSkillRecoveryContextPayload {
   string original_command = 4;
   string primary_skill_name = 5;
   int32 max_ornn_search_attempts = 6;
+  string command_arguments = 7;
+  bool discovery_requested = 8;
 }
 
 message AgentToolRequestIdentityPayload {

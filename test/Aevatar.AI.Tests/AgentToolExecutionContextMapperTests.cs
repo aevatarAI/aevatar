@@ -261,7 +261,9 @@ public sealed class AgentToolExecutionContextMapperTests
                 CommandName: " goal ",
                 OriginalCommand: " /goal ship ",
                 PrimarySkillName: " goal-skill ",
-                MaxOrnnSearchAttempts: 2),
+                MaxOrnnSearchAttempts: 2,
+                CommandArguments: " ship ",
+                DiscoveryRequested: true),
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external-trace"] = "trace-1",
@@ -298,7 +300,29 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.SkillRecovery.OriginalCommand.Should().Be("/goal ship");
         copy.SkillRecovery.PrimarySkillName.Should().Be("goal-skill");
         copy.SkillRecovery.MaxOrnnSearchAttempts.Should().Be(2);
+        copy.SkillRecovery.CommandArguments.Should().Be("ship");
+        copy.SkillRecovery.DiscoveryRequested.Should().BeTrue();
         copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
+    }
+
+    [Fact]
+    public void FromPayload_WhenSkillRecoveryNewFieldsAreMissing_ShouldUseDefaults()
+    {
+        var payload = new AgentToolExecutionContextPayload
+        {
+            SkillRecovery = new AgentSkillRecoveryContextPayload
+            {
+                RequireInitialOrnnSearch = true,
+                CommandName = "goal",
+            },
+        };
+
+        var context = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(payload.ToByteArray()));
+
+        context.SkillRecovery.CommandName.Should().Be("goal");
+        context.SkillRecovery.CommandArguments.Should().BeNull();
+        context.SkillRecovery.DiscoveryRequested.Should().BeFalse();
     }
 
     [Fact]

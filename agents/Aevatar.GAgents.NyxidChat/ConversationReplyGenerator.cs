@@ -449,16 +449,21 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static string? BuildSkillRecoveryStreamingStatus(AgentToolExecutionContext? toolContext)
     {
         var recovery = toolContext?.SkillRecovery;
-        if (recovery is not { RequireInitialOrnnSearch: true } ||
-            string.IsNullOrWhiteSpace(recovery.CommandName))
+        if (recovery is not { RequireInitialOrnnSearch: true })
         {
             return null;
         }
 
-        var commandLabel = recovery.CommandName.Trim().TrimStart('/');
+        if (recovery.DiscoveryRequested)
+            return "正在查找可用技能...";
+
+        var commandLabel = recovery.OriginalCommand?.Trim();
+        if (string.IsNullOrWhiteSpace(commandLabel))
+            commandLabel = recovery.CommandName?.Trim();
+
         return string.IsNullOrWhiteSpace(commandLabel)
             ? null
-            : $"正在处理 `/{commandLabel}`, 加载技能并扫描数据中...";
+            : $"正在处理 `{commandLabel}`, 加载技能并扫描数据中...";
     }
 
     // ADR-0021 §6 / canon §8 cross-round usage aggregation — each provider round

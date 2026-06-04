@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.ChatRouting.Abstractions;
@@ -57,7 +58,8 @@ public sealed class ChatCompletionsCommandFacade(
                 callerScopeResult.Error.Code,
                 callerScopeResult.Error.Message);
 
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, ct);
+        var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
+        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, trigger, ct);
         if (routedModelResult.Error is not null)
             return ChatCompletionsCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -77,6 +79,7 @@ public sealed class ChatCompletionsCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
+            trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             createdAt,
@@ -198,13 +201,16 @@ public sealed class ChatCompletionsCommandFacade(
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedChatCompletionsCommand normalized,
         ResponsesCallerScope callerScope,
+        SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
         var routeDecision = await chatRouteDecisionPort.ResolveAsync(
-            callerScope,
-            normalized.Model,
-            normalized.DeclaredTools.Count > 0 ? ToolMode.Declared : ToolMode.None,
-            BuildRouteContentHint(normalized),
+            new ResponsesChatRouteDecisionRequest(
+                callerScope,
+                normalized.Model,
+                normalized.DeclaredTools.Count > 0 ? ToolMode.Declared : ToolMode.None,
+                BuildRouteContentHint(normalized),
+                NormalizeRouteCommandName(trigger?.Name)),
             ct);
 
         if (routeDecision.Action.Reject is not null)
@@ -263,6 +269,7 @@ public sealed class ChatCompletionsCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
+        SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
         DateTimeOffset createdAt,
@@ -285,6 +292,7 @@ public sealed class ChatCompletionsCommandFacade(
             {
                 NyxIdRoutePreference = resolvedRouteValue,
             },
+            SkillRecovery = AgentSkillRecoveryContextBuilder.FromTrigger(trigger),
         };
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -563,6 +571,16 @@ public sealed class ChatCompletionsCommandFacade(
             ?.Content
         ?? normalized.ChatMessages.LastOrDefault()?.Content
         ?? string.Empty;
+
+    private static SkillInvocationTrigger? ParseSkillInvocationTrigger(string? text) =>
+        SkillInvocationTriggerParser.TryParse(text, platform: "cli", out var trigger)
+            ? trigger
+            : null;
+
+    private static string NormalizeRouteCommandName(string? commandName) =>
+        string.IsNullOrWhiteSpace(commandName)
+            ? string.Empty
+            : commandName.Trim().TrimStart('/').ToLowerInvariant();
 
     // Refactor (iter344/cluster-001):
     //   Old pattern: Host populated session records from endpoint locals.

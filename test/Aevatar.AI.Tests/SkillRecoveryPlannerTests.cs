@@ -119,7 +119,32 @@ public sealed class SkillRecoveryPlannerTests
             out var directive);
 
         forced.Should().BeTrue();
+        directive.ToolCall!.Name.Should().Be("use_skill");
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenDiscoveryRequested_ShouldBuildSearchWithoutFakeSkill()
+    {
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: false,
+                CommandName: null,
+                OriginalCommand: "::",
+                PrimarySkillName: null,
+                MaxOrnnSearchAttempts: 1,
+                CommandArguments: null,
+                DiscoveryRequested: true),
+            [ChatMessage.User("::")],
+            finalContent: null,
+            recoveryAttempts: 0,
+            callIdPrefix: "req-discovery",
+            out var directive);
+
+        forced.Should().BeTrue();
         directive.ToolCall!.Name.Should().Be("ornn_search_skills");
+        directive.ToolCall.ArgumentsJson.Should().Contain("skill discovery");
+        directive.ToolCall.ArgumentsJson.Should().NotContain("\"skill\"");
     }
 
     [Fact]
@@ -139,7 +164,7 @@ public sealed class SkillRecoveryPlannerTests
         };
 
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
-            Recovery(originalCommand: "/goal ship today", primarySkillName: "project-summary"),
+            Recovery(originalCommand: "/goal ship today", primarySkillName: "project-summary", commandArguments: "typed args"),
             messages,
             finalContent: "done",
             recoveryAttempts: 1,
@@ -149,7 +174,7 @@ public sealed class SkillRecoveryPlannerTests
         forced.Should().BeTrue();
         using var document = JsonDocument.Parse(directive.ToolCall!.ArgumentsJson);
         document.RootElement.GetProperty("skill").GetString().Should().Be("project-summary");
-        document.RootElement.GetProperty("args").GetString().Should().Be("ship today");
+        document.RootElement.GetProperty("args").GetString().Should().Be("typed args");
     }
 
     [Fact]
@@ -391,14 +416,17 @@ public sealed class SkillRecoveryPlannerTests
         bool requireInitialSearch = true,
         string originalCommand = "/goal ship",
         string? primarySkillName = "project-summary",
-        int maxAttempts = 2) =>
+        int maxAttempts = 2,
+        string? commandArguments = null) =>
         new(
             RequireInitialOrnnSearch: requireInitialSearch,
             RequireOrnnSearchOnBlocker: true,
             CommandName: "goal",
             OriginalCommand: originalCommand,
             PrimarySkillName: primarySkillName,
-            MaxOrnnSearchAttempts: maxAttempts);
+            MaxOrnnSearchAttempts: maxAttempts,
+            CommandArguments: commandArguments,
+            DiscoveryRequested: false);
 
     private static ChatMessage AssistantToolCall(string id, string name, string argumentsJson) =>
         new()

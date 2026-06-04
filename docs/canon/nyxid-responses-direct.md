@@ -142,7 +142,31 @@ llm-anthropic/claude-haiku-4-5
 
 chat-route policy 指定 `tool_set_ref` 或 `tool_choice_hint` 时，三条直连入口都会使用同一个 direct tool plan：同一个 tool set 会被注入，同一个 trusted prefilled arguments 合并规则会生效。不要为 `/v1/messages` 或 `/v1/chat/completions` 另建工具白名单。
 
-## 6. Messages 门面
+## 6. 显式 Skill 触发
+
+直连入口支持同一套显式 skill 触发语法：
+
+```text
+::skill-name optional arguments
+```
+
+触发只能出现在输入开头，或后续某一行的行首；句中普通文本例如 `please run ::skill` 不会触发。`skill-name` 会归一化为小写 route token，后面的文本原样作为 `command_arguments` 进入 skill recovery context。三条 `/v1/responses`、`/v1/messages`、`/v1/chat/completions` 入口只在 Application 层解析一次：`CommandName` 只给 chat-route policy 做命令匹配，arguments 和 discovery 只进入 `AgentSkillRecoveryContext`。
+
+裸 `::` 表示请求 skill discovery。它不会伪造 route command 或 skill 名称，chat-route `CommandName` 为空，skill recovery 会触发 `ornn_search_skills`。`:: ` 这类只有触发符和空白的输入按普通文本处理。
+
+Channel relay 入口也使用同一 parser。默认平台别名为：
+
+| 平台 | 触发符 |
+|---|---|
+| CLI / direct `/v1/*` / direct `nyxid-chat` | `::` |
+| Lark / Web channel | `::`、`/` |
+| 其它 channel | `::` |
+
+`/name` 只是在 Lark/Web channel 上保留的兼容别名，且本地注册 slash command（如 `/init`、`/model`）仍优先走本地确定性处理。canonical `::name` 不会被这些本地 slash command 吞掉；例如 `::model args` 表示名为 `model` 的 skill 触发，而不是 `/model` 本地模型配置命令。
+
+命名触发会优先调用 `use_skill` 加载同名 skill；如果加载失败或后续出现 blocker，再按 recovery 规则使用 `ornn_search_skills` 查找更合适的 skill。`use_skill` 与 `ornn_search_skills` 仍然使用当前调用者的 NyxID/Ornn 可见性，和普通工具调用一致。
+
+## 7. Messages 门面
 
 `POST /v1/messages` 已经上线，但它不是 `/v1/responses` 的完整替代品。它的定位是让只会说 Anthropic Messages 的客户端，例如 Claude Code，能通过同一条 NyxID proxy 链路访问 Aevatar。
 
@@ -164,7 +188,7 @@ chat-route policy 指定 `tool_set_ref` 或 `tool_choice_hint` 时，三条直�
 
 需要完整异步编排和 continuation 时，用 `/v1/responses`。
 
-## 7. Chat Completions 门面
+## 8. Chat Completions 门面
 
 `POST /v1/chat/completions` 是 OpenAI Chat Completions 兼容窄门面，适合只支持 `OPENAI_BASE_URL` + `/chat/completions` 的客户端通过 NyxID proxy 直连 Aevatar。
 
@@ -185,7 +209,7 @@ chat-route policy 指定 `tool_set_ref` 或 `tool_choice_hint` 时，三条直�
 
 需要完整异步编排和 continuation 时，用 `/v1/responses`。
 
-## 8. API Key 要求
+## 9. API Key 要求
 
 NyxID slug proxy 路由是 REST proxy plane：
 
@@ -197,7 +221,7 @@ NyxID slug proxy 路由是 REST proxy plane：
 
 `--allowed-services` 必须填 `nyxid service list --output json` 里的 UserService id，不是 catalog id。填错时常见错误是 `api_key_scope_forbidden_legacy`。
 
-## 9. 代码锚点
+## 10. 代码锚点
 
 主机端入口：
 
