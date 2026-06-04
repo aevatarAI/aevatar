@@ -114,6 +114,104 @@ public sealed class OrnnPublishSkillToolTests
         handler.Requests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("""
+        "name": "InvalidName"
+        """, "invalid_name")]
+    [InlineData("""
+        "version": "1.0.0"
+        """, "invalid_version")]
+    [InlineData("""
+        "instructions_markdown": "---\nname: bad\n---\nDo the work."
+        """, "invalid_instructions")]
+    [InlineData("""
+        "tags": ["BadTag"]
+        """, "invalid_string")]
+    [InlineData("""
+        "runtime_env_vars": ["lower_case"]
+        """, "invalid_string")]
+    [InlineData("""
+        "category": "runtime-based",
+        "runtimes": ["dotnet"],
+        "output_type": "binary"
+        """, "invalid_output_type")]
+    public async Task ExecuteAsync_ShouldRejectInvalidParserFieldsBeforeUpload(
+        string replacementFields,
+        string expectedDiagnostic)
+    {
+        var handler = new CapturingHandler("""{ "data": { "valid": true } }""");
+        var tool = CreateTool(handler);
+
+        using var _ = BeginTokenScope();
+        var result = await tool.ExecuteAsync(ArgumentsWith(replacementFields));
+
+        result.Should().Contain("validation_error");
+        result.Should().Contain(expectedDiagnostic);
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("""
+        "category": "plain",
+        "tool_list": ["search"]
+        """, "invalid_category_fields")]
+    [InlineData("""
+        "category": "plain",
+        "runtimes": ["dotnet"],
+        "output_type": "text"
+        """, "invalid_category_fields")]
+    [InlineData("""
+        "category": "tool-based"
+        """, "missing_tool_list")]
+    [InlineData("""
+        "category": "tool-based",
+        "tool_list": ["search"],
+        "runtimes": ["dotnet"]
+        """, "invalid_category_fields")]
+    [InlineData("""
+        "category": "runtime-based",
+        "output_type": "text"
+        """, "missing_runtimes")]
+    [InlineData("""
+        "category": "runtime-based",
+        "runtimes": ["dotnet"]
+        """, "missing_output_type")]
+    [InlineData("""
+        "category": "runtime-based",
+        "runtimes": ["dotnet"],
+        "output_type": "text",
+        "tool_list": ["search"]
+        """, "invalid_category_fields")]
+    [InlineData("""
+        "category": "mixed",
+        "runtimes": ["dotnet"],
+        "output_type": "text"
+        """, "missing_tool_list")]
+    [InlineData("""
+        "category": "mixed",
+        "tool_list": ["search"],
+        "output_type": "text"
+        """, "missing_runtimes")]
+    [InlineData("""
+        "category": "mixed",
+        "runtimes": ["dotnet"],
+        "tool_list": ["search"]
+        """, "missing_output_type")]
+    public async Task ExecuteAsync_ShouldRejectInvalidCategoryMatrixBeforeUpload(
+        string replacementFields,
+        string expectedDiagnostic)
+    {
+        var handler = new CapturingHandler("""{ "data": { "valid": true } }""");
+        var tool = CreateTool(handler);
+
+        using var _ = BeginTokenScope();
+        var result = await tool.ExecuteAsync(ArgumentsWith(replacementFields));
+
+        result.Should().Contain("validation_error");
+        result.Should().Contain(expectedDiagnostic);
+        handler.Requests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task ExecuteAsync_ShouldSkipUploadWhenLocalValidationFails()
     {
@@ -181,6 +279,18 @@ public sealed class OrnnPublishSkillToolTests
             }
             """;
     }
+
+    private static string ArgumentsWith(string replacementFields) =>
+        $$"""
+            {
+              "name": "plain-skill",
+              "description": "Plain skill",
+              "version": "1.0",
+              "category": "plain",
+              "instructions_markdown": "Do the work.",
+              {{replacementFields}}
+            }
+            """;
 
     private static OrnnPublishSkillTool CreateTool(
         CapturingHandler handler,
