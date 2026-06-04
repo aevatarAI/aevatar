@@ -32,7 +32,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         await base.OnActivateAsync(ct);
         if (State.Enabled && !string.IsNullOrWhiteSpace(State.CronExpression))
-            await EnsureNextFireScheduledAsync(DateTimeOffset.UtcNow, ct);
+        {
+            if (State.PendingNextFireAt != null)
+            {
+                var pendingNextFireAt = State.PendingNextFireAt.ToDateTimeOffset();
+                var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+                await ActivateNextFireIntentAsync(pendingNextFireAt, previousLease, ct);
+            }
+            else
+            {
+                await EnsureNextFireScheduledAsync(DateTimeOffset.UtcNow, ct);
+            }
+        }
     }
 
     public override Task<string> GetDescriptionAsync()
@@ -48,6 +59,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             .On<ScheduledDispatchConfiguredEvent>(ApplyConfigured)
             .On<ScheduledDispatchEnabledEvent>(ApplyEnabled)
             .On<ScheduledDispatchDisabledEvent>(ApplyDisabled)
+            .On<ScheduledDispatchNextFireIntentRecordedEvent>(ApplyNextFireIntentRecorded)
             .On<ScheduledDispatchNextFireScheduledEvent>(ApplyNextFireScheduled)
             .On<ScheduledDispatchFireStartedEvent>(ApplyFireStarted)
             .On<ScheduledDispatchFireDispatchedEvent>(ApplyFireDispatched)
@@ -369,6 +381,24 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         ct.ThrowIfCancellationRequested();
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        var pendingNextFireAt = State.PendingNextFireAt?.ToDateTimeOffset();
+        if (pendingNextFireAt != nextFireAtUtc)
+        {
+            await PersistDomainEventAsync(new ScheduledDispatchNextFireIntentRecordedEvent
+            {
+                NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
+                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }, ct);
+        }
+
+        await ActivateNextFireIntentAsync(nextFireAtUtc, previousLease, ct);
+    }
+
+    private async Task ActivateNextFireIntentAsync(
+        DateTimeOffset nextFireAtUtc,
+        RuntimeCallbackLease? previousLease,
+        CancellationToken ct)
+    {
         var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
         var lease = await ScheduleSelfDurableTimeoutAsync(
             NextFireCallbackId,
@@ -418,11 +448,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return false;
 
         var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
-        if (lease == null)
-            return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var state) &&
-                   string.Equals(state.CallbackId, NextFireCallbackId, StringComparison.Ordinal);
-
-        return RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
+        return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
     }
 
     private bool HasTerminalFireRecord(string idempotencyKey)
@@ -563,6 +589,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             next.NextFireAt = null;
             next.NextFireLease = null;
+            next.PendingNextFireAt = null;
+            next.PendingNextFireRequestedAt = null;
         }
 
         return next;
@@ -582,7 +610,23 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.Enabled = false;
         next.NextFireAt = null;
         next.NextFireLease = null;
+        next.PendingNextFireAt = null;
+        next.PendingNextFireRequestedAt = null;
         next.UpdatedAt = evt.DisabledAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyNextFireIntentRecorded(
+        ScheduledDispatchState current,
+        ScheduledDispatchNextFireIntentRecordedEvent evt)
+    {
+        var next = current.Clone();
+        next.PendingNextFireAt = evt.NextFireAt?.Clone();
+        next.PendingNextFireRequestedAt = evt.RequestedAt?.Clone();
+        next.UpdatedAt =
+            evt.RequestedAt?.ToDateTimeOffset() ??
+            evt.NextFireAt?.ToDateTimeOffset() ??
+            DateTimeOffset.UtcNow;
         return next;
     }
 
@@ -593,6 +637,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var next = current.Clone();
         next.NextFireAt = evt.NextFireAt?.ToDateTimeOffset();
         next.NextFireLease = evt.Lease?.Clone();
+        next.PendingNextFireAt = null;
+        next.PendingNextFireRequestedAt = null;
         next.UpdatedAt =
             evt.ScheduledAt?.ToDateTimeOffset() ??
             evt.NextFireAt?.ToDateTimeOffset() ??

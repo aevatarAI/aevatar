@@ -32,6 +32,8 @@ message ScheduledDispatchState
   ScheduledDispatchRuntimeCallbackLeaseState next_fire_lease = 21;
   map<string, ScheduledDispatchFireRecordState> fire_records = 22;
   ScheduledDispatchTargetState target = 23;
+  google.protobuf.Timestamp pending_next_fire_at = 24;
+  google.protobuf.Timestamp pending_next_fire_requested_at = 25;
 }
 
 enum ScheduledDispatchRuntimeCallbackBackendState
@@ -140,6 +142,12 @@ message ScheduledDispatchDisabledEvent
 {
   string reason = 1;
   google.protobuf.Timestamp disabled_at = 2;
+}
+
+message ScheduledDispatchNextFireIntentRecordedEvent
+{
+  google.protobuf.Timestamp next_fire_at = 1;
+  google.protobuf.Timestamp requested_at = 2;
 }
 
 message ScheduledDispatchNextFireScheduledEvent
