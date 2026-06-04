@@ -384,7 +384,6 @@ public sealed class ScheduledDispatchEndpointsTests
                 string.Empty,
                 string.Empty,
                 string.Empty,
-                null,
                 "0 9 * * *",
                 "UTC",
                 true,
