@@ -258,24 +258,26 @@ function resolveCompositionKindPillStyle(
   switch (normalizeStatus(kind)) {
     case "workflow role":
       return {
-        background: "rgba(24, 144, 255, 0.08)",
-        color: token.colorInfo,
+        background: token.colorInfoBg,
+        border: `1px solid ${token.colorInfoBorder}`,
+        color: token.colorInfoText,
       };
     case "workflow":
       return {
-        background: "rgba(82, 196, 26, 0.12)",
-        color: token.colorSuccess,
+        background: token.colorSuccessBg,
+        border: `1px solid ${token.colorSuccessBorder}`,
+        color: token.colorSuccessText,
       };
     case "service":
       return {
-        background: "rgba(250, 173, 20, 0.12)",
-        color: token.colorWarning,
+        background: token.colorWarningBg,
+        border: `1px solid ${token.colorWarningBorder}`,
+        color: token.colorWarningText,
       };
-    case "actor":
-    case "runtime":
     default:
       return {
         background: token.colorFillQuaternary,
+        border: `1px solid ${token.colorBorderSecondary}`,
         color: token.colorTextSecondary,
       };
   }
@@ -308,8 +310,9 @@ function resolveStatusPillStyle(
     ].includes(normalized)
   ) {
     return {
-      background: "rgba(24, 144, 255, 0.08)",
-      color: token.colorInfo,
+      background: token.colorSuccessBg,
+      border: `1px solid ${token.colorSuccessBorder}`,
+      color: token.colorSuccessText,
     };
   }
 
@@ -326,8 +329,9 @@ function resolveStatusPillStyle(
     ].includes(normalized)
   ) {
     return {
-      background: "rgba(250, 173, 20, 0.12)",
-      color: token.colorWarning,
+      background: token.colorWarningBg,
+      border: `1px solid ${token.colorWarningBorder}`,
+      color: token.colorWarningText,
     };
   }
 
@@ -335,13 +339,15 @@ function resolveStatusPillStyle(
     ["failed", "error", "cancelled", "degraded", "retired"].includes(normalized)
   ) {
     return {
-      background: "rgba(255, 77, 79, 0.12)",
-      color: token.colorError,
+      background: token.colorErrorBg,
+      border: `1px solid ${token.colorErrorBorder}`,
+      color: token.colorErrorText,
     };
   }
 
   return {
     background: token.colorFillQuaternary,
+    border: `1px solid ${token.colorBorderSecondary}`,
     color: token.colorTextSecondary,
   };
 }
@@ -880,11 +886,6 @@ const TeamDetailPage: React.FC = () => {
     : hasRunnableTeamEntry
       ? "waiting"
       : currentDeploymentStatus;
-  const currentHeaderStatusFriendly = hasVisibleRun
-    ? formatFriendlyStatus(currentRunStatus, intl)
-    : hasRunnableTeamEntry
-      ? t("pages.teams.detail.copy.20", "Waiting for first test")
-      : formatFriendlyStatus(currentDeploymentStatus, intl);
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly

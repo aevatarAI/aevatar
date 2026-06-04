@@ -63,10 +63,10 @@ const triggerLabelStyle: React.CSSProperties = {
 };
 
 const triggerDescriptionStyle: React.CSSProperties = {
-  color: "#8b5e3c",
+  color: "#475467",
   fontSize: 10,
   fontWeight: 600,
-  letterSpacing: "0.12em",
+  letterSpacing: 0,
   overflow: "hidden",
   textAlign: "left",
   textOverflow: "ellipsis",
@@ -75,8 +75,8 @@ const triggerDescriptionStyle: React.CSSProperties = {
 };
 
 const leadingGlyphStyle: React.CSSProperties = {
-  background: "#f8f4ee",
-  border: "1px solid #e7ddd2",
+  background: "#eef2f6",
+  border: "1px solid rgba(71, 85, 105, 0.18)",
   borderRadius: 999,
   flexShrink: 0,
   height: 22,
@@ -85,7 +85,7 @@ const leadingGlyphStyle: React.CSSProperties = {
 };
 
 const glyphDotStyle: React.CSSProperties = {
-  background: "#2563eb",
+  background: "#0f766e",
   borderRadius: 999,
   height: 6,
   left: "50%",
@@ -96,10 +96,10 @@ const glyphDotStyle: React.CSSProperties = {
 };
 
 const countPillStyle: React.CSSProperties = {
-  background: "#faf5ef",
-  border: "1px solid #ece2d8",
+  background: "#f8fafc",
+  border: "1px solid rgba(15, 23, 42, 0.08)",
   borderRadius: 999,
-  color: "#8b5e3c",
+  color: "#475467",
   fontSize: 10,
   fontWeight: 700,
   letterSpacing: "0.08em",
@@ -166,9 +166,9 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
         style={{
           alignItems: "center",
           background: "#ffffff",
-          border: `1px solid ${open ? "#d9e5fb" : "#e7ddd2"}`,
-          borderRadius: 14,
-          boxShadow: "0 1px 3px rgba(15, 23, 42, 0.06)",
+          border: `1px solid ${open ? "rgba(15, 118, 110, 0.34)" : "rgba(71, 85, 105, 0.18)"}`,
+          borderRadius: 6,
+          boxShadow: "0 8px 20px rgba(15, 23, 42, 0.05)",
           cursor: disabled ? "not-allowed" : "pointer",
           display: "inline-flex",
           gap: 8,
@@ -202,7 +202,7 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
             background: "transparent",
             border: "none",
             borderRadius: 0,
-            color: open ? "#2563eb" : "#9ca3af",
+            color: open ? "#0f766e" : "#98a2b3",
             display: "inline-flex",
             flexShrink: 0,
             height: 16,
@@ -224,10 +224,10 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
           aria-label={ariaLabel}
           role="listbox"
           style={{
-            background: "#fffaf6",
-            border: "1px solid #e7ddd2",
-            borderRadius: 22,
-            boxShadow: "0 24px 56px rgba(15, 23, 42, 0.16)",
+            background: "#ffffff",
+            border: "1px solid rgba(15, 23, 42, 0.08)",
+            borderRadius: 6,
+            boxShadow: "0 18px 42px rgba(15, 23, 42, 0.12)",
             left: 0,
             marginTop: 10,
             minWidth: Math.max(minWidth + 48, 280),
@@ -249,10 +249,10 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
             <div style={{ minWidth: 0 }}>
               <div
                 style={{
-                  color: "#8b5e3c",
+                  color: "#475467",
                   fontSize: 10,
                   fontWeight: 700,
-                  letterSpacing: "0.14em",
+                  letterSpacing: 0,
                   textTransform: "uppercase",
                 }}
               >
@@ -286,11 +286,11 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
                     menuAction.onClick();
                   }}
                   style={{
-                    background: "#faf5ef",
-                    border: "1px solid #ece2d8",
-                    borderRadius: 999,
-                    boxShadow: "0 1px 2px rgba(139, 94, 60, 0.08)",
-                    color: "#8b5e3c",
+                    background: "#ecfdf5",
+                    border: "1px solid #99f6e4",
+                    borderRadius: 6,
+                    boxShadow: "none",
+                    color: "#0f766e",
                     cursor: "pointer",
                     fontSize: 11,
                     fontWeight: 700,
@@ -308,7 +308,7 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
 
           {options.map((option) => {
             const active = option.value === value;
-            const baseBorder = active ? "#c7dbff" : "#efe5da";
+            const baseBorder = active ? "#99f6e4" : "rgba(15, 23, 42, 0.08)";
             return (
               <button
                 aria-selected={active}
@@ -329,9 +329,9 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
                 role="option"
                 style={{
                   alignItems: "center",
-                  background: active ? "#f3f7ff" : "#ffffff",
+                  background: active ? "#ecfdf5" : "#ffffff",
                   border: `1px solid ${baseBorder}`,
-                  borderRadius: 16,
+                  borderRadius: 6,
                   color: option.disabled ? "#d1d5db" : "#111827",
                   cursor: option.disabled ? "not-allowed" : "pointer",
                   display: "flex",
@@ -355,13 +355,13 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
                   <span
                     style={{
                       ...leadingGlyphStyle,
-                      background: active ? "#ffffff" : "#f8f4ee",
+                      background: active ? "#ffffff" : "#eef2f6",
                     }}
                   >
                     <span
                       style={{
                         ...glyphDotStyle,
-                        background: active ? "#2563eb" : "#b08968",
+                        background: active ? "#0f766e" : "#98a2b3",
                       }}
                     />
                   </span>
@@ -375,7 +375,7 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
                   >
                     <span
                       style={{
-                        color: active ? "#1d4ed8" : "#111827",
+                        color: active ? "#0f766e" : "#111827",
                         fontSize: 13,
                         fontWeight: 600,
                         overflow: "hidden",
@@ -388,7 +388,7 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
                     {option.description ? (
                       <span
                         style={{
-                          color: active ? "#5b86e5" : "#8b5e3c",
+                          color: active ? "#0f766e" : "#475467",
                           fontSize: 11,
                           overflow: "hidden",
                           textOverflow: "ellipsis",
@@ -413,8 +413,8 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
                     <span
                       style={{
                         ...countPillStyle,
-                        background: active ? "#ffffff" : "#faf5ef",
-                        color: active ? "#2563eb" : "#8b5e3c",
+                        background: active ? "#ffffff" : "#f8fafc",
+                        color: active ? "#0f766e" : "#475467",
                       }}
                     >
                       {option.badge}
@@ -423,7 +423,7 @@ export const AevatarHeaderSelect: React.FC<AevatarHeaderSelectProps> = ({
                   <span
                     style={{
                       alignItems: "center",
-                      background: active ? "#2563eb" : "transparent",
+                      background: active ? "#0f766e" : "transparent",
                       borderRadius: 999,
                       color: active ? "#ffffff" : "transparent",
                       display: "inline-flex",
