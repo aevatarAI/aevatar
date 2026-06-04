@@ -97,7 +97,10 @@ public sealed class MainnetHealthEndpointsTests
         apiHealthPayload.RootElement.GetProperty("ok").GetBoolean().Should().BeTrue();
         apiHealthPayload.RootElement.GetProperty("status").GetString().Should().Be("ready");
 
-        using var openApiDocument = JsonDocument.Parse(await client.GetStringAsync("/api/openapi.json"));
+        var openApiResponse = await client.GetAsync("/api/openapi.json");
+        var openApiBody = await openApiResponse.Content.ReadAsStringAsync();
+        openApiResponse.StatusCode.Should().Be(HttpStatusCode.OK, openApiBody);
+        using var openApiDocument = JsonDocument.Parse(openApiBody);
         var paths = openApiDocument.RootElement.GetProperty("paths");
         paths.TryGetProperty("/health/live", out _).Should().BeTrue();
         paths.TryGetProperty("/health/ready", out _).Should().BeTrue();

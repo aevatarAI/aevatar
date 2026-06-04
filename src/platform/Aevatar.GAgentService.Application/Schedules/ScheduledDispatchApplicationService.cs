@@ -140,7 +140,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             admission.Accepted,
             admission.CommandId,
             admission.CorrelationId,
-            admission.AckedAt);
+            admission.AckedAt,
+            "accepted");
     }
 
     private static ScheduledDispatchMutationReceipt CreateMutationReceipt(
@@ -153,7 +154,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             admission.Accepted,
             admission.CommandId,
             admission.CorrelationId,
-            admission.AckedAt);
+            admission.AckedAt,
+            "accepted");
 
     private async Task<string> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct)
     {

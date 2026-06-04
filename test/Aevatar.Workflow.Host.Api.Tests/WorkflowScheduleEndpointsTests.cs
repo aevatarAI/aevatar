@@ -539,7 +539,11 @@ public sealed class WorkflowScheduleEndpointsTests
             return Task.FromResult(new WorkflowScheduleMutationReceipt(
                 configuration.ScheduleId,
                 $"actor:{configuration.ScheduleId}",
-                Accepted: true));
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
         }
 
         public override Task<WorkflowScheduleMutationReceipt> UpdateAsync(
@@ -554,7 +558,11 @@ public sealed class WorkflowScheduleEndpointsTests
             return Task.FromResult(new WorkflowScheduleMutationReceipt(
                 scheduleId,
                 $"actor:{scheduleId}",
-                Accepted: true));
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
         }
 
         public override Task<WorkflowScheduleListResult> ListAsync(

@@ -93,10 +93,10 @@ public sealed record ScheduledDispatchMutationReceipt(
     string ScheduleId,
     string ScheduleActorId,
     bool Accepted,
-    string CommandId = "",
-    string CorrelationId = "",
-    DateTimeOffset AckedAt = default,
-    string AckStage = "accepted");
+    string CommandId,
+    string CorrelationId,
+    DateTimeOffset AckedAt,
+    string AckStage);
 
 public sealed record ScheduledDispatchRunNowReceipt(
     string ScheduleId,
@@ -104,10 +104,10 @@ public sealed record ScheduledDispatchRunNowReceipt(
     DateTimeOffset ScheduledFireAt,
     string IdempotencyKey,
     bool Accepted,
-    string CommandId = "",
-    string CorrelationId = "",
-    DateTimeOffset AckedAt = default,
-    string AckStage = "accepted");
+    string CommandId,
+    string CorrelationId,
+    DateTimeOffset AckedAt,
+    string AckStage);
 
 public sealed record ScheduledDispatchListResult(
     IReadOnlyList<ScheduledDispatchSummary> Items,

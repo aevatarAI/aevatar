@@ -56,10 +56,10 @@ public sealed record WorkflowScheduleMutationReceipt(
     string ScheduleId,
     string ScheduleActorId,
     bool Accepted,
-    string CommandId = "",
-    string CorrelationId = "",
-    DateTimeOffset AckedAt = default,
-    string AckStage = "accepted");
+    string CommandId,
+    string CorrelationId,
+    DateTimeOffset AckedAt,
+    string AckStage);
 
 public sealed record WorkflowScheduleRunNowReceipt(
     string ScheduleId,
@@ -67,10 +67,10 @@ public sealed record WorkflowScheduleRunNowReceipt(
     DateTimeOffset ScheduledFireAt,
     string IdempotencyKey,
     bool Accepted,
-    string CommandId = "",
-    string CorrelationId = "",
-    DateTimeOffset AckedAt = default,
-    string AckStage = "accepted");
+    string CommandId,
+    string CorrelationId,
+    DateTimeOffset AckedAt,
+    string AckStage);
 
 public sealed record WorkflowScheduleListResult(
     IReadOnlyList<WorkflowScheduleSummary> Items,

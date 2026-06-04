@@ -445,7 +445,11 @@ public sealed class ScheduledDispatchEndpointsTests
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 configuration.ScheduleId,
                 $"actor:{configuration.ScheduleId}",
-                Accepted: true));
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
         }
 
         public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
@@ -460,7 +464,11 @@ public sealed class ScheduledDispatchEndpointsTests
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 scheduleId,
                 $"actor:{scheduleId}",
-                Accepted: true));
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
         }
 
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
@@ -472,7 +480,14 @@ public sealed class ScheduledDispatchEndpointsTests
             if (EnableException != null)
                 throw EnableException;
 
-            return Task.FromResult(new ScheduledDispatchMutationReceipt(scheduleId, $"actor:{scheduleId}", Accepted: true));
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
         }
 
         public Task<ScheduledDispatchMutationReceipt> DisableAsync(
@@ -484,7 +499,14 @@ public sealed class ScheduledDispatchEndpointsTests
             if (DisableException != null)
                 throw DisableException;
 
-            return Task.FromResult(new ScheduledDispatchMutationReceipt(scheduleId, $"actor:{scheduleId}", Accepted: true));
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
         }
 
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
@@ -545,7 +567,11 @@ public sealed class ScheduledDispatchEndpointsTests
                 $"actor:{scheduleId}",
                 DateTimeOffset.UtcNow,
                 "run-now:schedule-1",
-                Accepted: true));
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
         }
     }
 }
