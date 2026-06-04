@@ -2,6 +2,7 @@ using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
+using Confluent.Kafka;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
@@ -156,6 +157,49 @@ public sealed class KafkaProviderTransportTests
         await emptyNamespace.Should().ThrowAsync<ArgumentException>();
         await emptyStreamId.Should().ThrowAsync<ArgumentException>();
         await nullPayload.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void BuildProducerConfig_ShouldCompressAndRaiseMaxMessageBytes_ByDefault()
+    {
+        var options = new KafkaProviderTransportOptions
+        {
+            BootstrapServers = "localhost:19092",
+            TopicName = "kafka-provider-topic",
+            ConsumerGroup = "kafka-provider-group",
+            TopicPartitionCount = 4,
+        };
+
+        var config = KafkaProviderProducer.BuildProducerConfig(options);
+
+        // Large actor event envelopes (e.g. aggregated tool-call results from a /daily-style skill
+        // run) must compress under the broker's ~1 MB max.message.bytes; without this the broker
+        // rejects the produce ("Broker: Message size too large") and the run fails silently with a
+        // generic "Sorry, I wasn't able to generate a response" reply.
+        config.CompressionType.Should().Be(CompressionType.Gzip);
+        config.MessageMaxBytes.Should().Be(10 * 1024 * 1024);
+        config.EnableIdempotence.Should().BeTrue();
+        config.Acks.Should().Be(Acks.All);
+        config.BootstrapServers.Should().Be("localhost:19092");
+    }
+
+    [Fact]
+    public void BuildProducerConfig_ShouldHonorConfiguredCompressionAndSize()
+    {
+        var options = new KafkaProviderTransportOptions
+        {
+            BootstrapServers = "localhost:19092",
+            TopicName = "kafka-provider-topic",
+            ConsumerGroup = "kafka-provider-group",
+            TopicPartitionCount = 4,
+            ProducerCompressionType = CompressionType.Zstd,
+            ProducerMaxMessageBytes = 4 * 1024 * 1024,
+        };
+
+        var config = KafkaProviderProducer.BuildProducerConfig(options);
+
+        config.CompressionType.Should().Be(CompressionType.Zstd);
+        config.MessageMaxBytes.Should().Be(4 * 1024 * 1024);
     }
 
 }
