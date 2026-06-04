@@ -2329,7 +2329,7 @@ const GAgentsPage: React.FC = () => {
                             }))
                           }
                           options={launchableBindingEndpoints.map((endpoint) => ({
-                            label: `${endpoint.displayName} (${endpoint.endpointId})`,
+                            label: t("pages.gagents.index.copy", "{value1} ({value2})", { value1: endpoint.displayName, value2: endpoint.endpointId }),
                             value: endpoint.endpointId,
                           }))}
                           value={

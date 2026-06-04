@@ -12,6 +12,7 @@ import {
   CompactFactValue,
   factValueFontFamily,
 } from "../components/TeamDetailPrimitives";
+import { t } from "@/shared/i18n/messages";
 
 type TeamRosterMemberRow = {
   readonly canInvokeAsEntry: boolean;
@@ -115,6 +116,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           </Typography.Text>
         }
       >
+        <Typography.Text type="secondary">
+          {intl.formatMessage({ id: "teams.members.description" })}
+        </Typography.Text>
         {rosterSyncing ? (
           <AevatarInspectorEmpty
             compact
@@ -224,7 +228,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               border: `1px solid ${token.colorInfoBorder}`,
                               color: token.colorInfo,
                             }}
-                            text="当前选中"
+                            text={intl.formatMessage({ id: "teams.members.selected" })}
                           />
                         ) : null}
                       </div>

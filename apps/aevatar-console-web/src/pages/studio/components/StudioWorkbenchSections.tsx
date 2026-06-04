@@ -1278,7 +1278,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               >
                 <option value="">
                   {selectedExecutionDetail
-                    ? `${formatDateTime(selectedExecutionDetail.startedAtUtc)} · ${selectedExecutionDetail.status}`
+                    ? t("pages.studio.studioworkbenchsections.copy", "{value1} · {value2}", { value1: formatDateTime(selectedExecutionDetail.startedAtUtc), value2: selectedExecutionDetail.status })
                     : t("pages.studio.studioworkbenchsections.runs", "{value1} runs", { value1: currentMemberExecutions.length })}
                 </option>
                 {currentMemberExecutions.map((execution) => (
@@ -1742,7 +1742,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
               t("pages.studio.studioworkbenchsections.current.implementation", "Current implementation")}{' '}
             · {selectedExecutionDetail?.executionId ||
               t("pages.studio.studioworkbenchsections.no.run.selected", "No run selected")}
-            {executionDurationLabel ? ` · ${executionDurationLabel}` : ''}
+            {executionDurationLabel ? t("pages.studio.studioworkbenchsections.copy.2", "· {value1}", { value1: executionDurationLabel }) : ''}
           </p>
           {executionPromptPreview ? (
             <Typography.Paragraph

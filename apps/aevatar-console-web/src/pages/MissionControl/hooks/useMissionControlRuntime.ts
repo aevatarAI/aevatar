@@ -30,6 +30,7 @@ import {
   buildMissionRuntimePlaceholderSnapshot,
   buildMissionSnapshotFromRuntime,
 } from '../runtimeAdapter';
+import { buildMissionActionFeedbackMessage } from '../runtimeHandoff';
 import type { MissionControlRuntimeArtifacts } from '../services/api';
 import {
   fetchMissionControlRuntimeArtifacts,
@@ -39,7 +40,6 @@ import {
   streamMissionControlEvents,
   submitMissionControlIntervention,
 } from '../services/api';
-import { t } from "@/shared/i18n/messages";
 
 const QUERY_KEY_PREFIX = 'mission-control-runtime';
 const STREAM_FLUSH_DELAY_MS = 120;
@@ -140,41 +140,20 @@ function buildConnectionMessage(
 function buildAcceptedFeedback(
   kind: MissionInterventionActionKind,
   accepted: boolean,
+  commandId?: string,
+  runId?: string,
   signalName?: string,
 ): MissionActionFeedback {
-  if (!accepted) {
-      return {
-        message: t("pages.missioncontrol.hooks.usemissioncontrolruntime.runtime.did.not.accept.the", "Runtime did not accept the intervention request. Please try again."),
-        tone: 'warning',
-      };
-  }
-
-  switch (kind) {
-    case 'signal':
-      return {
-        message: t(
-          "pages.missioncontrol.hooks.usemissioncontrolruntime.signal.accepted.waiting",
-          "Signal {signalName} was accepted. Waiting for runtime to continue.",
-          { signalName: signalName || "continue" },
-        ),
-        tone: 'success',
-      };
-    case 'approve':
-      return {
-        message: t("pages.missioncontrol.hooks.usemissioncontrolruntime.approval.was.accepted.waiting.for", "Approval was accepted. Waiting for the run to advance."),
-        tone: 'success',
-      };
-    case 'reject':
-      return {
-        message: t("pages.missioncontrol.hooks.usemissioncontrolruntime.rejection.was.submitted.waiting.for", "Rejection was submitted. Waiting for runtime to confirm stop or rollback."),
-        tone: 'warning',
-      };
-    default:
-      return {
-        message: t("pages.missioncontrol.hooks.usemissioncontrolruntime.resume.was.accepted.waiting.for", "Resume was accepted. Waiting for the next runtime snapshot."),
-        tone: 'success',
-      };
-  }
+  return {
+    message: buildMissionActionFeedbackMessage({
+      accepted,
+      commandId,
+      kind,
+      runId,
+      signalName,
+    }),
+    tone: !accepted || kind === 'reject' ? 'warning' : 'success',
+  };
 }
 
 export function useMissionControlRuntime(): UseMissionControlRuntimeResult {
@@ -476,7 +455,13 @@ export function useMissionControlRuntime(): UseMissionControlRuntimeResult {
           action,
         );
         setActionFeedback(
-          buildAcceptedFeedback(action.kind, result.accepted, result.signalName),
+          buildAcceptedFeedback(
+            action.kind,
+            result.accepted,
+            result.commandId,
+            result.runId,
+            result.signalName,
+          ),
         );
         await queryClient.invalidateQueries({
           queryKey: buildMissionControlQueryKey(runtimeContext),

@@ -3,6 +3,7 @@ import type {
   RuntimeStepInfo,
   RuntimeToolCallInfo,
 } from '@/shared/agui/runtimeEventSemantics';
+import { t } from '@/shared/i18n/messages';
 import type { StudioObserveSessionSeed } from '@/shared/studio/observeSession';
 
 export type InvokeResultState = {
@@ -73,6 +74,8 @@ export type StudioInvokeCurrentRunViewModel = {
   readonly rawOutput: string;
 };
 
+export type StudioInvokeRunViewMode = 'latest' | 'historical';
+
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
@@ -113,6 +116,42 @@ export function cloneInvokeResult(result: InvokeResultState): InvokeResultState 
     steps: [...result.steps],
     toolCalls: [...result.toolCalls],
   };
+}
+
+export function getStudioInvokeObserveHandoffText(input: {
+  readonly mode: InvokeResultState['mode'];
+  readonly runViewMode: StudioInvokeRunViewMode;
+  readonly status: InvokeResultState['status'];
+}): string {
+  if (input.runViewMode === 'historical') {
+    return t(
+      'pages.studio.studiomemberinvokepanelcurrentrun.historical.runs.are.read.only',
+      'Historical runs are read-only. Retry as a new run when you need a fresh Observe handoff.',
+    );
+  }
+
+  if (input.status === 'running') {
+    return t(
+      'pages.studio.studiomemberinvokepanelcurrentrun.observe.will.follow.the.latest',
+      'Observe will follow the latest run context after backend events arrive. Keep Invoke open while this stream updates.',
+    );
+  }
+
+  if (input.status === 'success') {
+    if (input.mode === 'invoke') {
+      return t(
+        'pages.studio.studiomemberinvokepanelcurrentrun.invoke.receipt.was.captured',
+        'Invoke receipt was captured. Switch to Observe to watch backend events and read-model materialization catch up for this member.',
+      );
+    }
+
+    return t(
+      'pages.studio.studiomemberinvokepanelcurrentrun.this.run.is.ready.for.observe',
+      'This run is ready for Observe. Switch to Observe to inspect backend events, audit frames, and the runtime trail for this member.',
+    );
+  }
+
+  return '';
 }
 
 function hasCurrentRunData(input: {

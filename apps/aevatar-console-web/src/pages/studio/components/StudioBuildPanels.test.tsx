@@ -1,7 +1,9 @@
 import { AGUIEventType } from '@aevatar-react-sdk/types';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
@@ -16,6 +18,7 @@ import {
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
 import {
+  StudioGAgentBuildPanel,
   StudioScriptBuildPanel,
   StudioWorkflowBuildPanel,
 } from './StudioBuildPanels';
@@ -80,6 +83,12 @@ type BuildWorkflowYamlsForTest = (
 
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
+    streamDraftRun: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/api/runtimeGAgentApi', () => ({
+  runtimeGAgentApi: {
     streamDraftRun: jest.fn(),
   },
 }));
@@ -157,6 +166,9 @@ jest.mock('@/modules/studio/scripts/ScriptCodeEditor', () => ({
 }));
 
 const mockedRuntimeRunsApi = runtimeRunsApi as unknown as {
+  streamDraftRun: jest.Mock;
+};
+const mockedRuntimeGAgentApi = runtimeGAgentApi as unknown as {
   streamDraftRun: jest.Mock;
 };
 const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
@@ -465,6 +477,7 @@ function WorkflowBuildHarness({
 
 describe('StudioWorkflowBuildPanel', () => {
   beforeEach(() => {
+    setLocale('en-US', false);
     jest.clearAllMocks();
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({} as Response);
     mockedScriptsApi.validateDraft.mockResolvedValue({
@@ -548,7 +561,7 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
   });
 
-  it('offers Add script from the empty Script build state', () => {
+  it('keeps the empty Script build state focused on creating the first script', () => {
     const handleCreateScriptDraft = jest.fn();
 
     render(
@@ -566,6 +579,28 @@ describe('StudioWorkflowBuildPanel', () => {
         onSelectScriptId={jest.fn()}
       />,
     );
+
+    expect(
+      screen.getByText(
+        'Create a script to start editing. Saved workspace scripts appear here when this catalog has one.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('No script is selected yet. Start a script draft to open the editor.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Script ID')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Script lifecycle status')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Script dry run input')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Validation, save, bind/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/dry-run controls/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Bind becomes available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Create a script before running it')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Validate' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save script' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load sample input' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue to Bind' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Promotion')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add script' }));
     expect(handleCreateScriptDraft).toHaveBeenCalled();
@@ -1560,6 +1595,43 @@ describe('StudioWorkflowBuildPanel', () => {
     expect(
       await screen.findByText(/provider is not connected yet/i),
     ).toBeInTheDocument();
+  });
+
+  it('keeps a GAgent draft-run failure inside Build with a recovery path', async () => {
+    mockedRuntimeGAgentApi.streamDraftRun.mockRejectedValueOnce(
+      new Error('GAgent draft run timed out before the backend returned any event.'),
+    );
+
+    render(
+      <StudioGAgentBuildPanel
+        scopeId="scope-1"
+        currentMemberLabel="gagent-1"
+        gAgentTypes={[
+          {
+            assemblyName: 'Aevatar.GAgents',
+            fullName: 'Aevatar.GAgents.TestGAgent',
+            typeName: 'TestGAgent',
+          },
+        ]}
+        gAgentTypesError={null}
+        gAgentTypesLoading={false}
+        selectedGAgentTypeName="Aevatar.GAgents.TestGAgent, Aevatar.GAgents"
+        onContinueToBind={jest.fn()}
+        onSelectGAgentTypeName={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(
+      await screen.findByText('Build dry-run needs attention'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This only failed the Build dry-run. Adjust the prompt or tools and retry, or continue to Bind when the member definition is ready to publish.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
   });
 
   it('locks apply changes while the step mutation is pending', async () => {

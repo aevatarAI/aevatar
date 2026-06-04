@@ -161,7 +161,7 @@ const TeamCreatePage: React.FC = () => {
   };
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Teams"
+      breadcrumb={t("pages.teams.new.aevatar.teams", "Aevatar / Teams")}
       extra={
         <Space wrap>
           <Button
