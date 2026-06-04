@@ -212,20 +212,20 @@ internal sealed class GAgentDraftRunCommandTargetResolver
     private readonly IActorRuntime _actorRuntime;
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
     private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
-    private readonly IAgentTypeVerifier? _agentTypeVerifier;
+    private readonly IAgentKindVerifier? _agentKindVerifier;
     private readonly IAgentKindRegistry? _agentKindRegistry;
 
     public GAgentDraftRunCommandTargetResolver(
         IActorRuntime actorRuntime,
         IGAgentDraftRunProjectionPort projectionPort,
         IGAgentRunTerminalProjectionPort terminalProjectionPort,
-        IAgentTypeVerifier? agentTypeVerifier = null,
+        IAgentKindVerifier? agentKindVerifier = null,
         IAgentKindRegistry? agentKindRegistry = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
-        _agentTypeVerifier = agentTypeVerifier;
+        _agentKindVerifier = agentKindVerifier;
         _agentKindRegistry = agentKindRegistry;
     }
 
@@ -236,14 +236,15 @@ internal sealed class GAgentDraftRunCommandTargetResolver
         ArgumentNullException.ThrowIfNull(command);
 
         var agentKind = NormalizeOptional(command.AgentKind);
-        var legacyActorTypeName = NormalizeOptional(command.ActorTypeName);
-        var agentType = ResolveExpectedType(agentKind, legacyActorTypeName);
-        if (agentType is null)
+        var implementation = ResolveExpectedImplementation(agentKind);
+        if (implementation is null)
         {
             return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Failure(
                 GAgentDraftRunStartError.UnknownActorType);
         }
 
+        agentKind = implementation.Metadata.Kind;
+        var diagnosticActorTypeName = implementation.Metadata.ImplementationClrTypeName;
         var preferredActorId = string.IsNullOrWhiteSpace(command.PreferredActorId)
             ? null
             : command.PreferredActorId.Trim();
@@ -254,7 +255,7 @@ internal sealed class GAgentDraftRunCommandTargetResolver
             var existingActor = await _actorRuntime.GetAsync(preferredActorId);
             if (existingActor != null)
             {
-                if (!await MatchesExpectedTypeAsync(existingActor, agentType, ct))
+                if (!await MatchesExpectedKindAsync(existingActor, agentKind, ct))
                 {
                     return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Failure(
                         GAgentDraftRunStartError.ActorTypeMismatch);
@@ -264,22 +265,18 @@ internal sealed class GAgentDraftRunCommandTargetResolver
             }
             else
             {
-                actor = string.IsNullOrWhiteSpace(agentKind)
-                    ? await _actorRuntime.CreateAsync(agentType!, preferredActorId, ct)
-                    : await _actorRuntime.CreateByKindAsync(agentKind, preferredActorId, ct);
+                actor = await _actorRuntime.CreateByKindAsync(agentKind, preferredActorId, ct);
             }
         }
         else
         {
-            actor = string.IsNullOrWhiteSpace(agentKind)
-                ? await _actorRuntime.CreateAsync(agentType!, null, ct)
-                : await _actorRuntime.CreateByKindAsync(agentKind, null, ct);
+            actor = await _actorRuntime.CreateByKindAsync(agentKind, null, ct);
         }
 
         return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Success(
             new GAgentDraftRunCommandTarget(
                 actor,
-                legacyActorTypeName ?? agentKind!,
+                diagnosticActorTypeName,
                 _projectionPort,
                 _terminalProjectionPort));
     }
@@ -290,40 +287,40 @@ internal sealed class GAgentDraftRunCommandTargetResolver
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private System.Type? ResolveExpectedType(string? agentKind, string? legacyActorTypeName)
+    private AgentImplementation? ResolveExpectedImplementation(string? agentKind)
     {
-        if (!string.IsNullOrWhiteSpace(agentKind))
-        {
-            try
-            {
-                var implementation = _agentKindRegistry?.Resolve(agentKind);
-                if (implementation != null)
-                    return ScopeGAgentActorTypeResolver.Resolve(implementation.Metadata.ImplementationClrTypeName);
-            }
-            catch (UnknownAgentKindException)
-            {
-                return null;
-            }
-        }
+        if (string.IsNullOrWhiteSpace(agentKind) || _agentKindRegistry == null)
+            return null;
 
-        return ScopeGAgentActorTypeResolver.Resolve(legacyActorTypeName ?? string.Empty);
+        try
+        {
+            return _agentKindRegistry.Resolve(agentKind);
+        }
+        catch (UnknownAgentKindException)
+        {
+            return null;
+        }
     }
 
-    private async Task<bool> MatchesExpectedTypeAsync(
+    private async Task<bool> MatchesExpectedKindAsync(
         IActor actor,
-        System.Type expectedType,
+        string expectedKind,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        ArgumentNullException.ThrowIfNull(expectedType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedKind);
 
-        if (expectedType.IsAssignableFrom(actor.Agent.GetType()))
+        if (_agentKindRegistry != null &&
+            _agentKindRegistry.TryGetKindForAgentType(actor.Agent.GetType(), out var localKind) &&
+            string.Equals(localKind, expectedKind, StringComparison.Ordinal))
+        {
             return true;
+        }
 
-        if (_agentTypeVerifier == null)
+        if (_agentKindVerifier == null)
             return false;
 
-        return await _agentTypeVerifier.IsExpectedAsync(actor.Id, expectedType, ct);
+        return await _agentKindVerifier.IsExpectedKindAsync(actor.Id, expectedKind, ct);
     }
 }
 

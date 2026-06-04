@@ -3,6 +3,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.AGUI.Contracts;
@@ -12,6 +14,8 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class GAgentDraftRunInteractionPortTests
 {
+    private const string TestAgentKind = "tests.draft-run-agent";
+
     [Fact]
     public async Task ExecuteAsync_ShouldReturnUnknownActorType_WhenTypeCannotBeResolved()
     {
@@ -22,7 +26,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             new RecordingInteractionService());
 
         var result = await port.ExecuteAsync(
-            Request("Aevatar.IamNotReal, Aevatar.IamNotReal"),
+            Request(agentKind: "tests.missing-draft-run-agent"),
             (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
@@ -48,12 +52,12 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        runtime.CreateCalls.Should().BeEmpty();
+        runtime.CreateByKindCalls.Should().BeEmpty();
         registry.RegisteredActors.Should().BeEmpty();
         admission.Targets.Should().ContainSingle().Which.Should().Be(new ScopeResourceTarget(
             "scope-a",
             ScopeResourceKind.GAgentActor,
-            typeof(TestAgent).AssemblyQualifiedName!,
+            typeof(TestAgent).FullName!,
             "existing-actor",
             ScopeResourceOperation.DraftRunReuse));
         interaction.Commands.Should().ContainSingle().Which.PreferredActorId.Should().Be("existing-actor");
@@ -378,10 +382,11 @@ public sealed class GAgentDraftRunInteractionPortTests
         RecordingRegistryCommandPort registry,
         RecordingAdmissionPort admission,
         RecordingInteractionService interaction) =>
-        new(runtime, registry, admission, interaction);
+        new(runtime, registry, admission, interaction, BuildRegistry());
 
     private static GAgentDraftRunInteractionRequest Request(
         string? actorTypeName = null,
+        string? agentKind = TestAgentKind,
         string? preferredActorId = "draft-actor",
         AgentToolExecutionContext? toolContext = null,
         LLMControlContext? llmControl = null) =>
@@ -395,7 +400,15 @@ public sealed class GAgentDraftRunInteractionPortTests
             " model ",
             " route ",
             ToolContext: toolContext,
-            LlmControl: llmControl);
+            LlmControl: llmControl,
+            AgentKind: agentKind);
+
+    private static IAgentKindRegistry BuildRegistry()
+    {
+        var builder = new AgentKindRegistryBuilder();
+        builder.Register<TestAgent>();
+        return new AgentKindRegistry(builder.Build());
+    }
 
     private static AgentToolExecutionContext NewToolContext() =>
         new(
@@ -518,6 +531,7 @@ public sealed class GAgentDraftRunInteractionPortTests
     {
         private readonly Dictionary<string, IActor> _createdActors = new(StringComparer.Ordinal);
         public List<(Type AgentType, string? ActorId)> CreateCalls { get; } = [];
+        public List<(string AgentKind, string? ActorId)> CreateByKindCalls { get; } = [];
         public List<string> DestroyedActorIds { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
@@ -529,6 +543,16 @@ public sealed class GAgentDraftRunInteractionPortTests
             var actorId = id ?? "created";
             operations?.Add($"runtime:create:{actorId}");
             CreateCalls.Add((agentType, actorId));
+            var actor = new TestActor(actorId);
+            _createdActors[actorId] = actor;
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? "created";
+            operations?.Add($"runtime:create:{actorId}");
+            CreateByKindCalls.Add((agentKind, actorId));
             var actor = new TestActor(actorId);
             _createdActors[actorId] = actor;
             return Task.FromResult<IActor>(actor);
@@ -568,6 +592,7 @@ public sealed class GAgentDraftRunInteractionPortTests
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
+    [GAgent(TestAgentKind)]
     private sealed class TestAgent : IAgent
     {
         public string Id { get; } = "test-agent";

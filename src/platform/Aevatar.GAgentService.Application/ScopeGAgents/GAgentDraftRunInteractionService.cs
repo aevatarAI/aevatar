@@ -109,16 +109,12 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
     {
         var scopeId = request.ScopeId.Trim();
         var agentKind = NormalizeOptional(request.AgentKind);
-        var actorTypeName = ResolveActorTypeName(agentKind, request.ActorTypeName);
+        var actorTypeName = ResolveActorTypeName(agentKind);
         if (string.IsNullOrWhiteSpace(actorTypeName))
             return PreparationResult.Failure(GAgentDraftRunStartError.UnknownActorType);
 
-        var actorType = ScopeGAgentActorTypeResolver.Resolve(actorTypeName);
-        if (actorType is null)
-            return PreparationResult.Failure(GAgentDraftRunStartError.UnknownActorType);
-
         var actorId = string.IsNullOrWhiteSpace(request.PreferredActorId)
-            ? AgentId.New(actorType)
+            ? $"{agentKind}:{Guid.NewGuid():N}"
             : request.PreferredActorId.Trim();
         var existingActor = await _actorRuntime.GetAsync(actorId);
         if (existingActor is not null)
@@ -144,9 +140,7 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         IActor? createdActor = null;
         try
         {
-            createdActor = string.IsNullOrWhiteSpace(agentKind)
-                ? await _actorRuntime.CreateAsync(actorType, actorId, ct)
-                : await _actorRuntime.CreateByKindAsync(agentKind, actorId, ct);
+            createdActor = await _actorRuntime.CreateByKindAsync(agentKind!, actorId, ct);
             var receipt = await _registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, actorTypeName, actorId),
                 ct);
@@ -177,24 +171,19 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
             RequiresRollbackOnFailure: true));
     }
 
-    private string? ResolveActorTypeName(string? agentKind, string actorTypeName)
+    private string? ResolveActorTypeName(string? agentKind)
     {
-        if (!string.IsNullOrWhiteSpace(agentKind))
-        {
-            try
-            {
-                var implementation = _agentKindRegistry?.Resolve(agentKind);
-                if (implementation != null)
-                    return implementation.Metadata.ImplementationClrTypeName;
-            }
-            catch (UnknownAgentKindException)
-            {
-                return null;
-            }
-        }
+        if (string.IsNullOrWhiteSpace(agentKind) || _agentKindRegistry == null)
+            return null;
 
-        var normalizedActorTypeName = actorTypeName.Trim();
-        return string.IsNullOrWhiteSpace(normalizedActorTypeName) ? null : normalizedActorTypeName;
+        try
+        {
+            return _agentKindRegistry.Resolve(agentKind).Metadata.ImplementationClrTypeName;
+        }
+        catch (UnknownAgentKindException)
+        {
+            return null;
+        }
     }
 
     private async Task RollbackAsync(

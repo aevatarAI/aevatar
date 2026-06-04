@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -10,6 +11,7 @@ namespace Aevatar.GAgents.ChatHistory;
 /// Per-user index actor that holds conversation list and metadata.
 /// Actor ID: <c>chat-index-{scopeId}</c>.
 /// </summary>
+[GAgent("chat.history.index")]
 public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>, IProjectedActor
 {
     public static string ProjectionKind => "chat-history-index";

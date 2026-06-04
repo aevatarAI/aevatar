@@ -20,6 +20,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -37,6 +38,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(NyxIdChatGAgent).Assembly));
 
         services.AddCqrsCore();
         services.AddHttpClient();

@@ -7,6 +7,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -48,6 +49,7 @@ public static class ChatRoutingServiceCollectionExtensions
         // Shared projection plumbing used by the projector (write dispatcher +
         // clock). Both registrations are TryAdd so they're safe alongside other
         // agents that already wire them.
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ChatRoutePolicyGAgent).Assembly));
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
 

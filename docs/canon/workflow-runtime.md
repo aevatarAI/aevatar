@@ -61,7 +61,7 @@ owner: eanzhao
    - 作为 definition/source actor 被解析与绑定
 2. `WorkflowRunGAgent`
    - 一次 run 一个 actor
-   - 按 `roles` 创建 run-scoped role actor 树；`agent_kind` 由 Foundation runtime 解析
+  - 按 `roles` 创建 run-scoped role actor 树；`agent_kind` 由 Foundation runtime 解析，省略时默认 `workflow.role-agent`
    - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
    - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
    - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
@@ -116,7 +116,7 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 roles:
   - id: planner
     name: Planner
-    agent_kind: aevatar.role-agent
+    agent_kind: workflow.role-agent
     system_prompt: "You are a planning assistant."
     provider: openai
     model: gpt-5.4
@@ -136,7 +136,7 @@ roles:
 语义规则：
 
 - `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
-- `agent_kind` 是 role-level actor lifecycle 入口；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
+- `agent_kind` 是 role-level actor lifecycle 入口，可指向任意已注册 primary `[GAgent]` kind；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
 - Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):

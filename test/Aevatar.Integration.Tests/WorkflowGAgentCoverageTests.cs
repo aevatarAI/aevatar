@@ -129,7 +129,7 @@ public class WorkflowGAgentCoverageTests
 
         runtime.CreateCalls.Should().Be(0);
         runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
-            "workflow.assistant-role",
+            "workflow.role-agent",
             $"{agent.Id}:role_a"));
         runtime.Linked.Should().ContainSingle();
         runtime.Linked[0].child.Should().EndWith(":role_a");
@@ -196,7 +196,7 @@ public class WorkflowGAgentCoverageTests
             roles:
               - id: assistant
                 name: Assistant
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
             steps:
               - id: step_1
                 type: llm_call
@@ -209,7 +209,7 @@ public class WorkflowGAgentCoverageTests
 
         runtime.CreateCalls.Should().Be(0);
         runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
-            "workflow.assistant-role",
+            "workflow.role-agent",
             "workflow-run-implicit-assistant:assistant"));
         runtime.Linked.Should().ContainSingle()
             .Which.child.Should().Be("workflow-run-implicit-assistant:assistant");
@@ -235,7 +235,7 @@ public class WorkflowGAgentCoverageTests
             roles:
               - id: assistant
                 name: Assistant
-                agent_kind: " workflow.assistant-role "
+                agent_kind: " workflow.role-agent "
             steps:
               - id: step_1
                 type: llm_call
@@ -248,7 +248,7 @@ public class WorkflowGAgentCoverageTests
 
         runtime.CreateCalls.Should().Be(0);
         runtime.CreateByKindCalls.Should().ContainSingle().Which.Should().Be((
-            "workflow.assistant-role",
+            "workflow.role-agent",
             "workflow-run-kind:assistant"));
         runtime.Linked.Should().ContainSingle()
             .Which.Should().Be(("workflow-run-kind", "workflow-run-kind:assistant"));
@@ -290,7 +290,7 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_WhenRoleAgentKindIsPublicAlias_ShouldCreateRoleActorByAliasAndInitializeIt()
+    public async Task WorkflowRunGAgent_WhenRoleAgentKindIsDefaultPrimary_ShouldCreateRoleActorByKindAndInitializeIt()
     {
         var runtime = new RecordingActorRuntime();
         var agent = CreateRunAgent(runtime: runtime);
@@ -302,7 +302,7 @@ public class WorkflowGAgentCoverageTests
             roles:
               - id: assistant
                 name: Assistant
-                agent_kind: aevatar.role-agent
+                agent_kind: workflow.role-agent
             steps:
               - id: step_1
                 type: llm_call
@@ -2176,7 +2176,7 @@ public class WorkflowGAgentCoverageTests
         bool includeAgentKind = true)
     {
         var name = workflowName ?? "wf_valid";
-        var agentKindLine = includeAgentKind ? "\n    agent_kind: workflow.assistant-role" : string.Empty;
+        var agentKindLine = includeAgentKind ? "\n    agent_kind: workflow.role-agent" : string.Empty;
         var providerLine = string.IsNullOrWhiteSpace(provider) ? string.Empty : $"\n    provider: \"{provider}\"";
         var modelLine = string.IsNullOrWhiteSpace(model) ? string.Empty : $"\n    model: \"{model}\"";
         return $$"""
@@ -2198,7 +2198,7 @@ public class WorkflowGAgentCoverageTests
                roles:
                  - id: role_a
                    name: RoleA
-                   agent_kind: workflow.assistant-role
+                   agent_kind: workflow.role-agent
                    system_prompt: "helpful role"
                    provider: openai
                    model: gpt-5.4
@@ -2629,11 +2629,6 @@ public class WorkflowGAgentCoverageTests
         public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class StaticRoleAgentTypeResolver(Type roleAgentType) : IRoleAgentTypeResolver
-    {
-        public Type ResolveRoleAgentType() => roleAgentType;
     }
 
     private sealed class RecordingEventModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>

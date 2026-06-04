@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -15,17 +16,20 @@ public sealed class OrleansActorRuntime : IActorRuntime
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly IActorRuntimeCallbackScheduler _callbackScheduler;
     private readonly ILogger<OrleansActorRuntime> _logger;
+    private readonly IAgentKindRegistry _agentKindRegistry;
 
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
         Aevatar.Foundation.Abstractions.IStreamProvider streams,
         IActorRuntimeCallbackScheduler callbackScheduler,
+        IAgentKindRegistry agentKindRegistry,
         IStreamLifecycleManager? streamLifecycleManager = null,
         ILogger<OrleansActorRuntime>? logger = null)
     {
         _grainFactory = grainFactory;
         _streams = streams;
         _callbackScheduler = callbackScheduler ?? throw new ArgumentNullException(nameof(callbackScheduler));
+        _agentKindRegistry = agentKindRegistry ?? throw new ArgumentNullException(nameof(agentKindRegistry));
         _streamLifecycleManager = streamLifecycleManager ?? NullStreamLifecycleManager.Instance;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
     }
@@ -39,23 +43,21 @@ public sealed class OrleansActorRuntime : IActorRuntime
         if (!typeof(IAgent).IsAssignableFrom(agentType))
             throw new InvalidOperationException($"Type {agentType.FullName} does not implement IAgent.");
 
-        var actorId = id ?? AgentId.New(agentType);
+        if (!_agentKindRegistry.TryGetKindForAgentType(agentType, out var agentKind))
+            throw new InvalidOperationException($"Agent type {agentType.FullName} is not registered with a primary [GAgent] kind.");
+
+        var actorId = id ?? $"{agentKind}:{Guid.NewGuid():N}";
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-        var agentTypeName = agentType.AssemblyQualifiedName
-            ?? throw new InvalidOperationException($"Unable to resolve agent type name for {agentType.FullName}.");
 
-        var initialized = await grain.InitializeAgentAsync(agentTypeName);
+        var initialized = await grain.InitializeAgentByKindAsync(agentKind);
         if (!initialized)
-            throw new InvalidOperationException($"Failed to initialize Orleans actor {actorId}.");
+            throw new InvalidOperationException($"Failed to initialize Orleans actor {actorId} for kind '{agentKind}'.");
 
-        _logger.LogInformation("Actor {Id} ({Type}) created via Orleans runtime", actorId, agentType.Name);
+        _logger.LogInformation("Actor {Id} ({Kind}) created via Orleans runtime", actorId, agentKind);
         return new OrleansActor(actorId, grain, _streams);
     }
 
     /// <summary>Creates actor by stable agent kind through Orleans grain activation.</summary>
-    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
-    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
     public async Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);

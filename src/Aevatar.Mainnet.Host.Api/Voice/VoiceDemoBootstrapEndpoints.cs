@@ -54,7 +54,7 @@ internal static class VoiceDemoBootstrapEndpoints
         await catalogCommandPort.UpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = actorId,
-            AgentType = NyxIdChatServiceDefaults.GAgentTypeName,
+            AgentType = NyxIdChatServiceDefaults.GAgentKind,
             TemplateName = "voice-demo",
             OwnerScope = ownerScope.Clone(),
         }, ct);

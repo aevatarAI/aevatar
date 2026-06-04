@@ -172,22 +172,22 @@ public class MakerRecursiveRegressionTests
         roles:
           - id: coordinator
             name: Coordinator
-            agent_kind: workflow.assistant-role
+            agent_kind: workflow.role-agent
             system_prompt: "coordinator"
             provider: mock-maker
           - id: worker_a
             name: WorkerA
-            agent_kind: workflow.assistant-role
+            agent_kind: workflow.role-agent
             system_prompt: "worker"
             provider: mock-maker
           - id: worker_b
             name: WorkerB
-            agent_kind: workflow.assistant-role
+            agent_kind: workflow.role-agent
             system_prompt: "worker"
             provider: mock-maker
           - id: worker_c
             name: WorkerC
-            agent_kind: workflow.assistant-role
+            agent_kind: workflow.role-agent
             system_prompt: "worker"
             provider: mock-maker
         steps:

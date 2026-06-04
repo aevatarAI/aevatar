@@ -113,7 +113,6 @@ public class AIFeatureBootstrapCoverageTests
         });
 
         using var provider = services.BuildServiceProvider();
-        provider.GetService<IRoleAgentTypeResolver>().Should().NotBeNull();
         provider.GetService<IVoiceToolInvoker>().Should().NotBeNull();
 
         var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
@@ -125,7 +124,7 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
-    public void AddAevatarAIFeatures_ShouldRegisterWorkflowRolePrimaryKindAndPublicAlias()
+    public void AddAevatarAIFeatures_ShouldRegisterWorkflowRolePrimaryKind()
     {
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder().Build();
@@ -135,15 +134,13 @@ public class AIFeatureBootstrapCoverageTests
         using var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<IAgentKindRegistry>();
 
-        var primary = registry.Resolve(WorkflowRoleGAgent.WorkflowAssistantRoleAgentKind);
-        var aliasFound = registry.TryResolve(WorkflowRoleConventions.DefaultAgentKind, out var alias);
+        var primary = registry.Resolve(WorkflowRoleConventions.DefaultAgentKind);
+        var formerAliasFound = registry.TryResolve("workflow.assistant-role", out var formerAlias);
 
-        primary.Metadata.Kind.Should().Be(WorkflowRoleGAgent.WorkflowAssistantRoleAgentKind);
+        primary.Metadata.Kind.Should().Be(WorkflowRoleConventions.DefaultAgentKind);
         primary.Metadata.ImplementationClrTypeName.Should().Be(typeof(WorkflowRoleGAgent).FullName);
-        aliasFound.Should().BeTrue();
-        alias.Metadata.Kind.Should().Be(WorkflowRoleGAgent.WorkflowAssistantRoleAgentKind);
-        alias.Metadata.LegacyKinds.Should().ContainSingle()
-            .Which.Should().Be(WorkflowRoleConventions.DefaultAgentKind);
+        formerAliasFound.Should().BeFalse();
+        formerAlias.Should().BeNull();
     }
 
     [Fact]
@@ -397,7 +394,12 @@ public class AIFeatureBootstrapCoverageTests
 
         using var provider = services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().BeNull();
-        provider.GetService<IRoleAgentTypeResolver>().Should().NotBeNull();
+        provider.GetRequiredService<IAgentKindRegistry>()
+            .Resolve(WorkflowRoleConventions.DefaultAgentKind)
+            .Metadata
+            .ImplementationClrTypeName
+            .Should()
+            .Be(typeof(WorkflowRoleGAgent).FullName);
     }
 
     [Fact]

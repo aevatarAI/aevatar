@@ -3,6 +3,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -37,6 +38,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 // Refactor (iter107/cluster-1-channel-business-io-process-queue):
 //   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
 //   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
+[GAgent("channel.runtime.conversation")]
 public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentState>
 {
     // Refactor (iter17/cluster-038):

@@ -220,7 +220,7 @@ public class NyxIdChatGAgentTests
 
         registry.UnregisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
             "scope-a",
-            NyxIdChatServiceDefaults.GAgentTypeName,
+            NyxIdChatServiceDefaults.GAgentKind,
             actorId));
         runtime.DestroyedActors.Should().BeEmpty();
     }
@@ -245,7 +245,7 @@ public class NyxIdChatGAgentTests
 
         registry.UnregisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
             "scope-a",
-            NyxIdChatServiceDefaults.GAgentTypeName,
+            NyxIdChatServiceDefaults.GAgentKind,
             actorId));
         runtime.DestroyedActors.Should().ContainSingle().Which.Should().Be(actorId);
     }
@@ -268,7 +268,7 @@ public class NyxIdChatGAgentTests
 
         registry.RegisteredActors.Should().ContainSingle().Which.Should().Be(new GAgentActorRegistration(
             "scope-a",
-            NyxIdChatServiceDefaults.GAgentTypeName,
+            NyxIdChatServiceDefaults.GAgentKind,
             actorId));
     }
 

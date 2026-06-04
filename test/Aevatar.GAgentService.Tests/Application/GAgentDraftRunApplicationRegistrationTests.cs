@@ -3,6 +3,8 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.AGUI.Contracts;
@@ -14,6 +16,8 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class GAgentDraftRunApplicationRegistrationTests
 {
+    private const string TestAgentKind = "tests.draft-run-registration-agent";
+
     [Fact]
     public async Task AddScopeGAgentDraftRunInteraction_ShouldExposeBusinessPortAndSharedRealtimeSession()
     {
@@ -26,6 +30,7 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         services.AddSingleton<IGAgentRunTerminalProjectionPort, RecordingTerminalProjectionPort>();
         services.AddSingleton<IGAgentRunTerminalQueryPort, NoopTerminalQueryPort>();
         services.AddSingleton<IGAgentDraftRunObservationScopeLeasePreparationPort, RecordingPreparationPort>();
+        services.AddSingleton<IAgentKindRegistry>(BuildRegistry());
 
         services.AddScopeGAgentDraftRunInteraction();
 
@@ -60,7 +65,8 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
                 "scope-a",
                 typeof(TestAgent).AssemblyQualifiedName!,
                 "hello",
-                PreferredActorId: "draft-actor"),
+                PreferredActorId: "draft-actor",
+                AgentKind: TestAgentKind),
             (evt, _) =>
             {
                 emitted.Add(evt);
@@ -82,6 +88,17 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
             CreateAsync(typeof(TAgent), id, ct);
 
         public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actorId = string.IsNullOrWhiteSpace(id)
+                ? Guid.NewGuid().ToString("N")
+                : id.Trim();
+            var actor = new TestActor(actorId);
+            _actors[actorId] = actor;
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             var actorId = string.IsNullOrWhiteSpace(id)
@@ -257,6 +274,14 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
+    private static IAgentKindRegistry BuildRegistry()
+    {
+        var builder = new AgentKindRegistryBuilder();
+        builder.Register<TestAgent>();
+        return new AgentKindRegistry(builder.Build());
+    }
+
+    [GAgent(TestAgentKind)]
     private sealed class TestAgent : IAgent
     {
         public string Id { get; } = "test-agent";

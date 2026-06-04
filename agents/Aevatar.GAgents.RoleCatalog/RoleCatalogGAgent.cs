@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -14,6 +15,7 @@ namespace Aevatar.GAgents.RoleCatalog;
 ///
 /// Actor ID: <c>role-catalog</c> (cluster-scoped singleton).
 /// </summary>
+[GAgent("role.catalog")]
 public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>, IProjectedActor
 {
     public static string ProjectionKind => "role-catalog";

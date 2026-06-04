@@ -70,15 +70,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
-        services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
+        services.TryAddSingleton<IAgentKindVerifier, DefaultAgentKindVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
         services.TryAddSingleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>();
-        services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
-        // Kind-token identity registry + transitional reflection fallback
-        // (issue #498). Modules contribute their kinds in their own DI
-        // extensions; the runtime guarantees the registry is available
-        // here so RuntimeActorGrain.OnActivateAsync can resolve identities
-        // without holding a reflection scan itself.
+        services.Replace(ServiceDescriptor.Singleton<IActorKindProbe, OrleansActorKindProbe>());
+        // Kind-token identity registry. Modules contribute their kinds in
+        // their own DI extensions; the runtime guarantees the registry is
+        // available here so RuntimeActorGrain resolves identities by kind.
         services.AddAevatarAgentKindRegistry();
         services.TryAddSingleton<IActorEventSubscriptionProvider>(sp =>
             new StreamProviderActorEventSubscriptionProvider(sp.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>()));

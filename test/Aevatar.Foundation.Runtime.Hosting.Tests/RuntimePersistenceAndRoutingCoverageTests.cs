@@ -1,6 +1,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
@@ -69,7 +71,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
     {
         var registry = new InMemoryStreamForwardingRegistry();
         var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
-        var services = new ServiceCollection().BuildServiceProvider();
+        var services = CreateServices();
         var runtime = new LocalActorRuntime(streams, services, streams);
 
         var parent = await runtime.CreateAsync<CoverageTestAgent>("parent");
@@ -89,7 +91,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
     {
         var registry = new InMemoryStreamForwardingRegistry();
         var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
-        var services = new ServiceCollection().BuildServiceProvider();
+        var services = CreateServices();
         var runtime = new LocalActorRuntime(streams, services, streams);
 
         var parent = await runtime.CreateAsync<CoverageTestAgent>("parent-relay");
@@ -112,7 +114,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
     {
         var registry = new InMemoryStreamForwardingRegistry();
         var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
-        var services = new ServiceCollection().BuildServiceProvider();
+        var services = CreateServices();
         var runtime = new LocalActorRuntime(streams, services, streams);
 
         var parent = await runtime.CreateAsync<CoverageTestAgent>("parent-destroy-relay");
@@ -145,7 +147,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
 
         var registry = new InMemoryStreamForwardingRegistry();
         var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
-        var services = new ServiceCollection().BuildServiceProvider();
+        var services = CreateServices();
         var runtime = new LocalActorRuntime(streams, services, streams);
 
         var parent = await runtime.CreateAsync<CoverageTestAgent>("parent-observed");
@@ -184,6 +186,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
         var hookDispatcher = new FaultedDeactivationHookDispatcher();
         var services = new ServiceCollection()
+            .AddAevatarAgentKindRegistry(builder => builder.Register<CoverageTestAgent>())
             .AddSingleton<IActorDeactivationHookDispatcher>(hookDispatcher)
             .BuildServiceProvider();
         var runtime = new LocalActorRuntime(streams, services, streams);
@@ -205,6 +208,12 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         public string Name { get; init; } = string.Empty;
     }
 
+    private static ServiceProvider CreateServices() =>
+        new ServiceCollection()
+            .AddAevatarAgentKindRegistry(builder => builder.Register<CoverageTestAgent>())
+            .BuildServiceProvider();
+
+    [GAgent("tests.coverage-agent")]
     private sealed class CoverageTestAgent : IAgent
     {
         public string Id => "coverage";

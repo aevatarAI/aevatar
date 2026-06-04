@@ -22,7 +22,7 @@ description: demo
 roles:
   - id: assistant
     name: Assistant
-    agent_kind: aevatar.role-agent
+    agent_kind: workflow.role-agent
     system_prompt: "You are helpful."
 steps:
   - id: step_1
@@ -60,7 +60,7 @@ roles:
       event_routes: "event.type == X -> fallback_module"
 ```
 
-- `agent_kind` 是可选的稳定 kind token；配置后由 `WorkflowRunGAgent` 通过 Foundation runtime 创建该 role actor。
+- `agent_kind` 是可选的稳定 kind token；配置后由 `WorkflowRunGAgent` 通过 Foundation runtime 创建该 role actor；省略时默认 `workflow.role-agent`。
 - `roles` 配置会透传到 `InitializeRoleAgentEvent`，并在 role actor 运行时生效。
 - `event_modules/event_routes` 合并优先级：平铺字段 > `extensions.*`。
 - `workflow yaml roles` 与独立 `role yaml` 共享同一归一化语义，避免双套解析规则。

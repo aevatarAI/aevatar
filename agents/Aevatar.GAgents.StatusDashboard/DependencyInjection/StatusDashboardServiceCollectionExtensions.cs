@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Microsoft.Extensions.Configuration;
@@ -32,6 +33,7 @@ public static class StatusDashboardServiceCollectionExtensions
         // Manifest binding
         services.AddOptions<StatusDashboardOptions>()
             .Bind(configuration.GetSection(StatusDashboardOptions.SectionName));
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(HealthProbeTargetGAgent).Assembly));
 
         // Default executors — additional executors / freshness sources can be
         // registered with TryAddEnumerable by other modules without touching

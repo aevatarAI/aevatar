@@ -495,8 +495,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeId,
                 ScopeBindingImplementationKind.GAgent,
                 GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                [
+                    GAgentServiceTestKit.TestStaticServiceAgentKind,
+                    [
                     new ScopeBindingGAgentEndpoint(
                         "run",
                         "Run",
@@ -504,7 +504,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         "type.googleapis.com/google.protobuf.StringValue",
                         string.Empty,
                         "Run the bound gagent."),
-                ]),
+                    ],
+                    typeof(TestStaticServiceAgent).AssemblyQualifiedName!),
             DisplayName: "Orders GAgent"));
 
         commandPort.Calls.Should().HaveCount(6);
@@ -515,6 +516,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         revisionCommand.Spec.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         revisionCommand.Spec.StaticSpec.Should().NotBeNull();
         revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
+        revisionCommand.Spec.StaticSpec.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
         revisionCommand.Spec.StaticSpec.PreferredActorId.Should().BeEmpty();
         result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         result.GAgent.Should().NotBeNull();
@@ -535,8 +537,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                [])));
+                GAgentServiceTestKit.TestStaticServiceAgentKind,
+                [],
+                typeof(TestStaticServiceAgent).AssemblyQualifiedName!)));
 
         commandPort.Calls.Should().HaveCount(6);
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
@@ -1121,8 +1124,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                []),
+                GAgentServiceTestKit.TestStaticServiceAgentKind,
+                [],
+                typeof(TestStaticServiceAgent).AssemblyQualifiedName!),
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true,
             ReplayRevisionId: revisionId));
@@ -1325,7 +1329,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                GAgentServiceTestKit.TestStaticServiceAgentKind,
                 [
                     new ScopeBindingGAgentEndpoint(
                         "run",
@@ -1334,7 +1338,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         "type.googleapis.com/google.protobuf.StringValue",
                         string.Empty,
                         "Run the bound gagent."),
-                ]),
+                ],
+                typeof(TestStaticServiceAgent).AssemblyQualifiedName!),
             AppId: "tenant-app"));
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
@@ -1621,6 +1626,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 StaticPlan = new StaticServiceDeploymentPlan
                 {
                     ActorTypeName = actorTypeName,
+                    AgentKind = GAgentServiceTestKit.TestStaticServiceAgentKind,
                 },
             },
         };

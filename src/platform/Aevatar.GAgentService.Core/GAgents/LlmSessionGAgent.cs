@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -17,6 +18,7 @@ namespace Aevatar.GAgentService.Core.GAgents;
 //   Old pattern: direct route forwarding bypassed the LLM tool loop and forced Host-side completion synthesis
 //   New principle: Reuse LlmSessionGAgent for forwarded Responses; Host renders response.completed from typed completion contract / readmodel
 // Refactor (iter355/issue1438-first): Old pattern: durable LlmSession tool runtime contracts persisted arguments, schemas, hints, and results as *_json strings New principle: typed Struct/Value fields are authoritative for new writes; legacy *_json fields are read fallback only
+[GAgent("gagent.service.llm-session")]
 public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -6,6 +7,7 @@ using Google.Protobuf;
 
 namespace Aevatar.Scripting.Core;
 
+[GAgent("scripting.evolution-manager")]
 public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionManagerState>
 {
     public ScriptEvolutionManagerGAgent()

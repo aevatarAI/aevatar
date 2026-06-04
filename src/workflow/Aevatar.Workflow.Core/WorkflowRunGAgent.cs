@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
@@ -28,6 +29,7 @@ namespace Aevatar.Workflow.Core;
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
+[GAgent("workflow.run")]
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost
@@ -622,10 +624,6 @@ public sealed class WorkflowRunGAgent
 
     private Task<DispatchAdmission> DispatchRoleInitializationAsync(string actorId, EventEnvelope envelope) =>
         _dispatchPort.DispatchAsync(actorId, envelope);
-
-    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
-    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
     private async Task<IActor> CreateRoleActorAsync(RoleDefinition role, string childActorId)
     {
         var agentKind = string.IsNullOrWhiteSpace(role.AgentKind)

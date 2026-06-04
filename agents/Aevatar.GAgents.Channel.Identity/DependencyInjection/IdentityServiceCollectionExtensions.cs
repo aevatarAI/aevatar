@@ -8,6 +8,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
@@ -58,6 +59,8 @@ public static class IdentityServiceCollectionExtensions
         // module.
         if (services.Any(static d => d.ImplementationType == typeof(AevatarOAuthClientBootstrapService)))
             return services;
+
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ExternalIdentityBindingGAgent).Assembly));
 
         // ─── Shared projection runtime infrastructure ───
         services.AddProjectionReadModelRuntime();

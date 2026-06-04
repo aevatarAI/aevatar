@@ -464,7 +464,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             endpointSpecs.Insert(0, BuildChatEndpointSpec());
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
-            actorTypeName.Split(',')[0]);
+            agentKind);
         var serviceDefinition = new ServiceDefinitionSpec
         {
             Identity = identity.Clone(),
@@ -513,11 +513,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (string.IsNullOrWhiteSpace(actorTypeName))
             ScopeWorkflowCapabilityOptions.NormalizeRequired(string.Empty, nameof(gagent.AgentKind));
 
-        if (_agentKindRegistry != null &&
-            _agentKindRegistry.TryResolveKindByClrTypeName(actorTypeName!, out var resolvedKind))
-            return resolvedKind;
-
-        return string.Empty;
+        throw new InvalidOperationException(
+            $"gagent actor_type_name '{actorTypeName}' is deprecated and cannot be used for identity. Provide gagent agentKind.");
     }
 
     private string NormalizeLegacyActorTypeName(string? actorTypeName, string agentKind)

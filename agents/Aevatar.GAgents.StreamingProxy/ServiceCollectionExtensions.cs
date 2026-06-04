@@ -14,6 +14,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,6 +31,7 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(StreamingProxyGAgent).Assembly));
         services.AddCqrsCore();
         services.TryAddSingleton<StreamingProxyNyxParticipantCoordinator>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, StreamingProxyChatLifecycleContinuationRunner>());

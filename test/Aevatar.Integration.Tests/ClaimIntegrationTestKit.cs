@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using Aevatar.Integration.Tests.Protocols;
@@ -30,6 +31,7 @@ internal static class ClaimIntegrationTestKit
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
+        services.AddAevatarAgentKindRegistry(builder => builder.Register<ClaimMessageSinkGAgent>());
         configure?.Invoke(services);
         services.AddScriptCapability(configuration);
         return services.BuildServiceProvider();

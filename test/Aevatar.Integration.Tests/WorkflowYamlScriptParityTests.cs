@@ -192,7 +192,7 @@ public class WorkflowYamlScriptParityTests
         roles:
           - id: transformer
             name: Transformer
-            agent_kind: workflow.assistant-role
+            agent_kind: workflow.role-agent
             system_prompt: "deterministic transform only"
         steps:
           - id: to_upper

@@ -1,5 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
@@ -18,7 +20,10 @@ public sealed class LocalActorDispatchAdmissionTests
             new InMemoryStreamOptions(),
             NullLoggerFactory.Instance,
             new InMemoryStreamForwardingRegistry());
-        var runtime = new LocalActorRuntime(streams, new ServiceCollection().BuildServiceProvider(), streams);
+        var services = new ServiceCollection()
+            .AddAevatarAgentKindRegistry(builder => builder.Register<GateAgent>())
+            .BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, services, streams);
         await runtime.CreateAsync<GateAgent>("admission-actor");
         var dispatchPort = new LocalActorDispatchPort(runtime, streams);
         var envelope = new EventEnvelope
@@ -43,6 +48,7 @@ public sealed class LocalActorDispatchAdmissionTests
         await GateAgent.Handled.Task.WaitAsync(TimeSpan.FromSeconds(1));
     }
 
+    [GAgent("tests.gate-agent")]
     private sealed class GateAgent : IAgent
     {
         public static TaskCompletionSource Release { get; private set; } =

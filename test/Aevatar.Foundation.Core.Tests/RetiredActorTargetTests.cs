@@ -6,11 +6,11 @@ namespace Aevatar.Foundation.Core.Tests;
 public sealed class RetiredActorTargetTests
 {
     [Fact]
-    public void Ctor_ShouldAcceptFullyQualifiedTokens()
+    public void Ctor_ShouldAcceptModuleQualifiedKindTokens()
     {
         var act = () => new RetiredActorTarget(
             "agent-id",
-            ["Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent"]);
+            ["channel-runtime.skill-runner"]);
 
         act.Should().NotThrow();
     }
@@ -18,14 +18,11 @@ public sealed class RetiredActorTargetTests
     [Fact]
     public void Ctor_ShouldRejectBareTokenWithoutNamespace()
     {
-        // A bare token would match any TypeName ending with "GAgent" because the
-        // boundary set intentionally excludes '.'. Reject so specs can't ship a
-        // foot-gun that looks like it works on the well-known IDs.
-        var act = () => new RetiredActorTarget("agent-id", ["GAgent"]);
+        var act = () => new RetiredActorTarget("agent-id", ["skill-runner"]);
 
         act.Should()
             .Throw<ArgumentException>()
-            .WithMessage("*fully-qualified*");
+            .WithMessage("*module-qualified*");
     }
 
     [Fact]
@@ -39,33 +36,33 @@ public sealed class RetiredActorTargetTests
     [Fact]
     public void Ctor_ShouldRejectWhitespaceToken()
     {
-        var act = () => new RetiredActorTarget("agent-id", new[] { "Aevatar.Real.Type", "  " });
+        var act = () => new RetiredActorTarget("agent-id", new[] { "channel-runtime.skill-runner", "  " });
 
         act.Should().Throw<ArgumentException>();
     }
 
     [Fact]
-    public void MatchesRuntimeType_ShouldMatchFullyQualifiedToken()
+    public void MatchesRuntimeKind_ShouldMatchPrimaryKindToken()
     {
         var target = new RetiredActorTarget(
             "agent-id",
-            ["Aevatar.GAgents.ChannelRuntime.UserAgentCatalogGAgent"]);
+            ["channel-runtime.user-agent-catalog"]);
 
         target
-            .MatchesRuntimeType("Aevatar.GAgents.ChannelRuntime.UserAgentCatalogGAgent, Aevatar.GAgents.ChannelRuntime")
+            .MatchesRuntimeKind("channel-runtime.user-agent-catalog")
             .Should()
             .BeTrue();
     }
 
     [Fact]
-    public void MatchesRuntimeType_ShouldRejectProxyOrSubstringTypeNames()
+    public void MatchesRuntimeKind_ShouldRejectNonExactKind()
     {
         var target = new RetiredActorTarget(
             "agent-id",
-            ["Aevatar.GAgents.ChannelRuntime.UserAgentCatalogGAgent"]);
+            ["channel-runtime.user-agent-catalog"]);
 
         target
-            .MatchesRuntimeType("Aevatar.GAgents.ChannelRuntime.UserAgentCatalogGAgentProxy, Aevatar")
+            .MatchesRuntimeKind("channel-runtime.user-agent-catalog-proxy")
             .Should()
             .BeFalse();
     }
