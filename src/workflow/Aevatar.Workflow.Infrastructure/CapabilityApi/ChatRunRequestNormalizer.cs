@@ -32,7 +32,7 @@ internal static class ChatRunRequestNormalizer
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
-        string? trustedConnectorHttpAuthorization = null)
+        WorkflowCallerCredential? trustedCallerCredential = null)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
@@ -63,8 +63,14 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
-                ConnectorHttpAuthorization: NormalizeOptional(trustedConnectorHttpAuthorization),
+                CallerCredential: NormalizeCallerCredential(trustedCallerCredential),
                 Headers: normalizedContext.Headers));
+    }
+
+    private static WorkflowCallerCredential? NormalizeCallerCredential(WorkflowCallerCredential? source)
+    {
+        var bearer = NormalizeOptional(source?.BearerToken);
+        return bearer == null ? null : new WorkflowCallerCredential(bearer);
     }
 
     private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)
@@ -333,7 +339,6 @@ internal static class ChatRunRequestNormalizer
         metadata[normalizedKey] = normalizedValue;
     }
 
-    // Refactor (iter169/cluster-issue1551): Old pattern: public metadata could carry connector authorization. New principle: only trusted adapter code can set the typed ConnectorHttpAuthorization command field.
     private static bool IsReservedMetadataKey(string key) =>
         IsScopeMetadataKey(key) ||
         string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal);

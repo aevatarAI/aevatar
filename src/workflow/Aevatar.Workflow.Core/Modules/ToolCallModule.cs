@@ -117,9 +117,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         if (tool is not IWorkflowContextualTool contextualTool)
             return tool.ExecuteAsync(argumentsJson, ct);
 
-        var connectorAuthorization = WorkflowRunExecutionContextStateAccess.TryGetConnectorAuthorization(ctx, out var authorization)
-            ? authorization
-            : string.Empty;
+        var callerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var credential)
+            ? credential
+            : new WorkflowCallerCredential();
         return contextualTool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: argumentsJson,
@@ -128,7 +128,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 ExecutionId: request.ExecutionId ?? string.Empty,
                 CallId: callId,
                 ScopeId: string.Empty,
-                ConnectorHttpAuthorization: connectorAuthorization),
+                CallerCredential: callerCredential),
             ct);
     }
 

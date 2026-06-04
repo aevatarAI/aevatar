@@ -34,7 +34,7 @@ public sealed class AgentWorkflowToolSourceAdapter(IEnumerable<IAgentToolSource>
         {
             ArgumentNullException.ThrowIfNull(request);
 
-            var toolContext = WorkflowConnectorAuthorizationToolContextMapper.FromAuthorization(request.ConnectorHttpAuthorization);
+            var toolContext = WorkflowCallerCredentialToolContextMapper.FromCredential(request.CallerCredential);
             using var scope = AgentToolContextScope.Push(toolContext);
             return await _tool.ExecuteAsync(request.ArgumentsJson, ct).ConfigureAwait(false);
         }

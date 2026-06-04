@@ -33,7 +33,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ["empty"] = " ",
             });
 
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
         host.ExecutionContextState.Llm.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainKey("trace-id");
         host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
@@ -67,7 +67,9 @@ public sealed class WorkflowExecutionRuntimeContextTests
     public async Task SetRequestMetadata_ShouldOnlyClearPassthroughWhenMetadataIsNullEmptyOrInvalid()
     {
         var host = new RecordingStateHost();
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer typed");
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { BearerToken = "typed" });
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
@@ -78,7 +80,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
 
-        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer typed");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
@@ -88,7 +90,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [" "] = " ",
             });
 
-        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer typed");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
@@ -142,7 +144,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         await WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(host);
 
         host.ExecutionContextState.Llm.Should().BeNull();
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         await FluentActions.Awaiting(() => WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(null!))
@@ -151,68 +153,78 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public void BuildConnectorAuthorizationDelta_ShouldPromoteOnlyTypedConnectorAuthorization()
+    public void BuildCallerCredentialDelta_ShouldPromoteOnlyTypedCallerCredential()
     {
-        var delta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(" Bearer secret ");
+        var delta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
+            new WorkflowCallerCredential { BearerToken = " secret " });
 
-        delta.ClearConnector.Should().BeTrue();
-        delta.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        delta.ClearCallerCredential.Should().BeTrue();
+        delta.CallerCredential!.BearerToken.Should().Be("secret");
 
-        var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(" ");
-        emptyDelta.ClearConnector.Should().BeTrue();
-        emptyDelta.Connector.Should().BeNull();
+        var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
+            new WorkflowCallerCredential { BearerToken = " " });
+        emptyDelta.ClearCallerCredential.Should().BeTrue();
+        emptyDelta.CallerCredential.Should().BeNull();
     }
 
     [Fact]
-    public async Task ConnectorAuthorizationRuntimeAccess_ShouldTrimSetAndClearTypedState()
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldTrimSetAndClearTypedState()
     {
         var host = new RecordingStateHost();
 
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, " Bearer secret ");
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { BearerToken = " secret " });
 
-        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("secret");
 
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, " ");
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { BearerToken = " " });
 
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
 
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer secret");
-        await ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorizationAsync(host);
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { BearerToken = "secret" });
+        await WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(host);
 
-        host.ExecutionContextState.Connector.Should().BeNull();
-        await FluentActions.Awaiting(() => ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(null!, "secret"))
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
+        await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+                null!,
+                new WorkflowCallerCredential { BearerToken = "secret" }))
             .Should()
             .ThrowAsync<ArgumentNullException>();
-        await FluentActions.Awaiting(() => ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorizationAsync(null!))
+        await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(null!))
             .Should()
             .ThrowAsync<ArgumentNullException>();
     }
 
     [Fact]
-    public void ConnectorAuthorizationRuntimeAccess_ShouldReadFromTypedStateHost()
+    public void WorkflowCallerCredentialRuntimeAccess_ShouldReadFromTypedStateHost()
     {
         var context = new RecordingWorkflowExecutionContext();
-        context.ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+        context.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
         {
-            HttpAuthorization = " Bearer secret ",
+            BearerToken = " secret ",
         };
 
-        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(context, out var authorization)
+        WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out var credential)
             .Should()
             .BeTrue();
-        authorization.Should().Be("Bearer secret");
+        credential.BearerToken.Should().Be("secret");
 
-        context.ExecutionContextState.Connector.HttpAuthorization = " ";
-        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(context, out authorization)
+        context.ExecutionContextState.CallerCredential.BearerToken = " ";
+        WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out credential)
             .Should()
             .BeFalse();
-        authorization.Should().BeEmpty();
+        credential.BearerToken.Should().BeEmpty();
 
-        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(new ContextWithoutRuntimeAccessor(), out authorization)
+        WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(new ContextWithoutRuntimeAccessor(), out credential)
             .Should()
             .BeFalse();
-        authorization.Should().BeEmpty();
-        FluentActions.Invoking(() => ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(null!, out _))
+        credential.BearerToken.Should().BeEmpty();
+        FluentActions.Invoking(() => WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(null!, out _))
             .Should()
             .Throw<ArgumentNullException>();
     }
@@ -329,7 +341,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
 
@@ -430,7 +442,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
     }
@@ -441,8 +453,8 @@ public sealed class WorkflowExecutionRuntimeContextTests
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
@@ -454,11 +466,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization,
+                BearerToken = delta.CallerCredential.BearerToken,
             };
         }
     }

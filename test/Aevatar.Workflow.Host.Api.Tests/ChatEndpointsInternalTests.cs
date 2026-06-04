@@ -327,7 +327,7 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_ShouldPassTrustedBearerAsTypedConnectorAuthorization()
+    public async Task HandleChat_ShouldPassTrustedBearerAsWorkflowCallerCredential()
     {
         var capturedCommand = default(WorkflowChatRunRequest);
         var interactionService = new FakeCommandInteractionService
@@ -357,7 +357,7 @@ public sealed class ChatEndpointsInternalTests
             CancellationToken.None);
 
         capturedCommand.Should().NotBeNull();
-        capturedCommand!.ConnectorHttpAuthorization.Should().Be("Bearer trusted-token");
+        capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
         capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 

@@ -130,7 +130,7 @@ public static class ScopeServiceEndpoints
                 SessionId: request.SessionId,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
-                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                CallerCredential: WorkflowCallerCredentialExtractor.Extract(http),
                 LlmControl: ToWorkflowLlmControl(await BuildScopedLlmControlAsync(http, ct)),
                 Headers: scopedHeaders);
 
@@ -1506,7 +1506,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 normalizedPrompt,
                 scopedHeaders,
-                ConnectorHttpAuthorizationExtractor.Extract(http),
+                WorkflowCallerCredentialExtractor.Extract(http),
                 request.RevisionId,
                 appId);
             var target = await resolutionService.ResolveAsync(invocationRequest, ct);
@@ -2858,7 +2858,7 @@ const response = await fetch("{{invokePath}}", {
         string endpointId,
         string prompt,
         IReadOnlyDictionary<string, string>? headers,
-        string? connectorHttpAuthorization,
+        WorkflowCallerCredential? callerCredential,
         string? revisionId,
         string? appId = null)
     {
@@ -2866,7 +2866,7 @@ const response = await fetch("{{invokePath}}", {
         {
             Prompt = prompt,
             ScopeId = scopeId,
-            ConnectorHttpAuthorization = connectorHttpAuthorization ?? string.Empty,
+            ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential),
         };
         if (headers != null)
         {
@@ -2887,6 +2887,12 @@ const response = await fetch("{{invokePath}}", {
                 AppId = string.Empty,
             },
         };
+    }
+
+    private static string ToConnectorHttpAuthorization(WorkflowCallerCredential? callerCredential)
+    {
+        var token = callerCredential?.BearerToken?.Trim();
+        return string.IsNullOrWhiteSpace(token) ? string.Empty : $"Bearer {token}";
     }
 
     private static void EnsureWorkflowStreamTarget(

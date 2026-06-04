@@ -32,19 +32,19 @@ internal static class WorkflowRunExecutionContextStateAccess
         return stateHost.ClearExecutionContextAsync(ct);
     }
 
-    public static WorkflowRunExecutionContextDelta BuildConnectorAuthorizationDelta(string? authorization)
+    public static WorkflowRunExecutionContextDelta BuildCallerCredentialDelta(WorkflowCallerCredential? credential)
     {
         var delta = new WorkflowRunExecutionContextDelta
         {
-            ClearConnector = true,
+            ClearCallerCredential = true,
         };
-        var normalized = Normalize(authorization);
+        var normalized = Normalize(credential?.BearerToken);
         if (string.IsNullOrWhiteSpace(normalized))
             return delta;
 
-        delta.Connector = new WorkflowRunConnectorExecutionContextDelta
+        delta.CallerCredential = new WorkflowCallerCredential
         {
-            HttpAuthorization = normalized,
+            BearerToken = normalized,
         };
 
         return delta;
@@ -88,18 +88,21 @@ internal static class WorkflowRunExecutionContextStateAccess
         return delta;
     }
 
-    public static bool TryGetConnectorAuthorization(
+    public static bool TryGetCallerCredential(
         IWorkflowExecutionContext ctx,
-        out string authorization)
+        out WorkflowCallerCredential credential)
     {
-        var connector = Get(ctx).Connector;
-        if (!string.IsNullOrWhiteSpace(connector?.HttpAuthorization))
+        var callerCredential = Get(ctx).CallerCredential;
+        if (!string.IsNullOrWhiteSpace(callerCredential?.BearerToken))
         {
-            authorization = connector.HttpAuthorization.Trim();
+            credential = new WorkflowCallerCredential
+            {
+                BearerToken = callerCredential.BearerToken.Trim(),
+            };
             return true;
         }
 
-        authorization = string.Empty;
+        credential = new WorkflowCallerCredential();
         return false;
     }
 
@@ -116,8 +119,8 @@ internal static class WorkflowRunExecutionContextStateAccess
     public static WorkflowRunExecutionContextState RedactedClone(WorkflowRunExecutionContextState? source)
     {
         var clone = source?.Clone() ?? new WorkflowRunExecutionContextState();
-        if (!string.IsNullOrWhiteSpace(clone.Connector?.HttpAuthorization))
-            clone.Connector.HttpAuthorization = string.Empty;
+        if (!string.IsNullOrWhiteSpace(clone.CallerCredential?.BearerToken))
+            clone.CallerCredential.BearerToken = string.Empty;
         return clone;
     }
 

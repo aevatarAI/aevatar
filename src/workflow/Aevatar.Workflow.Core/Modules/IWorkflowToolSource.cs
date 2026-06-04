@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Abstractions;
+
 namespace Aevatar.Workflow.Core.Modules;
 
 public interface IWorkflowTool
@@ -14,7 +16,7 @@ public sealed record WorkflowToolExecutionRequest(
     string ExecutionId,
     string CallId,
     string ScopeId,
-    string ConnectorHttpAuthorization);
+    WorkflowCallerCredential CallerCredential);
 
 public interface IWorkflowContextualTool : IWorkflowTool
 {

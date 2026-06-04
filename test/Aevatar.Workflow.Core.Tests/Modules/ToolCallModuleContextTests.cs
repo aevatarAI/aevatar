@@ -112,14 +112,14 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
-    public async Task ToolCallModule_ShouldPassActorOwnedConnectorAuthorizationToContextualTool()
+    public async Task ToolCallModule_ShouldPassActorOwnedCallerCredentialToContextualTool()
     {
         var tool = new CapturingContextualTool("nyxid_tool");
         var module = CreateModule(tool);
         var ctx = new RecordingWorkflowContext();
-        ctx.ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
         {
-            HttpAuthorization = " Bearer typed-token ",
+            BearerToken = " typed-token ",
         };
         ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -139,12 +139,12 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.StepId.Should().Be("call_proxy");
         tool.LastRequest.ExecutionId.Should().Be("exec-1");
         tool.LastRequest.CallId.Should().Be("workflow:run-1:call_proxy:exec-1");
-        tool.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer typed-token");
+        tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 
     [Fact]
-    public async Task ToolCallModule_ShouldIgnoreMetadataOnlyConnectorAuthorizationForContextualTool()
+    public async Task ToolCallModule_ShouldIgnoreMetadataOnlyCallerCredentialForContextualTool()
     {
         var tool = new CapturingContextualTool("nyxid_tool");
         var module = CreateModule(tool);
@@ -157,7 +157,7 @@ public sealed class ToolCallModuleContextTests
         await ExecuteToolCallAsync(module, ctx, tool.Name);
 
         tool.LastRequest.Should().NotBeNull();
-        tool.LastRequest!.ConnectorHttpAuthorization.Should().BeEmpty();
+        tool.LastRequest!.CallerCredential.BearerToken.Should().BeEmpty();
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 
@@ -335,8 +335,8 @@ public sealed class ToolCallModuleContextTests
             ct.ThrowIfCancellationRequested();
             if (delta.ClearLlm)
                 ExecutionContextState.Llm = null;
-            if (delta.ClearConnector)
-                ExecutionContextState.Connector = null;
+            if (delta.ClearCallerCredential)
+                ExecutionContextState.CallerCredential = null;
             if (delta.Llm != null)
             {
                 ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
@@ -348,11 +348,11 @@ public sealed class ToolCallModuleContextTests
                     ExecutionContextState.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
             }
 
-            if (delta.Connector != null)
+            if (delta.CallerCredential != null)
             {
-                ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+                ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
                 {
-                    HttpAuthorization = delta.Connector.HttpAuthorization,
+                    BearerToken = delta.CallerCredential.BearerToken,
                 };
             }
 
@@ -363,7 +363,7 @@ public sealed class ToolCallModuleContextTests
         {
             ct.ThrowIfCancellationRequested();
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
 
