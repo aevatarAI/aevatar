@@ -244,7 +244,7 @@ public sealed class MessagesCommandFacade(
             {
                 NyxIdRoutePreference = resolvedRouteValue,
             },
-            SkillRecovery = BuildSkillRecoveryContext(trigger),
+            SkillRecovery = AgentSkillRecoveryContextBuilder.FromTrigger(trigger),
         };
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -429,35 +429,6 @@ public sealed class MessagesCommandFacade(
         SkillInvocationTriggerParser.TryParse(text, platform: "cli", out var trigger)
             ? trigger
             : null;
-
-    private static AgentSkillRecoveryContext BuildSkillRecoveryContext(SkillInvocationTrigger? trigger)
-    {
-        if (trigger is null)
-            return AgentSkillRecoveryContext.Empty;
-
-        if (trigger.IsDiscovery)
-        {
-            return new AgentSkillRecoveryContext(
-                RequireInitialOrnnSearch: true,
-                RequireOrnnSearchOnBlocker: false,
-                CommandName: null,
-                OriginalCommand: trigger.OriginalText,
-                PrimarySkillName: null,
-                MaxOrnnSearchAttempts: 1,
-                CommandArguments: null,
-                DiscoveryRequested: true);
-        }
-
-        return new AgentSkillRecoveryContext(
-            RequireInitialOrnnSearch: true,
-            RequireOrnnSearchOnBlocker: true,
-            CommandName: trigger.Name,
-            OriginalCommand: trigger.OriginalText,
-            PrimarySkillName: trigger.Name,
-            MaxOrnnSearchAttempts: 2,
-            CommandArguments: trigger.Arguments,
-            DiscoveryRequested: false);
-    }
 
     private static string NormalizeRouteCommandName(string? commandName) =>
         string.IsNullOrWhiteSpace(commandName)

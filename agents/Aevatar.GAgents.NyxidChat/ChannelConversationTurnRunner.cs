@@ -1639,15 +1639,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         if (trigger.IsDiscovery)
         {
-            context = new AgentSkillRecoveryContext(
-                RequireInitialOrnnSearch: true,
-                RequireOrnnSearchOnBlocker: false,
-                CommandName: null,
-                OriginalCommand: trigger.OriginalText,
-                PrimarySkillName: null,
-                MaxOrnnSearchAttempts: 1,
-                CommandArguments: null,
-                DiscoveryRequested: true);
+            context = AgentSkillRecoveryContextBuilder.FromTrigger(trigger);
             return true;
         }
 
@@ -1662,15 +1654,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return false;
         }
 
-        context = new AgentSkillRecoveryContext(
-            RequireInitialOrnnSearch: true,
-            RequireOrnnSearchOnBlocker: true,
-            CommandName: normalizedCommand,
-            OriginalCommand: trigger.OriginalText,
-            PrimarySkillName: normalizedCommand,
-            MaxOrnnSearchAttempts: 2,
-            CommandArguments: trigger.Arguments,
-            DiscoveryRequested: false);
+        context = AgentSkillRecoveryContextBuilder.FromTrigger(trigger) with
+        {
+            CommandName = normalizedCommand,
+            PrimarySkillName = normalizedCommand,
+        };
         return true;
     }
 

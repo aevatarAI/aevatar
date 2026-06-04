@@ -307,44 +307,18 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
 
     private static AgentToolExecutionContext BuildToolContext(NyxIdChatCommand command, LLMControlContext effectiveControl)
     {
+        var skillRecovery = SkillInvocationTriggerParser.TryParse(command.Prompt, platform: "cli", out var trigger)
+            ? AgentSkillRecoveryContextBuilder.FromTrigger(trigger)
+            : AgentSkillRecoveryContext.Empty;
         var toolContext = AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(command.SessionId, null),
             Credentials = new AgentToolCredentials(command.AccessToken, null, null),
             Caller = new AgentToolCallerContext(command.ScopeId, command.ScopeId, command.SessionId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, command.ScopeId, null, null),
-            SkillRecovery = BuildSkillRecoveryContext(command.Prompt),
+            SkillRecovery = skillRecovery,
         };
         return effectiveControl.ToToolContext(toolContext);
-    }
-
-    private static AgentSkillRecoveryContext BuildSkillRecoveryContext(string? prompt)
-    {
-        if (!SkillInvocationTriggerParser.TryParse(prompt, platform: "cli", out var trigger))
-            return AgentSkillRecoveryContext.Empty;
-
-        if (trigger.IsDiscovery)
-        {
-            return new AgentSkillRecoveryContext(
-                RequireInitialOrnnSearch: true,
-                RequireOrnnSearchOnBlocker: false,
-                CommandName: null,
-                OriginalCommand: trigger.OriginalText,
-                PrimarySkillName: null,
-                MaxOrnnSearchAttempts: 1,
-                CommandArguments: null,
-                DiscoveryRequested: true);
-        }
-
-        return new AgentSkillRecoveryContext(
-            RequireInitialOrnnSearch: true,
-            RequireOrnnSearchOnBlocker: true,
-            CommandName: trigger.Name,
-            OriginalCommand: trigger.OriginalText,
-            PrimarySkillName: trigger.Name,
-            MaxOrnnSearchAttempts: 2,
-            CommandArguments: trigger.Arguments,
-            DiscoveryRequested: false);
     }
 
     private static void AppendMetadata(
