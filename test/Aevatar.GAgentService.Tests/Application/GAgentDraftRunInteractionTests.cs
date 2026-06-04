@@ -28,14 +28,13 @@ public sealed class GAgentDraftRunInteractionTests
         var result = await resolver.ResolveAsync(
             new GAgentDraftRunCommand(
                 ScopeId: "scope-a",
-                ActorTypeName: typeof(ExpectedAgent).AssemblyQualifiedName!,
+                AgentKind: ExpectedAgentKind,
                 Prompt: "hello",
-                PreferredActorId: "actor-1",
-                AgentKind: ExpectedAgentKind),
+                PreferredActorId: "actor-1"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorKindMismatch);
         verifier.Calls.Should().ContainSingle().Which.Should().Be(("actor-1", ExpectedAgentKind));
     }
 
@@ -55,10 +54,9 @@ public sealed class GAgentDraftRunInteractionTests
         var result = await resolver.ResolveAsync(
             new GAgentDraftRunCommand(
                 ScopeId: "scope-a",
-                ActorTypeName: typeof(ExpectedAgent).AssemblyQualifiedName!,
+                AgentKind: ExpectedAgentKind,
                 Prompt: "hello",
-                PreferredActorId: "actor-1",
-                AgentKind: ExpectedAgentKind),
+                PreferredActorId: "actor-1"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();

@@ -81,7 +81,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             interactionPort,
             CancellationToken.None);
 
-        interactionPort.Requests.Should().ContainSingle().Which.ActorTypeName.Should().Be(typeof(StreamTestAgent).AssemblyQualifiedName!);
+        interactionPort.Requests.Should().ContainSingle().Which.AgentKind.Should().Be(typeof(StreamTestAgent).AssemblyQualifiedName!);
         var body = await ReadBodyAsync(http);
         body.Should().Contain("runStarted");
         body.Should().Contain("runError");
@@ -266,7 +266,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             ResultFactory = (request, emitAsync, onAcceptedAsync, ct) =>
                 Task.FromResult(new StaticGAgentStreamInvocationResult(
                     null,
-                    GAgentDraftRunStartError.UnknownActorType,
+                    GAgentDraftRunStartError.UnknownAgentKind,
                     GAgentDraftRunCompletionStatus.Unknown,
                     CompletionObserved: false)),
         };
@@ -1340,7 +1340,7 @@ public sealed class ScopeServiceEndpointsStreamTests
                 await onAcceptedAsync(
                     new GAgentDraftRunAcceptedReceipt(
                         request.PreferredActorId ?? "actor-1",
-                        request.ActorTypeName,
+                        request.AgentKind,
                         "cmd-1",
                         "corr-1"),
                     ct);

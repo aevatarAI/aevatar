@@ -31,7 +31,7 @@ jest.mock("@/shared/agui/sseFrameNormalizer", () => ({
 
 jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   runtimeGAgentApi: {
-    listTypes: jest.fn(),
+    listKinds: jest.fn(),
     listActors: jest.fn(),
     getScopeBinding: jest.fn(),
     getDefaultRouteTarget: jest.fn(),
@@ -105,7 +105,7 @@ import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 
 describe("GAgentsPage", () => {
   const mockedRuntimeGAgentApi = runtimeGAgentApi as unknown as {
-    listTypes: jest.Mock;
+    listKinds: jest.Mock;
     listActors: jest.Mock;
     getScopeBinding: jest.Mock;
     getDefaultRouteTarget: jest.Mock;
@@ -121,7 +121,7 @@ describe("GAgentsPage", () => {
     getAuthSession: jest.Mock;
   };
   let actorGroupsState: Array<{
-    gAgentType: string;
+    agentKind: string;
     actorIds: string[];
   }>;
 
@@ -136,25 +136,27 @@ describe("GAgentsPage", () => {
       scopeId: "scope-a",
       scopeSource: "nyxid",
     });
-    mockedRuntimeGAgentApi.listTypes.mockResolvedValue([
+    mockedRuntimeGAgentApi.listKinds.mockResolvedValue([
       {
-        typeName: "OrdersGAgent",
-        fullName: "Tests.OrdersGAgent",
-        assemblyName: "Tests",
+        agentKind: "Tests.OrdersGAgent",
+        displayName: "Orders Assistant",
+        diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
+        endpoints: [],
       },
       {
-        typeName: "PlannerGAgent",
-        fullName: "Tests.PlannerGAgent",
-        assemblyName: "Tests",
+        agentKind: "Tests.PlannerGAgent",
+        displayName: "Planner Assistant",
+        diagnosticClrTypeName: "Tests.PlannerGAgent, Tests",
+        endpoints: [],
       },
     ]);
     actorGroupsState = [
       {
-        gAgentType: "Tests.OrdersGAgent",
+        agentKind: "Tests.OrdersGAgent",
         actorIds: ["orders-1"],
       },
       {
-        gAgentType: "Tests.PlannerGAgent",
+        agentKind: "Tests.PlannerGAgent",
         actorIds: ["planner-1"],
       },
     ];
@@ -181,7 +183,7 @@ describe("GAgentsPage", () => {
       targetName: "Orders Assistant",
       expectedActorId: "orders-1",
       gAgent: {
-        actorTypeName: "Tests.OrdersGAgent, Tests",
+        agentKind: "Tests.OrdersGAgent",
         preferredActorId: "orders-1",
       },
     });
@@ -205,10 +207,10 @@ describe("GAgentsPage", () => {
         }))
     );
     mockedRuntimeGAgentApi.removeActor.mockImplementation(
-      async (_scopeId: string, gAgentType: string, actorId: string) => {
+      async (_scopeId: string, agentKind: string, actorId: string) => {
         actorGroupsState = actorGroupsState
           .map((group) =>
-            group.gAgentType === gAgentType
+            group.agentKind === agentKind
               ? {
                   ...group,
                   actorIds: group.actorIds.filter((entry) => entry !== actorId),
@@ -256,7 +258,7 @@ describe("GAgentsPage", () => {
     renderWithQueryClient(React.createElement(GAgentsPage));
 
     expect(
-      (await screen.findAllByText("OrdersGAgent (Tests)")).length
+      (await screen.findAllByText("Orders Assistant")).length
     ).toBeGreaterThan(0);
     await waitFor(() => {
       expect(mockedRuntimeGAgentApi.listActors).toHaveBeenCalledWith("scope-a");
@@ -283,7 +285,7 @@ describe("GAgentsPage", () => {
     renderWithQueryClient(React.createElement(GAgentsPage));
 
     expect(
-      (await screen.findAllByText("OrdersGAgent (Tests)")).length
+      (await screen.findAllByText("Orders Assistant")).length
     ).toBeGreaterThan(0);
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Manage actors" })).not.toBeDisabled();
@@ -318,7 +320,7 @@ describe("GAgentsPage", () => {
     renderWithQueryClient(React.createElement(GAgentsPage));
 
     expect(
-      (await screen.findAllByText("OrdersGAgent (Tests)")).length
+      (await screen.findAllByText("Orders Assistant")).length
     ).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("tab", { name: "Draft Run" }));
     fireEvent.change(screen.getByLabelText("Draft prompt"), {
@@ -330,7 +332,7 @@ describe("GAgentsPage", () => {
       expect(mockedRuntimeGAgentApi.streamDraftRun).toHaveBeenCalledWith(
         "scope-a",
         {
-          actorTypeName: "Tests.OrdersGAgent, Tests",
+          agentKind: "Tests.OrdersGAgent",
           prompt: "hello agent",
           preferredActorId: undefined,
           timeoutMs: 30000,
@@ -349,7 +351,7 @@ describe("GAgentsPage", () => {
       expect.objectContaining({
         kind: "observed_run_session",
         scopeId: "scope-a",
-        routeName: "OrdersGAgent",
+        routeName: "Orders Assistant",
         endpointId: "chat",
         prompt: "hello agent",
         actorId: "orders-1",
@@ -412,6 +414,7 @@ describe("GAgentsPage", () => {
           scriptDefinitionActorId: "",
           scriptSourceHash: "",
           staticActorTypeName: "Tests.OrdersGAgent, Tests",
+          staticAgentKind: "Tests.OrdersGAgent",
           staticPreferredActorId: "orders-1",
         },
       ],
@@ -501,7 +504,7 @@ describe("GAgentsPage", () => {
       expect(mockedRuntimeGAgentApi.bindScopeGAgent).toHaveBeenCalledWith({
         scopeId: "scope-a",
         displayName: "Orders Assistant",
-        actorTypeName: "Tests.OrdersGAgent, Tests",
+        agentKind: "Tests.OrdersGAgent",
         preferredActorId: undefined,
         endpoints: [
           {

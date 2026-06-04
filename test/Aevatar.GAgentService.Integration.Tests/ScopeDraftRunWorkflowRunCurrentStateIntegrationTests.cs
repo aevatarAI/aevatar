@@ -353,7 +353,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
             GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
-            _registrations.Add(new ActorRegistration(registration.ScopeId, registration.GAgentType, registration.ActorId));
+            _registrations.Add(new ActorRegistration(registration.ScopeId, registration.AgentKind, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionVisible));
@@ -365,7 +365,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         {
             _registrations.RemoveAll(registration =>
                 string.Equals(registration.ScopeId, target.ScopeId, StringComparison.Ordinal) &&
-                string.Equals(registration.GAgentType, target.GAgentType, StringComparison.Ordinal) &&
+                string.Equals(registration.AgentKind, target.AgentKind, StringComparison.Ordinal) &&
                 string.Equals(registration.ActorId, target.ActorId, StringComparison.Ordinal));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 target,
@@ -378,7 +378,7 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         {
             var exists = _registrations.Any(registration =>
                 string.Equals(registration.ScopeId, target.ScopeId, StringComparison.Ordinal) &&
-                string.Equals(registration.GAgentType, target.GAgentType, StringComparison.Ordinal) &&
+                string.Equals(registration.AgentKind, target.AgentKind, StringComparison.Ordinal) &&
                 string.Equals(registration.ActorId, target.ActorId, StringComparison.Ordinal));
             return Task.FromResult(exists
                 ? ScopeResourceAdmissionResult.Allowed()
@@ -387,13 +387,13 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 
         private static IReadOnlyList<GAgentActorGroup> BuildGroups(IEnumerable<ActorRegistration> registrations) =>
             registrations
-                .GroupBy(static registration => registration.GAgentType, StringComparer.Ordinal)
+                .GroupBy(static registration => registration.AgentKind, StringComparer.Ordinal)
                 .Select(static group => new GAgentActorGroup(
                     group.Key,
                     group.Select(static registration => registration.ActorId).ToArray()))
                 .ToArray();
 
-        private sealed record ActorRegistration(string ScopeId, string GAgentType, string ActorId);
+        private sealed record ActorRegistration(string ScopeId, string AgentKind, string ActorId);
     }
 
     private sealed class TestAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>

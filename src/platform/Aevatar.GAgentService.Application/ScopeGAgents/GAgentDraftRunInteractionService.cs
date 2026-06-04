@@ -61,7 +61,7 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
             // New principle: the port preserves typed ToolContext and LlmControl into the command boundary.
             var command = new GAgentDraftRunCommand(
                 ScopeId: request.ScopeId.Trim(),
-                ActorTypeName: actor.ActorTypeName,
+                AgentKind: actor.AgentKind,
                 Prompt: request.Prompt.Trim(),
                 PreferredActorId: actor.ActorId,
                 SessionId: string.IsNullOrWhiteSpace(request.SessionId) ? null : request.SessionId.Trim(),
@@ -70,7 +70,6 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
                 PreferredLlmRoute: NormalizeOptional(request.PreferredLlmRoute),
                 Headers: request.Headers,
                 InputParts: request.InputParts,
-                AgentKind: NormalizeOptional(request.AgentKind),
                 ToolContext: request.ToolContext,
                 LlmControl: request.LlmControl,
                 UseCorrelationIdAsFallbackSessionId: request.UseCorrelationIdAsFallbackSessionId,
@@ -109,9 +108,8 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
     {
         var scopeId = request.ScopeId.Trim();
         var agentKind = NormalizeOptional(request.AgentKind);
-        var actorTypeName = ResolveActorTypeName(agentKind);
-        if (string.IsNullOrWhiteSpace(actorTypeName))
-            return PreparationResult.Failure(GAgentDraftRunStartError.UnknownActorType);
+        if (!IsRegisteredAgentKind(agentKind))
+            return PreparationResult.Failure(GAgentDraftRunStartError.UnknownAgentKind);
 
         var actorId = string.IsNullOrWhiteSpace(request.PreferredActorId)
             ? $"{agentKind}:{Guid.NewGuid():N}"
@@ -123,16 +121,16 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
                 new ScopeResourceTarget(
                     scopeId,
                     ScopeResourceKind.GAgentActor,
-                    actorTypeName,
+                    agentKind!,
                     actorId,
                     ScopeResourceOperation.DraftRunReuse),
                 ct);
             if (!admission.IsAllowed)
-                return PreparationResult.Failure(GAgentDraftRunStartError.ActorTypeMismatch);
+                return PreparationResult.Failure(GAgentDraftRunStartError.ActorKindMismatch);
 
             return PreparationResult.Success(new GAgentDraftRunPreparedActor(
                 scopeId,
-                actorTypeName,
+                agentKind!,
                 actorId,
                 RequiresRollbackOnFailure: false));
         }
@@ -142,14 +140,14 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
         {
             createdActor = await _actorRuntime.CreateByKindAsync(agentKind!, actorId, ct);
             var receipt = await _registryCommandPort.RegisterActorAsync(
-                new GAgentActorRegistration(scopeId, actorTypeName, actorId),
+                new GAgentActorRegistration(scopeId, agentKind!, actorId),
                 ct);
             if (!receipt.IsAdmissionVisible)
             {
                 await RollbackAsync(
-                    new GAgentDraftRunPreparedActor(scopeId, actorTypeName, actorId, RequiresRollbackOnFailure: true),
+                    new GAgentDraftRunPreparedActor(scopeId, agentKind!, actorId, RequiresRollbackOnFailure: true),
                     CancellationToken.None);
-                return PreparationResult.Failure(GAgentDraftRunStartError.ActorTypeMismatch);
+                return PreparationResult.Failure(GAgentDraftRunStartError.ActorKindMismatch);
             }
         }
         catch
@@ -157,7 +155,7 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
             if (createdActor is not null)
             {
                 await RollbackAsync(
-                    new GAgentDraftRunPreparedActor(scopeId, actorTypeName, actorId, RequiresRollbackOnFailure: true),
+                    new GAgentDraftRunPreparedActor(scopeId, agentKind!, actorId, RequiresRollbackOnFailure: true),
                     CancellationToken.None);
             }
 
@@ -166,25 +164,14 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
 
         return PreparationResult.Success(new GAgentDraftRunPreparedActor(
             scopeId,
-            actorTypeName,
+            agentKind!,
             actorId,
             RequiresRollbackOnFailure: true));
     }
 
-    private string? ResolveActorTypeName(string? agentKind)
-    {
-        if (string.IsNullOrWhiteSpace(agentKind) || _agentKindRegistry == null)
-            return null;
-
-        try
-        {
-            return _agentKindRegistry.Resolve(agentKind).Metadata.ImplementationClrTypeName;
-        }
-        catch (UnknownAgentKindException)
-        {
-            return null;
-        }
-    }
+    private bool IsRegisteredAgentKind(string? agentKind) =>
+        !string.IsNullOrWhiteSpace(agentKind) &&
+        _agentKindRegistry?.TryResolve(agentKind, out _) == true;
 
     private async Task RollbackAsync(
         GAgentDraftRunPreparedActor preparedActor,
@@ -195,7 +182,7 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
 
         if (!await TryUnregisterDraftRunActorAsync(
                 preparedActor.ScopeId,
-                preparedActor.ActorTypeName,
+                preparedActor.AgentKind,
                 preparedActor.ActorId,
                 ct))
             return;
@@ -212,14 +199,14 @@ internal sealed class GAgentDraftRunInteractionService : IGAgentDraftRunInteract
 
     private async Task<bool> TryUnregisterDraftRunActorAsync(
         string scopeId,
-        string actorTypeName,
+        string agentKind,
         string actorId,
         CancellationToken ct)
     {
         try
         {
             await _registryCommandPort.UnregisterActorAsync(
-                new GAgentActorRegistration(scopeId, actorTypeName, actorId),
+                new GAgentActorRegistration(scopeId, agentKind, actorId),
                 ct);
             return true;
         }

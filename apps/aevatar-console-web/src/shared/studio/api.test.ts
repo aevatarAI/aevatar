@@ -923,7 +923,7 @@ describe('studioApi host-session requests', () => {
         implementationKind: 'GAgent',
         expectedActorId: 'orders-gagent:dep-1',
         gAgent: {
-          actorTypeName: 'Tests.OrdersGAgent, Tests',
+          agentKind: 'Tests.OrdersGAgent',
         },
       }),
     } as Response);
@@ -932,7 +932,7 @@ describe('studioApi host-session requests', () => {
     const result = await studioApi.bindScopeGAgent({
       scopeId: 'scope-1',
       displayName: 'orders-gagent',
-      actorTypeName: 'Tests.OrdersGAgent, Tests',
+      agentKind: 'Tests.OrdersGAgent',
       revisionId: 'rev-1',
       endpoints: [
         {
@@ -947,9 +947,9 @@ describe('studioApi host-session requests', () => {
 
     expect(result.implementationKind).toBe('gagent');
     expect(result.targetKind).toBe('gagent');
-    expect(result.targetName).toBe('Tests.OrdersGAgent, Tests');
+    expect(result.targetName).toBe('orders-gagent');
     expect(result.gAgent).toEqual({
-      actorTypeName: 'Tests.OrdersGAgent, Tests',
+      actorTypeName: '',
     });
 
     const [input, init] = fetchMock.mock.calls[0] as [
@@ -962,7 +962,7 @@ describe('studioApi host-session requests', () => {
       implementationKind: 'gagent',
       displayName: 'orders-gagent',
       gagent: {
-        actorTypeName: 'Tests.OrdersGAgent, Tests',
+        agentKind: 'Tests.OrdersGAgent',
         endpoints: [
           {
             endpointId: 'run',
@@ -1675,6 +1675,7 @@ describe('studioApi host-session requests', () => {
         workflowRevision: 'rev-2',
         scriptId: null,
         scriptRevision: null,
+        agentKind: null,
         actorTypeName: null,
       },
       lastBinding: {

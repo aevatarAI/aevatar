@@ -35,9 +35,10 @@ message InvocationPayload {
 }
 
 message InvokeGAgentToolRequest {
+  reserved "actor_name";
   oneof target {
     string actor_id = 1;
-    string actor_name = 2;
+    string agent_kind = 2;
   }
   InvocationPayload payload = 3;
   InvocationWaitMode wait = 4;

@@ -219,7 +219,7 @@ public class NyxIdChatEndpointsCoverageTests
         createdActorId.Should().NotBeNullOrWhiteSpace();
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == createdActorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
             call.Type == typeof(NyxIdChatGAgent) &&
@@ -259,7 +259,7 @@ public class NyxIdChatEndpointsCoverageTests
         doc.RootElement.GetProperty("statusUrl").GetString().Should().Be("/api/scopes/scope-a/nyxid-chat/conversations");
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == createdActorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
             call.Type == typeof(NyxIdChatGAgent) &&
@@ -297,7 +297,7 @@ public class NyxIdChatEndpointsCoverageTests
         actorId.Should().NotBeNullOrWhiteSpace();
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
             call.Type == typeof(NyxIdChatGAgent) &&
@@ -509,7 +509,7 @@ public class NyxIdChatEndpointsCoverageTests
             "Refactor (issue1321-first): tool_choice_hint is tool prefill, not actor addressing");
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == actorId);
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be(actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
@@ -546,7 +546,7 @@ public class NyxIdChatEndpointsCoverageTests
             "Refactor (issue1321-first): tool_choice_hint is tool prefill, not actor addressing");
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == actorId);
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be(actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
@@ -642,7 +642,7 @@ public class NyxIdChatEndpointsCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == "actor-1");
         historyCommandPort.DeletedConversations.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
@@ -650,7 +650,7 @@ public class NyxIdChatEndpointsCoverageTests
         actorStore.AdmissionTargets.Should().ContainSingle(target =>
             target.ScopeId == "scope-a" &&
             target.ResourceKind == ScopeResourceKind.GAgentActor &&
-            target.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            target.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             target.ActorId == "actor-1" &&
             target.Operation == ScopeResourceOperation.Delete);
     }
@@ -706,7 +706,7 @@ public class NyxIdChatEndpointsCoverageTests
         actorStore.AdmissionTargets.Should().ContainSingle(target =>
             target.ScopeId == "scope-a" &&
             target.ResourceKind == ScopeResourceKind.GAgentActor &&
-            target.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            target.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             target.ActorId == "actor-missing" &&
             target.Operation == ScopeResourceOperation.Delete);
         actorStore.RemovedActors.Should().BeEmpty();
@@ -745,7 +745,7 @@ public class NyxIdChatEndpointsCoverageTests
         actorStore.AdmissionTargets.Should().ContainSingle(target =>
             target.ScopeId == "scope-a" &&
             target.ResourceKind == ScopeResourceKind.GAgentActor &&
-            target.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            target.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             target.ActorId == "actor-denied" &&
             target.Operation == ScopeResourceOperation.Delete);
         runtime.Actors.GetValueOrDefault("actor-denied")
@@ -808,11 +808,11 @@ public class NyxIdChatEndpointsCoverageTests
         assertion.Which.Message.Should().Be("history unavailable");
         actorStore.RemovedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == "actor-1");
         actorStore.AddedActors.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
-            entry.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == "actor-1");
     }
 
@@ -910,7 +910,7 @@ public class NyxIdChatEndpointsCoverageTests
         actorStore.AdmissionTargets.Should().ContainSingle(target =>
             target.ScopeId == "scope-a" &&
             target.ResourceKind == ScopeResourceKind.GAgentActor &&
-            target.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            target.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             target.ActorId == "actor-missing" &&
             target.Operation == ScopeResourceOperation.Stream);
     }
@@ -1009,7 +1009,7 @@ public class NyxIdChatEndpointsCoverageTests
         actorStore.AdmissionTargets.Should().ContainSingle(target =>
             target.ScopeId == "scope-a" &&
             target.ResourceKind == ScopeResourceKind.GAgentActor &&
-            target.GAgentType == NyxIdChatServiceDefaults.GAgentKind &&
+            target.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             target.ActorId == "actor-missing" &&
             target.Operation == ScopeResourceOperation.Approve);
     }
@@ -3720,8 +3720,8 @@ public class NyxIdChatEndpointsCoverageTests
             GAgentActorRegistryCommandStage.AdmissionVisible;
         public ScopeResourceAdmissionResult AdmissionResult { get; init; } =
             ScopeResourceAdmissionResult.Allowed();
-        public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
-        public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
+        public List<(string ScopeId, string AgentKind, string ActorId)> AddedActors { get; } = [];
+        public List<(string ScopeId, string AgentKind, string ActorId)> RemovedActors { get; } = [];
         public List<ScopeResourceTarget> AdmissionTargets { get; } = [];
         public string? LastRequestedScopeId { get; private set; }
 
@@ -3747,7 +3747,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             if (AddActorException is not null)
                 throw AddActorException;
-            AddedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            AddedActors.Add((registration.ScopeId, registration.AgentKind, registration.ActorId));
             if (AddActorExceptionAfterCommit is not null)
                 throw AddActorExceptionAfterCommit;
 
@@ -3760,7 +3760,7 @@ public class NyxIdChatEndpointsCoverageTests
             GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
-            RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            RemovedActors.Add((registration.ScopeId, registration.AgentKind, registration.ActorId));
             if (RemoveActorException is not null)
                 throw RemoveActorException;
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(

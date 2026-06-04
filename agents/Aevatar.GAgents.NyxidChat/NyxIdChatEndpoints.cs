@@ -142,7 +142,7 @@ public static partial class NyxIdChatEndpoints
 
         var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
         var actorIds = snapshot.Groups
-            .FirstOrDefault(g => string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentKind, StringComparison.Ordinal))
+            .FirstOrDefault(g => string.Equals(g.AgentKind, NyxIdChatServiceDefaults.GAgentKind, StringComparison.Ordinal))
             ?.ActorIds
             ?? [];
         return Results.Ok(new

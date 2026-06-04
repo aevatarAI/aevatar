@@ -5088,7 +5088,7 @@ public sealed class ScopeServiceEndpointsTests
                 GAgent: request.GAgent == null
                     ? null
                     : new ScopeBindingGAgentResult(
-                        request.GAgent.ActorTypeName)));
+                        request.GAgent.AgentKind)));
         }
     }
 
@@ -5712,7 +5712,7 @@ public sealed class ScopeServiceEndpointsTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
-                    .Failure(GAgentDraftRunStartError.UnknownActorType));
+                    .Failure(GAgentDraftRunStartError.UnknownAgentKind));
         }
     }
 
@@ -5738,7 +5738,7 @@ public sealed class ScopeServiceEndpointsTests
             var result = await interactionService.ExecuteAsync(
                 new GAgentDraftRunInteractionRequest(
                     ScopeId: request.Identity.TenantId,
-                    ActorTypeName: "TestStaticGAgent",
+                    AgentKind: "TestStaticGAgent",
                     Prompt: input.Prompt,
                     PreferredActorId: input.PreferredActorId,
                     SessionId: input.SessionId,

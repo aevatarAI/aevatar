@@ -79,7 +79,7 @@ internal sealed class InvokeGAgentTool : IAevatarInvocationTool
     public string Name => "aevatar_invoke_gagent";
 
     public string Description =>
-        "Invoke a single Aevatar GAgent by actor_id or caller-scoped actor_name with a typed chat payload.";
+        "Invoke a single Aevatar GAgent by actor_id or caller-scoped agent_kind with a typed chat payload.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.InvokeGAgent;
 

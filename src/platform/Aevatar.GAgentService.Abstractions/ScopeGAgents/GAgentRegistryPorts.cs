@@ -27,7 +27,7 @@ public interface IScopeResourceAdmissionPort
 
 public sealed record GAgentActorRegistration(
     string ScopeId,
-    string GAgentType,
+    string AgentKind,
     string ActorId);
 
 public sealed record GAgentActorRegistryCommandReceipt(
@@ -51,12 +51,12 @@ public sealed record GAgentActorRegistrySnapshot(
     DateTimeOffset UpdatedAt,
     DateTimeOffset ObservedAt);
 
-public sealed record GAgentActorGroup(string GAgentType, IReadOnlyList<string> ActorIds);
+public sealed record GAgentActorGroup(string AgentKind, IReadOnlyList<string> ActorIds);
 
 public sealed record ScopeResourceTarget(
     string ScopeId,
     ScopeResourceKind ResourceKind,
-    string GAgentType,
+    string AgentKind,
     string ActorId,
     ScopeResourceOperation Operation);
 

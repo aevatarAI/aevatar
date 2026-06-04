@@ -70,7 +70,8 @@ public sealed class AevatarInvocationToolSourceTests
         doc.RootElement.TryGetProperty("not", out _).Should().BeFalse();
         doc.RootElement.TryGetProperty("enum", out _).Should().BeFalse();
         doc.RootElement.GetProperty("properties").TryGetProperty("actor_id", out _).Should().BeTrue();
-        doc.RootElement.GetProperty("properties").TryGetProperty("actor_name", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").TryGetProperty("agent_kind", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").TryGetProperty("actor_name", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -121,7 +122,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task InvokeGAgent_ShouldResolveActorNameAndDispatchEnvelopeThroughPort()
+    public async Task InvokeGAgent_ShouldResolveAgentKindAndDispatchEnvelopeThroughPort()
     {
         var harness = new Harness();
         harness.ActorRegistry.Snapshot = new GAgentActorRegistrySnapshot(
@@ -135,7 +136,7 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(callId: "call-gagent");
         var output = await tool.ExecuteAsync("""
             {
-              "actor_name": "RoleGAgent",
+              "agent_kind": "RoleGAgent",
               "payload": {
                 "prompt": "hello",
                 "input_parts": [
@@ -176,6 +177,25 @@ public sealed class AevatarInvocationToolSourceTests
         result.GetProperty("run_id").GetString().Should().Be("call-gagent");
         result.GetProperty("stream_topic").GetString().Should().Be("aevatar://actors/actor-1/runs/call-gagent");
         result.GetProperty("wait").GetString().Should().Be("stream");
+    }
+
+    [Fact]
+    public async Task InvokeGAgent_ShouldRejectActorNameAlias()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(callId: "call-gagent-legacy-alias");
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_name": "RoleGAgent",
+              "payload": { "prompt": "hello" }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        output.Should().Contain("agent_kind");
+        harness.ActorDispatch.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -541,7 +561,7 @@ public sealed class AevatarInvocationToolSourceTests
         var harness = new Harness();
         harness.TeamInvocation.Result = new StaticGAgentStreamInvocationResult(
             null,
-            GAgentDraftRunStartError.ActorTypeMismatch,
+            GAgentDraftRunStartError.ActorKindMismatch,
             GAgentDraftRunCompletionStatus.Unknown,
             false);
         var tool = await harness.DiscoverToolAsync("aevatar_invoke_team");
@@ -556,7 +576,7 @@ public sealed class AevatarInvocationToolSourceTests
             }
             """);
 
-        ErrorCode(output).Should().Be("actortypemismatch");
+        ErrorCode(output).Should().Be("actorkindmismatch");
         harness.TeamInvocation.Request.Should().NotBeNull();
     }
 

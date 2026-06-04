@@ -755,6 +755,11 @@ function decodeStudioScopeBindingRevision(
         "staticActorTypeName",
         "StaticActorTypeName",
       ]) || "",
+    staticAgentKind:
+      readOptionalString(record, [
+        "staticAgentKind",
+        "StaticAgentKind",
+      ]) || "",
   };
 }
 
@@ -1250,6 +1255,12 @@ function decodeStudioMemberImplementationRef(
         record,
         ["scriptRevision", "ScriptRevision"],
         "StudioMemberImplementationRef.scriptRevision"
+      ) ?? null,
+    agentKind:
+      readNullableString(
+        record,
+        ["agentKind", "AgentKind"],
+        "StudioMemberImplementationRef.agentKind"
       ) ?? null,
     actorTypeName:
       readNullableString(
@@ -1922,7 +1933,7 @@ export const studioApi = {
             serviceId: trimOptional(input.serviceId),
             displayName: trimOptional(input.displayName),
             gagent: compactObject({
-              actorTypeName: input.actorTypeName.trim(),
+              agentKind: input.agentKind.trim(),
               endpoints: input.endpoints.map((endpoint) =>
                 compactObject({
                   endpointId: endpoint.endpointId.trim(),
@@ -2010,7 +2021,7 @@ export const studioApi = {
     scopeId: string;
     memberId: string;
     displayName?: string | null;
-    actorTypeName: string;
+    agentKind: string;
     endpoints: StudioScopeGAgentBindingInput["endpoints"];
     revisionId?: string | null;
   }): Promise<StudioMemberBindingAcceptedResponse> {
@@ -2025,7 +2036,7 @@ export const studioApi = {
             implementationKind: "gagent",
             displayName: trimOptional(input.displayName),
             gagent: compactObject({
-              actorTypeName: input.actorTypeName.trim(),
+              agentKind: input.agentKind.trim(),
               endpoints: input.endpoints.map((endpoint) =>
                 compactObject({
                   endpointId: endpoint.endpointId.trim(),

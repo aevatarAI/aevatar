@@ -17,7 +17,7 @@ public sealed class GAgentDraftRunInteractionPortTests
     private const string TestAgentKind = "tests.draft-run-agent";
 
     [Fact]
-    public async Task ExecuteAsync_ShouldReturnUnknownActorType_WhenTypeCannotBeResolved()
+    public async Task ExecuteAsync_ShouldReturnUnknownAgentKind_WhenTypeCannotBeResolved()
     {
         var port = CreatePort(
             new RecordingActorRuntime(_ => null),
@@ -31,7 +31,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.UnknownActorType);
+        result.Error.Should().Be(GAgentDraftRunStartError.UnknownAgentKind);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public sealed class GAgentDraftRunInteractionPortTests
         admission.Targets.Should().ContainSingle().Which.Should().Be(new ScopeResourceTarget(
             "scope-a",
             ScopeResourceKind.GAgentActor,
-            typeof(TestAgent).FullName!,
+            TestAgentKind,
             "existing-actor",
             ScopeResourceOperation.DraftRunReuse));
         interaction.Commands.Should().ContainSingle().Which.PreferredActorId.Should().Be("existing-actor");
@@ -80,7 +80,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorKindMismatch);
         runtime.DestroyedActorIds.Should().BeEmpty();
         interaction.Commands.Should().BeEmpty();
     }
@@ -130,7 +130,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorKindMismatch);
         interaction.Commands.Should().BeEmpty();
         runtime.DestroyedActorIds.Should().ContainSingle("draft-actor");
         operations.Should().ContainInOrder(
@@ -219,7 +219,7 @@ public sealed class GAgentDraftRunInteractionPortTests
         {
             ResultFactory = (_, _, _, _) => Task.FromResult(
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Failure(
-                    GAgentDraftRunStartError.ActorTypeMismatch)),
+                    GAgentDraftRunStartError.ActorKindMismatch)),
         };
         var port = CreatePort(runtime, registry, new RecordingAdmissionPort(), interaction);
 
@@ -229,7 +229,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(GAgentDraftRunStartError.ActorTypeMismatch);
+        result.Error.Should().Be(GAgentDraftRunStartError.ActorKindMismatch);
         runtime.DestroyedActorIds.Should().ContainSingle("draft-actor");
         registry.UnregisteredActors.Should().ContainSingle().Which.ActorId.Should().Be("draft-actor");
     }
@@ -319,7 +319,7 @@ public sealed class GAgentDraftRunInteractionPortTests
                 await onAcceptedAsync!(
                     new GAgentDraftRunAcceptedReceipt(
                         command.PreferredActorId ?? "actor-1",
-                        command.ActorTypeName,
+                        command.AgentKind,
                         command.CommandIdSeed ?? "cmd-1",
                         command.CorrelationIdSeed ?? "corr-1",
                         command.SessionId ?? string.Empty),
@@ -355,7 +355,7 @@ public sealed class GAgentDraftRunInteractionPortTests
                 await onAcceptedAsync!(
                     new GAgentDraftRunAcceptedReceipt(
                         command.PreferredActorId ?? "actor-1",
-                        command.ActorTypeName,
+                        command.AgentKind,
                         command.CommandIdSeed ?? "cmd-1",
                         command.CorrelationIdSeed ?? "corr-1",
                         command.SessionId ?? string.Empty),
@@ -385,14 +385,13 @@ public sealed class GAgentDraftRunInteractionPortTests
         new(runtime, registry, admission, interaction, BuildRegistry());
 
     private static GAgentDraftRunInteractionRequest Request(
-        string? actorTypeName = null,
         string? agentKind = TestAgentKind,
         string? preferredActorId = "draft-actor",
         AgentToolExecutionContext? toolContext = null,
         LLMControlContext? llmControl = null) =>
         new(
             "scope-a",
-            actorTypeName ?? typeof(TestAgent).AssemblyQualifiedName!,
+            agentKind ?? string.Empty,
             "hello",
             preferredActorId,
             "session-1",
@@ -400,8 +399,7 @@ public sealed class GAgentDraftRunInteractionPortTests
             " model ",
             " route ",
             ToolContext: toolContext,
-            LlmControl: llmControl,
-            AgentKind: agentKind);
+            LlmControl: llmControl);
 
     private static IAgentKindRegistry BuildRegistry()
     {
@@ -433,7 +431,7 @@ public sealed class GAgentDraftRunInteractionPortTests
         CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
             new GAgentDraftRunAcceptedReceipt(
                 command.PreferredActorId ?? "actor-1",
-                command.ActorTypeName,
+                command.AgentKind,
                 "cmd-1",
                 "corr-1",
                 command.SessionId ?? string.Empty),
