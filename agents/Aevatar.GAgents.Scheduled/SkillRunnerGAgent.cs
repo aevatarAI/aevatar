@@ -27,6 +27,8 @@ namespace Aevatar.GAgents.Scheduled;
 [GAgent("scheduled.skill-runner")]
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
+    private static readonly TimeSpan LongOutputDocumentDecisionTimeout = TimeSpan.FromSeconds(45);
+
     private readonly NyxIdApiClient? _nyxIdApiClient;
     private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
@@ -348,7 +350,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 if (string.IsNullOrEmpty(chunk.DeltaContent))
                     continue;
                 content.Append(chunk.DeltaContent);
-                if (streamingState is not null)
+                if (streamingState is not null &&
+                    content.Length <= SkillRunnerStreamingReplySink.MaxLarkTextLength)
                     // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
                     // turn. Acceptable for bounded skill output (≤30 KB capped, and the
                     // actor-owned streaming state dedupes against `_lastEmittedText` so most allocations don't even
@@ -383,13 +386,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 _toolFailureCounter.SuccessCount,
                 State.RequiresNyxidProxySuccess);
 
-            // Issue #423 §C — chunked delivery for outputs that exceed the Lark body cap.
-            // For ≤30 KB outputs the chunker returns a single-element list and the dispatch
-            // loop below collapses to the existing single-message path. Larger outputs split
-            // at `\n\n` boundaries (or hard-split for no-paragraph inputs) so the full report
-            // lands as a sequence of "[part k/N]" messages instead of being silently truncated
-            // at the cap.
-            var chunks = SkillRunnerOutputChunker.Split(output);
+            var docReply = await TryCreateLongOutputDocumentReplyAsync(
+                output,
+                requestId,
+                llmControl,
+                toolContext,
+                metadata,
+                ct);
+            var chunks = docReply is not null
+                ? [docReply]
+                : SkillRunnerOutputChunker.Split(output);
             await DispatchOutputChunksAsync(streamingState, chunks, ct);
 
             return output;
@@ -643,6 +649,101 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
 
+    private async Task<string?> TryCreateLongOutputDocumentReplyAsync(
+        string output,
+        string requestId,
+        LLMControlContext llmControl,
+        AgentToolExecutionContext toolContext,
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken ct)
+    {
+        if (output.Length <= SkillRunnerStreamingReplySink.MaxLarkTextLength)
+            return null;
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(LongOutputDocumentDecisionTimeout);
+        try
+        {
+            var decisionText = new StringBuilder();
+            await foreach (var chunk in ChatStreamAsync(
+                               [ContentPart.TextPart(BuildLongOutputDocumentDecisionPrompt(output))],
+                               $"{requestId}:lark-docx",
+                               llmControl with { MaxToolRoundsOverride = 2 },
+                               toolContext with
+                               {
+                                   Request = toolContext.Request with { RequestId = $"{requestId}:lark-docx", CallId = null },
+                               },
+                               metadata,
+                               timeoutCts.Token))
+            {
+                if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                    decisionText.Append(chunk.DeltaContent);
+            }
+
+            var reply = decisionText.ToString().Trim();
+            if (TryAcceptLongOutputDocumentReply(reply, out var accepted))
+                return accepted;
+
+            Logger.LogWarning(
+                "Skill runner {ActorId} long-output document decision did not produce an accepted doc link; falling back to chunked delivery.",
+                Id);
+            return null;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} long-output document decision timed out; falling back to chunked delivery.",
+                Id);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Skill runner {ActorId} long-output document decision failed; falling back to chunked delivery.",
+                Id);
+            return null;
+        }
+    }
+
+    private static string BuildLongOutputDocumentDecisionPrompt(string output) =>
+        $"""
+        The scheduled skill output below is too long for one Lark message.
+
+        Decide whether the full content should be delivered as a Lark cloud document.
+        If yes, call the lark_docx_create tool exactly once with:
+        - title: a concise title for this report
+        - markdown_text: the complete output exactly as provided
+        - visibility: readable
+
+        If the tool result reports success=true with document_url, answer with one short user-facing Lark message that includes the document URL.
+        If you do not call the tool, if the tool fails, or if there is no document_url, answer with DOCX_FALLBACK.
+        Do not summarize, omit, or rewrite the report body in the final message.
+
+        Output:
+        {output}
+        """;
+
+    private static bool TryAcceptLongOutputDocumentReply(string reply, out string accepted)
+    {
+        accepted = string.Empty;
+        if (string.IsNullOrWhiteSpace(reply))
+            return false;
+        if (reply.Contains("DOCX_FALLBACK", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!ContainsDocumentLink(reply))
+            return false;
+        if (reply.Length > SkillRunnerStreamingReplySink.MaxLarkTextLength)
+            return false;
+
+        accepted = reply;
+        return true;
+    }
+
+    private static bool ContainsDocumentLink(string reply) =>
+        reply.Contains("http://", StringComparison.OrdinalIgnoreCase) ||
+        reply.Contains("https://", StringComparison.OrdinalIgnoreCase);
+
     private Task SendOutputAsync(string output, CancellationToken ct) =>
         SendOutputAsync(output, providerSlugOverride: null, ct);
 
@@ -819,8 +920,17 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkReceiveId, State.OutboundConfig?.LarkReceiveId);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkReceiveIdType, State.OutboundConfig?.LarkReceiveIdType);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkOutboundProxySlug, State.OutboundConfig?.NyxProviderSlug);
 
         return metadata;
+    }
+
+    private static void AddIfNotEmpty(IDictionary<string, string> metadata, string key, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            metadata[key] = value.Trim();
     }
 
     private async Task<LLMControlContext> BuildExecutionLlmControlAsync(CancellationToken ct)

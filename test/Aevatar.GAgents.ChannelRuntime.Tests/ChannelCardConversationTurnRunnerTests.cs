@@ -219,5 +219,14 @@ public sealed class ChannelCardConversationTurnRunnerTests
 
         public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
+
+        public Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 }

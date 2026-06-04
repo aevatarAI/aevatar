@@ -46,6 +46,166 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkDocxCreateTool_ShouldCreateAppendPermission_AndReturnLink()
+    {
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":0,"data":{"children":[]}}""",
+            DrivePermissionResponse = """{"code":0,"data":{"link_share_entity":"tenant_readable"}}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.lark.receive_id"] = "oc_chat_1",
+                ["channel.lark.receive_id_type"] = "chat_id",
+            });
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"# Daily\n\nFull text","visibility":"readable"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("document_token").GetString().Should().Be("doccn_123");
+        document.RootElement.GetProperty("document_url").GetString().Should().Be("https://example.feishu.cn/docx/doccn_123");
+        document.RootElement.GetProperty("visibility_applied").GetBoolean().Should().BeTrue();
+        client.LastDocxCreateToken.Should().Be("token-123");
+        client.LastDocxCreateRequest.Should().Be(new LarkDocxCreateRequest("Daily report"));
+        client.LastDocxAppendRequest.Should().Be(new LarkDocxAppendBlocksRequest("doccn_123", "# Daily\n\nFull text"));
+        client.LastDrivePermissionRequest.Should().Be(new LarkDrivePermissionRequest("doccn_123", LarkDocxVisibility.Readable, "oc_chat_1", "chat_id"));
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenPermissionOrUrlMissing()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var permissionFailure = new LarkDocxCreateTool(new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":0,"data":{}}""",
+            DrivePermissionResponse = """{"code":999,"msg":"permission denied"}""",
+        });
+
+        var permissionResult = await permissionFailure.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        permissionResult.Should().Contain("\"success\":false");
+        permissionResult.Should().Contain("\"visibility_applied\":false");
+        permissionResult.Should().Contain("lark_code=999");
+
+        var missingUrl = new LarkDocxCreateTool(new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123"}}}""",
+            DocxAppendResponse = """{"code":0,"data":{}}""",
+            DrivePermissionResponse = """{"code":0,"data":{}}""",
+        });
+
+        var missingUrlResult = await missingUrl.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        missingUrlResult.Should().Contain("\"success\":false");
+        missingUrlResult.Should().Contain("docx_create_missing_url");
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenCreateReturnsProxyError()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"error":true,"status":503,"message":"docx unavailable"}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("nyx_proxy_error status=503");
+        result.Should().Contain("docx unavailable");
+        client.LastDocxCreateRequest.Should().Be(new LarkDocxCreateRequest("Daily report"));
+        client.LastDocxAppendRequest.Should().BeNull();
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenCreateOmitsDocumentToken()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"url":"https://example.feishu.cn/docx/missing-token"}}}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("docx_create_missing_token");
+        client.LastDocxCreateRequest.Should().Be(new LarkDocxCreateRequest("Daily report"));
+        client.LastDocxAppendRequest.Should().BeNull();
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenAppendReturnsProxyError()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":999,"msg":"append rejected"}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("\"document_token\":\"doccn_123\"");
+        result.Should().Contain("\"document_url\":\"https://example.feishu.cn/docx/doccn_123\"");
+        result.Should().Contain("lark_code=999");
+        result.Should().Contain("append rejected");
+        client.LastDocxAppendRequest.Should().Be(new LarkDocxAppendBlocksRequest("doccn_123", "full text"));
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldValidateInputs()
+    {
+        var tool = new LarkDocxCreateTool(new StubLarkNyxClient());
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{"markdown_text":"body"}"""))
+                .Should().Contain("title is required");
+            (await tool.ExecuteAsync(JsonSerializer.Serialize(new
+            {
+                title = new string('t', 201),
+                markdown_text = "body",
+            })))
+                .Should().Contain("title exceeds the maximum of 200 characters");
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":" "}"""))
+                .Should().Contain("markdown_text is required");
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body","visibility":"public"}"""))
+                .Should().Contain("visibility must be one of");
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body","receive_id":"oc_1"}"""))
+                .Should().Contain("receive_id and receive_id_type must be provided together");
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body","receive_id":"oc_1","receive_id_type":"email"}"""))
+                .Should().Contain("receive_id_type must be one of");
+        }
+    }
+
+    [Fact]
     public async Task LarkMessagesSendTool_PropagatesTypedCallerScope()
     {
         var client = new StubLarkNyxClient
@@ -1169,7 +1329,7 @@ public class LarkToolsTests
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(11);
+        tools.Should().HaveCount(12);
         tools.Should().Contain(tool => tool is LarkMessagesSendTool);
         tools.Should().Contain(tool => tool is LarkMessagesReplyTool);
         tools.Should().Contain(tool => tool is LarkMessagesReactTool);
@@ -1181,6 +1341,7 @@ public class LarkToolsTests
         tools.Should().Contain(tool => tool is LarkSheetsAppendRowsTool);
         tools.Should().Contain(tool => tool is LarkApprovalsListTool);
         tools.Should().Contain(tool => tool is LarkApprovalsActTool);
+        tools.Should().Contain(tool => tool is LarkDocxCreateTool);
     }
 
     [Fact]
@@ -1471,6 +1632,61 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkNyxClient_DocxCreateAppendPermission_ShapesProxyRequests()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.CreateDocxDocumentAsync(
+            "token-123",
+            new LarkDocxCreateRequest("Daily report"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/docx/v1/documents");
+        handler.LastBody.Should().Contain("\"title\":\"Daily report\"");
+
+        const int ExpectedDocxBlockTextLength = 2_000;
+        var longText = new string('x', ExpectedDocxBlockTextLength + 5);
+        await client.AppendDocxTextBlocksAsync(
+            "token-123",
+            new LarkDocxAppendBlocksRequest("doccn_123", longText),
+            CancellationToken.None);
+
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/docx/v1/documents/doccn_123/blocks/doccn_123/children");
+        using (var appendBody = JsonDocument.Parse(handler.LastBody!))
+        {
+            var children = appendBody.RootElement.GetProperty("children");
+            children.GetArrayLength().Should().Be(2);
+            children[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString()!
+                .Length.Should().Be(ExpectedDocxBlockTextLength);
+            children[1].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString()!
+                .Length.Should().Be(5);
+        }
+
+        await client.SetDrivePermissionAsync(
+            "token-123",
+            new LarkDrivePermissionRequest("doccn_123", LarkDocxVisibility.Editable, "oc_chat_1", "chat_id"),
+            CancellationToken.None);
+
+        handler.LastRequest!.Method.Method.Should().Be("PATCH");
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/drive/v1/permissions/doccn_123/public?type=docx");
+        handler.LastBody.Should().Contain("\"link_share_entity\":\"tenant_editable\"");
+        handler.LastBody.Should().Contain("\"receive_id\":\"oc_chat_1\"");
+    }
+
+    [Fact]
     public void LarkNyxClient_NormalizeChatSearchQuery_ShouldKeepOriginalWhenUnquotingFails()
     {
         var method = typeof(LarkNyxClient).GetMethod(
@@ -1495,8 +1711,12 @@ public class LarkToolsTests
         public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
         public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string DocxCreateResponse { get; set; } = """{"code":0,"data":{"document":{"document_id":"doccn_default","url":"https://example.feishu.cn/docx/doccn_default"}}}""";
+        public string DocxAppendResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string DrivePermissionResponse { get; set; } = """{"code":0,"data":{}}""";
 
         public string? LastSendToken { get; private set; }
+        public string? LastDocxCreateToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
@@ -1508,6 +1728,9 @@ public class LarkToolsTests
         public LarkSheetAppendRowsRequest? LastSheetAppendRequest { get; private set; }
         public LarkApprovalTaskQueryRequest? LastApprovalQueryRequest { get; private set; }
         public LarkApprovalTaskActionRequest? LastApprovalActionRequest { get; private set; }
+        public LarkDocxCreateRequest? LastDocxCreateRequest { get; private set; }
+        public LarkDocxAppendBlocksRequest? LastDocxAppendRequest { get; private set; }
+        public LarkDrivePermissionRequest? LastDrivePermissionRequest { get; private set; }
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
@@ -1574,6 +1797,25 @@ public class LarkToolsTests
         {
             LastApprovalActionRequest = request;
             return Task.FromResult(ApprovalActionResponse);
+        }
+
+        public Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct)
+        {
+            LastDocxCreateToken = token;
+            LastDocxCreateRequest = request;
+            return Task.FromResult(DocxCreateResponse);
+        }
+
+        public Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct)
+        {
+            LastDocxAppendRequest = request;
+            return Task.FromResult(DocxAppendResponse);
+        }
+
+        public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct)
+        {
+            LastDrivePermissionRequest = request;
+            return Task.FromResult(DrivePermissionResponse);
         }
     }
 
