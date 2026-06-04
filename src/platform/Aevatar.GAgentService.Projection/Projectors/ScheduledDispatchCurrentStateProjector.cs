@@ -54,12 +54,13 @@ public sealed class ScheduledDispatchCurrentStateProjector
     {
         var target = state.Target ?? new ScheduledDispatchTargetState();
         var serviceIdentity = target.ServiceInvocation?.Identity;
+        var scheduleId = string.IsNullOrWhiteSpace(state.ScheduleId) ? context.RootActorId : state.ScheduleId;
         var document = new ScheduledDispatchDocument
         {
-            Id = context.RootActorId,
+            Id = scheduleId,
             ActorId = context.RootActorId,
             ScheduleActorId = context.RootActorId,
-            ScheduleId = string.IsNullOrWhiteSpace(state.ScheduleId) ? context.RootActorId : state.ScheduleId,
+            ScheduleId = scheduleId,
             DisplayName = state.DisplayName ?? string.Empty,
             TargetKind = ToApplicationTargetKind(target.Kind).ToString(),
             PayloadTypeUrl = state.PayloadTypeUrl ?? string.Empty,

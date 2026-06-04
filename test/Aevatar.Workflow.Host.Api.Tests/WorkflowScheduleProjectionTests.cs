@@ -95,7 +95,7 @@ public sealed class WorkflowScheduleProjectionTests
 
         dispatcher.Upserts.Should().ContainSingle();
         var document = dispatcher.Upserts.Single();
-        document.Id.Should().Be("scheduled-dispatch:schedule-1");
+        document.Id.Should().Be("schedule-1");
         document.ActorId.Should().Be("scheduled-dispatch:schedule-1");
         document.ScheduleActorId.Should().Be("scheduled-dispatch:schedule-1");
         document.ScheduleId.Should().Be("schedule-1");
@@ -156,6 +156,7 @@ public sealed class WorkflowScheduleProjectionTests
 
         dispatcher.Upserts.Should().ContainSingle();
         var document = dispatcher.Upserts.Single();
+        document.Id.Should().Be("scheduled-dispatch:fallback");
         document.ScheduleId.Should().Be("scheduled-dispatch:fallback");
         document.DisplayName.Should().BeEmpty();
         document.CronExpression.Should().BeEmpty();
