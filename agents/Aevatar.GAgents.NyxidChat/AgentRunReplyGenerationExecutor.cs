@@ -319,6 +319,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.ToolName, toolResult.Result)));
         }
 
+        // Defense-in-depth complement to the Kafka transport fix (commit f2c2319e7):
+        // bound the tool-result payload before it enters the
+        // AgentRunNextToolStepRequestedEvent command envelope, so an oversized
+        // aggregate (e.g. large multi-source JSON) degrades to a truncated-but-useful
+        // reply instead of failing the whole run with an opaque ProduceException once
+        // the serialized envelope exceeds the broker's max.message.bytes.
+        ToolResultPayloadBounds.BoundResultMessages(toolStepResult.ResultMessages);
+
         return new AgentRunNextToolStepRequestedEvent
         {
             RunId = workItem.RunId,
