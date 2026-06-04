@@ -18,12 +18,18 @@ describe("app navigation groups", () => {
 
     expect(groups.map((group) => group.label)).toEqual([
       "Teams",
-      "Platform",
+      "Build",
+      "Run",
+      "Release",
+      "Operate",
       "Settings",
     ]);
     expect(groups.map((group) => group.labelMessageId)).toEqual([
       "nav.groups.teams",
-      "nav.groups.platform",
+      "nav.groups.build",
+      "nav.groups.run",
+      "nav.groups.release",
+      "nav.groups.operate",
       "nav.groups.settings",
     ]);
   });

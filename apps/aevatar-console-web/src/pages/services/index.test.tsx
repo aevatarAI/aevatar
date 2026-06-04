@@ -132,7 +132,7 @@ describe('ServicesPage', () => {
   it('renders the reframed services authority workbench with inventory and empty detail state', async () => {
     renderWithQueryClient(React.createElement(ServicesPage));
 
-    expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
+    expect(await screen.findByText('Aevatar / Release')).toBeTruthy();
     expect(screen.getAllByText('Services').length).toBeGreaterThan(0);
     expect(await screen.findByText('可见服务')).toBeTruthy();
     expect((await screen.findAllByText('已挂服务态')).length).toBeGreaterThan(0);
@@ -143,7 +143,7 @@ describe('ServicesPage', () => {
     expect(screen.getByText('团队/租户')).toBeTruthy();
     expect(screen.getByText('结果窗口')).toBeTruthy();
     expect(screen.getByRole('button', { name: '重置' })).toBeTruthy();
-    expect(screen.getByText('Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、部署或 Topology。')).toBeTruthy();
+    expect(screen.getByText('Services 是 Release 路径下的服务目录，展示当前范围内可调用的团队能力、服务挂载位置、承载 Actor，并指引你继续进入 Governance、部署或 Topology。')).toBeTruthy();
     expect(screen.getByText('服务目录')).toBeTruthy();
     expect(screen.getByText('按行扫描状态、部署和入口，点击行或按钮在抽屉里查看详情。')).toBeTruthy();
     expect(screen.getByText('状态')).toBeTruthy();

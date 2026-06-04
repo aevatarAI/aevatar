@@ -14,9 +14,9 @@ async function openAdvancedConsole(): Promise<void> {
   fireEvent.click(await screen.findByRole("menuitem", { name: "Advanced Console" }));
 }
 
-async function openEventStream(): Promise<void> {
+async function openRuntimeEvents(): Promise<void> {
   await openToolsMenu();
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Event Stream" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Runtime Events" }));
 }
 
 jest.mock("@/shared/ui/aevatarPageShells", () => {
@@ -1863,7 +1863,7 @@ describe("ChatPage", () => {
     });
 
     expect(screen.queryByText("Raw Events (8)")).toBeNull();
-    await openEventStream();
+    await openRuntimeEvents();
 
     expect(await screen.findByText("Raw Events (8)")).toBeTruthy();
     expect(screen.getByText("RUN_STARTED")).toBeTruthy();

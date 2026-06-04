@@ -46,17 +46,35 @@ describe("console routes", () => {
     const routes = loadRoutes();
 
     expect(findRoute(routes, "/teams").hideInMenu).toBe(false);
-    expect(findRoute(routes, "/studio").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/studio").hideInMenu).toBeUndefined();
+    expect(findRoute(routes, "/studio").name).toBe("Builder");
+    expect(findRoute(routes, "/studio").menuGroupKey).toBe("build");
+    expect(findRoute(routes, "/runtime/workflows").hideInMenu).toBeUndefined();
+    expect(findRoute(routes, "/runtime/workflows").name).toBe("Workflow Library");
+    expect(findRoute(routes, "/runtime/workflows").menuGroupKey).toBe("build");
+    expect(findRoute(routes, "/runtime/primitives").hideInMenu).toBeUndefined();
+    expect(findRoute(routes, "/runtime/primitives").name).toBe("Connectors");
+    expect(findRoute(routes, "/runtime/primitives").menuGroupKey).toBe("build");
+    expect(findRoute(routes, "/scopes/files").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/scopes/files").parentKeys).toEqual(["/studio"]);
     expect(findRoute(routes, "/chat").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/chat").parentKeys).toEqual(["/runtime/runs"]);
+    expect(findRoute(routes, "/scopes/invoke").parentKeys).toEqual(["/runtime/runs"]);
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBeUndefined();
-    expect(findRoute(routes, "/runtime/runs").menuGroupKey).toBe("platform");
+    expect(findRoute(routes, "/runtime/runs").name).toBe("Run Console");
+    expect(findRoute(routes, "/runtime/runs").menuGroupKey).toBe("run");
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
     expect(findRoute(routes, "/teams").name).toBe("My Teams");
     expect(findRoute(routes, "/teams").component).toBe("./teams");
     expect(findRoute(routes, "/teams/new").name).toBe("Create Team");
     expect(findRoute(routes, "/teams/new").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/teams/new").parentKeys).toEqual(["/teams"]);
     expect(findRoute(routes, "/teams/:scopeId").component).toBe("./teams/detail");
     expect(findRoute(routes, "/runtime/gagents").name).toBe("Members");
+    expect(findRoute(routes, "/runtime/gagents").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/runtime/gagents").parentKeys).toEqual([
+      "/runtime/explorer",
+    ]);
     expect(findRoute(routes, "/scopes/assets").name).toBeUndefined();
     expect(findRoute(routes, "/scopes/invoke").name).toBeUndefined();
     expect(findRoute(routes, "/scopes/overview").component).toBe("./scopes/overview");
@@ -74,14 +92,14 @@ describe("console routes", () => {
     expect(hasRoute(routes, "/mission-control")).toBe(true);
     expect(findRoute(routes, "/mission-control").redirect).toBe("/runtime/mission-control");
     expect(findRoute(routes, "/runtime/mission-control").hideInMenu).toBe(true);
-    expect(findRoute(routes, "/runtime/explorer").menuGroupKey).toBe("platform");
+    expect(findRoute(routes, "/runtime/explorer").menuGroupKey).toBe("operate");
     expect(findRoute(routes, "/runtime/explorer/detail").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/explorer/detail").parentKeys).toEqual([
       "/runtime/explorer",
     ]);
-    expect(findRoute(routes, "/services").menuGroupKey).toBe("platform");
-    expect(findRoute(routes, "/deployments").menuGroupKey).toBe("platform");
-    expect(findRoute(routes, "/governance").menuGroupKey).toBe("platform");
+    expect(findRoute(routes, "/services").menuGroupKey).toBe("release");
+    expect(findRoute(routes, "/deployments").menuGroupKey).toBe("release");
+    expect(findRoute(routes, "/governance").menuGroupKey).toBe("release");
     expect(findRoute(routes, "/governance/audit").redirect).toBe(
       "/governance?view=changes",
     );

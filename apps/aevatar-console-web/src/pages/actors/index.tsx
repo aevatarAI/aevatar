@@ -1260,7 +1260,7 @@ export const TopologyExplorerPage: React.FC<{
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
+      breadcrumb="Aevatar / Operate"
       extra={
         <Tag color="blue">{t("pages.actors.index.real.data", "real data")}</Tag>
       }

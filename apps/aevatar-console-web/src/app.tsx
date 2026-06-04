@@ -157,7 +157,10 @@ const CONSOLE_LOCALE_OPTIONS: readonly ConsoleLocaleOption[] = [
 ];
 const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
   "/teams": "nav.items.myTeams",
-  "/runtime/runs": "nav.items.eventStream",
+  "/studio": "nav.items.builder",
+  "/runtime/workflows": "nav.items.workflowLibrary",
+  "/runtime/primitives": "nav.items.connectors",
+  "/runtime/runs": "nav.items.runConsole",
   "/services": "nav.items.services",
   "/governance": "nav.items.governance",
   "/deployments": "nav.items.deployments",
@@ -709,7 +712,9 @@ function decorateNavigationMenuItems(
       ? decorateNavigationMenuItems(item.children, false)
       : undefined;
     const isLiveOpsGroup =
-      groupKey === "live" && Array.isArray(children) && children.length > 0;
+      (groupKey === "run" || groupKey === "operate") &&
+      Array.isArray(children) &&
+      children.length > 0;
     const hasRenderableIcon = React.isValidElement(item.icon);
     const localizedName = nameMessageId
       ? React.createElement(LocalizedNavigationText, {
@@ -911,7 +916,10 @@ export const layout = ({
       return React.cloneElement(
         defaultDom as React.ReactElement<{ selectedKeys?: string[] }>,
         {
-          selectedKeys: getNavigationSelectedKeys(window.location.pathname),
+          selectedKeys: getNavigationSelectedKeys(
+            window.location.pathname,
+            window.location.search,
+          ),
         },
       );
     },

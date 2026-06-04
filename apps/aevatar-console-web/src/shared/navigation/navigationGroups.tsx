@@ -1,7 +1,10 @@
 import {
-  DashboardOutlined,
+  ApartmentOutlined,
+  PlayCircleOutlined,
+  RocketOutlined,
   SettingOutlined,
   TeamOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import React from "react";
 
@@ -21,10 +24,28 @@ const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
     labelMessageId: "nav.groups.teams",
   },
   {
-    icon: <DashboardOutlined />,
-    key: "platform",
-    label: "Platform",
-    labelMessageId: "nav.groups.platform",
+    icon: <ToolOutlined />,
+    key: "build",
+    label: "Build",
+    labelMessageId: "nav.groups.build",
+  },
+  {
+    icon: <PlayCircleOutlined />,
+    key: "run",
+    label: "Run",
+    labelMessageId: "nav.groups.run",
+  },
+  {
+    icon: <RocketOutlined />,
+    key: "release",
+    label: "Release",
+    labelMessageId: "nav.groups.release",
+  },
+  {
+    icon: <ApartmentOutlined />,
+    key: "operate",
+    label: "Operate",
+    labelMessageId: "nav.groups.operate",
   },
   {
     flattenSingleItem: true,

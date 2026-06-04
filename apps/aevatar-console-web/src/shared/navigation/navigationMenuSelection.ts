@@ -45,7 +45,40 @@ const navigationRoutes: NavigationRouteMatcher[] = (routes as NavigationRoute[])
     matcher: createPathMatcher(route.path as string),
   }));
 
-export function getNavigationSelectedKeys(pathname: string): string[] {
+function parseNavigationLocation(
+  pathnameOrLocation: string,
+  search: string,
+): { pathname: string; search: string } {
+  const parsedLocation = new URL(
+    pathnameOrLocation,
+    "https://console.aevatar.local",
+  );
+
+  return {
+    pathname: parsedLocation.pathname,
+    search: search || parsedLocation.search,
+  };
+}
+
+function hasMissionControlRunContext(search: string): boolean {
+  return new URLSearchParams(search).has("runId");
+}
+
+export function getNavigationSelectedKeys(
+  pathnameOrLocation: string,
+  search = "",
+): string[] {
+  const { pathname, search: normalizedSearch } = parseNavigationLocation(
+    pathnameOrLocation,
+    search,
+  );
+
+  if (pathname === "/runtime/mission-control") {
+    return hasMissionControlRunContext(normalizedSearch)
+      ? ["/runtime/runs"]
+      : ["/runtime/explorer"];
+  }
+
   const normalizedPathname = pathname.split("?")[0]?.split("#")[0] ?? pathname;
   const matchedRoute = navigationRoutes.find((route) =>
     route.matcher.test(normalizedPathname),

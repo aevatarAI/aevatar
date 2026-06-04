@@ -2088,8 +2088,8 @@ const DeploymentsPage: React.FC = () => {
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
-      description={t("pages.deployments.index.deployments.is.platform.release.2", "Deployments is Platform's release workbench, focusing on current serving, rollout progress and traffic distribution.")}
+      breadcrumb="Aevatar / Release"
+      description={t("pages.deployments.index.deployments.is.platform.release.2", "Deployments is the Release workbench, focusing on current serving, rollout progress and traffic distribution.")}
       title="Deployments"
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

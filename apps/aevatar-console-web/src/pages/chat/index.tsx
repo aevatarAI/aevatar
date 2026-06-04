@@ -2197,7 +2197,7 @@ const ChatPage: React.FC = () => {
                         : [
                             `Start with a natural-language prompt for ${selectedService.label}.`,
                             "Use Advanced Console when you need a specific endpoint, actor, or audit trail.",
-                            "Open Event Stream only when you need raw AGUI evidence for debugging.",
+                            "Open Runtime Events only when you need raw AGUI evidence for debugging.",
                           ]
                     }
                     onAction={

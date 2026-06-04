@@ -1912,7 +1912,7 @@ const GovernanceWorkbench: React.FC = () => {
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
+      breadcrumb="Aevatar / Release"
       title="Governance"
     >
       <div style={buildAevatarViewportStyle(surfaceToken)}>

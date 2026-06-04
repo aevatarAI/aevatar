@@ -583,8 +583,8 @@ const ServicesPage: React.FC = () => {
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
-      description={t("pages.services.index.services.platform.governance.deployments", "Services is the authoritative service directory of Platform. It answers what services are in the current scope, where it is currently hung, and who hosts it, and guides you to continue to Governance, Deployments or Topology.")}
+      breadcrumb="Aevatar / Release"
+      description={t("pages.services.index.services.platform.governance.deployments", "Services is the release directory for callable AI team surfaces. It shows what is serving in the current scope, where each service is attached, who hosts it, and where to continue for Governance, Deployments, or Topology.")}
       title="Services"
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>

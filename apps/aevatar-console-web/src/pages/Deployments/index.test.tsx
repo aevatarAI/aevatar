@@ -298,13 +298,13 @@ describe('DeploymentsPage', () => {
   it('shows the service deployment list before an operator opens a service', async () => {
     renderDeploymentsPage();
 
-    expect(await screen.findByText('Aevatar / Platform')).toBeInTheDocument();
+    expect(await screen.findByText('Aevatar / Release')).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { name: 'Deployments' }),
     ).toBeInTheDocument();
     expect(
       await screen.findByText(
-        '部署是 Platform 的发布工作台，聚焦当前服务态、发布推进进度和流量分配。',
+        '部署是 Release 工作台，聚焦当前服务态、发布推进进度和流量分配。',
       ),
     ).toBeInTheDocument();
     expect(await screen.findByText('发布服务列表')).toBeInTheDocument();

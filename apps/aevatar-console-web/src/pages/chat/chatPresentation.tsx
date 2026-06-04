@@ -1598,7 +1598,7 @@ export function ChatToolsMenu({
       actionLabel: eventStreamOpen ? "Hide stream" : "Show stream",
       description:
         t("pages.chat.chatpresentation.review.raw.agui.runtime.events", "Review raw AGUI runtime events when you need protocol-level detail."),
-      label: t("pages.chat.chatpresentation.event.stream", "Event Stream"),
+      label: t("pages.chat.chatpresentation.event.stream", "Runtime Events"),
       onClick: onToggleEventStream,
       open: eventStreamOpen,
     },

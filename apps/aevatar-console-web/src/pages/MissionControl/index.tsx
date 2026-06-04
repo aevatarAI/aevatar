@@ -382,7 +382,7 @@ function MissionHeaderBar({
                 )
               }
             >
-              {t("pages.missioncontrol.index.open.event.stream.2", "Open Event Stream")}</Button>
+              {t("pages.missioncontrol.index.open.event.stream.2", "Open Run Console")}</Button>
           </>
         )}
         {ui.interventionRequired ? (
