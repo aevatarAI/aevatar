@@ -324,6 +324,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionObservationScopeLeasePreparationPort>(static sp => sp.GetRequiredService<ChatCompletionsObservationRuntime>().ScopePreparationPort);
         builder.Services.AddSingleton<ILlmSessionObservationProjectionPort>(static sp => sp.GetRequiredService<ChatCompletionsObservationRuntime>().ProjectionPort);
+        builder.Services.AddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new ChatCompletionsStubCallerScopeResolver());
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(
@@ -419,6 +420,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
         source.Should().NotContain("IResponsesCompletionApplicationService");
         source.Should().NotContain("ChatStreamAsync");
         source.Should().NotContain("CollectAsync");
+        source.Should().NotContain("completion.Accepted");
     }
 
     private static async Task<WebApplication> CreateAppAsync(
@@ -446,6 +448,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionObservationScopeLeasePreparationPort>(static sp => sp.GetRequiredService<ChatCompletionsObservationRuntime>().ScopePreparationPort);
         builder.Services.AddSingleton<ILlmSessionObservationProjectionPort>(static sp => sp.GetRequiredService<ChatCompletionsObservationRuntime>().ProjectionPort);
+        builder.Services.AddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new ChatCompletionsStubCallerScopeResolver());
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? ChatCompletionsStaticChatRoutePolicyQueryPort.ForSnapshot(

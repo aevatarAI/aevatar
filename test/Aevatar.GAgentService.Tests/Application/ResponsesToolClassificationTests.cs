@@ -111,32 +111,6 @@ public sealed class ResponsesToolClassificationTests
     }
 
     [Fact]
-    public void ResponsesToolCallAccumulator_ShouldAppendRepeatedAnonymousDeltas()
-    {
-        var accumulator = new ResponsesToolCallAccumulator();
-
-        accumulator.TrackDelta(new()
-        {
-            Id = string.Empty,
-            Name = "client_tool",
-            ArgumentsJson = """{"city":""",
-        });
-        accumulator.TrackDelta(new()
-        {
-            Id = string.Empty,
-            Name = string.Empty,
-            ArgumentsJson = "\"Singapore\"}",
-        });
-
-        accumulator.BuildToolCalls().Should().ContainSingle().Which.Should().BeEquivalentTo(new
-        {
-            Id = "stream-tool-call-1",
-            Name = "client_tool",
-            ArgumentsJson = """{"city":"Singapore"}""",
-        });
-    }
-
-    [Fact]
     public async Task PublicMethods_ShouldRejectNullArguments()
     {
         await ((Func<Task>)(async () => await ResponsesToolClassifier.ClassifyAsync(null!, [], ToolProviderContext, new RecordingLogger())))

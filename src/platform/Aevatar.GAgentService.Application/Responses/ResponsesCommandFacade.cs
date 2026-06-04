@@ -31,8 +31,11 @@ public sealed class ResponsesCommandFacade(
     IActorDispatchPort dispatchPort,
     IResponsesToolClassificationService toolClassificationService,
     IResponsesDirectToolPlanService directToolPlanService,
+    ILlmSessionRunObservationService observationService,
     ILogger<ResponsesCommandFacade> logger) : IResponsesCommandFacade
 {
+    private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
+
     public async Task<ResponsesCreateCommandResult> CreateAsync(
         ResponsesCommandRequest request,
         ResponsesCallerScopeResolutionContext callerScopeContext,
@@ -187,9 +190,45 @@ public sealed class ResponsesCommandFacade(
 
         try
         {
-            var admission = await DispatchRunAsync(plan, ct);
-            await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, ct);
-            return ResponsesStreamCommandResult.FromAccepted(new ResponsesStreamAcceptedCommandResult(admission));
+            var observed = await observationService.ObserveAsync(
+                new LlmSessionRunObservationRequest(
+                    plan.Session.ActorId,
+                    plan.Session.ResponseId,
+                    $"{plan.Session.ResponseId}:llm-run",
+                    async token =>
+                    {
+                        var admission = await DispatchRunAsync(plan, token).ConfigureAwait(false);
+                        await TryResolveIncomingToolResultsAsync(plan.PreviousSnapshot, plan.Normalized, token)
+                            .ConfigureAwait(false);
+                        return admission;
+                    },
+                    DefaultObservationTimeout),
+                async (delta, token) =>
+                {
+                    if (!string.IsNullOrEmpty(delta.TextDelta))
+                        await onTextDelta(delta.TextDelta, token).ConfigureAwait(false);
+                },
+                ct).ConfigureAwait(false);
+            if (observed.Error is not null)
+            {
+                await TryUpdateSessionStatusAsync(
+                    plan.Session,
+                    observed.Error.Kind == LlmSessionRunObservedTerminalKind.Cancelled
+                        ? LlmSessionStatus.Cancelled
+                        : LlmSessionStatus.Failed,
+                    CancellationToken.None);
+                return ResponsesStreamCommandResult.FromError(
+                    observed.Error.StatusCode,
+                    observed.Error.Code,
+                    observed.Error.Message);
+            }
+
+            return observed.Completion is not null
+                ? ResponsesStreamCommandResult.FromCompleted(observed.Completion)
+                : ResponsesStreamCommandResult.FromError(
+                    503,
+                    "observation_unavailable",
+                    "LLM run observation ended without a terminal event.");
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -833,7 +872,7 @@ public sealed class ResponsesCommandFacade(
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
-            command.RunId);
+            plan.Session.ResponseId);
         return dispatchPort.DispatchAsync(plan.Session.ActorId, envelope, ct);
     }
 
