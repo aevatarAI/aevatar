@@ -99,6 +99,8 @@ public sealed class WorkflowRunGAgent
         ? Id
         : State.RunId;
 
+    public string ScopeId => State.ScopeId ?? string.Empty;
+
     WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
 
     // Refactor (iter115/cluster-3): Old pattern: callers received the mutable

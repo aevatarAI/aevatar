@@ -1445,9 +1445,10 @@ public sealed class WorkflowCoreModulesCoverageTests
     {
         public string Name { get; } = name;
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
-            return Task.FromResult(execute(argumentsJson));
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(execute(request.ArgumentsJson));
         }
     }
 
@@ -1456,10 +1457,11 @@ public sealed class WorkflowCoreModulesCoverageTests
         public string Name { get; } = name;
         public int ExecuteCalls { get; private set; }
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             ExecuteCalls++;
-            return Task.FromResult(execute(argumentsJson));
+            return Task.FromResult(execute(request.ArgumentsJson));
         }
     }
 

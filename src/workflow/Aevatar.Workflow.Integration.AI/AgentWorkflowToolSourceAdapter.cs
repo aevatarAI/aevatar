@@ -21,22 +21,33 @@ public sealed class AgentWorkflowToolSourceAdapter(IEnumerable<IAgentToolSource>
         return workflowTools;
     }
 
-    private sealed class AgentWorkflowToolAdapter(IAgentTool tool) : IWorkflowContextualTool
+    private sealed class AgentWorkflowToolAdapter(IAgentTool tool) : IWorkflowTool
     {
         private readonly IAgentTool _tool = tool ?? throw new ArgumentNullException(nameof(tool));
 
         public string Name => _tool.Name;
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            _tool.ExecuteAsync(argumentsJson, ct);
-
         public async Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(request);
 
-            var toolContext = WorkflowCallerCredentialToolContextMapper.FromCredential(request.CallerCredential);
+            var credentialContext = WorkflowCallerCredentialToolContextMapper.FromCredential(request.CallerCredential);
+            var toolContext = credentialContext with
+            {
+                Request = credentialContext.Request with
+                {
+                    CallId = Normalize(request.CallId),
+                },
+                Caller = credentialContext.Caller with
+                {
+                    ScopeId = Normalize(request.ScopeId),
+                },
+            };
             using var scope = AgentToolContextScope.Push(toolContext);
             return await _tool.ExecuteAsync(request.ArgumentsJson, ct).ConfigureAwait(false);
         }
+
+        private static string? Normalize(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 }
