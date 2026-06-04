@@ -62,6 +62,8 @@ public sealed class LarkAgentToolSource : IAgentToolSource
             tools.Add(new LarkApprovalsListTool(_client));
         if (_options.EnableApprovalsAct)
             tools.Add(new LarkApprovalsActTool(_client));
+        if (_options.EnableDocxCreate)
+            tools.Add(new LarkDocxCreateTool(_client));
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
     }

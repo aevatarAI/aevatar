@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -981,6 +982,106 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ExecuteSkillAsync_OverLimitOutput_ShouldUseDocxDecisionReply_WhenLinkReturned()
+    {
+        var output = new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength + 100);
+        var provider = new StubStreamingProviderFactory(
+            new StubStreamingTurn([output]),
+            new StubStreamingTurn(
+                [],
+                [
+                    new ToolCall
+                    {
+                        Id = "call-docx",
+                        Name = "lark_docx_create",
+                        ArgumentsJson = "{}",
+                    },
+                ]),
+            new StubStreamingTurn(["Full output moved to https://example.feishu.cn/docx/doccn_123"]));
+        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_doc_link"}}""");
+        var docxTool = new FixedResultTool(
+            "lark_docx_create",
+            """{"success":true,"document_token":"doccn_123","document_url":"https://example.feishu.cn/docx/doccn_123","visibility_applied":true}""");
+        var agent = CreateAgent(
+            "skill-runner-docx-success",
+            providerFactory: provider,
+            toolSources: [new SingleToolSource(docxTool)]);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        await agent.HandleInitializeAsync(initialize);
+        AttachNyxIdApiClient(agent, handler);
+
+        var result = await InvokeExecuteSkillAsync(agent);
+
+        result.Should().Be(output);
+        provider.Requests.Should().HaveCount(3);
+        provider.Requests[1].RequestId.Should().EndWith(":lark-docx");
+        provider.Requests[1].ToolContext.Should().NotBeNull();
+        var docxToolContext = provider.Requests[1].ToolContext!;
+        docxToolContext.Routing.MaxToolRoundsOverride.Should().Be(2);
+        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveId, "oc_chat_1");
+        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveIdType, "chat_id");
+        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkOutboundProxySlug, "api-lark-bot");
+        provider.Requests[2].Messages.Any(message =>
+            message.Role == "tool" &&
+            message.Content is not null &&
+            message.Content.Contains("https://example.feishu.cn/docx/doccn_123", StringComparison.Ordinal))
+            .Should().BeTrue();
+        handler.Requests.Should().ContainSingle();
+        ExtractLarkText(handler.Bodies[0]!).Should().Be("Full output moved to https://example.feishu.cn/docx/doccn_123");
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_OverLimitOutput_ShouldFallBackToChunks_WhenDocDecisionHasNoLink()
+    {
+        var output = string.Join("\n\n", Enumerable.Repeat(
+            new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength - 1_000),
+            2));
+        var expectedChunks = SkillRunnerOutputChunker.Split(output);
+        var provider = new StubStreamingProviderFactory(
+            new StubStreamingTurn([output]),
+            new StubStreamingTurn(["DOCX_FALLBACK"]));
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"message_id":"om_part_1"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_part_2"}}""");
+        var agent = CreateAgent("skill-runner-docx-fallback", providerFactory: provider);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        await agent.HandleInitializeAsync(initialize);
+        AttachNyxIdApiClient(agent, handler);
+
+        var result = await InvokeExecuteSkillAsync(agent);
+
+        result.Should().Be(output);
+        provider.Requests.Should().HaveCount(2);
+        handler.Requests.Should().HaveCount(expectedChunks.Count);
+        ExtractLarkText(handler.Bodies[0]!).Should().Be(expectedChunks[0]);
+        ExtractLarkText(handler.Bodies[1]!).Should().Be(expectedChunks[1]);
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_BelowLimitOutput_ShouldNotInvokeDocDecision()
+    {
+        var provider = new StubStreamingProviderFactory("short output");
+        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_short"}}""");
+        var agent = CreateAgent("skill-runner-docx-not-needed", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+        AttachNyxIdApiClient(agent, handler);
+
+        var result = await InvokeExecuteSkillAsync(agent);
+
+        result.Should().Be("short output");
+        provider.Requests.Should().ContainSingle();
+        handler.Requests.Should().ContainSingle();
+        ExtractLarkText(handler.Bodies[0]!).Should().Be("short output");
+    }
+
+    [Fact]
     public async Task SkillRunnerStreamingRunState_CoalescesInsideThrottleAndDispatchesAfterThrottle()
     {
         var handler = new SequencedHandler(
@@ -1213,12 +1314,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         string actorId,
         ServiceProvider? serviceProvider = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
-        ILLMProviderFactory? providerFactory = null)
+        ILLMProviderFactory? providerFactory = null,
+        IEnumerable<IAgentToolSource>? toolSources = null)
     {
         var resolvedServices = serviceProvider ?? _serviceProvider;
         var agent = new SkillRunnerGAgent(
             llmProviderFactory: providerFactory,
-            ownerLlmConfigSource: ownerLlmConfigSource)
+            ownerLlmConfigSource: ownerLlmConfigSource,
+            toolSources: toolSources)
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
@@ -1270,8 +1373,40 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         setIdMethod!.Invoke(agent, [actorId]);
     }
 
-    private sealed class StubStreamingProviderFactory(params string[] deltas) : ILLMProviderFactory, ILLMProvider
+    private sealed record StubStreamingTurn(
+        IReadOnlyList<string> Deltas,
+        IReadOnlyList<ToolCall>? ToolCalls = null);
+
+    private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
     {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class FixedResultTool(string name, string result) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => "Fixed result test tool";
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult(result);
+    }
+
+    private sealed class StubStreamingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        private readonly Queue<StubStreamingTurn> _turns;
+
+        public StubStreamingProviderFactory(params string[] deltas)
+            : this(new StubStreamingTurn(deltas))
+        {
+        }
+
+        public StubStreamingProviderFactory(params StubStreamingTurn[] turns)
+        {
+            _turns = new Queue<StubStreamingTurn>(turns);
+        }
+
         public string Name => "stub";
         public List<LLMRequest> Requests { get; } = [];
 
@@ -1280,11 +1415,20 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             Requests.Add(request);
-            foreach (var delta in deltas)
+            var turn = _turns.Count > 0
+                ? _turns.Dequeue()
+                : new StubStreamingTurn([]);
+            foreach (var delta in turn.Deltas)
             {
                 ct.ThrowIfCancellationRequested();
                 await Task.Yield();
                 yield return new LLMStreamChunk { DeltaContent = delta };
+            }
+
+            if (turn.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in turn.ToolCalls)
+                    yield return new LLMStreamChunk { DeltaToolCall = toolCall };
             }
 
             yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };

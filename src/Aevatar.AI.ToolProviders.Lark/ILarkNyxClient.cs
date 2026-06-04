@@ -13,6 +13,14 @@ public interface ILarkNyxClient
     Task<string> AppendSheetRowsAsync(string token, LarkSheetAppendRowsRequest request, CancellationToken ct);
     Task<string> ListApprovalTasksAsync(string token, LarkApprovalTaskQueryRequest request, CancellationToken ct);
     Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct);
+    Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct) =>
+        throw new NotSupportedException();
+
+    Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct) =>
+        throw new NotSupportedException();
+
+    Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct) =>
+        throw new NotSupportedException();
 }
 
 public sealed record LarkSendMessageRequest(
@@ -92,3 +100,22 @@ public sealed record LarkApprovalTaskActionRequest(
     string? FormJson,
     string? TransferUserId,
     string? UserIdType);
+
+public enum LarkDocxVisibility
+{
+    Readable,
+    Editable,
+}
+
+public sealed record LarkDocxCreateRequest(
+    string Title);
+
+public sealed record LarkDocxAppendBlocksRequest(
+    string DocumentId,
+    string MarkdownText);
+
+public sealed record LarkDrivePermissionRequest(
+    string DocumentToken,
+    LarkDocxVisibility Visibility,
+    string? ReceiveId,
+    string? ReceiveIdType);

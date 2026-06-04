@@ -6,6 +6,8 @@ namespace Aevatar.AI.ToolProviders.Lark;
 
 public sealed class LarkNyxClient : ILarkNyxClient
 {
+    internal const int MaxDocxBlockTextLength = 2_000;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -303,11 +305,117 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ct);
     }
 
+    public Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["title"] = request.Title,
+        };
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            "open-apis/docx/v1/documents",
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["children"] = BuildTextBlocks(request.MarkdownText),
+        };
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/docx/v1/documents/{Uri.EscapeDataString(request.DocumentId)}/blocks/{Uri.EscapeDataString(request.DocumentId)}/children",
+            "POST",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
+    public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct)
+    {
+        var linkShareEntity = request.Visibility == LarkDocxVisibility.Editable
+            ? "tenant_editable"
+            : "tenant_readable";
+        var body = new Dictionary<string, object?>
+        {
+            ["link_share_entity"] = linkShareEntity,
+            ["external_access"] = false,
+            ["security_entity"] = "anyone_can_view",
+            ["comment_entity"] = "anyone_can_view",
+            ["share_entity"] = "anyone_can_view",
+            ["copy_entity"] = "anyone_can_view",
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.ReceiveId) &&
+            !string.IsNullOrWhiteSpace(request.ReceiveIdType))
+        {
+            body["target"] = new Dictionary<string, object?>
+            {
+                ["receive_id"] = request.ReceiveId.Trim(),
+                ["receive_id_type"] = request.ReceiveIdType.Trim(),
+            };
+        }
+
+        return _nyxClient.ProxyRequestAsync(
+            token,
+            _options.ProviderSlug,
+            $"open-apis/drive/v1/permissions/{Uri.EscapeDataString(request.DocumentToken)}/public?type=docx",
+            "PATCH",
+            JsonSerializer.Serialize(body, JsonOptions),
+            extraHeaders: null,
+            ct);
+    }
+
     private static string BuildTransferPath(string? userIdType)
     {
         if (string.IsNullOrWhiteSpace(userIdType))
             return "open-apis/approval/v4/tasks/forward";
         return $"open-apis/approval/v4/tasks/forward?user_id_type={Uri.EscapeDataString(userIdType.Trim())}";
+    }
+
+    private static IReadOnlyList<Dictionary<string, object?>> BuildTextBlocks(string markdownText)
+    {
+        var normalized = string.IsNullOrEmpty(markdownText) ? " " : markdownText;
+        var blocks = new List<Dictionary<string, object?>>();
+        foreach (var chunk in SplitBlockText(normalized))
+        {
+            blocks.Add(new Dictionary<string, object?>
+            {
+                ["block_type"] = 2,
+                ["text"] = new Dictionary<string, object?>
+                {
+                    ["elements"] = new[]
+                    {
+                        new Dictionary<string, object?>
+                        {
+                            ["text_run"] = new Dictionary<string, object?>
+                            {
+                                ["content"] = chunk,
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
+        return blocks;
+    }
+
+    private static IEnumerable<string> SplitBlockText(string text)
+    {
+        for (var offset = 0; offset < text.Length; offset += MaxDocxBlockTextLength)
+        {
+            var length = Math.Min(MaxDocxBlockTextLength, text.Length - offset);
+            yield return text.Substring(offset, length);
+        }
     }
 
     internal static string NormalizeChatSearchQuery(string query)

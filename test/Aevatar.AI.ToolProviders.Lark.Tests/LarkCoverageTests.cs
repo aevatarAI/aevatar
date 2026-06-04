@@ -76,6 +76,11 @@ public sealed class LarkCoverageTests
         sheetsTool.Name.Should().Be("lark_sheets_append_rows");
         sheetsTool.Description.Should().Contain("Append rows to a known Lark spreadsheet");
         sheetsTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+
+        var docxTool = new LarkDocxCreateTool(client);
+        docxTool.Name.Should().Be("lark_docx_create");
+        docxTool.Description.Should().Contain("Create a Lark cloud document");
+        docxTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
     }
 
     [Fact]
@@ -89,6 +94,19 @@ public sealed class LarkCoverageTests
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LarkAgentToolSource_ShouldSkipDocxTool_WhenDisabled()
+    {
+        var source = new LarkAgentToolSource(
+            new LarkToolOptions { EnableDocxCreate = false },
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new StubLarkNyxClient());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().NotContain(tool => tool.Name == "lark_docx_create");
     }
 
     [Fact]
@@ -138,6 +156,29 @@ public sealed class LarkCoverageTests
 
         InvokeTryParseError("""{"code":0}""").Should().Be((false, string.Empty));
         InvokeTryParseError("not-json").Should().Be((true, "invalid_lark_response_json"));
+    }
+
+    [Fact]
+    public void LarkProxyResponseParser_ShouldHandleDocxAndPermissionShapes()
+    {
+        var parserType = typeof(LarkAgentToolSource).Assembly.GetType("Aevatar.AI.ToolProviders.Lark.LarkProxyResponseParser")!;
+        var parseDocx = parserType.GetMethod("ParseDocxCreateSuccess", BindingFlags.Public | BindingFlags.Static)!;
+        var parsePermission = parserType.GetMethod("ParseDrivePermissionSuccess", BindingFlags.Public | BindingFlags.Static)!;
+
+        var docxResult = parseDocx.Invoke(
+            null,
+            ["""{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}"""]);
+        docxResult.Should().NotBeNull();
+        docxResult!.GetType().GetProperty("DocumentToken")!.GetValue(docxResult).Should().Be("doccn_123");
+        docxResult.GetType().GetProperty("DocumentUrl")!.GetValue(docxResult).Should().Be("https://example.feishu.cn/docx/doccn_123");
+
+        var permissionResult = parsePermission.Invoke(
+            null,
+            ["""{"code":0,"data":{"link_share_entity":"tenant_readable","external_access":false,"share_url":"https://share.example/doc"}}"""]);
+        permissionResult.Should().NotBeNull();
+        permissionResult!.GetType().GetProperty("LinkShareEntity")!.GetValue(permissionResult).Should().Be("tenant_readable");
+        permissionResult.GetType().GetProperty("ExternalAccess")!.GetValue(permissionResult).Should().Be(false);
+        permissionResult.GetType().GetProperty("ShareUrl")!.GetValue(permissionResult).Should().Be("https://share.example/doc");
     }
 
     [Fact]
@@ -344,6 +385,30 @@ public sealed class LarkCoverageTests
         }
 
         public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""");
+        }
+
+        public Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct)
         {
             _ = token;
             _ = request;

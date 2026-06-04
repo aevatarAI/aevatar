@@ -289,6 +289,38 @@ internal static class LarkProxyResponseParser
             PageToken: TryReadString(data, "page_token"));
     }
 
+    public static LarkDocxCreateResult ParseDocxCreateSuccess(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var data = ResolveDataRoot(document.RootElement);
+        var documentData = data.TryGetProperty("document", out var documentProp) &&
+                           documentProp.ValueKind == JsonValueKind.Object
+            ? documentProp
+            : data;
+
+        var token = TryReadString(documentData, "document_id") ??
+                    TryReadString(documentData, "document_token") ??
+                    TryReadString(documentData, "token");
+        return new LarkDocxCreateResult(
+            DocumentToken: token,
+            DocumentId: TryReadString(documentData, "document_id") ?? token,
+            DocumentUrl: TryReadString(documentData, "url") ??
+                         TryReadString(documentData, "document_url") ??
+                         TryReadString(documentData, "share_url"));
+    }
+
+    public static LarkDrivePermissionResult ParseDrivePermissionSuccess(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        var data = ResolveDataRoot(document.RootElement);
+        return new LarkDrivePermissionResult(
+            LinkShareEntity: TryReadString(data, "link_share_entity"),
+            ExternalAccess: TryReadBool(data, "external_access"),
+            ShareUrl: TryReadString(data, "share_url") ??
+                      TryReadString(data, "url") ??
+                      TryReadString(data, "document_url"));
+    }
+
     private static JsonElement ResolveDataRoot(JsonElement root) =>
         root.TryGetProperty("data", out var dataProp) && dataProp.ValueKind == JsonValueKind.Object
             ? dataProp
@@ -469,3 +501,13 @@ internal sealed record LarkApprovalTaskQueryResult(
     int Count,
     bool HasMore,
     string? PageToken);
+
+internal sealed record LarkDocxCreateResult(
+    string? DocumentToken,
+    string? DocumentId,
+    string? DocumentUrl);
+
+internal sealed record LarkDrivePermissionResult(
+    string? LinkShareEntity,
+    bool? ExternalAccess,
+    string? ShareUrl);
