@@ -16,25 +16,21 @@ public static class ScheduledDispatchEndpoints
         group.MapPost("/scheduled-dispatches", Create)
             .WithTags("Scheduled dispatches")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status409Conflict);
+            .Produces(StatusCodes.Status400BadRequest);
         group.MapPut("/scheduled-dispatches/{scheduleId}", Update)
             .WithTags("Scheduled dispatches")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status409Conflict);
+            .Produces(StatusCodes.Status400BadRequest);
         group.MapPost("/scheduled-dispatches/{scheduleId}/enable", Enable)
             .WithTags("Scheduled dispatches")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound)
-            .Produces(StatusCodes.Status409Conflict);
+            .Produces(StatusCodes.Status404NotFound);
         group.MapPost("/scheduled-dispatches/{scheduleId}/disable", Disable)
             .WithTags("Scheduled dispatches")
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound)
-            .Produces(StatusCodes.Status409Conflict);
+            .Produces(StatusCodes.Status404NotFound);
         group.MapGet("/scheduled-dispatches", List)
             .WithTags("Scheduled dispatches")
             .Produces<ScheduledDispatchListResult>(StatusCodes.Status200OK);
@@ -51,8 +47,7 @@ public static class ScheduledDispatchEndpoints
             .WithTags("Scheduled dispatches")
             .Produces<ScheduledDispatchRunNowReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound)
-            .Produces(StatusCodes.Status409Conflict);
+            .Produces(StatusCodes.Status404NotFound);
     }
 
     internal static async Task<IResult> Create(

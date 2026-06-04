@@ -9,6 +9,12 @@ public enum ScheduledDispatchTargetKind
     ServiceInvocation = 1,
 }
 
+public enum ScheduledDispatchScheduleKind
+{
+    Generic = 0,
+    Workflow = 1,
+}
+
 public sealed record ScheduledDispatchTargetDescriptor(
     ScheduledDispatchTargetKind Kind,
     string? ActorId = null,
@@ -29,7 +35,8 @@ public sealed record ScheduledDispatchConfiguration(
     string CronExpression,
     string Timezone,
     bool Enabled,
-    IReadOnlyDictionary<string, string> Headers);
+    IReadOnlyDictionary<string, string> Headers,
+    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic);
 
 public sealed record PreparedScheduledDispatchTarget(
     string? TargetActorId,
@@ -60,7 +67,8 @@ public sealed record ScheduledDispatchSummary(
     int FireCount,
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
-    string ScheduleActorId);
+    string ScheduleActorId,
+    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic);
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,
@@ -84,14 +92,22 @@ public sealed record ScheduledDispatchPreview(
 public sealed record ScheduledDispatchMutationReceipt(
     string ScheduleId,
     string ScheduleActorId,
-    bool Accepted);
+    bool Accepted,
+    string CommandId = "",
+    string CorrelationId = "",
+    DateTimeOffset AckedAt = default,
+    string AckStage = "accepted");
 
 public sealed record ScheduledDispatchRunNowReceipt(
     string ScheduleId,
     string ScheduleActorId,
     DateTimeOffset ScheduledFireAt,
     string IdempotencyKey,
-    bool Accepted);
+    bool Accepted,
+    string CommandId = "",
+    string CorrelationId = "",
+    DateTimeOffset AckedAt = default,
+    string AckStage = "accepted");
 
 public sealed record ScheduledDispatchListResult(
     IReadOnlyList<ScheduledDispatchSummary> Items,
@@ -103,7 +119,8 @@ public sealed record ScheduledDispatchListQuery(
     string? Cursor = null,
     bool IncludeTotalCount = false,
     ScheduledDispatchTargetKind? TargetKind = null,
-    string? ServiceEndpointId = null);
+    string? ServiceEndpointId = null,
+    ScheduledDispatchScheduleKind? ScheduleKind = null);
 
 public interface IScheduledDispatchActorPort
 {

@@ -79,6 +79,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.Enabled,
             command.Headers,
             command.Target,
+            command.ScheduleKind,
             isCreate: true);
 
     [EventHandler]
@@ -94,6 +95,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.Enabled,
             command.Headers,
             command.Target,
+            command.ScheduleKind,
             isCreate: false);
 
     private async Task HandleConfigureAsync(
@@ -107,6 +109,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         bool enabled,
         IEnumerable<KeyValuePair<string, string>> headers,
         ScheduledDispatchTargetState? target,
+        ScheduledDispatchScheduleKindState scheduleKind,
         bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -129,6 +132,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
             PayloadTypeUrl = ResolvePayloadTypeUrl(triggerEnvelope),
             Target = NormalizeTarget(target),
+            ScheduleKind = scheduleKind,
         };
         foreach (var (key, value) in NormalizeHeaders(headers))
             configured.Headers[key] = value;
@@ -301,12 +305,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         string idempotencyKey,
         CancellationToken ct)
     {
+        var headers = BuildFireHeaders(scheduledFireAtUtc, idempotencyKey);
+        if (ResolveTargetKind() == ScheduledDispatchTargetKindState.ServiceInvocation)
+            return BuildServiceInvocationDispatchEnvelope(headers, idempotencyKey);
+
         var envelope = State.TriggerEnvelope?.Clone()
             ?? throw new InvalidOperationException("Scheduled dispatch trigger envelope is not configured.");
         if (envelope.Payload == null)
             throw new InvalidOperationException("Scheduled dispatch trigger envelope payload is not configured.");
 
-        var headers = BuildFireHeaders(scheduledFireAtUtc, idempotencyKey);
         envelope.Id = idempotencyKey;
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
         envelope.Route = EnvelopeRouteSemantics.CreateDirect(ResolveScheduleId(), ResolveDispatchTargetActorId());
@@ -340,6 +347,58 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             ResolveDispatchTargetActorId(),
             ResolveTargetKind(),
             envelope);
+    }
+
+    private ScheduledDispatchEnvelope BuildServiceInvocationDispatchEnvelope(
+        IReadOnlyDictionary<string, string> headers,
+        string idempotencyKey)
+    {
+        var target = State.Target?.ServiceInvocation
+            ?? throw new InvalidOperationException("Scheduled service invocation target is not configured.");
+        var request = new ServiceInvocationRequest
+        {
+            Identity = target.Identity?.Clone(),
+            EndpointId = target.EndpointId ?? string.Empty,
+            Payload = EnrichServiceInvocationPayload(target.Payload, headers),
+            CommandId = idempotencyKey,
+            CorrelationId = idempotencyKey,
+            RevisionId = target.RevisionId ?? string.Empty,
+        };
+        if (target.Caller != null)
+            request.Caller = target.Caller.Clone();
+
+        var envelope = new EventEnvelope
+        {
+            Id = idempotencyKey,
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(request),
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                ResolveScheduleId(),
+                ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = idempotencyKey,
+            },
+        };
+        foreach (var (key, value) in headers)
+            envelope.Propagation.Baggage[key] = value;
+
+        return new ScheduledDispatchEnvelope(
+            ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+            ScheduledDispatchTargetKindState.ServiceInvocation,
+            envelope);
+    }
+
+    private static Any EnrichServiceInvocationPayload(Any? payload, IReadOnlyDictionary<string, string> headers)
+    {
+        if (payload == null)
+            throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
+        if (!payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
+            return payload.Clone();
+
+        foreach (var (key, value) in headers)
+            chatRequest.Metadata[key] = value;
+        return Any.Pack(chatRequest);
     }
 
     private IReadOnlyDictionary<string, string> BuildFireHeaders(
@@ -585,6 +644,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         foreach (var (key, value) in NormalizeHeaders(evt.Headers))
             next.Headers[key] = value;
         next.Target = NormalizeTarget(evt.Target);
+        next.ScheduleKind = evt.ScheduleKind;
         if (!next.Enabled)
         {
             next.NextFireAt = null;

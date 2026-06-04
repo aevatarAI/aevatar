@@ -234,10 +234,32 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.MissingScheduleIds.Add("missing");
         var missing = () => service.RunNowAsync("missing");
 
-        enabled.Should().Be(new ScheduledDispatchMutationReceipt("schedule-1", "actor:schedule-1", true));
-        disabled.Should().Be(new ScheduledDispatchMutationReceipt("schedule-1", "actor:schedule-1", true));
+        enabled.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = true,
+            CommandId = "cmd-1",
+            CorrelationId = "corr-1",
+            AckStage = "accepted",
+        });
+        enabled.AckedAt.Should().NotBe(default);
+        disabled.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = true,
+            CommandId = "cmd-1",
+            CorrelationId = "corr-1",
+            AckStage = "accepted",
+        });
+        disabled.AckedAt.Should().NotBe(default);
         runNow.ScheduleId.Should().Be("schedule-1");
         runNow.ScheduleActorId.Should().Be("actor:schedule-1");
+        runNow.CommandId.Should().Be("cmd-1");
+        runNow.CorrelationId.Should().Be("corr-1");
+        runNow.AckedAt.Should().NotBe(default);
+        runNow.AckStage.Should().Be("accepted");
         runNow.IdempotencyKey.Should().Be(
             ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", runNow.ScheduledFireAt));
         actorPort.Enabled.Should().ContainSingle().Which.Should().Be(("actor:schedule-1", "resume"));
@@ -271,7 +293,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "cursor-2",
             true,
             ScheduledDispatchTargetKind.ServiceInvocation,
-            "chat"));
+            "chat",
+            ScheduledDispatchScheduleKind.Workflow));
         queryPort.FilteredListRequests.Should().HaveCount(3);
         queryPort.FilteredListRequests[0].Should().Be(new ScheduledDispatchListQuery(1, "cursor-1", true));
         queryPort.FilteredListRequests[1].Should().Be(new ScheduledDispatchListQuery(200));
@@ -280,7 +303,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "cursor-2",
             true,
             ScheduledDispatchTargetKind.ServiceInvocation,
-            "chat"));
+            "chat",
+            ScheduledDispatchScheduleKind.Workflow));
         preview.Timezone.Should().Be("UTC");
         preview.NextFireTimes.Should().HaveCount(100);
         await invalidPreview.Should().ThrowAsync<ArgumentException>();
@@ -301,6 +325,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                         TargetKind = ScheduledDispatchTargetKind.ServiceInvocation.ToString(),
                         ServiceEndpointId = "chat",
                         ServiceId = "daily",
+                        ScheduleKind = ScheduledDispatchScheduleKind.Workflow.ToString(),
                     },
                 ],
                 NextCursor = "workflow-cursor",
@@ -314,7 +339,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "cursor",
             true,
             ScheduledDispatchTargetKind.ServiceInvocation,
-            "chat"));
+            "chat",
+            ScheduledDispatchScheduleKind.Workflow));
 
         result.Items.Should().ContainSingle()
             .Which.ScheduleId.Should().Be("workflow-1");
@@ -338,6 +364,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     FieldPath = nameof(ScheduledDispatchDocument.ServiceEndpointId),
                     Operator = ProjectionDocumentFilterOperator.Eq,
                     Value = ProjectionDocumentValue.FromString("chat"),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ScheduledDispatchDocument.ScheduleKind),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(ScheduledDispatchScheduleKind.Workflow.ToString()),
                 },
             },
             options => options.ComparingByMembers<ProjectionDocumentValue>());

@@ -185,7 +185,16 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var receipt = await service.EnableAsync("schedule-1", "resume");
 
-        receipt.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", false));
+        receipt.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = false,
+            AckStage = "accepted",
+        });
+        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        receipt.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        receipt.AckedAt.Should().NotBe(default);
         actorPort.Enabled.Should().ContainSingle()
             .Which.Should().Be(("actor:schedule-1", "resume"));
     }
@@ -206,7 +215,16 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var receipt = await service.CreateAsync(CreateConfiguration("schedule-1"));
 
-        receipt.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", false));
+        receipt.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = false,
+            AckStage = "accepted",
+        });
+        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        receipt.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        receipt.AckedAt.Should().NotBe(default);
         actorPort.Created.Should().ContainSingle();
     }
 
@@ -271,8 +289,26 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
         var disabled = await service.DisableAsync("schedule-1", " ");
 
-        enabled.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", true));
-        disabled.Should().Be(new WorkflowScheduleMutationReceipt("schedule-1", "actor:schedule-1", true));
+        enabled.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = true,
+            AckStage = "accepted",
+        });
+        enabled.CommandId.Should().NotBeNullOrWhiteSpace();
+        enabled.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        enabled.AckedAt.Should().NotBe(default);
+        disabled.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "schedule-1",
+            ScheduleActorId = "actor:schedule-1",
+            Accepted = true,
+            AckStage = "accepted",
+        });
+        disabled.CommandId.Should().NotBeNullOrWhiteSpace();
+        disabled.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        disabled.AckedAt.Should().NotBe(default);
         actorPort.Enabled.Should().ContainSingle()
             .Which.Should().Be(("actor:schedule-1", "resume"));
         actorPort.Disabled.Should().ContainSingle()
@@ -283,7 +319,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
     public async Task UpdateAsync_ShouldUseRouteScheduleIdAndScrubOptionalAdapterHeaders()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
-        var service = CreateService(actorPort);
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["route-schedule"] = CreateDetail("route-schedule");
+        var service = CreateService(actorPort, queryPort);
 
         var receipt = await service.UpdateAsync(
             " route-schedule ",
@@ -305,7 +343,16 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 ScopeId: " ",
                 TenantId: "tenant-1"));
 
-        receipt.Should().Be(new WorkflowScheduleMutationReceipt("route-schedule", "actor:route-schedule", true));
+        receipt.Should().BeEquivalentTo(new
+        {
+            ScheduleId = "route-schedule",
+            ScheduleActorId = "actor:route-schedule",
+            Accepted = true,
+            AckStage = "accepted",
+        });
+        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        receipt.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        receipt.AckedAt.Should().NotBe(default);
         actorPort.Updated.Should().ContainSingle();
         var configuration = actorPort.Updated.Single().Configuration;
         configuration.ScheduleId.Should().Be("route-schedule");
@@ -465,9 +512,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
         {
             Schedule = CreateDetail("generic").Schedule with
             {
-                TargetKind = ScheduledDispatchTargetKind.Envelope,
-                ServiceEndpointId = string.Empty,
-                ServiceId = string.Empty,
+                TargetKind = ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceEndpointId = "chat",
+                ServiceId = "generic-chat",
+                ScheduleKind = ScheduledDispatchScheduleKind.Generic,
             },
         };
         var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
@@ -497,8 +545,38 @@ public sealed class WorkflowScheduleApplicationServiceTests
             25,
             "cursor",
             true,
-            ScheduledDispatchTargetKind.ServiceInvocation,
-            "chat"));
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow));
+    }
+
+    [Fact]
+    public async Task Mutations_ShouldRejectExistingNonWorkflowSchedulesWithoutDispatching()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["generic"] = CreateDetail("generic") with
+        {
+            Schedule = CreateDetail("generic").Schedule with
+            {
+                ScheduleKind = ScheduledDispatchScheduleKind.Generic,
+            },
+        };
+        var service = CreateService(actorPort, queryPort);
+
+        var update = () => service.UpdateAsync("generic", CreateConfiguration("generic"));
+        var enable = () => service.EnableAsync("generic", "resume");
+        var disable = () => service.DisableAsync("generic", "pause");
+        var runNow = () => service.RunNowAsync("generic");
+
+        await update.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+
+        actorPort.Updated.Should().BeEmpty();
+        actorPort.Enabled.Should().BeEmpty();
+        actorPort.Disabled.Should().BeEmpty();
+        actorPort.RunNowRequests.Should().BeEmpty();
+        actorPort.ResolveScheduleIds.Should().BeEmpty();
     }
 
     [Fact]
@@ -785,6 +863,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 FireCount: 0,
                 FailureCount: 0,
                 Headers: new Dictionary<string, string>(),
-                ScheduleActorId: string.Empty),
+                ScheduleActorId: string.Empty,
+                ScheduleKind: ScheduledDispatchScheduleKind.Workflow),
             []);
 }

@@ -55,14 +55,22 @@ public sealed record WorkflowScheduleDetail(
 public sealed record WorkflowScheduleMutationReceipt(
     string ScheduleId,
     string ScheduleActorId,
-    bool Accepted);
+    bool Accepted,
+    string CommandId = "",
+    string CorrelationId = "",
+    DateTimeOffset AckedAt = default,
+    string AckStage = "accepted");
 
 public sealed record WorkflowScheduleRunNowReceipt(
     string ScheduleId,
     string ScheduleActorId,
     DateTimeOffset ScheduledFireAt,
     string IdempotencyKey,
-    bool Accepted);
+    bool Accepted,
+    string CommandId = "",
+    string CorrelationId = "",
+    DateTimeOffset AckedAt = default,
+    string AckStage = "accepted");
 
 public sealed record WorkflowScheduleListResult(
     IReadOnlyList<WorkflowScheduleSummary> Items,

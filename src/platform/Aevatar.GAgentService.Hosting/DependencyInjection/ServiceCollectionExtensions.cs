@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -24,6 +25,7 @@ using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -106,6 +108,30 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeScriptCommandPort, ScopeScriptCommandApplicationService>();
         services.TryAddSingleton<IScopeScriptSaveObservationPort, ScopeScriptSaveObservationService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, GAgentServiceDemoBootstrapHostedService>());
+        return services;
+    }
+
+    public static IServiceCollection AddScheduledDispatchCapability(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddGAgentServiceProjection();
+        services.AddGAgentServiceProjectionReadModelProviders(configuration);
+        services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
+        services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
+        services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
+        services.TryAddSingleton<ServiceInvocationResolutionService>();
+        services.TryAddSingleton<IInvokeAdmissionAuthorizer, ScheduledDispatchInvokeAdmissionAuthorizer>();
+        services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
+        services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
+        services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
+        services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
+        services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
+        services.TryAddTransient<ScheduledDispatchGAgent>();
         return services;
     }
 
@@ -247,4 +273,19 @@ public static class ServiceCollectionExtensions
             defaultSortSelector: static readModel => readModel.UpdatedAt);
     }
 
+}
+
+internal sealed class ScheduledDispatchInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
+{
+    public Task AuthorizeAsync(
+        string serviceKey,
+        string deploymentId,
+        PreparedServiceRevisionArtifact artifact,
+        ServiceEndpointDescriptor endpoint,
+        ServiceInvocationRequest request,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
 }

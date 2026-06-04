@@ -384,10 +384,10 @@ public sealed class ScheduledDispatchGAgentTests
         serviceRequest.EndpointId.Should().Be("chat");
         serviceRequest.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("run daily");
         serviceRequest.CommandId.Should().Be(idempotencyKey);
-        serviceRequest.CorrelationId.Should().Be("template-correlation");
+        serviceRequest.CorrelationId.Should().Be(idempotencyKey);
         agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("service-run-actor");
         agent.State.FireRecords[idempotencyKey].CommandId.Should().Be(idempotencyKey);
-        agent.State.FireRecords[idempotencyKey].CorrelationId.Should().Be("template-correlation");
+        agent.State.FireRecords[idempotencyKey].CorrelationId.Should().Be(idempotencyKey);
     }
 
     [Fact]
@@ -533,6 +533,58 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.FireRecords.Should().BeEmpty();
         agent.State.FireCount.Should().Be(0);
         agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForServiceInvocation_ShouldUseTypedTargetAndPropagateFireHeadersToChatPayload()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch, serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            triggerEnvelope: CreateTriggerEnvelope("stale-target", new ServiceInvocationRequest
+            {
+                Identity = new ServiceIdentity { ServiceId = "stale-service" },
+                EndpointId = "stale-endpoint",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "stale" }),
+            }),
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                        Metadata = { ["caller"] = "kept" },
+                    }),
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        dispatch.Dispatches.Should().BeEmpty();
+        var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
+        request.Identity.ServiceId.Should().Be("configured-service");
+        request.EndpointId.Should().Be("chat");
+        request.CommandId.Should().Be(ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt));
+        request.CorrelationId.Should().Be(request.CommandId);
+        var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Prompt.Should().Be("configured");
+        chatRequest.Metadata.Should().Contain("caller", "kept");
+        chatRequest.Metadata.Should().Contain(ScheduledDispatchMetadataKeys.ScheduleId, "schedule-1");
+        chatRequest.Metadata.Should().ContainKey(ScheduledDispatchMetadataKeys.FireAtUtc);
+        chatRequest.Metadata.Should().Contain(ScheduledDispatchMetadataKeys.IdempotencyKey, request.CommandId);
     }
 
     [Fact]

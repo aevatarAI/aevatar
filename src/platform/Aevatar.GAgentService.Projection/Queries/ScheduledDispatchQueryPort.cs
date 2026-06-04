@@ -71,6 +71,16 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             });
         }
 
+        if (query.ScheduleKind != null)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.ScheduleKind),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ScheduleKind.Value.ToString()),
+            });
+        }
+
         return filters.ToArray();
     }
 
@@ -106,7 +116,8 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.FireCount,
             document.FailureCount,
             document.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
-            document.ScheduleActorId ?? string.Empty);
+            document.ScheduleActorId ?? string.Empty,
+            ParseScheduleKind(document.ScheduleKind));
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
         new(
@@ -123,4 +134,9 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
         Enum.TryParse<ScheduledDispatchTargetKind>(value, ignoreCase: true, out var parsed)
             ? parsed
             : ScheduledDispatchTargetKind.Envelope;
+
+    private static ScheduledDispatchScheduleKind ParseScheduleKind(string? value) =>
+        Enum.TryParse<ScheduledDispatchScheduleKind>(value, ignoreCase: true, out var parsed)
+            ? parsed
+            : ScheduledDispatchScheduleKind.Generic;
 }

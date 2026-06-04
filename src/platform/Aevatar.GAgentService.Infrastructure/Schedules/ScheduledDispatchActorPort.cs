@@ -62,6 +62,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             Enabled = configuration.Enabled,
             PayloadTypeUrl = dispatch.PayloadTypeUrl,
             Target = CreateTargetState(dispatch.Descriptor),
+            ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind),
         };
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
@@ -91,6 +92,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             Enabled = configuration.Enabled,
             PayloadTypeUrl = dispatch.PayloadTypeUrl,
             Target = CreateTargetState(dispatch.Descriptor),
+            ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind),
         };
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
@@ -151,6 +153,13 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         };
         return _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
+
+    private static ScheduledDispatchScheduleKindState ToStateScheduleKind(ScheduledDispatchScheduleKind kind) =>
+        kind switch
+        {
+            ScheduledDispatchScheduleKind.Workflow => ScheduledDispatchScheduleKindState.Workflow,
+            _ => ScheduledDispatchScheduleKindState.Generic,
+        };
 
     private static ScheduledDispatchTargetState CreateTargetState(ScheduledDispatchTargetDescriptor descriptor)
     {

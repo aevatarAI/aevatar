@@ -21,7 +21,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         CancellationToken ct = default)
     {
         var receipt = await _scheduledDispatches.CreateAsync(ToScheduledDispatchConfiguration(configuration), ct);
-        return new WorkflowScheduleMutationReceipt(receipt.ScheduleId, receipt.ScheduleActorId, receipt.Accepted);
+        return ToWorkflowMutationReceipt(receipt);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> UpdateAsync(
@@ -29,8 +29,9 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         WorkflowScheduleConfiguration configuration,
         CancellationToken ct = default)
     {
+        await EnsureWorkflowScheduleAsync(scheduleId, ct);
         var receipt = await _scheduledDispatches.UpdateAsync(scheduleId, ToScheduledDispatchConfiguration(configuration), ct);
-        return new WorkflowScheduleMutationReceipt(receipt.ScheduleId, receipt.ScheduleActorId, receipt.Accepted);
+        return ToWorkflowMutationReceipt(receipt);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> EnableAsync(
@@ -38,8 +39,9 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         string reason,
         CancellationToken ct = default)
     {
+        await EnsureWorkflowScheduleAsync(scheduleId, ct);
         var receipt = await _scheduledDispatches.EnableAsync(scheduleId, reason, ct);
-        return new WorkflowScheduleMutationReceipt(receipt.ScheduleId, receipt.ScheduleActorId, receipt.Accepted);
+        return ToWorkflowMutationReceipt(receipt);
     }
 
     public async Task<WorkflowScheduleMutationReceipt> DisableAsync(
@@ -47,8 +49,9 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         string reason,
         CancellationToken ct = default)
     {
+        await EnsureWorkflowScheduleAsync(scheduleId, ct);
         var receipt = await _scheduledDispatches.DisableAsync(scheduleId, reason, ct);
-        return new WorkflowScheduleMutationReceipt(receipt.ScheduleId, receipt.ScheduleActorId, receipt.Accepted);
+        return ToWorkflowMutationReceipt(receipt);
     }
 
     public async Task<WorkflowScheduleDetail?> GetAsync(
@@ -69,11 +72,9 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             take,
             cursor,
             includeTotalCount,
-            ScheduledDispatchTargetKind.ServiceInvocation,
-            "chat"), ct);
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow), ct);
         return new WorkflowScheduleListResult(
             result.Items
-                .Where(static x => !string.IsNullOrWhiteSpace(x.ServiceId))
                 .Select(ToWorkflowSummary)
                 .ToArray(),
             result.NextCursor,
@@ -95,13 +96,18 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         string scheduleId,
         CancellationToken ct = default)
     {
+        await EnsureWorkflowScheduleAsync(scheduleId, ct);
         var receipt = await _scheduledDispatches.RunNowAsync(scheduleId, ct);
         return new WorkflowScheduleRunNowReceipt(
             receipt.ScheduleId,
             receipt.ScheduleActorId,
             receipt.ScheduledFireAt,
             receipt.IdempotencyKey,
-            receipt.Accepted);
+            receipt.Accepted,
+            receipt.CommandId,
+            receipt.CorrelationId,
+            receipt.AckedAt,
+            receipt.AckStage);
     }
 
     private static ScheduledDispatchConfiguration ToScheduledDispatchConfiguration(
@@ -121,7 +127,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             configuration.CronExpression,
             configuration.Timezone,
             configuration.Enabled,
-            BuildWorkflowScheduleHeaders(configuration));
+            BuildWorkflowScheduleHeaders(configuration),
+            ScheduledDispatchScheduleKind.Workflow);
     }
 
     private static ServiceIdentity BuildWorkflowServiceIdentity(WorkflowScheduleConfiguration configuration)
@@ -201,10 +208,25 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             summary.ScheduleActorId,
             summary.TargetActorId);
 
+    private async Task EnsureWorkflowScheduleAsync(string scheduleId, CancellationToken ct)
+    {
+        var detail = await _scheduledDispatches.GetAsync(scheduleId, ct);
+        if (detail == null || !IsWorkflowCompatibilitySchedule(detail.Schedule))
+            throw new ScheduledDispatchNotFoundException(scheduleId);
+    }
+
+    private static WorkflowScheduleMutationReceipt ToWorkflowMutationReceipt(ScheduledDispatchMutationReceipt receipt) =>
+        new(
+            receipt.ScheduleId,
+            receipt.ScheduleActorId,
+            receipt.Accepted,
+            receipt.CommandId,
+            receipt.CorrelationId,
+            receipt.AckedAt,
+            receipt.AckStage);
+
     private static bool IsWorkflowCompatibilitySchedule(ScheduledDispatchSummary summary) =>
-        summary.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation &&
-        string.Equals(summary.ServiceEndpointId, "chat", StringComparison.Ordinal) &&
-        !string.IsNullOrWhiteSpace(summary.ServiceId);
+        summary.ScheduleKind == ScheduledDispatchScheduleKind.Workflow;
 
     private static string ResolveScopeId(string serviceKey)
     {

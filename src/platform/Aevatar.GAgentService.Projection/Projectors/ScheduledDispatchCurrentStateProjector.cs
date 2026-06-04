@@ -63,6 +63,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ScheduleId = scheduleId,
             DisplayName = state.DisplayName ?? string.Empty,
             TargetKind = ToApplicationTargetKind(target.Kind).ToString(),
+            ScheduleKind = ToApplicationScheduleKind(state.ScheduleKind).ToString(),
             PayloadTypeUrl = state.PayloadTypeUrl ?? string.Empty,
             CronExpression = state.CronExpression ?? string.Empty,
             Timezone = state.Timezone ?? string.Empty,
@@ -115,6 +116,13 @@ public sealed class ScheduledDispatchCurrentStateProjector
         {
             ScheduledDispatchTargetKindState.ServiceInvocation => ScheduledDispatchTargetKind.ServiceInvocation,
             _ => ScheduledDispatchTargetKind.Envelope,
+        };
+
+    private static ScheduledDispatchScheduleKind ToApplicationScheduleKind(ScheduledDispatchScheduleKindState stateKind) =>
+        stateKind switch
+        {
+            ScheduledDispatchScheduleKindState.Workflow => ScheduledDispatchScheduleKind.Workflow,
+            _ => ScheduledDispatchScheduleKind.Generic,
         };
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>

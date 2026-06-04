@@ -34,7 +34,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ct);
         var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
         var admission = await _actorPort.DispatchCreateAsync(actorId, normalized, dispatch, ct);
-        return new ScheduledDispatchMutationReceipt(normalized.ScheduleId, actorId, admission.Accepted);
+        return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
     }
 
     public async Task<ScheduledDispatchMutationReceipt> UpdateAsync(
@@ -55,7 +55,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ct);
         var actorId = await ResolveScheduleActorAsync(normalized.ScheduleId, ct);
         var admission = await _actorPort.DispatchUpdateAsync(actorId, normalized, dispatch, ct);
-        return new ScheduledDispatchMutationReceipt(normalized.ScheduleId, actorId, admission.Accepted);
+        return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
     }
 
     public async Task<ScheduledDispatchMutationReceipt> EnableAsync(
@@ -66,7 +66,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var admission = await _actorPort.DispatchEnableAsync(actorId, NormalizeOptional(reason), ct);
-        return new ScheduledDispatchMutationReceipt(normalizedScheduleId, actorId, admission.Accepted);
+        return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
 
     public async Task<ScheduledDispatchMutationReceipt> DisableAsync(
@@ -77,7 +77,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var admission = await _actorPort.DispatchDisableAsync(actorId, NormalizeOptional(reason), ct);
-        return new ScheduledDispatchMutationReceipt(normalizedScheduleId, actorId, admission.Accepted);
+        return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
 
     public Task<ScheduledDispatchDetail?> GetAsync(
@@ -137,8 +137,23 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             actorId,
             scheduledFireAt,
             ScheduledDispatchCalculator.BuildIdempotencyKey(normalizedScheduleId, scheduledFireAt),
-            admission.Accepted);
+            admission.Accepted,
+            admission.CommandId,
+            admission.CorrelationId,
+            admission.AckedAt);
     }
+
+    private static ScheduledDispatchMutationReceipt CreateMutationReceipt(
+        string scheduleId,
+        string actorId,
+        DispatchAdmission admission) =>
+        new(
+            scheduleId,
+            actorId,
+            admission.Accepted,
+            admission.CommandId,
+            admission.CorrelationId,
+            admission.AckedAt);
 
     private async Task<string> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct)
     {

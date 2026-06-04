@@ -34,6 +34,13 @@ message ScheduledDispatchState
   ScheduledDispatchTargetState target = 23;
   google.protobuf.Timestamp pending_next_fire_at = 24;
   google.protobuf.Timestamp pending_next_fire_requested_at = 25;
+  ScheduledDispatchScheduleKindState schedule_kind = 26;
+}
+
+enum ScheduledDispatchScheduleKindState
+{
+  SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_GENERIC = 0;
+  SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_WORKFLOW = 1;
 }
 
 enum ScheduledDispatchRuntimeCallbackBackendState
@@ -90,6 +97,7 @@ message ScheduledDispatchCreateCommand
   map<string, string> headers = 8;
   string payload_type_url = 9;
   ScheduledDispatchTargetState target = 10;
+  ScheduledDispatchScheduleKindState schedule_kind = 11;
 }
 
 message ScheduledDispatchUpdateCommand
@@ -104,6 +112,7 @@ message ScheduledDispatchUpdateCommand
   map<string, string> headers = 8;
   string payload_type_url = 9;
   ScheduledDispatchTargetState target = 10;
+  ScheduledDispatchScheduleKindState schedule_kind = 11;
 }
 
 message ScheduledDispatchConfiguredEvent
@@ -120,6 +129,7 @@ message ScheduledDispatchConfiguredEvent
   string payload_type_url = 10;
   ScheduledDispatchTargetState target = 11;
   reserved 12;
+  ScheduledDispatchScheduleKindState schedule_kind = 13;
 }
 
 message ScheduledDispatchEnableCommand
