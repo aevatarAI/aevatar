@@ -56,6 +56,7 @@ type TeamTestPanelProps = {
   readonly onClearEntry?: () => void;
   readonly onNavigate?: (href: string) => void;
   readonly onPromptChange: (value: string) => void;
+  readonly onRetryRoster?: () => void;
   readonly onSetEntryAndTest: (memberId: string) => void;
   readonly onStop: () => void;
   readonly onTest: () => void;
@@ -160,6 +161,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
   onClearEntry,
   onNavigate,
   onPromptChange,
+  onRetryRoster,
   onSetEntryAndTest,
   onStop,
   onTest,
@@ -222,15 +224,22 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
 
     if (rosterError) {
       return (
-        <AevatarInspectorEmpty
-          compact
-          title={intl.formatMessage({
-            id: "teams.detail.test.entry.rosterUnavailable.title",
-          })}
-          description={intl.formatMessage({
-            id: "teams.detail.test.entry.rosterUnavailable.description",
-          })}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <AevatarInspectorEmpty
+            compact
+            title={intl.formatMessage({
+              id: "teams.detail.test.entry.rosterUnavailable.title",
+            })}
+            description={intl.formatMessage({
+              id: "teams.detail.test.entry.rosterUnavailable.description",
+            })}
+          />
+          {onRetryRoster ? (
+            <Button onClick={onRetryRoster}>
+              {intl.formatMessage({ id: "teams.members.actions.retryRoster" })}
+            </Button>
+          ) : null}
+        </div>
       );
     }
 

@@ -554,6 +554,9 @@ const TeamDetailPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ["teams", "roster", scopeId] }),
     ]);
   }, [queryClient, scopeId, teamMembersQueryKey, teamSummaryQueryKey]);
+  const retryTeamMembersRoster = React.useCallback(() => {
+    void teamMembersQuery.refetch();
+  }, [teamMembersQuery]);
 
   const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
@@ -765,35 +768,40 @@ const TeamDetailPage: React.FC = () => {
     trimText(entryMemberSummary?.displayName) || entryMemberId;
   const teamRosterRows = React.useMemo(
     () =>
-      (teamMembersQuery.data?.members ?? []).map((member) => ({
-        buildStudioHref: buildTeamStudioHref({
+      (teamMembersQuery.data?.members ?? []).map((member) => {
+        const publishedServiceId = trimText(member.publishedServiceId);
+
+        return {
+          buildStudioHref: buildTeamStudioHref({
+            memberId: member.memberId,
+            mode: "build-member",
+            returnTo: buildTeamReturnHref(member.memberId),
+            scopeId,
+            teamId: selectedTeamId,
+          }),
+          description: trimText(member.description),
+          canInvokeAsEntry:
+            normalizeStatus(member.lifecycleStage) === "bind_ready" &&
+            publishedServiceId.length > 0,
+          editStudioHref: buildTeamStudioHref({
+            memberId: member.memberId,
+            mode: "edit-member",
+            returnTo: buildTeamReturnHref(member.memberId),
+            scopeId,
+            teamId: selectedTeamId,
+          }),
+          hasPublishedService: publishedServiceId.length > 0,
+          implementationKind: formatCompositionKind(member.implementationKind),
+          key: member.memberId,
+          lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
+          lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
+          isEntryMember: trimText(member.memberId) === entryMemberId,
+          isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
           memberId: member.memberId,
-          mode: "build-member",
-          returnTo: buildTeamReturnHref(member.memberId),
-          scopeId,
-          teamId: selectedTeamId,
-        }),
-        description: trimText(member.description),
-        canInvokeAsEntry:
-          normalizeStatus(member.lifecycleStage) === "bind_ready" &&
-          trimText(member.publishedServiceId).length > 0,
-        editStudioHref: buildTeamStudioHref({
-          memberId: member.memberId,
-          mode: "edit-member",
-          returnTo: buildTeamReturnHref(member.memberId),
-          scopeId,
-          teamId: selectedTeamId,
-        }),
-        implementationKind: formatCompositionKind(member.implementationKind),
-        key: member.memberId,
-        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
-        lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
-        isEntryMember: trimText(member.memberId) === entryMemberId,
-        isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
-        memberId: member.memberId,
-        name: trimText(member.displayName) || member.memberId,
-        serviceId: trimText(member.publishedServiceId) || "--",
-      })),
+          name: trimText(member.displayName) || member.memberId,
+          serviceId: publishedServiceId,
+        };
+      }),
     [
       buildTeamReturnHref,
       entryMemberId,
@@ -1022,7 +1030,7 @@ const TeamDetailPage: React.FC = () => {
   );
   const tabOptions: TeamTabOption[] = [
     { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
-    { label: t("pages.teams.detail.copy.46", "team member"), value: "members" },
+    { label: formatTeamTabLabel("members", intl), value: "members" },
   ];
 
   const initialLoading =
@@ -1452,6 +1460,7 @@ const TeamDetailPage: React.FC = () => {
       onClearEntry={handleClearEntry}
       onNavigate={(href) => history.push(href)}
       onPromptChange={setTeamTestPrompt}
+      onRetryRoster={retryTeamMembersRoster}
       onSetEntryAndTest={(memberId) => void handleSetEntry(memberId, { test: true })}
       onStop={handleStopTeamTest}
       onTest={() => void streamTeamTest()}
@@ -1514,6 +1523,7 @@ const TeamDetailPage: React.FC = () => {
     return (
       <TeamMembersTab
         createMemberHref={createMemberHref}
+        entryClearBusy={entryActionBusyMemberId === entryMemberClearingId}
         entryActionBusyMemberId={entryActionBusyMemberId}
         onClearEntry={
           teamSummaryQuery.data && !isTeamArchived && entryMemberId
@@ -1521,6 +1531,7 @@ const TeamDetailPage: React.FC = () => {
             : undefined
         }
         onNavigate={(href) => history.push(href)}
+        onRetryRoster={retryTeamMembersRoster}
         onSetEntry={
           teamSummaryQuery.data && !isTeamArchived
             ? (memberId) => void handleSetEntry(memberId)
@@ -1528,6 +1539,7 @@ const TeamDetailPage: React.FC = () => {
         }
         rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
         rosterLoading={teamMembersQuery.isLoading}
+        rosterRetrying={teamMembersQuery.isFetching}
         rosterSyncing={isTeamMembersProjectionSyncing}
         rosterRows={teamRosterRows}
         rosterTeamId={selectedTeamId}

@@ -9,14 +9,13 @@ import {
 import {
   DetailPill,
   FactLine,
-  CompactFactValue,
   factValueFontFamily,
 } from "../components/TeamDetailPrimitives";
-import { t } from "@/shared/i18n/messages";
 
 type TeamRosterMemberRow = {
   readonly canInvokeAsEntry: boolean;
   readonly description: string;
+  readonly hasPublishedService: boolean;
   readonly implementationKind: string;
   readonly isEntryMember?: boolean;
   readonly isSelectedMember?: boolean;
@@ -34,14 +33,20 @@ type TeamMembersTabProps = {
   readonly rosterError?: boolean;
   readonly rosterLoading?: boolean;
   readonly rosterRows?: readonly TeamRosterMemberRow[];
+  readonly rosterRetrying?: boolean;
   readonly rosterSyncing?: boolean;
   readonly rosterTeamId?: string;
   readonly createMemberHref?: string;
   readonly entryActionBusyMemberId?: string;
+  readonly entryClearBusy?: boolean;
   readonly onClearEntry?: () => void;
   readonly onNavigate?: (href: string) => void;
+  readonly onRetryRoster?: () => void;
   readonly onSetEntry?: (memberId: string) => void;
 };
+
+const memberGridTemplateColumns =
+  "minmax(190px, 1.15fr) minmax(260px, 1.6fr) minmax(140px, 0.75fr) minmax(170px, 0.85fr) minmax(220px, max-content)";
 
 const ellipsisTextStyle: React.CSSProperties = {
   display: "block",
@@ -77,11 +82,14 @@ const EllipsisText: React.FC<{
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   createMemberHref = "",
   entryActionBusyMemberId = "",
+  entryClearBusy = false,
   onClearEntry,
   onNavigate,
+  onRetryRoster,
   onSetEntry,
   rosterError = false,
   rosterLoading = false,
+  rosterRetrying = false,
   rosterRows = [],
   rosterSyncing = false,
   rosterTeamId = "",
@@ -136,13 +144,22 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             })}
           />
         ) : rosterError ? (
-          <AevatarInspectorEmpty
-            compact
-            title={intl.formatMessage({ id: "teams.members.unavailable.title" })}
-            description={intl.formatMessage({
-              id: "teams.members.unavailable.description",
-            })}
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <AevatarInspectorEmpty
+              compact
+              title={intl.formatMessage({ id: "teams.members.unavailable.title" })}
+              description={intl.formatMessage({
+                id: "teams.members.unavailable.description",
+              })}
+            />
+            {onRetryRoster ? (
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <Button loading={rosterRetrying} onClick={onRetryRoster}>
+                  {intl.formatMessage({ id: "teams.members.actions.retryRoster" })}
+                </Button>
+              </div>
+            ) : null}
+          </div>
         ) : rosterRows.length > 0 ? (
           <div
             style={{
@@ -152,7 +169,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             }}
           >
             <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 980 }}>
+              <div style={{ minWidth: 920 }}>
                 <div
                   style={{
                     background: "var(--ant-colorBgContainerDisabled)",
@@ -162,8 +179,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     fontSize: 12,
                     fontWeight: 600,
                     gap: 16,
-                    gridTemplateColumns:
-                      "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
+                    gridTemplateColumns: memberGridTemplateColumns,
                     padding: "12px 16px",
                   }}
                 >
@@ -177,9 +193,15 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                 </div>
                 {rosterRows.map((row, index) => (
                   <div
+                    aria-label={intl.formatMessage(
+                      { id: "teams.members.row.label" },
+                      { memberId: row.memberId, name: row.name },
+                    )}
+                    data-testid={`team-member-row-${row.memberId}`}
                     key={row.key}
+                    role="group"
                     style={{
-                      alignItems: "center",
+                      alignItems: "start",
                       background: row.isEntryMember
                         ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 34%)"
                         : row.isSelectedMember
@@ -194,8 +216,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         : undefined,
                       display: "grid",
                       gap: 16,
-                      gridTemplateColumns:
-                        "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
+                      gridTemplateColumns: memberGridTemplateColumns,
                       padding: "14px 16px",
                     }}
                   >
@@ -244,35 +265,75 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     </div>
                     <div style={{ minWidth: 0 }}>
                       <FactLine
-                        rows={1}
+                        monospace={false}
+                        rows={2}
+                        secondary
                         text={
                           row.description ||
-                          intl.formatMessage(
-                            { id: "teams.members.fallback.team" },
-                            { teamId: rosterTeamId || "--" },
-                          )
+                          intl.formatMessage({ id: "teams.members.fallback.purpose" })
                         }
                       />
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                       <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
-                      <Typography.Text style={{ fontFamily: factValueFontFamily, fontSize: 12 }}>
-                        {row.implementationKind}
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {intl.formatMessage(
+                          { id: "teams.members.kind" },
+                          { kind: row.implementationKind },
+                        )}
                       </Typography.Text>
                     </div>
-                    <CompactFactValue
-                      color="var(--ant-color-text-secondary)"
-                      strong={false}
-                      value={row.serviceId}
-                    />
-                    <Space wrap size={8}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                      {row.hasPublishedService ? (
+                        <>
+                          <EllipsisText
+                            monospace
+                            style={{
+                              fontSize: 12,
+                            }}
+                            type="secondary"
+                          >
+                            {row.serviceId}
+                          </EllipsisText>
+                          {row.canInvokeAsEntry ? (
+                            <Typography.Text
+                              style={{ color: token.colorSuccess, fontSize: 12 }}
+                            >
+                              {intl.formatMessage({
+                                id: "teams.members.service.runnable",
+                              })}
+                            </Typography.Text>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <Typography.Text type="secondary">
+                            {intl.formatMessage({
+                              id: "teams.members.service.notPublished",
+                            })}
+                          </Typography.Text>
+                          <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                            {intl.formatMessage({
+                              id: "teams.members.service.buildFirst",
+                            })}
+                          </Typography.Text>
+                        </>
+                      )}
+                    </div>
+                    <Space
+                      wrap
+                      size={6}
+                      style={{ justifyContent: "flex-end", minWidth: 0 }}
+                    >
                       {row.isEntryMember ? (
                         <Button
+                          aria-label={intl.formatMessage(
+                            { id: "teams.members.actions.clearEntryFor" },
+                            { name: row.name },
+                          )}
                           icon={<CheckCircleOutlined />}
-                          disabled={
-                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
-                          }
-                          loading={entryActionBusyMemberId === row.memberId}
+                          disabled={isEntryActionBusy && !entryClearBusy}
+                          loading={entryClearBusy}
                           onClick={onClearEntry}
                           size="small"
                         >
@@ -280,6 +341,10 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         </Button>
                       ) : row.canInvokeAsEntry && onSetEntry ? (
                         <Button
+                          aria-label={intl.formatMessage(
+                            { id: "teams.members.actions.setEntryFor" },
+                            { name: row.name },
+                          )}
                           disabled={
                             isEntryActionBusy && entryActionBusyMemberId !== row.memberId
                           }
@@ -289,16 +354,18 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         >
                           {intl.formatMessage({ id: "teams.members.actions.setEntry" })}
                         </Button>
+                      ) : !row.canInvokeAsEntry ? (
+                        <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                          {intl.formatMessage({
+                            id: "teams.members.service.buildFirst",
+                          })}
+                        </Typography.Text>
                       ) : null}
                       <Button
-                        href={row.editStudioHref}
-                        icon={<EditOutlined />}
-                        onClick={handleNavigate(row.editStudioHref)}
-                        size="small"
-                      >
-                        {intl.formatMessage({ id: "teams.members.actions.editInStudio" })}
-                      </Button>
-                      <Button
+                        aria-label={intl.formatMessage(
+                          { id: "teams.members.actions.buildFor" },
+                          { name: row.name },
+                        )}
                         href={row.buildStudioHref}
                         icon={<ToolOutlined />}
                         onClick={handleNavigate(row.buildStudioHref)}
@@ -306,6 +373,18 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         type="primary"
                       >
                         {intl.formatMessage({ id: "teams.members.actions.build" })}
+                      </Button>
+                      <Button
+                        aria-label={intl.formatMessage(
+                          { id: "teams.members.actions.editInStudioFor" },
+                          { name: row.name },
+                        )}
+                        href={row.editStudioHref}
+                        icon={<EditOutlined />}
+                        onClick={handleNavigate(row.editStudioHref)}
+                        size="small"
+                      >
+                        {intl.formatMessage({ id: "teams.members.actions.editInStudio" })}
                       </Button>
                     </Space>
                   </div>
