@@ -91,6 +91,20 @@ export type MissionInterventionActionKind =
 
 export type MissionFeedbackTone = 'info' | 'success' | 'warning' | 'error';
 
+export type MissionHandoffSeverity =
+  | 'observe'
+  | 'action'
+  | 'blocked'
+  | 'confirming';
+
+export interface MissionHandoffCue {
+  detail: string;
+  evidence: string;
+  nextStep: string;
+  severity: MissionHandoffSeverity;
+  title: string;
+}
+
 export interface MissionMetric {
   key: string;
   label: string;
@@ -141,6 +155,7 @@ export interface MissionTopologyNode {
   observationStatus: MissionObservationStatus;
   freshnessLabel: string;
   freshnessSeconds: number;
+  handoff: MissionHandoffCue;
   summary: string;
   lastLatencyMs?: number;
   confidence?: number;
@@ -166,6 +181,7 @@ export interface MissionExecutionEvent {
   detail: string;
   stepId?: string;
   actorId?: string;
+  handoff: MissionHandoffCue;
   timestamp: string;
   severity: 'info' | 'success' | 'warning' | 'error';
 }

@@ -2014,6 +2014,11 @@ jest.mock("./components/StudioBuildPanels", () => {
     }, [dirty, props.onRegisterLeaveGuard]);
 
     mockReact.useEffect(() => {
+      if (!selectedScriptId) {
+        props.onScriptBuildStateChange?.(null);
+        return () => props.onScriptBuildStateChange?.(null);
+      }
+
       props.onScriptBuildStateChange?.({
         scriptId: selectedScriptId,
         displayName: selectedScriptId,
@@ -2028,20 +2033,29 @@ jest.mock("./components/StudioBuildPanels", () => {
       return () => props.onScriptBuildStateChange?.(null);
     }, [dirty, props.onScriptBuildStateChange, selectedScriptId]);
 
+    if (!selectedScriptId) {
+      return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
+        mockReact.createElement("div", { key: "title" }, "Script source"),
+        mockReact.createElement(
+          "p",
+          { key: "empty-copy" },
+          "No script is selected yet. Start a script draft to open the editor."
+        ),
+        mockReact.createElement(
+          "button",
+          {
+            key: "add-script",
+            type: "button",
+            onClick: () => props.onCreateScriptDraft?.(),
+          },
+          "Add script"
+        ),
+      ]);
+    }
+
     return mockReact.createElement("div", { "data-testid": "studio-script-build-panel" }, [
       mockReact.createElement("div", { key: "title" }, "Script source"),
       mockReact.createElement("div", { key: "provenance" }, "lints · partial"),
-      !selectedScriptId
-        ? mockReact.createElement(
-            "button",
-            {
-              key: "add-script",
-              type: "button",
-              onClick: () => props.onCreateScriptDraft?.(),
-            },
-            "Add script"
-          )
-        : null,
       mockReact.createElement("input", {
         key: "script-id",
         "aria-label": "Script ID",
@@ -2208,6 +2222,8 @@ jest.mock("./components/StudioShell", () => ({
     onSelectMember,
     onSelectPage,
     selectedMemberKey,
+    showLifecycle = true,
+    showMemberRail = true,
   }: any) => {
     const React = require("react");
     const filterOptions = [
@@ -2233,7 +2249,7 @@ jest.mock("./components/StudioShell", () => ({
         React.createElement("div", { key: "workbench" }, "Workbench"),
         contextBar ? React.createElement("div", { key: "context-bar" }, contextBar) : null,
         alerts ? React.createElement("div", { key: "alerts" }, alerts) : null,
-        React.createElement(
+        showMemberRail ? React.createElement(
           "div",
           { key: "members", "aria-label": "Team members" },
           [
@@ -2273,8 +2289,8 @@ jest.mock("./components/StudioShell", () => ({
               )
             ),
           ]
-        ),
-        ...lifecycleSteps.map((step: any) =>
+        ) : null,
+        ...(showLifecycle ? lifecycleSteps : []).map((step: any) =>
           React.createElement(
             "button",
             {
@@ -3543,7 +3559,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("service-alpha");
       expect(window.location.search).toContain("member=member%3Amember-alpha");
@@ -3573,7 +3589,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
     await waitFor(() => {
       expect(window.location.search).toContain("member=member%3Aworkspace-demo");
     });
@@ -3663,7 +3679,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
     await waitFor(() => {
       expect(window.location.search).toContain("member=member%3Amember-alpha");
     });
@@ -3672,7 +3688,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-b&scopeLabel=%E5%9B%A2%E9%98%9F+B&memberId=service-beta&memberLabel=%E6%88%90%E5%91%98+Beta&tab=workflows"
     );
 
-    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("service-beta");
       expect(window.location.search).toContain("member=member%3Amember-beta");
@@ -3713,7 +3729,7 @@ describe("StudioPage", () => {
       "/studio?draft=new&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3"
     );
 
-    expect(await screen.findByRole("button", { name: "Return to team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回创建页" })).toBeNull();
     expect(await screen.findByTestId("studio-empty-member-state")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "发布团队入口" })).toBeNull();
@@ -3821,7 +3837,7 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
     expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
-      "GAgent build"
+      "GAgent Build"
     );
 
     await waitFor(() => {
@@ -3970,8 +3986,29 @@ describe("StudioPage", () => {
         scripts: true,
       },
     });
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValueOnce([
+      {
+        available: true,
+        scopeId: "scope-1",
+        script: {
+          scopeId: "scope-1",
+          scriptId: "script-alpha",
+          catalogActorId: "catalog-1",
+          definitionActorId: "definition-1",
+          activeRevision: "rev-script-1",
+          activeSourceHash: "hash-1",
+          updatedAt: "2026-03-18T00:00:00Z",
+        },
+        source: {
+          sourceText: "using System;",
+          definitionActorId: "definition-1",
+          revision: "rev-script-1",
+          sourceHash: "hash-1",
+        },
+      },
+    ]);
 
-    renderStudioPage("/studio?tab=scripts");
+    renderStudioPage("/studio?scopeId=scope-1&focus=script%3Ascript-alpha&tab=scripts");
 
     await screen.findByLabelText("Script ID");
     fireEvent.change(screen.getByLabelText("Script source editor"), {
@@ -4173,7 +4210,7 @@ describe("StudioPage", () => {
       );
     });
     expect(message.info).toHaveBeenCalledWith(
-      "Team entry changes have been submitted and are waiting for synchronization confirmation.",
+      "Team entry change submitted. Waiting for sync confirmation.",
     );
   });
 
@@ -4403,7 +4440,7 @@ describe("StudioPage", () => {
   it("returns to canonical Team detail when Studio has Team context", async () => {
     renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Return to team" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back to Team" }));
 
     expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
     const searchParams = new URLSearchParams(window.location.search);
@@ -4425,7 +4462,7 @@ describe("StudioPage", () => {
       );
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Return to team" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back to Team" }));
 
     expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
     const searchParams = new URLSearchParams(window.location.search);
@@ -4590,6 +4627,16 @@ describe("StudioPage", () => {
 
     renderStudioPage("/studio?tab=scripts");
 
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent("Create a script");
+    expect(screen.getByText("No script is selected yet. Start a script draft to open the editor.")).toBeTruthy();
+    expect(screen.queryByLabelText("Team members")).toBeNull();
+    expect(screen.queryByTestId("studio-lifecycle-section")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Observe" })).toBeNull();
+    expect(screen.queryByLabelText("Script ID")).toBeNull();
+    expect(screen.queryByText("Script draft run")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save draft" })).toBeNull();
+
     fireEvent.click(await screen.findByRole("button", { name: "Add script" }));
 
     const createDialog = await screen.findByRole("dialog", { name: "Create member" });
@@ -4738,6 +4785,12 @@ describe("StudioPage", () => {
       "aria-pressed",
       "true",
     );
+    expect(screen.getByRole("button", { name: "Workflow" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Script" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^GAgent/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Workflow" }));
+    expect(screen.getByTestId("studio-gagent-build-panel")).toBeTruthy();
+    expect(screen.queryByTestId("studio-workflow-build-panel")).toBeNull();
     expect(screen.getByRole("button", { name: "Continue to Bind" })).toBeEnabled();
 
     await waitFor(() => {
@@ -5270,7 +5323,7 @@ describe("StudioPage", () => {
       expect(screen.getByText("member:script-alpha")).toBeTruthy();
       expect(screen.getByText("services:none")).toBeTruthy();
       expect(screen.getByText("endpoint:no-endpoint")).toBeTruthy();
-      expect(screen.getByText(/empty:script-alpha cannot be called directly yet\./)).toBeTruthy();
+      expect(screen.getByText(/empty:script-alpha cannot be invoked directly yet\./)).toBeTruthy();
     });
   });
 
@@ -5666,64 +5719,50 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:10:00Z",
       },
     ]);
-    mockScopeRuntimeApi.listServices
-      .mockResolvedValueOnce([
+    let draft1ServicePublished = false;
+    const draft2Service = {
+      serviceId: "draft2",
+      displayName: "draft2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-draft2",
+      endpoints: [
         {
-          serviceId: "draft2",
-          displayName: "draft2",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft2",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft2.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
+          endpointId: "chat",
+          displayName: "Chat",
+          kind: "chat",
+          description: "Chat with draft2.",
+          requestTypeUrl: "",
+          responseTypeUrl: "",
         },
-      ])
-      .mockResolvedValueOnce([
+      ],
+    };
+    const draft1Service = {
+      serviceId: "draft1",
+      displayName: "draft1",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-draft1",
+      endpoints: [
         {
-          serviceId: "draft2",
-          displayName: "draft2",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft2",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft2.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
+          endpointId: "chat",
+          displayName: "Chat",
+          kind: "chat",
+          description: "Chat with draft1.",
+          requestTypeUrl: "",
+          responseTypeUrl: "",
         },
-        {
-          serviceId: "draft1",
-          displayName: "draft1",
-          deploymentStatus: "Active",
-          primaryActorId: "actor-draft1",
-          endpoints: [
-            {
-              endpointId: "chat",
-              displayName: "Chat",
-              kind: "chat",
-              description: "Chat with draft1.",
-              requestTypeUrl: "",
-              responseTypeUrl: "",
-            },
-          ],
-        },
-      ]);
-    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValueOnce({
+      ],
+    };
+    mockScopeRuntimeApi.listServices.mockImplementation(async () =>
+      draft1ServicePublished ? [draft2Service, draft1Service] : [draft2Service],
+    );
+    (studioApi.bindMemberWorkflow as jest.Mock).mockImplementationOnce(async () => {
+      draft1ServicePublished = true;
+      return {
       status: "accepted",
       bindingRunId: "bind-draft1",
       scopeId: "scope-1",
       memberId: "draft1",
+      };
     });
     (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValueOnce({
       bindingRunId: "bind-draft1",
@@ -5763,6 +5802,7 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     expect(await screen.findByText("candidate:draft1")).toBeTruthy();
+    expect(screen.queryByText("service:draft2")).toBeNull();
     expect(await screen.findByText("service:no-service")).toBeTruthy();
 
     await act(async () => {
@@ -6141,6 +6181,120 @@ describe("StudioPage", () => {
       );
     });
     expect(screen.queryByTestId("studio-bind-surface")).toBeNull();
+  });
+
+  it("switches from GAgent Build to a workflow-backed Team draft without persisting the stale GAgent tab", async () => {
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      workflowId: "workflow-1",
+      name: "draft1",
+      fileName: "draft1.yaml",
+      filePath: "/tmp/workflows/draft1.yaml",
+      yaml: "name: draft1\nsteps: []\n",
+      document: {
+        ...mockParsedDocument,
+        name: "draft1",
+      },
+    };
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "draft1",
+        displayName: "draft1",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "draft1-service",
+        lastBoundRevisionId: "rev-draft1",
+        teamId: "t-alpha",
+      },
+      {
+        ...mockStudioMembers[0],
+        memberId: "gagent-1",
+        displayName: "gagent-1",
+        implementationKind: "gagent",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "gagent-service",
+        lastBoundRevisionId: "rev-gagent-1",
+        teamId: "t-alpha",
+      },
+    ];
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "workflow-1",
+        name: "draft1",
+        description: "Current draft member",
+        fileName: "draft1.yaml",
+        filePath: "/tmp/workflows/draft1.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      },
+    ]);
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
+      {
+        serviceId: "draft1-service",
+        displayName: "draft1",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-draft1",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with draft1.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+      {
+        serviceId: "gagent-service",
+        displayName: "gagent-1",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-gagent",
+        endpoints: [
+          {
+            endpointId: "run",
+            displayName: "Run",
+            kind: "command",
+            description: "Run gagent-1.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]);
+    mockScopeRuntimeApi.getServiceRevisions.mockImplementation(
+      async (_scopeId: string, serviceId: string) =>
+        serviceId === "gagent-service"
+          ? mockBuildGAgentServiceRevisionCatalog({
+              serviceId: "gagent-service",
+              displayName: "gagent-1",
+            })
+          : mockBuildServiceRevisionCatalog({
+              serviceId: "draft1-service",
+              displayName: "draft1",
+              workflowName: "draft1",
+            })
+    );
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Agagent-1&step=build&tab=gagents"
+    );
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    const rail = await screen.findByLabelText("Team members");
+    fireEvent.click(await within(rail).findByRole("button", { name: "draft1" }));
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("workflow:workflow-1");
+      expect(searchParams.get("tab")).toBe("studio");
+      expect(screen.queryByTestId("studio-gagent-build-panel")).toBeNull();
+    });
   });
 
   it("recovers a direct unbound Workflow Team member Bind link with workflow focus", async () => {
@@ -7896,7 +8050,7 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     expect(screen.getByText("service:no-service")).toBeTruthy();
     expect(screen.getByText("services:none")).toBeTruthy();
-    expect(screen.getByText("empty:Please select a member to call.")).toBeTruthy();
+    expect(screen.getByText("empty:Select a member to invoke.")).toBeTruthy();
   });
 
   it("opens the Studio invoke surface from the bind surface endpoint action", async () => {

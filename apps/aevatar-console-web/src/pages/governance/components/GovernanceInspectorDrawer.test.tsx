@@ -222,4 +222,146 @@ describe("GovernanceInspectorDrawer", () => {
       });
     });
   });
+
+  it("renders retired policies as read-only facts instead of editable controls", () => {
+    render(
+      <GovernanceInspectorDrawer
+        busyAction={null}
+        endpointCatalog={null}
+        identity={{
+          tenantId: "tenant-a",
+          appId: "app-a",
+          namespace: "default",
+        }}
+        onClose={jest.fn()}
+        onCreateBinding={jest.fn(async () => undefined)}
+        onCreateEndpoint={jest.fn(async () => undefined)}
+        onCreatePolicy={jest.fn(async () => undefined)}
+        onRetireBinding={jest.fn(async () => undefined)}
+        onRetirePolicy={jest.fn(async () => undefined)}
+        onSetEndpointExposure={jest.fn(async () => undefined)}
+        onUpdateEndpoint={jest.fn(async () => undefined)}
+        onUpdateBinding={jest.fn(async () => undefined)}
+        onUpdatePolicy={jest.fn(async () => undefined)}
+        open
+        policyOptions={[]}
+        serviceId="service-alpha"
+        target={{
+          kind: "policy",
+          mode: "edit",
+          record: {
+            activationRequiredBindingIds: [],
+            displayName: "Retired Policy",
+            invokeAllowedCallerServiceKeys: [],
+            invokeRequiresActiveDeployment: false,
+            policyId: "policy-retired",
+            retired: true,
+          },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("这条策略已经退役，是治理目录中的历史事实，不能继续保存或再次下线。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存策略" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "下线策略" })).toBeNull();
+  });
+
+  it("renders retired bindings as read-only facts instead of editable controls", () => {
+    render(
+      <GovernanceInspectorDrawer
+        busyAction={null}
+        endpointCatalog={null}
+        identity={{
+          tenantId: "tenant-a",
+          appId: "app-a",
+          namespace: "default",
+        }}
+        onClose={jest.fn()}
+        onCreateBinding={jest.fn(async () => undefined)}
+        onCreateEndpoint={jest.fn(async () => undefined)}
+        onCreatePolicy={jest.fn(async () => undefined)}
+        onRetireBinding={jest.fn(async () => undefined)}
+        onRetirePolicy={jest.fn(async () => undefined)}
+        onSetEndpointExposure={jest.fn(async () => undefined)}
+        onUpdateEndpoint={jest.fn(async () => undefined)}
+        onUpdateBinding={jest.fn(async () => undefined)}
+        onUpdatePolicy={jest.fn(async () => undefined)}
+        open
+        policyOptions={[]}
+        serviceId="service-alpha"
+        target={{
+          kind: "binding",
+          mode: "edit",
+          record: {
+            bindingId: "binding-retired",
+            bindingKind: "service",
+            connectorRef: null,
+            displayName: "Retired Binding",
+            policyIds: [],
+            retired: true,
+            secretRef: null,
+            serviceRef: null,
+          },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("这条绑定已经退役，是治理目录中的历史事实，不能继续保存或再次下线。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存绑定" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "下线绑定" })).toBeNull();
+  });
+
+  it("does not offer a repeated public exposure action for an already-public endpoint", () => {
+    render(
+      <GovernanceInspectorDrawer
+        busyAction={null}
+        endpointCatalog={{
+          endpoints: [],
+          serviceKey: "tenant-a/app-a/default/service-alpha",
+          updatedAt: "2026-04-16T10:00:00Z",
+        }}
+        identity={{
+          tenantId: "tenant-a",
+          appId: "app-a",
+          namespace: "default",
+        }}
+        onClose={jest.fn()}
+        onCreateBinding={jest.fn(async () => undefined)}
+        onCreateEndpoint={jest.fn(async () => undefined)}
+        onCreatePolicy={jest.fn(async () => undefined)}
+        onRetireBinding={jest.fn(async () => undefined)}
+        onRetirePolicy={jest.fn(async () => undefined)}
+        onSetEndpointExposure={jest.fn(async () => undefined)}
+        onUpdateEndpoint={jest.fn(async () => undefined)}
+        onUpdateBinding={jest.fn(async () => undefined)}
+        onUpdatePolicy={jest.fn(async () => undefined)}
+        open
+        policyOptions={[]}
+        serviceId="service-alpha"
+        target={{
+          kind: "endpoint",
+          mode: "edit",
+          record: {
+            description: "",
+            displayName: "Public Invoke",
+            endpointId: "invoke",
+            exposureKind: "public",
+            kind: "command",
+            policyIds: [],
+            requestTypeUrl: "type.googleapis.com/demo.Invoke",
+            responseTypeUrl: "",
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "已公开" })).toBeDisabled();
+    expect(
+      screen.getByText("当前入口目录已经观察到公开状态，不再显示重复的公开切换。"),
+    ).toBeInTheDocument();
+  });
 });

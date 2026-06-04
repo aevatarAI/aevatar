@@ -22,7 +22,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { history } from "@/shared/navigation/history";
 import {
-  buildRuntimeRunsHref,
+  buildRuntimeWorkflowRunHref,
   buildRuntimeWorkflowsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import { buildStudioWorkflowEditorRoute } from "@/shared/studio/navigation";
@@ -96,6 +96,10 @@ function buildWorkflowHref(workflowName: string): string {
   return buildRuntimeWorkflowsHref({
     workflow: workflowName.trim() || undefined,
   });
+}
+
+function buildWorkflowRunHref(workflowName: string): string {
+  return buildRuntimeWorkflowRunHref(workflowName);
 }
 
 function buildWorkflowSummary(workflow: WorkflowCatalogItem): string {
@@ -349,9 +353,7 @@ const WorkflowsPage: React.FC = () => {
               onClick={(event) => {
                 event.stopPropagation();
                 history.push(
-                  buildRuntimeRunsHref({
-                    workflow: workflow.name,
-                  }),
+                  buildWorkflowRunHref(workflow.name),
                 );
               }}
               style={workflowRunTextButtonStyle}
@@ -481,7 +483,7 @@ const WorkflowsPage: React.FC = () => {
         render: (_value, step) => (
           <Typography.Text type="secondary">
             {step.next
-              ? `Next: ${step.next}`
+              ? t("pages.workflows.index.next", "Next: {value1}", { value1: step.next })
               : step.branchCount > 0
                 ? intl.formatMessage(
                     {
@@ -672,9 +674,7 @@ const WorkflowsPage: React.FC = () => {
                 icon={<PlayCircleOutlined />}
                 onClick={() =>
                   history.push(
-                    buildRuntimeRunsHref({
-                      workflow: selectedWorkflowDetail.catalog.name,
-                    }),
+                    buildWorkflowRunHref(selectedWorkflowDetail.catalog.name),
                   )
                 }
                 style={workflowRunTextButtonStyle}

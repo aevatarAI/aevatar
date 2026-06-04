@@ -22,6 +22,9 @@ import {
   type TeamDetailTab,
 } from "@/shared/navigation/teamRoutes";
 import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
+import {
+  formatStudioMemberLifecycleStage,
+} from "@/shared/studio/models";
 import type { StudioTeamSummary } from "@/shared/studio/models";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import { describeError } from "@/shared/ui/errorText";
@@ -71,7 +74,6 @@ function trimText(value: string | null | undefined): string {
 
 function resolveTeamHeading(input: {
   displayName?: string | null;
-  intl: ReturnType<typeof useIntl>;
   lensTitle?: string | null;
   scopeId: string | null | undefined;
   workflowId?: string | null;
@@ -85,9 +87,6 @@ function resolveTeamHeading(input: {
   const normalizedWorkflowId = trimText(input.workflowId);
   const normalizedWorkflowName = trimText(input.workflowName);
   const normalizedLensTitle = trimText(input.lensTitle);
-  const currentTeamLabel = input.intl.formatMessage({
-    id: "teams.detail.heading.currentTeam",
-  });
 
   if (
     normalizedDisplayName &&
@@ -109,10 +108,10 @@ function resolveTeamHeading(input: {
 
   const genericLensTitle =
     normalizedScopeId ? `Team ${normalizedScopeId}` : "";
-  if (normalizedLensTitle === currentTeamLabel || normalizedLensTitle === t("pages.teams.detail.current.team", "Current team")) {
+  if (normalizedLensTitle === t("pages.teams.detail.copy", "Current team")) {
     return {
       metaScopeId: normalizedScopeId || undefined,
-      title: currentTeamLabel,
+      title: normalizedLensTitle,
     };
   }
 
@@ -128,7 +127,7 @@ function resolveTeamHeading(input: {
 
   return {
     metaScopeId: normalizedScopeId || undefined,
-    title: input.intl.formatMessage({ id: "teams.detail.heading.default" }),
+    title: t("pages.teams.detail.copy.2", "Team detail"),
   };
 }
 
@@ -215,62 +214,38 @@ function formatFriendlyStatus(
   }
 }
 
-function formatTeamLifecycleLabel(
-  value: string | null | undefined,
-  intl: ReturnType<typeof useIntl>,
-): string {
+function formatTeamLifecycleLabel(value: string | null | undefined): string {
   switch (normalizeStatus(value)) {
     case "active":
-      return intl.formatMessage({ id: "teams.detail.status.active" });
+      return t("teams.detail.status.active", "Active");
     case "archived":
-      return intl.formatMessage({ id: "teams.detail.status.archived" });
+      return t("teams.detail.status.archived", "Archived");
     case "unknown":
-      return intl.formatMessage({ id: "teams.detail.status.unknown" });
+      return t("teams.detail.status.unknown", "Unknown status");
     default:
-      return trimText(value) || intl.formatMessage({ id: "teams.detail.status.unknown" });
+      return trimText(value) || t("teams.detail.status.unknown", "Unknown status");
   }
 }
 
-function formatTeamMemberLifecycleLabel(
-  value: string | null | undefined,
-  intl: ReturnType<typeof useIntl>,
-): string {
-  switch (normalizeStatus(value)) {
-    case "created":
-      return intl.formatMessage({ id: "teams.detail.status.created" });
-    case "build_ready":
-    case "buildready":
-      return intl.formatMessage({ id: "teams.detail.status.buildReady" });
-    case "bind_ready":
-    case "bindready":
-      return intl.formatMessage({ id: "teams.detail.status.bindReady" });
-    default:
-      return trimText(value) || intl.formatMessage({ id: "teams.detail.status.unknown" });
-  }
-}
-
-function formatCompositionKind(
-  kind: string | null | undefined,
-  intl: ReturnType<typeof useIntl>,
-): string {
+function formatCompositionKind(kind: string | null | undefined): string {
   switch (normalizeStatus(kind)) {
     case "":
     case "unknown":
-      return intl.formatMessage({ id: "teams.detail.status.kind.unknown" });
+      return t("pages.teams.detail.copy.7", "Unrecognized");
     case "workflow role":
-      return intl.formatMessage({ id: "teams.detail.status.kind.role" });
+      return t("pages.teams.detail.copy.8", "Role");
     case "workflow":
-      return intl.formatMessage({ id: "teams.detail.status.kind.workflow" });
+      return t("pages.teams.detail.copy.9", "Workflow");
     case "service":
-      return intl.formatMessage({ id: "teams.detail.status.kind.service" });
+      return t("pages.teams.detail.copy.10", "Service");
     case "actor":
-      return intl.formatMessage({ id: "teams.detail.status.kind.actor" });
+      return "Actor";
     case "runtime":
-      return intl.formatMessage({ id: "teams.detail.status.kind.runtime" });
+      return t("pages.teams.detail.copy.11", "Run");
     case "script":
-      return intl.formatMessage({ id: "teams.detail.status.kind.script" });
+      return t("pages.teams.detail.copy.12", "Script");
     case "gagent":
-      return intl.formatMessage({ id: "teams.detail.status.kind.gagent" });
+      return "Agent";
     default:
       return kind || "--";
   }
@@ -372,7 +347,7 @@ function resolveStatusPillStyle(
 }
 
 function formatCompactTimestamp(value: string | null | undefined): string {
-  return formatCompactDateTime(value, t("pages.teams.detail.none.yet", "None yet"));
+  return formatCompactDateTime(value, t("pages.teams.detail.copy.13", "None"));
 }
 
 function formatLocalTimeLabel(date: Date): string {
@@ -454,11 +429,6 @@ const TeamDetailPage: React.FC = () => {
   const [teamTestModalOpen, setTeamTestModalOpen] = React.useState(false);
   const [entryActionBusyMemberId, setEntryActionBusyMemberId] = React.useState("");
   const teamTestAbortRef = React.useRef<AbortController | null>(null);
-  const formatTeamTestMessage = React.useCallback(
-    (id: string, values?: Record<string, string | number>) =>
-      intl.formatMessage({ id }, values),
-    [intl],
-  );
   const { token } = theme.useToken();
 
   React.useEffect(() => {
@@ -703,7 +673,6 @@ const TeamDetailPage: React.FC = () => {
     scopeId,
   ]);
   const teamHeading = resolveTeamHeading({
-    intl,
     scopeId,
     workflowId: activeWorkflowSummary?.workflowId,
     workflowName: activeWorkflowSummary?.workflowName,
@@ -716,7 +685,7 @@ const TeamDetailPage: React.FC = () => {
   const teamTitle = teamHeading.title;
   const teamLifecycleStatus = trimText(teamSummaryQuery.data?.lifecycleStage);
   const teamLifecycleLabel = teamSummaryQuery.data
-    ? formatTeamLifecycleLabel(teamSummaryQuery.data.lifecycleStage, intl)
+    ? formatTeamLifecycleLabel(teamSummaryQuery.data.lifecycleStage)
     : "";
   const teamSummaryDescription = trimText(teamSummaryQuery.data?.description);
   const teamMetaScopeId = teamHeading.metaScopeId || (selectedTeamId ? scopeId : "");
@@ -809,9 +778,9 @@ const TeamDetailPage: React.FC = () => {
           scopeId,
           teamId: selectedTeamId,
         }),
-        implementationKind: formatCompositionKind(member.implementationKind, intl),
+        implementationKind: formatCompositionKind(member.implementationKind),
         key: member.memberId,
-        lifecycleLabel: formatTeamMemberLifecycleLabel(member.lifecycleStage, intl),
+        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
         lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
         isEntryMember: trimText(member.memberId) === entryMemberId,
         isSelectedMember: trimText(member.memberId) === selectedRosterMemberId,
@@ -826,7 +795,6 @@ const TeamDetailPage: React.FC = () => {
       scopeId,
       selectedTeamId,
       teamMembersQuery.data?.members,
-      intl,
       token,
     ],
   );
@@ -846,21 +814,19 @@ const TeamDetailPage: React.FC = () => {
     activeWorkflowSummary?.updatedAt ||
     "";
   const latestVisibleUpdateNote = teamSummaryQuery.data?.updatedAt
-    ? intl.formatMessage({ id: "teams.detail.update.fromTeam" })
+    ? t("pages.teams.detail.team", "From Team update time")
     : lens.currentRun?.lastUpdatedAt
       ? trimText(lens.currentRun?.runId)
-      ? intl.formatMessage(
-          { id: "teams.detail.update.fromRun" },
-          { runId: compactId(lens.currentRun?.runId) },
-        )
-      : intl.formatMessage({ id: "teams.detail.update.fromVisibleRun" })
+      ? t("pages.teams.detail.run", "From run {value1}", { value1: compactId(lens.currentRun?.runId) })
+      : t("pages.teams.detail.copy.15", "From latest visible run")
       : activeWorkflowSummary?.updatedAt
-        ? intl.formatMessage({ id: "teams.detail.update.fromWorkflow" })
-        : intl.formatMessage({ id: "teams.detail.update.empty" });
+        ? t("pages.teams.detail.workflow", "From workflow update time")
+        : t("pages.teams.detail.copy.16", "No visible update time yet");
   const activeRunId =
     lens.currentRun?.runId ||
     focusedOperationalUnit?.latestRun?.runId ||
     "";
+  const hasVisibleRun = Boolean(activeRunId);
   const currentRevisionId = trimText(lens.activeRevision?.revisionId) || "--";
   const currentRevisionStatus =
     trimText(lens.activeRevision?.servingState) ||
@@ -873,9 +839,9 @@ const TeamDetailPage: React.FC = () => {
   // Refactor (iterv1/issue1444-first):
   //   Old pattern: Team workbench rendered completed as stable and mixed run/deployment status.
   //   New principle: expose run completion, deployment serving, and readmodel freshness as separate facts.
-  const currentHeaderStatusFriendly = teamSummaryQuery.data
+  const currentReadModelFreshnessLabel = teamSummaryQuery.data
     ? `ReadModel · ${formatCompactTimestamp(latestVisibleUpdate)}`
-    : t("pages.teams.detail.readmodel.unavailable", "ReadModel unavailable");
+    : t("pages.teams.detail.readmodel", "ReadModel is not visible yet");
   const currentRevisionFriendly = formatFriendlyStatus(currentRevisionStatus, intl);
   const currentDeploymentFriendly = formatFriendlyStatus(currentDeploymentStatus, intl);
   const currentServiceKey =
@@ -885,9 +851,9 @@ const TeamDetailPage: React.FC = () => {
   const currentServiceDisplayName =
     trimText(lens.currentService?.displayName) || "--";
   const currentRunStatus = trimText(lens.currentRun?.completionStatus) || "--";
-  const currentRunFriendly = activeRunId
+  const currentRunFriendly = hasVisibleRun
     ? formatFriendlyStatus(currentRunStatus, intl)
-    : intl.formatMessage({ id: "teams.detail.overview.identity.noVisibleRun" });
+    : t("pages.teams.detail.copy.17", "Waiting for first test");
   const currentMemberLabel =
     trimText(preferredMemberSummary?.displayName) ||
     teamRosterRows.find((row) => row.memberId === currentMemberId)?.name ||
@@ -895,54 +861,66 @@ const TeamDetailPage: React.FC = () => {
     "--";
   const currentMemberCardCaption = currentMemberId
     ? `memberId · ${compactOptionalId(currentMemberId)}`
-    : t("pages.teams.detail.current.member.not.selected", "No member selected yet");
+    : t("pages.teams.detail.copy.18", "No member selected yet");
   const currentMemberCardTooltip = currentMemberId
     ? `memberId · ${currentMemberId}`
-    : t("pages.teams.detail.current.member.not.selected", "No member selected yet");
+    : t("pages.teams.detail.copy.19", "No member selected yet");
   const currentServiceFriendly =
     currentServiceDisplayName !== "--"
       ? currentServiceDisplayName
       : runtimeServiceId || "--";
+  const hasRunnableTeamEntry =
+    Boolean(entryMemberId) ||
+    Boolean(currentMemberId) ||
+    currentServiceFriendly !== "--" ||
+    currentServiceKey !== "--" ||
+    Boolean(runtimeServiceId);
+  const currentHeaderStatus = hasVisibleRun
+    ? currentRunStatus
+    : hasRunnableTeamEntry
+      ? "waiting"
+      : currentDeploymentStatus;
+  const currentHeaderStatusFriendly = hasVisibleRun
+    ? formatFriendlyStatus(currentRunStatus, intl)
+    : hasRunnableTeamEntry
+      ? t("pages.teams.detail.copy.20", "Waiting for first test")
+      : formatFriendlyStatus(currentDeploymentStatus, intl);
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
       : currentDeploymentFriendly;
   const currentServicePillText =
     currentServiceFriendly !== "--"
-      ? intl.formatMessage(
-          { id: "teams.detail.overview.pill.service" },
-          { value: currentServiceFriendly },
-        )
-      : intl.formatMessage({ id: "teams.detail.overview.pill.servicePending" });
+      ? t("pages.teams.detail.copy.21", "Services ·{value1}", { value1: currentServiceFriendly })
+      : t("pages.teams.detail.copy.22", "Service to be configured");
   const currentDeploymentPillText =
     currentVersionFriendly !== "--"
-      ? intl.formatMessage(
-          { id: "teams.detail.overview.pill.version" },
-          { value: currentVersionFriendly },
-        )
-      : intl.formatMessage({ id: "teams.detail.overview.pill.versionPending" });
-  const currentRunPillText = activeRunId
-    ? intl.formatMessage(
-        { id: "teams.detail.overview.pill.run" },
-        { value: currentRunFriendly },
-      )
-    : intl.formatMessage({ id: "teams.detail.overview.pill.runMissing" });
+      ? t("pages.teams.detail.copy.23", "Version ·{value1}", { value1: currentVersionFriendly })
+      : t("pages.teams.detail.copy.24", "Version to be confirmed");
+  const currentRunPillText = hasVisibleRun
+    ? t("pages.teams.detail.copy.25", "Run ·{value1}", { value1: currentRunFriendly })
+    : t("pages.teams.detail.copy.26", "Next steps · Test team");
   const currentServiceCardCaption = runtimeServiceId
     ? `serviceId · ${compactOptionalId(runtimeServiceId)}`
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
       ? `serviceKey · ${compactId(currentServiceKey)}`
-      : intl.formatMessage({ id: "teams.detail.overview.identity.noService" });
+      : t("pages.teams.detail.copy.27", "There are currently no more service IDs");
   const currentServiceCardTooltip = runtimeServiceId
     ? `serviceId · ${runtimeServiceId}`
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
       ? `serviceKey · ${currentServiceKey}`
-      : intl.formatMessage({ id: "teams.detail.overview.identity.noService" });
-  const currentRunCardCaption = activeRunId
+      : t("pages.teams.detail.copy.28", "There are currently no more service IDs");
+  const currentRunCardCaption = hasVisibleRun
     ? `runId · ${compactId(activeRunId)}`
-    : intl.formatMessage({ id: "teams.detail.overview.identity.noVisibleRun" });
-  const currentRunCardTooltip = activeRunId
+    : t("pages.teams.detail.copy.29", "The latest runs will be displayed here after the testing team.");
+  const currentRunCardTooltip = hasVisibleRun
     ? `runId · ${activeRunId}`
-    : intl.formatMessage({ id: "teams.detail.overview.identity.noVisibleRun" });
+    : t("pages.teams.detail.copy.30", "The latest runs will be displayed here after the testing team.");
+  const teamStartupGuidance = hasVisibleRun
+    ? t("pages.teams.detail.copy.31", "The recent runs are visible and you can continue to test the team or adjust the member configuration.")
+    : hasRunnableTeamEntry
+      ? t("pages.teams.detail.copy.32", "The team portal is ready, but not yet visibly running. Click \"Test Team\" to generate the first run.")
+      : t("pages.teams.detail.copy.33", "No entrance available yet. Configure entry members and services first, and then test the team.");
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
@@ -950,37 +928,26 @@ const TeamDetailPage: React.FC = () => {
   const configurationDetailRows = React.useMemo(
     () => [
       {
-        label: intl.formatMessage({ id: "teams.detail.overview.configuration.workflow" }),
+        label: t("pages.teams.detail.copy.34", "team process"),
         note: `workflowId: ${activeWorkflowId || "--"}`,
         value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
       },
       {
-        label: intl.formatMessage({
-          id: "teams.detail.overview.configuration.bindingMode",
-        }),
+        label: t("pages.teams.detail.copy.35", "Binding method"),
         note:
           currentServiceFriendly !== "--"
-            ? intl.formatMessage(
-                { id: "teams.detail.overview.configuration.bindingCurrentService" },
-                { service: currentServiceFriendly },
-              )
-            : intl.formatMessage({
-                id: "teams.detail.overview.configuration.bindingNoService",
-              }),
-        value: formatCompositionKind(lens.activeRevision?.implementationKind, intl),
+            ? t("pages.teams.detail.copy.36", "Currently routes to {value1}", { value1: currentServiceFriendly })
+            : t("pages.teams.detail.copy.37", "Currently, the main service entrance has not been matched."),
+        value: formatCompositionKind(lens.activeRevision?.implementationKind),
       },
       {
-        label: intl.formatMessage({
-          id: "teams.detail.overview.configuration.primaryService",
-        }),
+        label: t("pages.teams.detail.copy.38", "Main service entrance"),
         note: `serviceId: ${compactOptionalId(runtimeServiceId)} · serviceKey: ${compactOptionalId(currentServiceKey)}`,
         noteTooltip: `serviceId: ${runtimeServiceId || "--"} · serviceKey: ${currentServiceKey}`,
         value: currentServiceFriendly,
       },
       {
-        label: intl.formatMessage({
-          id: "teams.detail.overview.configuration.versionIdentity",
-        }),
+        label: t("pages.teams.detail.copy.39", "Version ID"),
         note: `revisionId: ${compactOptionalId(currentRevisionId)}`,
         noteTooltip: `revisionId: ${currentRevisionId}`,
         value: currentVersionFriendly,
@@ -992,7 +959,6 @@ const TeamDetailPage: React.FC = () => {
       currentServiceFriendly,
       currentServiceKey,
       currentVersionFriendly,
-      intl,
       lens.activeRevision?.implementationKind,
       runtimeServiceId,
       teamTitle,
@@ -1005,12 +971,7 @@ const TeamDetailPage: React.FC = () => {
         key: row.key,
         kind: row.implementationKind,
         name: row.name,
-        summary:
-          row.description ||
-          intl.formatMessage(
-            { id: "teams.detail.overview.fallback.serviceEntry" },
-            { serviceId: compactOptionalId(row.serviceId) },
-          ),
+        summary: row.description || t("pages.teams.detail.copy.40", "Service entry {value1}", { value1: compactOptionalId(row.serviceId) }),
       }));
     }
 
@@ -1022,33 +983,28 @@ const TeamDetailPage: React.FC = () => {
       {
         key: "fallback-workflow",
         kind: "workflow",
-        name: intl.formatMessage({ id: "teams.detail.overview.fallback.teamWorkflow" }),
+        name: t("pages.teams.detail.copy.41", "team process"),
         summary: workflowNameValue !== "--" ? workflowNameValue : activeWorkflowId || "--",
       },
       {
         key: "fallback-actor",
         kind: "actor",
-        name: intl.formatMessage({
-          id: "teams.detail.overview.fallback.currentExecution",
-        }),
-        summary: activeRunId
-          ? currentRunFriendly
-          : intl.formatMessage({ id: "teams.detail.overview.fallback.noRecentRun" }),
+        name: t("pages.teams.detail.copy.42", "current execution"),
+        summary: hasVisibleRun ? currentRunFriendly : t("pages.teams.detail.copy.43", "After the test team, the most recent runs will be displayed."),
       },
       {
         key: "fallback-service",
         kind: "service",
-        name: intl.formatMessage({ id: "teams.detail.overview.fallback.primaryService" }),
+        name: t("pages.teams.detail.copy.44", "main service"),
         summary: currentServiceFriendly,
       },
     ];
   }, [
     activeWorkflowId,
-    activeRunId,
     currentRunFriendly,
     currentServiceFriendly,
     hasExplicitRuntimeFocus,
-    intl,
+    hasVisibleRun,
     teamRosterRows,
     workflowNameValue,
   ]);
@@ -1056,22 +1012,16 @@ const TeamDetailPage: React.FC = () => {
     () =>
       compositionDisplayRows.map((row) => ({
         key: row.key,
-        kindLabel: formatCompositionKind(row.kind, intl),
+        kindLabel: formatCompositionKind(row.kind),
         kindStyle: resolveCompositionKindPillStyle(token, row.kind),
         name: row.name,
         summary: row.summary,
       })),
-    [compositionDisplayRows, intl, token],
+    [compositionDisplayRows, token],
   );
   const tabOptions: TeamTabOption[] = [
-    {
-      label: intl.formatMessage({ id: "teams.detail.tabs.overview" }),
-      value: "overview",
-    },
-    {
-      label: intl.formatMessage({ id: "teams.detail.tabs.members" }),
-      value: "members",
-    },
+    { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
+    { label: t("pages.teams.detail.copy.46", "team member"), value: "members" },
   ];
 
   const initialLoading =
@@ -1148,23 +1098,17 @@ const TeamDetailPage: React.FC = () => {
         displayName,
         description: teamEditorDescription.trim() || null,
       });
-      void message.success(
-        intl.formatMessage({ id: "teams.detail.messages.updateSuccess" }),
-      );
+      void message.success(intl.formatMessage({ id: "teams.detail.messages.updateSuccess" }));
       setTeamEditorOpen(false);
       await refreshTeamAuthority();
     } catch (error) {
       void message.error(
-        describeError(
-          error,
-          intl.formatMessage({ id: "teams.detail.messages.updateFailed" }),
-        ),
+        describeError(error, intl.formatMessage({ id: "teams.detail.messages.updateFailed" })),
       );
     } finally {
       setTeamEditorSaving(false);
     }
   }, [
-    intl,
     refreshTeamAuthority,
     scopeId,
     selectedTeamId,
@@ -1172,6 +1116,7 @@ const TeamDetailPage: React.FC = () => {
     teamEditorName,
     teamEditorSaving,
     teamSummaryQuery.data,
+    intl,
   ]);
   const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
   const archiveTeamActionLabel =
@@ -1203,29 +1148,24 @@ const TeamDetailPage: React.FC = () => {
     setTeamArchiving(true);
     try {
       await studioApi.archiveTeam(scopeId, selectedTeamId);
-      void message.success(
-        intl.formatMessage({ id: "teams.detail.messages.archiveSuccess" }),
-      );
+      void message.success(intl.formatMessage({ id: "teams.detail.messages.archiveSuccess" }));
       setTeamArchiveOpen(false);
       await refreshTeamAuthority();
     } catch (error) {
       void message.error(
-        describeError(
-          error,
-          intl.formatMessage({ id: "teams.detail.messages.archiveFailed" }),
-        ),
+        describeError(error, intl.formatMessage({ id: "teams.detail.messages.archiveFailed" })),
       );
     } finally {
       setTeamArchiving(false);
     }
   }, [
-    intl,
     isTeamArchived,
     refreshTeamAuthority,
     scopeId,
     selectedTeamId,
     teamArchiving,
     teamSummaryQuery.data,
+    intl,
   ]);
   const handleOpenTeamsList = React.useCallback(() => {
     history.push(teamsListHref);
@@ -1305,7 +1245,7 @@ const TeamDetailPage: React.FC = () => {
           describeTeamTestError(
             accumulator.errorText,
             intl.formatMessage({ id: "teams.detail.test.errors.failed" }),
-            formatTeamTestMessage,
+            (id, values) => intl.formatMessage({ id }, values),
           ),
         );
       }
@@ -1322,7 +1262,7 @@ const TeamDetailPage: React.FC = () => {
           describeTeamTestError(
             error,
             intl.formatMessage({ id: "teams.detail.test.errors.failed" }),
-            formatTeamTestMessage,
+            (id, values) => intl.formatMessage({ id }, values),
           ),
         );
         setTeamTestLastResult({
@@ -1336,7 +1276,7 @@ const TeamDetailPage: React.FC = () => {
       const errorDescription = describeTeamTestError(
         error,
         intl.formatMessage({ id: "teams.detail.test.errors.failed" }),
-        formatTeamTestMessage,
+        (id, values) => intl.formatMessage({ id }, values),
       );
       setTeamTestStatus("error");
       setTeamTestError(errorDescription);
@@ -1351,14 +1291,7 @@ const TeamDetailPage: React.FC = () => {
         teamTestAbortRef.current = null;
       }
     }
-  }, [
-    formatTeamTestMessage,
-    intl,
-    isTeamArchived,
-    scopeId,
-    selectedTeamId,
-    teamTestPrompt,
-  ]);
+  }, [intl, isTeamArchived, scopeId, selectedTeamId, teamTestPrompt]);
   const handleStopTeamTest = React.useCallback(() => {
     teamTestAbortRef.current?.abort();
   }, []);
@@ -1418,14 +1351,9 @@ const TeamDetailPage: React.FC = () => {
           const entryVisible = await waitForTeamEntryVisibility(normalizedMemberId);
           if (!entryVisible) {
             const errorDescription: TeamTestErrorDescription = {
-              action: "retry",
-              actionLabel: intl.formatMessage({
-                id: "teams.detail.test.entrySyncing.action",
-              }),
+              actionLabel: intl.formatMessage({ id: "teams.detail.test.entrySyncing.action" }),
               description:
-                intl.formatMessage({
-                  id: "teams.detail.test.entrySyncing.description",
-                }),
+                intl.formatMessage({ id: "teams.detail.test.entrySyncing.description" }),
               kind: "entry_syncing",
               title: intl.formatMessage({ id: "teams.detail.test.entrySyncing.title" }),
             };
@@ -1447,7 +1375,7 @@ const TeamDetailPage: React.FC = () => {
         const errorDescription = describeTeamTestError(
           error,
           intl.formatMessage({ id: "teams.detail.messages.entrySetFailed" }),
-          formatTeamTestMessage,
+          (id, values) => intl.formatMessage({ id }, values),
         );
         setTeamTestStatus("error");
         setTeamTestError(errorDescription);
@@ -1457,9 +1385,8 @@ const TeamDetailPage: React.FC = () => {
       }
     },
     [
-      intl,
-      formatTeamTestMessage,
       queryClient,
+      intl,
       refreshTeamAuthority,
       scopeId,
       selectedTeamId,
@@ -1493,7 +1420,7 @@ const TeamDetailPage: React.FC = () => {
       const errorDescription = describeTeamTestError(
         error,
         intl.formatMessage({ id: "teams.detail.messages.entryClearFailed" }),
-        formatTeamTestMessage,
+        (id, values) => intl.formatMessage({ id }, values),
       );
       setTeamTestStatus("error");
       setTeamTestError(errorDescription);
@@ -1504,7 +1431,6 @@ const TeamDetailPage: React.FC = () => {
   }, [
     queryClient,
     entryMemberId,
-    formatTeamTestMessage,
     intl,
     isTeamArchived,
     refreshTeamAuthority,
@@ -1546,7 +1472,7 @@ const TeamDetailPage: React.FC = () => {
         compositionRows={overviewCompositionRows}
         currentDeploymentPillStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
         currentDeploymentPillText={currentDeploymentPillText}
-        currentHeaderStatusFriendly={currentHeaderStatusFriendly}
+        currentHeaderStatusFriendly={currentReadModelFreshnessLabel}
         currentHeaderStatusStyle={{
           background: token.colorFillQuaternary,
           color: token.colorTextSecondary,
@@ -1557,7 +1483,7 @@ const TeamDetailPage: React.FC = () => {
         currentRunCardCaption={currentRunCardCaption}
         currentRunCardTooltip={currentRunCardTooltip}
         currentRunFriendly={currentRunFriendly}
-        currentRunPillStyle={resolveStatusPillStyle(token, currentRunStatus)}
+        currentRunPillStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
         currentRunPillText={currentRunPillText}
         currentServiceCardCaption={currentServiceCardCaption}
         currentServiceCardTooltip={currentServiceCardTooltip}
@@ -1578,6 +1504,7 @@ const TeamDetailPage: React.FC = () => {
             ? () => void handleClearEntry()
             : undefined
         }
+        startupGuidance={teamStartupGuidance}
       />
     );
   };
@@ -1632,14 +1559,12 @@ const TeamDetailPage: React.FC = () => {
           editTeamHint={editTeamHint}
           editTeamLabel={editTeamActionLabel}
           onArchiveTeam={openTeamArchive}
-          onOpenTeamEditor={openTeamEditor}
-          onOpenTeamTest={openTeamTestModal}
-          testTeamDisabled={isTeamArchived}
-          testTeamHint={intl.formatMessage({
-            id: "teams.detail.test.disabled.archived",
-          })}
-          testTeamLabel={intl.formatMessage({ id: "teams.detail.actions.test" })}
-        />
+        onOpenTeamEditor={openTeamEditor}
+        onOpenTeamTest={openTeamTestModal}
+        testTeamDisabled={isTeamArchived}
+        testTeamHint={intl.formatMessage({ id: "teams.detail.test.archivedHint" })}
+        testTeamLabel={intl.formatMessage({ id: "teams.detail.actions.test" })}
+      />
       }
       activeTab={activeTab}
       activeTabLabel={formatTeamTabLabel(activeTab, intl)}
@@ -1707,9 +1632,7 @@ const TeamDetailPage: React.FC = () => {
               {intl.formatMessage({ id: "teams.detail.edit.modal.description" })}
             </Typography.Text>
             <Input.TextArea
-              aria-label={intl.formatMessage({
-                id: "teams.detail.edit.modal.descriptionAria",
-              })}
+              aria-label={intl.formatMessage({ id: "teams.detail.edit.modal.descriptionAria" })}
               autoSize={{ minRows: 3, maxRows: 5 }}
               disabled={teamEditorSaving}
               onChange={(event) => setTeamEditorDescription(event.target.value)}

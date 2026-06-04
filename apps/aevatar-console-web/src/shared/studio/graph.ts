@@ -5,6 +5,7 @@ import {
   type Node,
   type XYPosition,
 } from '@xyflow/react';
+import { t } from '@/shared/i18n/messages';
 
 export type StudioGraphRole = {
   readonly id: string;
@@ -292,7 +293,10 @@ function summarizeStepParameters(
 ): string {
   const entries = getSummarizableStepParameterEntries(stepType, parameters);
   if (entries.length === 0) {
-    return 'No parameters configured';
+    return t(
+      'shared.studio.graph.no.parameters.configured',
+      'No parameters configured',
+    );
   }
 
   return entries
