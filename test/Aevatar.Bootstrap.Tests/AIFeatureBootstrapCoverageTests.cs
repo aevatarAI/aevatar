@@ -17,6 +17,7 @@ using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
