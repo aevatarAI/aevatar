@@ -16,16 +16,6 @@ public static class ToolCallMiddlewareChainFactory
         return Build(toolMiddlewares, approvalHandler, hooks);
     }
 
-    public static IReadOnlyList<IToolCallMiddleware> ForPort(
-        IEnumerable<IToolCallMiddleware> toolMiddlewares,
-        IToolApprovalHandler? approvalHandler,
-        AgentHookPipeline? hooks)
-    {
-        ArgumentNullException.ThrowIfNull(toolMiddlewares);
-
-        return Build(toolMiddlewares, approvalHandler, hooks);
-    }
-
     private static IReadOnlyList<IToolCallMiddleware> Build(
         IEnumerable<IToolCallMiddleware> toolMiddlewares,
         IToolApprovalHandler? approvalHandler,

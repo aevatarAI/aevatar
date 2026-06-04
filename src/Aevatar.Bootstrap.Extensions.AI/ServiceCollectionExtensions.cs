@@ -1,13 +1,9 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.Agents;
-using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.LLMProviders;
-using Aevatar.AI.Core.Middleware;
-using Aevatar.AI.Core.Tools;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
@@ -104,12 +100,6 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
-        services.TryAddSingleton<IAgentToolExecutionPort>(sp =>
-            new AgentToolExecutionPort(
-                ToolCallMiddlewareChainFactory.ForPort(
-                    sp.GetServices<IToolCallMiddleware>(),
-                    sp.GetService<IToolApprovalHandler>(),
-                    sp.GetService<AgentHookPipeline>())));
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(
