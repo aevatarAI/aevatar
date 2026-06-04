@@ -100,19 +100,6 @@ internal static class SkillRecoveryPlanner
             ? recovery.MaxOrnnSearchAttempts
             : 1;
 
-        if (recovery.RequireInitialOrnnSearch &&
-            !HasToolCall(messages, OrnnSearchSkillsToolName))
-        {
-            if (recoveryAttempts >= maxAttempts)
-                return false;
-
-            directive = new RecoveryDirective(
-                BuildOrnnSearchToolCall(BuildCallId(callIdPrefix, OrnnSearchSkillsToolName), BuildInitialSearchQuery(recovery)),
-                ConsumesOrnnSearchAttempt: true,
-                Nudge: null);
-            return true;
-        }
-
         if (!string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
             !HasUseSkillFor(messages, recovery.PrimarySkillName))
         {
@@ -122,6 +109,19 @@ internal static class SkillRecoveryPlanner
                     recovery.PrimarySkillName,
                     ExtractCommandArguments(recovery)),
                 ConsumesOrnnSearchAttempt: false,
+                Nudge: null);
+            return true;
+        }
+
+        if (recovery.RequireInitialOrnnSearch &&
+            !HasToolCall(messages, OrnnSearchSkillsToolName))
+        {
+            if (recoveryAttempts >= maxAttempts)
+                return false;
+
+            directive = new RecoveryDirective(
+                BuildOrnnSearchToolCall(BuildCallId(callIdPrefix, OrnnSearchSkillsToolName), BuildInitialSearchQuery(recovery)),
+                ConsumesOrnnSearchAttempt: true,
                 Nudge: null);
             return true;
         }
@@ -202,7 +202,7 @@ internal static class SkillRecoveryPlanner
     }
 
     private static bool IsEnabled(AgentSkillRecoveryContext recovery) =>
-        recovery.RequireInitialOrnnSearch || recovery.RequireOrnnSearchOnBlocker;
+        recovery.RequireInitialOrnnSearch || recovery.RequireOrnnSearchOnBlocker || recovery.DiscoveryRequested;
 
     private static bool HasToolCall(IReadOnlyList<ChatMessage> messages, string toolName) =>
         messages.Any(message =>
@@ -373,6 +373,9 @@ internal static class SkillRecoveryPlanner
 
     private static string ExtractCommandArguments(AgentSkillRecoveryContext recovery)
     {
+        if (!string.IsNullOrWhiteSpace(recovery.CommandArguments))
+            return recovery.CommandArguments.Trim();
+
         var original = recovery.OriginalCommand?.Trim();
         var command = recovery.CommandName?.Trim().TrimStart('/');
         if (string.IsNullOrWhiteSpace(original) || string.IsNullOrWhiteSpace(command))
@@ -422,7 +425,7 @@ internal static class SkillRecoveryPlanner
         if (!string.IsNullOrWhiteSpace(recovery.PrimarySkillName))
             return recovery.PrimarySkillName.Trim();
 
-        return "the slash command";
+        return recovery.DiscoveryRequested ? "skill discovery" : "the skill command";
     }
 
     private static string BuildInitialSearchQuery(AgentSkillRecoveryContext recovery)
@@ -432,6 +435,9 @@ internal static class SkillRecoveryPlanner
 
         if (!string.IsNullOrWhiteSpace(recovery.CommandName))
             return recovery.CommandName.Trim().TrimStart('/');
+
+        if (recovery.DiscoveryRequested)
+            return "skill discovery";
 
         return DescribeCommand(recovery);
     }

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -53,7 +54,8 @@ public sealed class MessagesCommandFacade(
                 "authentication_error",
                 callerScopeResult.Error.Message);
 
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, ct);
+        var trigger = ParseSkillInvocationTrigger(BuildRouteContentHint(normalized));
+        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScopeResult.Scope!, trigger, ct);
         if (routedModelResult.Error is not null)
             return MessagesCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -72,6 +74,7 @@ public sealed class MessagesCommandFacade(
             callerScopeResult.Scope!,
             routedModelResult.Model!,
             routedModelResult.Action!,
+            trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             ct);
@@ -141,6 +144,7 @@ public sealed class MessagesCommandFacade(
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedMessagesRequest normalized,
         ResponsesCallerScope callerScope,
+        SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
         var routeDecision = await ResolveResponsesChatRouteAsync(
@@ -148,6 +152,7 @@ public sealed class MessagesCommandFacade(
             normalized.Model,
             ResolveToolMode(normalized.DeclaredTools.Count, inlineToolResultCount: 0),
             BuildRouteContentHint(normalized),
+            trigger?.Name ?? string.Empty,
             ct);
 
         if (routeDecision.Action.Reject is not null)
@@ -217,6 +222,7 @@ public sealed class MessagesCommandFacade(
         ResponsesCallerScope callerScope,
         string routedModel,
         ChatRouteAction routeAction,
+        SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult session,
         CancellationToken ct)
@@ -238,6 +244,7 @@ public sealed class MessagesCommandFacade(
             {
                 NyxIdRoutePreference = resolvedRouteValue,
             },
+            SkillRecovery = BuildSkillRecoveryContext(trigger),
         };
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -407,8 +414,55 @@ public sealed class MessagesCommandFacade(
         string model,
         ToolMode toolMode,
         string contentHint,
+        string commandName,
         CancellationToken ct)
-        => chatRouteDecisionPort.ResolveAsync(callerScope, model, toolMode, contentHint, ct);
+        => chatRouteDecisionPort.ResolveAsync(
+            new ResponsesChatRouteDecisionRequest(
+                callerScope,
+                model,
+                toolMode,
+                contentHint,
+                NormalizeRouteCommandName(commandName)),
+            ct);
+
+    private static SkillInvocationTrigger? ParseSkillInvocationTrigger(string? text) =>
+        SkillInvocationTriggerParser.TryParse(text, platform: "cli", out var trigger)
+            ? trigger
+            : null;
+
+    private static AgentSkillRecoveryContext BuildSkillRecoveryContext(SkillInvocationTrigger? trigger)
+    {
+        if (trigger is null)
+            return AgentSkillRecoveryContext.Empty;
+
+        if (trigger.IsDiscovery)
+        {
+            return new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: false,
+                CommandName: null,
+                OriginalCommand: trigger.OriginalText,
+                PrimarySkillName: null,
+                MaxOrnnSearchAttempts: 1,
+                CommandArguments: null,
+                DiscoveryRequested: true);
+        }
+
+        return new AgentSkillRecoveryContext(
+            RequireInitialOrnnSearch: true,
+            RequireOrnnSearchOnBlocker: true,
+            CommandName: trigger.Name,
+            OriginalCommand: trigger.OriginalText,
+            PrimarySkillName: trigger.Name,
+            MaxOrnnSearchAttempts: 2,
+            CommandArguments: trigger.Arguments,
+            DiscoveryRequested: false);
+    }
+
+    private static string NormalizeRouteCommandName(string? commandName) =>
+        string.IsNullOrWhiteSpace(commandName)
+            ? string.Empty
+            : commandName.Trim().TrimStart('/').ToLowerInvariant();
 
     private static ToolMode ResolveToolMode(int declaredToolCount, int inlineToolResultCount)
     {

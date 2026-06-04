@@ -217,7 +217,9 @@ public static class AgentToolExecutionContextMapper
             AgentToolExecutionContext.Normalize(payload.CommandName),
             AgentToolExecutionContext.Normalize(payload.OriginalCommand),
             AgentToolExecutionContext.Normalize(payload.PrimarySkillName),
-            payload.MaxOrnnSearchAttempts);
+            payload.MaxOrnnSearchAttempts,
+            AgentToolExecutionContext.Normalize(payload.CommandArguments),
+            payload.DiscoveryRequested);
     }
 
     private static AgentSkillRecoveryContextPayload ToSkillRecoveryPayload(AgentSkillRecoveryContext context) =>
@@ -229,6 +231,8 @@ public static class AgentToolExecutionContextMapper
             OriginalCommand = context.OriginalCommand ?? string.Empty,
             PrimarySkillName = context.PrimarySkillName ?? string.Empty,
             MaxOrnnSearchAttempts = context.MaxOrnnSearchAttempts,
+            CommandArguments = context.CommandArguments ?? string.Empty,
+            DiscoveryRequested = context.DiscoveryRequested,
         };
 
     public static IReadOnlyDictionary<string, string> StripOwnedControlKeys(IReadOnlyDictionary<string, string>? metadata)

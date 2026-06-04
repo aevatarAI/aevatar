@@ -78,7 +78,9 @@ public sealed record AgentSkillRecoveryContext(
     string? CommandName,
     string? OriginalCommand,
     string? PrimarySkillName,
-    int MaxOrnnSearchAttempts)
+    int MaxOrnnSearchAttempts,
+    string? CommandArguments = null,
+    bool DiscoveryRequested = false)
 {
     public static AgentSkillRecoveryContext Empty { get; } = new(
         RequireInitialOrnnSearch: false,
@@ -86,5 +88,7 @@ public sealed record AgentSkillRecoveryContext(
         CommandName: null,
         OriginalCommand: null,
         PrimarySkillName: null,
-        MaxOrnnSearchAttempts: 0);
+        MaxOrnnSearchAttempts: 0,
+        CommandArguments: null,
+        DiscoveryRequested: false);
 }

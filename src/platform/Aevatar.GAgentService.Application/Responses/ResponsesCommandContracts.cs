@@ -58,13 +58,17 @@ public interface IResponsesRouteResolver
 // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
 //   Old pattern: Responses/Messages Application facades constructed chat route snapshots with the concrete ChatRouting.Core resolver.
 //   New principle: Application depends on a business route-decision port; Host composes that port with the current readmodel query and resolver implementation.
+public sealed record ResponsesChatRouteDecisionRequest(
+    ResponsesCallerScope CallerScope,
+    string Model,
+    ToolMode ToolMode,
+    string ContentHint,
+    string CommandName);
+
 public interface IResponsesChatRouteDecisionPort
 {
     Task<ChatRouteDecision> ResolveAsync(
-        ResponsesCallerScope callerScope,
-        string model,
-        ToolMode toolMode,
-        string contentHint,
+        ResponsesChatRouteDecisionRequest request,
         CancellationToken ct = default);
 }
 

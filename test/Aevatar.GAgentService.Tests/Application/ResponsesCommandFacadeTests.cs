@@ -481,6 +481,70 @@ public sealed class ResponsesCommandFacadeTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenNamedSkillTriggerProvided_ShouldRouteCommandAndCarryRecoveryContext()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5"));
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver("route-value"),
+            chatRouteDecisionPort: routeDecisionPort);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "::Goal ship today",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        routeDecisionPort.LastRequest.Should().NotBeNull();
+        routeDecisionPort.LastRequest!.CommandName.Should().Be("goal");
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        var recovery = AgentToolExecutionContextMapper.FromPayload(command.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("goal");
+        recovery.PrimarySkillName.Should().Be("goal");
+        recovery.CommandArguments.Should().Be("ship today");
+        recovery.OriginalCommand.Should().Be("::Goal ship today");
+        recovery.DiscoveryRequested.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDiscoveryTriggerProvided_ShouldKeepRouteCommandEmptyAndRequestDiscovery()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5"));
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: routeDecisionPort);
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "client-model",
+            "::",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        routeDecisionPort.LastRequest.Should().NotBeNull();
+        routeDecisionPort.LastRequest!.CommandName.Should().BeEmpty();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        var recovery = AgentToolExecutionContextMapper.FromPayload(command.ToolContext).SkillRecovery;
+        recovery.DiscoveryRequested.Should().BeTrue();
+        recovery.CommandName.Should().BeNull();
+        recovery.PrimarySkillName.Should().BeNull();
+        recovery.OriginalCommand.Should().Be("::");
+    }
+
+    [Fact]
     public async Task StreamAsync_ShouldReturnUpstreamError_AndMarkSessionFailed()
     {
         var sessions = new RecordingSessionPort();
@@ -672,18 +736,20 @@ public sealed class ResponsesCommandFacadeTests
         string matchedRuleId = "")
         : IResponsesChatRouteDecisionPort
     {
+        public ResponsesChatRouteDecisionRequest? LastRequest { get; private set; }
+
         public Task<ChatRouteDecision> ResolveAsync(
-            ResponsesCallerScope callerScope,
-            string model,
-            ToolMode toolMode,
-            string contentHint,
+            ResponsesChatRouteDecisionRequest request,
             CancellationToken ct = default)
-            => Task.FromResult(new ChatRouteDecision
+        {
+            LastRequest = request;
+            return Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
                 UsedFallback = usedFallback,
                 MatchedRuleId = matchedRuleId,
             });
+        }
     }
 
     private sealed class EmptyToolSetRegistry : IToolSetRegistry
