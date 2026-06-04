@@ -141,6 +141,106 @@ public sealed class LlmSessionRunObservationServiceTests
     }
 
     [Fact]
+    public async Task ObserveAsync_ShouldReturnObservationUnavailable_WhenPreparationIsUnavailable()
+    {
+        var ports = new RecordingObservationPorts([], preparationAvailable: false);
+        var service = ports.CreateService();
+        var dispatched = false;
+
+        var result = await service.ObserveAsync(
+            Request(ports, dispatch: _ =>
+            {
+                dispatched = true;
+                return Task.FromResult(new DispatchAdmission(true, "cmd-1", DateTimeOffset.UtcNow, "actor-1", "resp-1"));
+            }),
+            null);
+
+        result.Error.Should().BeEquivalentTo(new LlmSessionRunObservedError(
+            LlmSessionRunObservedTerminalKind.ObservationUnavailable,
+            503,
+            "observation_unavailable",
+            "LLM run observation is unavailable."));
+        result.Completion.Should().BeNull();
+        result.Admission.Should().BeNull();
+        dispatched.Should().BeFalse();
+        ports.Events.Should().Equal("prepare");
+    }
+
+    [Fact]
+    public async Task ObserveAsync_ShouldReturnObservationUnavailable_WhenAttachmentIsUnavailable()
+    {
+        var ports = new RecordingObservationPorts([], attachmentAvailable: false);
+        var service = ports.CreateService();
+        var dispatched = false;
+
+        var result = await service.ObserveAsync(
+            Request(ports, dispatch: _ =>
+            {
+                dispatched = true;
+                return Task.FromResult(new DispatchAdmission(true, "cmd-1", DateTimeOffset.UtcNow, "actor-1", "resp-1"));
+            }),
+            null);
+
+        result.Error.Should().BeEquivalentTo(new LlmSessionRunObservedError(
+            LlmSessionRunObservedTerminalKind.ObservationUnavailable,
+            503,
+            "observation_unavailable",
+            "LLM run observation attachment is unavailable."));
+        result.Completion.Should().BeNull();
+        result.Admission.Should().BeNull();
+        dispatched.Should().BeFalse();
+        ports.Events.Should().Equal("prepare", "attach", "release-preparation");
+    }
+
+    [Fact]
+    public async Task ObserveAsync_ShouldReturnObservationUnavailable_WhenSinkCompletesWithoutTerminal()
+    {
+        var ports = new RecordingObservationPorts([ChunkEnvelope("resp-1", "partial")]);
+        var service = ports.CreateService();
+        var deltas = new List<LlmSessionRunObservedDelta>();
+
+        var result = await service.ObserveAsync(Request(ports), (delta, _) =>
+        {
+            deltas.Add(delta);
+            return ValueTask.CompletedTask;
+        });
+
+        result.Error.Should().BeEquivalentTo(new LlmSessionRunObservedError(
+            LlmSessionRunObservedTerminalKind.ObservationUnavailable,
+            503,
+            "observation_unavailable",
+            "LLM run observation ended without a terminal event."));
+        result.Completion.Should().BeNull();
+        result.Admission!.CorrelationId.Should().Be("resp-1");
+        deltas.Select(static delta => delta.TextDelta).Should().Equal("partial");
+        ports.Events.Should().ContainInOrder("prepare", "attach", "dispatch", "detach", "release-projection", "release-preparation");
+    }
+
+    [Fact]
+    public async Task ObserveAsync_ShouldUnwrapCommittedEnvelope_AndEmitDeltaAndCompletion()
+    {
+        var ports = new RecordingObservationPorts([
+            CommittedEnvelope(ChunkEnvelope("resp-1", "Hel")),
+            CommittedEnvelope(ChunkEnvelope("resp-1", "lo")),
+            CommittedEnvelope(CompletedEnvelope("resp-1", "Hello")),
+        ]);
+        var service = ports.CreateService();
+        var deltas = new List<LlmSessionRunObservedDelta>();
+
+        var result = await service.ObserveAsync(Request(ports), (delta, _) =>
+        {
+            deltas.Add(delta);
+            return ValueTask.CompletedTask;
+        });
+
+        result.Error.Should().BeNull();
+        result.Completion!.OutputText.Should().Be("Hello");
+        result.Admission!.CorrelationId.Should().Be("resp-1");
+        deltas.Select(static delta => delta.TextDelta).Where(static text => text != null)
+            .Should().Equal("Hel", "lo");
+    }
+
+    [Fact]
     public async Task ObserveAsync_ShouldDetachAndRelease_WhenDispatchThrows()
     {
         var ports = new RecordingObservationPorts([]);
@@ -238,6 +338,20 @@ public sealed class LlmSessionRunObservationServiceTests
             Propagation = new EnvelopePropagation { CorrelationId = responseId },
         };
 
+    private static EventEnvelope CommittedEnvelope(EventEnvelope envelope) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventData = envelope.Payload,
+                },
+            }),
+            Propagation = envelope.Propagation,
+        };
+
     private static LlmSessionRuntimeToolCall RuntimeTool(string callId, string name, string argumentsJson) =>
         new()
         {
@@ -250,10 +364,17 @@ public sealed class LlmSessionRunObservationServiceTests
     private sealed class RecordingObservationPorts
     {
         private readonly IReadOnlyList<EventEnvelope> _events;
+        private readonly bool _preparationAvailable;
+        private readonly bool _attachmentAvailable;
 
-        public RecordingObservationPorts(IReadOnlyList<EventEnvelope> events)
+        public RecordingObservationPorts(
+            IReadOnlyList<EventEnvelope> events,
+            bool preparationAvailable = true,
+            bool attachmentAvailable = true)
         {
             _events = events;
+            _preparationAvailable = preparationAvailable;
+            _attachmentAvailable = attachmentAvailable;
             ScopePreparationPort = new RecordingScopeLeasePreparationPort(this);
             ProjectionPort = new RecordingProjectionPort(this);
         }
@@ -283,6 +404,9 @@ public sealed class LlmSessionRunObservationServiceTests
                 CancellationToken ct = default)
             {
                 owner.Events.Add("prepare");
+                if (!owner._preparationAvailable)
+                    return Task.FromResult<LlmSessionObservationScopeLeasePreparation?>(null);
+
                 return Task.FromResult<LlmSessionObservationScopeLeasePreparation?>(
                     new LlmSessionObservationScopeLeasePreparation(actorId, responseId));
             }
@@ -308,8 +432,11 @@ public sealed class LlmSessionRunObservationServiceTests
                 IEventSink<EventEnvelope> sink,
                 CancellationToken ct = default)
             {
-                Sink = sink;
                 owner.Events.Add("attach");
+                if (!owner._attachmentAvailable)
+                    return Task.FromResult<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?>(null);
+
+                Sink = sink;
                 return Task.FromResult<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?>(
                     new EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>(
                         new ObservationLease(actorId, responseId),
