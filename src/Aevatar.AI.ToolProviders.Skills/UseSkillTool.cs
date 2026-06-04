@@ -398,6 +398,42 @@ public sealed class UseSkillTool : IAgentTool
             }
         }
 
+        if (skill.Scripts.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## script_compile/script_execute Handoff");
+            sb.AppendLine();
+            sb.AppendLine("Call `script_compile` with the inline script package before calling `script_execute` for the user task.");
+
+            foreach (var script in skill.Scripts)
+            {
+                var compilePayload = new
+                {
+                    script_id = script.ScriptId,
+                    source_files = script.SourceFiles,
+                    proto_files = script.ProtoFiles,
+                    entry_behavior_type_name = script.EntryBehaviorTypeName,
+                };
+
+                var executePayload = new
+                {
+                    script_id = script.ScriptId,
+                    input = "Use the current user request and skill arguments.",
+                };
+
+                sb.AppendLine();
+                sb.AppendLine("### script_compile");
+                sb.AppendLine("```json");
+                sb.AppendLine(JsonSerializer.Serialize(compilePayload, new JsonSerializerOptions { WriteIndented = true }));
+                sb.AppendLine("```");
+                sb.AppendLine();
+                sb.AppendLine("### script_execute");
+                sb.AppendLine("```json");
+                sb.AppendLine(JsonSerializer.Serialize(executePayload, new JsonSerializerOptions { WriteIndented = true }));
+                sb.AppendLine("```");
+            }
+        }
+
         // 附带关联文件
         if (skill.AssociatedFiles is { Count: > 0 })
         {

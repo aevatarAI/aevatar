@@ -50,6 +50,10 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         var workflows = DiscoverWorkflows(skill.Files, parsed.WorkflowEntry);
         if (workflows.Count == 0)
             workflows = extraction.Workflows;
+        var scriptExtraction = new SkillScriptExtractor().ExtractFromFiles(
+            parsed.Name ?? skill.Name ?? nameOrId,
+            parsed.ScriptEntry,
+            extraction.RemainingFiles);
 
         return new SkillDefinition
         {
@@ -62,8 +66,9 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
             WhenToUse = parsed.WhenToUse,
             IsModelInvocable = parsed.IsModelInvocable,
             IsUserInvocable = parsed.IsUserInvocable,
-            AssociatedFiles = extraction.RemainingFiles,
+            AssociatedFiles = scriptExtraction.RemainingFiles,
             Workflows = workflows,
+            Scripts = scriptExtraction.Scripts,
         };
     }
 

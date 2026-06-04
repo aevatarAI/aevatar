@@ -196,6 +196,47 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task RemoteSkillFetcher_LiftsScriptsIntoTypedDescriptorAndKeepsCallerToken()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Script Skill",
+                "description": "Runs script",
+                "files": {
+                  "SKILL.md": "---\nname: script-skill\nscriptEntry: Zeta.EntryBehavior\n---\nRun it.",
+                  "scripts/a-helper.cs": "public sealed class HelperBehavior {}",
+                  "scripts/z-entry.cs": "public sealed class EntryBehavior {}",
+                  "scripts/contract.proto": "syntax = \"proto3\";",
+                  "assets/fallback.cs": "public sealed class FallbackBehavior {}",
+                  "docs/readme.md": "reference"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Script Skill");
+
+        skill.Should().NotBeNull();
+        var script = skill!.Scripts.Should().ContainSingle().Subject;
+        script.ScriptId.Should().Be("script-skill-a-helper");
+        script.SourceFiles.Keys.Should().Equal("scripts/a-helper.cs", "scripts/z-entry.cs");
+        script.ProtoFiles.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>(
+                "scripts/contract.proto",
+                "syntax = \"proto3\";"));
+        script.EntryBehaviorTypeName.Should().Be("Zeta.EntryBehavior");
+        skill.AssociatedFiles.Should().ContainKeys("assets/fallback.cs", "docs/readme.md");
+        skill.AssociatedFiles.Should().NotContainKey("scripts/a-helper.cs");
+        skill.AssociatedFiles.Should().NotContainKey("scripts/z-entry.cs");
+        skill.AssociatedFiles.Should().NotContainKey("scripts/contract.proto");
+
+        handler.Requests.Should().ContainSingle()
+            .Which.Authorization!.Parameter.Should().Be("access-token");
+    }
+
+    [Fact]
     public async Task RemoteSkillFetcher_DefaultsWorkflowIdToFirstSortedWorkflowFileNameWithoutFrontmatterEntry()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""

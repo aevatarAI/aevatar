@@ -61,6 +61,9 @@ public sealed class SkillDefinition
 
     /// <summary>技能附带的可运行 workflow YAML 描述。</summary>
     public IReadOnlyList<SkillWorkflowDescriptor> Workflows { get; init; } = [];
+
+    /// <summary>技能附带的可编译 C# script 描述。</summary>
+    public IReadOnlyList<SkillScriptDescriptor> Scripts { get; init; } = [];
 }
 
 /// <summary>
@@ -73,4 +76,22 @@ public sealed class SkillWorkflowDescriptor
 
     /// <summary>Workflow YAML bundle passed to aevatar_start_workflow.workflow_yamls in stable path order.</summary>
     public required IReadOnlyList<string> WorkflowYamls { get; init; }
+}
+
+/// <summary>
+/// Skill package C# script handoff descriptor.
+/// </summary>
+public sealed class SkillScriptDescriptor
+{
+    /// <summary>Script identifier passed to script_compile.script_id and script_execute.script_id.</summary>
+    public required string ScriptId { get; init; }
+
+    /// <summary>C# source files passed to script_compile.source_files in stable path order.</summary>
+    public required IReadOnlyDictionary<string, string> SourceFiles { get; init; }
+
+    /// <summary>Protobuf files passed to script_compile.proto_files in stable path order.</summary>
+    public required IReadOnlyDictionary<string, string> ProtoFiles { get; init; }
+
+    /// <summary>Optional behavior type name passed to script_compile.entry_behavior_type_name.</summary>
+    public string EntryBehaviorTypeName { get; init; } = "";
 }
