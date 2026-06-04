@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
@@ -1331,6 +1332,104 @@ public class NyxIdChatEndpointsCoverageTests
         emitted.Select(x => x.EventCase).Should().ContainInOrder(
             AGUIEvent.EventOneofCase.TextMessageContent,
             AGUIEvent.EventOneofCase.RunFinished);
+    }
+
+    [Fact]
+    public async Task NyxIdChatInteraction_ShouldAttachSkillRecoveryForCanonicalTrigger()
+    {
+        var actor = new StubActor("actor-1");
+        var runtime = new StubActorRuntime();
+        runtime.Actors[actor.Id] = actor;
+        var projectionPort = new StubNyxIdChatSessionProjectionPort
+        {
+            Messages =
+            {
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
+            },
+        };
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
+
+        var result = await interaction.ExecuteAsync(
+            new NyxIdChatCommand(
+                actor.Id,
+                "scope-a",
+                "::Goal ship today",
+                "session-1",
+                "access-token",
+                null,
+                null),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var request = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        request.Prompt.Should().Be("::Goal ship today");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("goal");
+        recovery.PrimarySkillName.Should().Be("goal");
+        recovery.CommandArguments.Should().Be("ship today");
+        recovery.OriginalCommand.Should().Be("::Goal ship today");
+        recovery.DiscoveryRequested.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task NyxIdChatInteraction_ShouldAttachDiscoveryRecoveryForBareCanonicalTrigger()
+    {
+        var actor = new StubActor("actor-1");
+        var runtime = new StubActorRuntime();
+        runtime.Actors[actor.Id] = actor;
+        var projectionPort = new StubNyxIdChatSessionProjectionPort
+        {
+            Messages =
+            {
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
+            },
+        };
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
+
+        var result = await interaction.ExecuteAsync(
+            new NyxIdChatCommand(
+                actor.Id,
+                "scope-a",
+                "::",
+                "session-1",
+                "access-token",
+                null,
+                null),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var request = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        request.Prompt.Should().Be("::");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeFalse();
+        recovery.CommandName.Should().BeNull();
+        recovery.PrimarySkillName.Should().BeNull();
+        recovery.CommandArguments.Should().BeNull();
+        recovery.OriginalCommand.Should().Be("::");
+        recovery.DiscoveryRequested.Should().BeTrue();
     }
 
     [Fact]

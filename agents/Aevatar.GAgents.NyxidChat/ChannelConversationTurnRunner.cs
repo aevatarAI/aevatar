@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -1560,6 +1561,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var requestActivity = BuildLlmRequestActivity(
             activity,
             inboundEvent.Text,
+            inboundEvent.Platform,
             _identityBindingQueryPort is null || senderBinding is not null);
         var request = new NeedsLlmReplyEvent
         {
@@ -1587,7 +1589,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
 
-        if (TryBuildSkillRecoveryContext(inboundEvent.Text, out var skillRecovery))
+        if (TryBuildSkillRecoveryContext(inboundEvent.Text, inboundEvent.Platform, out var skillRecovery))
         {
             request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
             {
@@ -1629,29 +1631,34 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return request;
     }
 
-    private bool TryBuildSkillRecoveryContext(string? text, out AgentSkillRecoveryContext context)
+    private bool TryBuildSkillRecoveryContext(string? text, string? platform, out AgentSkillRecoveryContext context)
     {
         context = AgentSkillRecoveryContext.Empty;
-        if (!TryParseSlashCommand(text, out var commandName, out _))
+        if (!SkillInvocationTriggerParser.TryParse(text, platform, out var trigger))
             return false;
 
-        var normalizedCommand = commandName.Trim().TrimStart('/');
+        if (trigger.IsDiscovery)
+        {
+            context = AgentSkillRecoveryContextBuilder.FromTrigger(trigger);
+            return true;
+        }
+
+        var normalizedCommand = trigger.Name?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedCommand))
             return false;
 
-        if (LocalSlashCommands.Contains(normalizedCommand) ||
-            ResolveSlashCommandHandler(normalizedCommand) is not null)
+        if (trigger.TriggerToken == "/" &&
+            (LocalSlashCommands.Contains(normalizedCommand) ||
+             ResolveSlashCommandHandler(normalizedCommand) is not null))
         {
             return false;
         }
 
-        context = new AgentSkillRecoveryContext(
-            RequireInitialOrnnSearch: true,
-            RequireOrnnSearchOnBlocker: true,
-            CommandName: normalizedCommand,
-            OriginalCommand: (text ?? string.Empty).Trim(),
-            PrimarySkillName: null,
-            MaxOrnnSearchAttempts: 2);
+        context = AgentSkillRecoveryContextBuilder.FromTrigger(trigger) with
+        {
+            CommandName = normalizedCommand,
+            PrimarySkillName = normalizedCommand,
+        };
         return true;
     }
 
@@ -1675,40 +1682,45 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // slash silently consumed.
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
     // non-slash text path unchanged (owner-LLM chat fallback).
-    private ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText, bool allowSkillInvocationPrompt)
+    private ChatActivity BuildLlmRequestActivity(
+        ChatActivity activity,
+        string? inboundText,
+        string? platform,
+        bool allowSkillInvocationPrompt)
     {
         var requestActivity = activity.Clone();
         if (requestActivity.Content is null)
             return requestActivity;
 
-        if (allowSkillInvocationPrompt && TryBuildSkillInvocationPrompt(inboundText, out var prompt))
+        if (allowSkillInvocationPrompt && TryBuildSkillInvocationPrompt(inboundText, platform, out var prompt))
             requestActivity.Content.Text = prompt;
 
         return requestActivity;
     }
 
-    private bool TryBuildSkillInvocationPrompt(string? text, out string prompt)
+    private bool TryBuildSkillInvocationPrompt(string? text, string? platform, out string prompt)
     {
         prompt = string.Empty;
-        if (!TryParseSlashCommand(text, out var commandName, out var argumentText))
+        if (!SkillInvocationTriggerParser.TryParse(text, platform, out var trigger) ||
+            trigger.IsDiscovery)
         {
             return false;
         }
 
         // Refactor (iter1/cluster-issue1553): Old pattern: hardcoded /daily skill name. New principle: generic skill discovery, no skill-name in routing logic.
-        return TryBuildSlashSkillDiscoveryPrompt(text, commandName, argumentText, out prompt);
+        return TryBuildSlashSkillDiscoveryPrompt(trigger, out prompt);
     }
 
     private bool TryBuildSlashSkillDiscoveryPrompt(
-        string? text,
-        string commandName,
-        string argumentText,
+        SkillInvocationTrigger trigger,
         out string prompt)
     {
         prompt = string.Empty;
+        var commandName = trigger.Name ?? string.Empty;
         if (string.IsNullOrWhiteSpace(commandName) ||
-            LocalSlashCommands.Contains(commandName) ||
-            ResolveSlashCommandHandler(commandName) is not null)
+            (trigger.TriggerToken == "/" &&
+             (LocalSlashCommands.Contains(commandName) ||
+              ResolveSlashCommandHandler(commandName) is not null)))
         {
             return false;
         }
@@ -1718,13 +1730,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (string.IsNullOrWhiteSpace(skillQuery))
             return false;
 
-        var queryJson = JsonSerializer.Serialize(skillQuery);
-        var argsJson = JsonSerializer.Serialize(argumentText);
-        var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
+        var argsJson = JsonSerializer.Serialize(trigger.Arguments);
+        var originalJson = JsonSerializer.Serialize(trigger.OriginalText);
+        var triggerLabel = trigger.TriggerToken == "/" ? "/" : trigger.TriggerToken;
         prompt =
-            $"The user invoked the Lark `/{normalizedCommand}` shortcut.\n" +
-            "This slash command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
-            $"Aevatar has already executed `ornn_search_skills` (query = {queryJson}) and `use_skill` for the best matching skill before this turn (their tool results are in the messages above); the loaded skill's instructions are the only source of truth for this command.\n" +
+            $"The user invoked the `{triggerLabel}{normalizedCommand}` skill trigger.\n" +
+            "This command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
+            "Aevatar has already attempted `use_skill` for this command before this turn. If that load failed, use the tool results above and the recovery rules to search for the best matching skill before giving up.\n" +
             $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
             "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
             "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +

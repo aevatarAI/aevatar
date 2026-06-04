@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -58,7 +59,8 @@ public sealed class ResponsesCommandFacade(
                 callerScopeResult.Error.Message);
 
         var callerScope = callerScopeResult.Scope!;
-        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScope, ct);
+        var trigger = ParseSkillInvocationTrigger(normalized.Prompt);
+        var routedModelResult = await ResolveRouteTargetAsync(normalized, callerScope, trigger, ct);
         if (routedModelResult.Error is not null)
             return ResponsesCreateCommandResult.FromError(
                 routedModelResult.Error.StatusCode,
@@ -100,6 +102,7 @@ public sealed class ResponsesCommandFacade(
             continuation.PreviousSnapshot,
             callerScope,
             routedModelResult.Action!,
+            trigger,
             callerScopeContext.InboundBearerToken,
             sessionResult.Session!,
             createdAt,
@@ -229,6 +232,7 @@ public sealed class ResponsesCommandFacade(
     private async Task<RouteTargetResult> ResolveRouteTargetAsync(
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
+        SkillInvocationTrigger? trigger,
         CancellationToken ct)
     {
         var routeDecision = await ResolveResponsesChatRouteAsync(
@@ -236,6 +240,7 @@ public sealed class ResponsesCommandFacade(
             normalized.Model,
             ResolveToolMode(normalized.DeclaredTools.Count, normalized.ToolResults.Count),
             BuildContentHint(normalized.Prompt),
+            trigger?.Name ?? string.Empty,
             ct);
 
         if (routeDecision.Action.Reject is not null)
@@ -361,6 +366,7 @@ public sealed class ResponsesCommandFacade(
         LlmSessionSnapshot? previousSnapshot,
         ResponsesCallerScope callerScope,
         ChatRouteAction routeAction,
+        SkillInvocationTrigger? trigger,
         string bearerToken,
         LlmSessionRegistrationResult responseSession,
         DateTimeOffset createdAt,
@@ -387,6 +393,7 @@ public sealed class ResponsesCommandFacade(
             {
                 NyxIdRoutePreference = resolvedRouteValue,
             },
+            SkillRecovery = AgentSkillRecoveryContextBuilder.FromTrigger(trigger),
         };
         var llmRequest = BuildLlmRequest(
             normalized,
@@ -554,8 +561,26 @@ public sealed class ResponsesCommandFacade(
         string model,
         ToolMode toolMode,
         string contentHint,
+        string commandName,
         CancellationToken ct)
-        => chatRouteDecisionPort.ResolveAsync(callerScope, model, toolMode, contentHint, ct);
+        => chatRouteDecisionPort.ResolveAsync(
+            new ResponsesChatRouteDecisionRequest(
+                callerScope,
+                model,
+                toolMode,
+                contentHint,
+                NormalizeRouteCommandName(commandName)),
+            ct);
+
+    private static SkillInvocationTrigger? ParseSkillInvocationTrigger(string? text) =>
+        SkillInvocationTriggerParser.TryParse(text, platform: "cli", out var trigger)
+            ? trigger
+            : null;
+
+    private static string NormalizeRouteCommandName(string? commandName) =>
+        string.IsNullOrWhiteSpace(commandName)
+            ? string.Empty
+            : commandName.Trim().TrimStart('/').ToLowerInvariant();
 
     private static ToolMode ResolveToolMode(int declaredToolCount, int inlineToolResultCount)
     {

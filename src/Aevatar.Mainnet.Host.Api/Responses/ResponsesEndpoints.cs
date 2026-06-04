@@ -599,17 +599,14 @@ internal static partial class ResponsesApiEndpoints
     internal static async Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         IChatRoutePolicyQueryPort queryPort,
         ChatRouteResolver resolver,
-        ResponsesCallerScope callerScope,
-        string model,
-        ToolMode toolMode,
-        string contentHint,
+        ResponsesChatRouteDecisionRequest request,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(queryPort);
         ArgumentNullException.ThrowIfNull(resolver);
-        ArgumentNullException.ThrowIfNull(callerScope);
+        ArgumentNullException.ThrowIfNull(request);
 
-        var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
+        var ownerScope = OwnerScope.ForNyxIdNative(request.CallerScope.ScopeId);
         var snapshot = await queryPort.LookupForCallerAsync(ownerScope, ct);
         return resolver.Resolve(snapshot, new ChatRouteInput
         {
@@ -622,10 +619,10 @@ internal static partial class ResponsesApiEndpoints
                 SenderId = ownerScope.SenderId,
             },
             Channel = string.Empty,
-            CommandName = string.Empty,
-            ContentHint = contentHint,
-            ToolMode = toolMode,
-            Model = model,
+            CommandName = request.CommandName,
+            ContentHint = request.ContentHint,
+            ToolMode = request.ToolMode,
+            Model = request.Model,
         });
     }
 

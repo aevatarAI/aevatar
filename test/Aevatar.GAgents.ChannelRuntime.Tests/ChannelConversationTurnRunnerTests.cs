@@ -943,7 +943,6 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-goal-1");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ornn_search_skills");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("goal");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ship command fix");
@@ -953,13 +952,16 @@ public sealed class ChannelConversationTurnRunnerTests
         recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
         recovery.CommandName.Should().Be("goal");
         recovery.OriginalCommand.Should().Be("/goal ship command fix");
+        recovery.PrimarySkillName.Should().Be("goal");
+        recovery.CommandArguments.Should().Be("ship command fix");
+        recovery.DiscoveryRequested.Should().BeFalse();
         recovery.MaxOrnnSearchAttempts.Should().Be(2);
         adapter.Replies.Should().BeEmpty();
         relayHandler.Requests.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldRouteDailySlashCommandThroughGenericSkillDiscovery()
+    public async Task RunInboundAsync_ShouldRouteSlashAliasThroughGenericSkillRecovery()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -994,14 +996,116 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-daily-1");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("Ornn skill-backed command");
-        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ornn_search_skills");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("daily");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("alice");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/daily alice");
         result.LlmReplyRequest.Activity.Content.Text.Should().NotContain("chrono-ai-daily");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.CommandName.Should().Be("daily");
+        recovery.PrimarySkillName.Should().Be("daily");
+        recovery.CommandArguments.Should().Be("alice");
+        recovery.OriginalCommand.Should().Be("/daily alice");
         adapter.Replies.Should().BeEmpty();
         relayHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRouteCanonicalSkillTriggerAcrossChannels()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "::Goal ship command fix",
+                "msg-canonical-skill-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "telegram",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("`::goal`");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("ship command fix");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("goal");
+        recovery.PrimarySkillName.Should().Be("goal");
+        recovery.CommandArguments.Should().Be("ship command fix");
+        recovery.OriginalCommand.Should().Be("::Goal ship command fix");
+        recovery.DiscoveryRequested.Should().BeFalse();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldAttachDiscoveryRecoveryForBareCanonicalTrigger()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "::",
+                "msg-canonical-discovery-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "telegram",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Be("::");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeFalse();
+        recovery.CommandName.Should().BeNull();
+        recovery.PrimarySkillName.Should().BeNull();
+        recovery.CommandArguments.Should().BeNull();
+        recovery.OriginalCommand.Should().Be("::");
+        recovery.DiscoveryRequested.Should().BeTrue();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldTreatCanonicalModelTriggerAsSkillInvocation()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "::model status",
+                "msg-canonical-model-skill-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("`::model`");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.CommandName.Should().Be("model");
+        recovery.PrimarySkillName.Should().Be("model");
+        recovery.CommandArguments.Should().Be("status");
+        recovery.OriginalCommand.Should().Be("::model status");
+        adapter.Replies.Should().BeEmpty();
     }
 
     [Fact]
@@ -1371,12 +1475,13 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("ornn_search_skills");
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("use_skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("foobar");
         var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
         recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
         recovery.CommandName.Should().Be("foobar");
+        recovery.PrimarySkillName.Should().Be("foobar");
         adapter.Replies.Should().BeEmpty();
     }
 

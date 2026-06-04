@@ -52,6 +52,69 @@ public sealed class ChatCompletionsCommandFacadeTests
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
 
+    [Fact]
+    public async Task CreateAsync_WhenNamedSkillTriggerProvided_ShouldRouteCommandAndCarryRecoveryContext()
+    {
+        var sessions = new RecordingSessionPort();
+        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_skill")
+            .WithCompletedText("ok")
+            .Build();
+        var dispatch = new RecordingActorDispatchPort(observation);
+        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("chrono/gpt-5-chat"));
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: routeDecisionPort,
+            observationRuntime: observation);
+
+        var result = await facade.CreateAsync(
+            BuildRequest("gpt-4o-mini", chatMessages: [ChatMessage.User("::Goal ship today")]),
+            CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        routeDecisionPort.LastRequest.Should().NotBeNull();
+        routeDecisionPort.LastRequest!.CommandName.Should().Be("goal");
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        var recovery = AgentToolExecutionContextMapper.FromPayload(command.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
+        recovery.CommandName.Should().Be("goal");
+        recovery.PrimarySkillName.Should().Be("goal");
+        recovery.CommandArguments.Should().Be("ship today");
+        recovery.OriginalCommand.Should().Be("::Goal ship today");
+        recovery.DiscoveryRequested.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDiscoveryTriggerProvided_ShouldKeepRouteCommandEmptyAndRequestDiscovery()
+    {
+        var sessions = new RecordingSessionPort();
+        var observation = ObservationScenarioBuilder.ForResponse("chatcmpl_discovery")
+            .WithCompletedText("ok")
+            .Build();
+        var dispatch = new RecordingActorDispatchPort(observation);
+        var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("chrono/gpt-5-chat"));
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            chatRouteDecisionPort: routeDecisionPort,
+            observationRuntime: observation);
+
+        var result = await facade.CreateAsync(
+            BuildRequest("gpt-4o-mini", chatMessages: [ChatMessage.User("::")]),
+            CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        routeDecisionPort.LastRequest.Should().NotBeNull();
+        routeDecisionPort.LastRequest!.CommandName.Should().BeEmpty();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        var recovery = AgentToolExecutionContextMapper.FromPayload(command.ToolContext).SkillRecovery;
+        recovery.DiscoveryRequested.Should().BeTrue();
+        recovery.CommandName.Should().BeNull();
+        recovery.PrimarySkillName.Should().BeNull();
+        recovery.OriginalCommand.Should().Be("::");
+    }
+
     [Theory]
     [MemberData(nameof(InvalidRequests))]
     public async Task CreateAsync_WhenRequestValidationFails_ShouldReturnBadRequest(
@@ -690,17 +753,19 @@ public sealed class ChatCompletionsCommandFacadeTests
     private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
         : IResponsesChatRouteDecisionPort
     {
+        public ResponsesChatRouteDecisionRequest? LastRequest { get; private set; }
+
         public Task<ChatRouteDecision> ResolveAsync(
-            ResponsesCallerScope callerScope,
-            string model,
-            ToolMode toolMode,
-            string contentHint,
+            ResponsesChatRouteDecisionRequest request,
             CancellationToken ct = default)
-            => Task.FromResult(new ChatRouteDecision
+        {
+            LastRequest = request;
+            return Task.FromResult(new ChatRouteDecision
             {
                 Action = action.Clone(),
                 UsedFallback = false,
             });
+        }
     }
 
     private sealed class StaticResponsesToolClassificationService(
