@@ -154,24 +154,6 @@ internal static class ChatCompletionsApiEndpoints
             return;
         }
 
-        if (completion.Accepted is not null)
-        {
-            await WriteDataFrameAsync(
-                response,
-                BuildStreamingStopChunk(normalized, createdAt, finishReason: null),
-                CancellationToken.None);
-            if (normalized.IncludeUsageInStream)
-            {
-                await WriteDataFrameAsync(
-                    response,
-                    BuildStreamingUsageChunk(normalized, createdAt, usage: null),
-                    CancellationToken.None);
-            }
-
-            await WriteDoneFrameAsync(response, CancellationToken.None);
-            return;
-        }
-
         throw new InvalidOperationException("Chat Completions stream facade returned no result.");
     }
 

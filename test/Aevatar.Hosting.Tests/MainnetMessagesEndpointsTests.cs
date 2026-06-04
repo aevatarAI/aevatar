@@ -6,6 +6,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
@@ -83,21 +84,18 @@ public sealed class MainnetMessagesEndpointsTests
         root.GetProperty("type").GetString().Should().Be("message");
         root.GetProperty("role").GetString().Should().Be("assistant");
         root.GetProperty("model").GetString().Should().Be("claude-haiku-4-5");
-        root.GetProperty("stop_reason").GetString().Should().Be("end_turn");
+        root.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
         var content = root.GetProperty("content");
-        content.GetArrayLength().Should().Be(1);
-        content[0].GetProperty("type").GetString().Should().Be("text");
-        content[0].GetProperty("text").GetString().Should().Be("Hi there");
-        root.GetProperty("usage").GetProperty("input_tokens").GetInt32().Should().Be(5);
-        root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(3);
+        content.GetArrayLength().Should().Be(0);
+        root.GetProperty("usage").GetProperty("input_tokens").GetInt32().Should().Be(0);
+        root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(0);
 
         // Path B reuses the same LlmSession actor as Path A (no MessagesSessionGAgent).
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.Completion.OutputText.Should().Be("Hi there");
+        sessions.RecordedCompletions.Should().BeEmpty();
         (await sessions.GetByResponseIdAsync(root.GetProperty("id").GetString()!))!
-            .Completion!.Usage.Should().Be(new TokenUsage(5, 3, 8));
+            .Completion.Should().BeNull();
 
         // System message + user message both flow into the intermediate ChatMessage list.
         provider.LastRequest.Should().NotBeNull();
@@ -160,11 +158,8 @@ public sealed class MainnetMessagesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("content")[0]
-            .GetProperty("text")
-            .GetString()
-            .Should()
-            .Be("Eventually visible");
+        doc.RootElement.GetProperty("content").GetArrayLength().Should().Be(0);
+        doc.RootElement.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
@@ -218,8 +213,7 @@ public sealed class MainnetMessagesEndpointsTests
         body.Should().Contain("event: message_stop");
         body.Should().NotContain("stream-bearer");
 
-        sessions.RecordedCompletions.Should().ContainSingle()
-            .Which.Completion.OutputText.Should().Be("Hello");
+        sessions.RecordedCompletions.Should().BeEmpty();
     }
 
     [Fact]
@@ -270,13 +264,9 @@ public sealed class MainnetMessagesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
-        root.GetProperty("stop_reason").GetString().Should().Be("tool_use");
+        root.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
         var content = root.GetProperty("content");
-        content.GetArrayLength().Should().Be(1);
-        content[0].GetProperty("type").GetString().Should().Be("tool_use");
-        content[0].GetProperty("id").GetString().Should().Be("toolu_abc");
-        content[0].GetProperty("name").GetString().Should().Be("get_weather");
-        content[0].GetProperty("input").GetProperty("city").GetString().Should().Be("SF");
+        content.GetArrayLength().Should().Be(0);
 
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
@@ -753,8 +743,12 @@ public sealed class MainnetMessagesEndpointsTests
             .Should().Contain("aevatar_invoke_gagent");
         provider.LastRequest.Model.Should().Be("original-claude");
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("content")[0].GetProperty("text").GetString()
-            .Should().Be("routed through model");
+        doc.RootElement.GetProperty("content").GetArrayLength().Should().Be(0);
+        doc.RootElement.GetProperty("stop_reason").ValueKind.Should().Be(JsonValueKind.Null);
+        var command = app.Services.GetRequiredService<MessagesRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ToolSelection.ToolChoiceHintName.Should().Be("aevatar_invoke_gagent");
+        command.ToolSelection.ToolChoiceHintArgumentsJson.Should().Contain("\"actor_id\":\"target-agent\"");
     }
 
     // ----- Test fixtures -------------------------------------------------------
@@ -772,15 +766,19 @@ public sealed class MainnetMessagesEndpointsTests
             EnvironmentName = Environments.Development,
         });
         builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(provider);
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);
         sessions ??= new MessagesRecordingSessionStore();
         builder.Services.AddSingleton(sessions);
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
-        builder.Services.AddSingleton<IActorDispatchPort, AcceptedOnlyActorDispatchPort>();
-        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
-        builder.Services.AddSingleton<MessagesCommandFacade>();
-        builder.Services.AddSingleton<IMessagesCommandFacade, CompletingMessagesCommandFacade>();
+        builder.Services.AddSingleton<MessagesObservationRuntime>();
+        builder.Services.AddSingleton<MessagesRecordingActorDispatchPort>();
+        builder.Services.AddSingleton<IActorDispatchPort>(static sp => sp.GetRequiredService<MessagesRecordingActorDispatchPort>());
+        builder.Services.AddSingleton<ILlmSessionObservationScopeLeasePreparationPort>(static sp => sp.GetRequiredService<MessagesObservationRuntime>().ScopePreparationPort);
+        builder.Services.AddSingleton<ILlmSessionObservationProjectionPort>(static sp => sp.GetRequiredService<MessagesObservationRuntime>().ProjectionPort);
+        builder.Services.AddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
+        builder.Services.AddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.AddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.AddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
@@ -809,126 +807,190 @@ public sealed class MainnetMessagesEndpointsTests
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
 
-    private sealed class AcceptedOnlyActorDispatchPort : IActorDispatchPort
+    private sealed class MessagesRecordingActorDispatchPort(
+        MessagesRecordingLLMProvider provider,
+        MessagesObservationRuntime observationRuntime) : IActorDispatchPort
     {
-        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
+
+        public async Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            Calls.Add((actorId, envelope));
+            if (envelope.Payload?.Is(LlmRunRequested.Descriptor) == true)
+            {
+                var command = envelope.Payload.Unpack<LlmRunRequested>();
+                provider.CaptureDispatchedCommand(command);
+                await observationRuntime.PublishFromProviderAsync(command, provider, ct);
+            }
+
+            return DispatchAdmissionFactory.Create(actorId, envelope);
+        }
     }
 
-    private sealed class CompletingMessagesCommandFacade(
-        MessagesCommandFacade inner,
-        ILLMProviderFactory providerFactory,
-        IResponsesCompletionApplicationService completionService,
-        ILlmSessionRegistrationPort sessionRegistrationPort) : IMessagesCommandFacade
+    private sealed class MessagesObservationRuntime
     {
-        public async Task<MessagesCreateCommandResult> CreateAsync(
-            MessagesCommandRequest request,
-            ResponsesCallerScopeResolutionContext callerScopeContext,
-            CancellationToken ct = default)
+        public MessagesObservationRuntime()
         {
-            if (request.Stream == true)
-                return await inner.CreateAsync(request, callerScopeContext, ct);
-
-            var planRequest = request with { Stream = true };
-            var result = await inner.CreateAsync(planRequest, callerScopeContext, ct);
-            if (result.Error is not null || result.StreamPlan is null)
-                return result;
-
-            var plan = result.StreamPlan with
-            {
-                Normalized = result.StreamPlan.Normalized with { Stream = false },
-            };
-            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
-            {
-                var completion = await completionService.CollectAsync(
-                    providerFactory.GetDefault(),
-                    plan.LlmRequest,
-                    plan.ToolContext,
-                    plan.ToolClassification,
-                    ct);
-                var snapshot = BuildCompletionSnapshot(completion);
-                await RecordCompletionAsync(plan.Session, snapshot, ct);
-                return MessagesCreateCommandResult.FromCompleted(
-                    new MessagesCreateCompletedCommandResult(plan.Normalized, snapshot));
-            }
+            ScopePreparationPort = new MessagesObservationScopeLeasePreparationPort();
+            ProjectionPort = new MessagesObservationProjectionPort();
         }
 
-        public async Task<ResponsesStreamCommandResult> StreamAsync(
-            MessagesCreateCommandPlan plan,
-            Func<string, CancellationToken, ValueTask> onTextDelta,
-            CancellationToken ct = default)
-        {
-            _ = await inner.StreamAsync(plan, onTextDelta, ct);
-            using (ResponsesToolContext.Push(plan.ToolChoiceHintPlan))
-            {
-                var completion = await completionService.StreamAsync(
-                    providerFactory.GetDefault(),
-                    plan.LlmRequest,
-                    plan.ToolContext,
-                    plan.ToolClassification,
-                    onTextDelta,
-                    ct);
-                var snapshot = BuildCompletionSnapshot(completion);
-                await RecordCompletionAsync(plan.Session, snapshot, ct);
-                return ResponsesStreamCommandResult.FromCompleted(snapshot);
-            }
-        }
+        public MessagesObservationScopeLeasePreparationPort ScopePreparationPort { get; }
 
-        private async Task RecordCompletionAsync(
-            LlmSessionRegistrationResult session,
-            LlmSessionCompletionSnapshot snapshot,
+        public MessagesObservationProjectionPort ProjectionPort { get; }
+
+        public async Task PublishFromProviderAsync(
+            LlmRunRequested command,
+            MessagesRecordingLLMProvider provider,
             CancellationToken ct)
         {
-            await sessionRegistrationPort.RecordCompletionAsync(
-                session.ActorId,
-                session.ResponseId,
-                ToCompletion(snapshot),
-                ct);
-        }
+            if (ProjectionPort.Sink is null)
+                return;
 
-        private static LlmSessionCompletionSnapshot BuildCompletionSnapshot(ResponsesCompletionResult completion) =>
-            new(
-                completion.Text,
-                completion.ForwardedToolCalls
-                    .Select(static call => new LlmSessionCompletedToolCallSnapshot(
-                        call.Id,
-                        call.Name,
-                        string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson))
-                    .ToArray(),
-                DateTimeOffset.UtcNow,
-                null,
-                null,
-                completion.Usage);
+            var chunks = await provider.CollectForCommandAsync(command, ct);
+            var outputText = new StringBuilder();
+            TokenUsage? usage = null;
+            var forwardedToolCalls = new List<LlmSessionRuntimeToolCall>();
 
-        private static LlmSessionCompletion ToCompletion(LlmSessionCompletionSnapshot snapshot)
-        {
-            var completion = new LlmSessionCompletion
+            foreach (var chunk in chunks)
             {
-                OutputText = snapshot.OutputText,
-                CompletedAt = Timestamp.FromDateTimeOffset(snapshot.CompletedAt ?? DateTimeOffset.UtcNow),
-            };
-            if (snapshot.Usage is not null)
-            {
-                completion.Usage = new LlmSessionTokenUsage
+                if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 {
-                    PromptTokens = snapshot.Usage.PromptTokens,
-                    CompletionTokens = snapshot.Usage.CompletionTokens,
-                    TotalTokens = snapshot.Usage.TotalTokens,
+                    outputText.Append(chunk.DeltaContent);
+                    ProjectionPort.Sink.Push(ObservedEnvelope(new LlmStreamChunkObserved
+                    {
+                        ResponseId = command.ResponseId,
+                        RunId = command.RunId,
+                        DeltaText = chunk.DeltaContent,
+                        ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    }));
+                }
+
+                if (chunk.DeltaToolCall is not null)
+                {
+                    var runtimeCall = ToRuntimeToolCall(chunk.DeltaToolCall);
+                    forwardedToolCalls.Add(runtimeCall.Clone());
+                    ProjectionPort.Sink.Push(ObservedEnvelope(new LlmStreamChunkObserved
+                    {
+                        ResponseId = command.ResponseId,
+                        RunId = command.RunId,
+                        ToolCallDelta = runtimeCall,
+                        ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    }));
+                }
+
+                if (chunk.Usage is not null)
+                    usage = chunk.Usage;
+            }
+
+            var completed = new LlmRunCompleted
+            {
+                ResponseId = command.ResponseId,
+                RunId = command.RunId,
+                OutputText = outputText.ToString(),
+                CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            };
+            completed.ForwardedToolCalls.AddRange(forwardedToolCalls);
+            if (usage is not null)
+            {
+                completed.Usage = new LlmSessionTokenUsage
+                {
+                    PromptTokens = usage.PromptTokens,
+                    CompletionTokens = usage.CompletionTokens,
+                    TotalTokens = usage.TotalTokens,
                 };
             }
 
-            foreach (var call in snapshot.ToolCalls)
-            {
-                completion.ToolCalls.Add(new LlmSessionCompletedToolCall
-                {
-                    CallId = call.CallId,
-                    ToolName = call.ToolName,
-                    Result = ResponsesJsonValues.ParseBoundaryPayload(call.ResultJson),
-                });
-            }
-
-            return completion;
+            ProjectionPort.Sink.Push(ObservedEnvelope(completed));
         }
+
+        private static EventEnvelope ObservedEnvelope(Google.Protobuf.IMessage payload) =>
+            new()
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Google.Protobuf.WellKnownTypes.Any.Pack(payload),
+            };
+
+        private static LlmSessionRuntimeToolCall ToRuntimeToolCall(ToolCall call) =>
+            new()
+            {
+                CallId = call.Id,
+                ToolName = call.Name,
+                ArgumentsJson = string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson,
+                Arguments = ParseBoundaryObject(call.ArgumentsJson),
+            };
+
+        private static Struct ParseBoundaryObject(string? json)
+        {
+            var value = ResponsesJsonValues.ParseBoundaryPayload(json);
+            return value.KindCase == Google.Protobuf.WellKnownTypes.Value.KindOneofCase.StructValue
+                ? value.StructValue.Clone()
+                : new Struct();
+        }
+    }
+
+    private sealed class MessagesObservationScopeLeasePreparationPort
+        : ILlmSessionObservationScopeLeasePreparationPort
+    {
+        public Task<LlmSessionObservationScopeLeasePreparation?> PrepareAsync(
+            string actorId,
+            string responseId,
+            CancellationToken ct = default) =>
+            Task.FromResult<LlmSessionObservationScopeLeasePreparation?>(
+                new LlmSessionObservationScopeLeasePreparation(actorId, responseId));
+
+        public Task ReleaseAsync(
+            LlmSessionObservationScopeLeasePreparation preparation,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class MessagesObservationProjectionPort : ILlmSessionObservationProjectionPort
+    {
+        public IEventSink<EventEnvelope>? Sink { get; private set; }
+
+        public bool ProjectionEnabled => true;
+
+        public Task<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?> AttachExistingResponseProjectionAsync(
+            string actorId,
+            string responseId,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            Sink = sink;
+            return Task.FromResult<EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>?>(
+                new EventSinkProjectionAttachment<ILlmSessionObservationProjectionLease>(
+                    new MessagesObservationLease(actorId, responseId),
+                    new NoOpAsyncDisposable()));
+        }
+
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+            ILlmSessionObservationProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<IAsyncDisposable?>(new NoOpAsyncDisposable());
+
+        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
+        {
+            Sink = null;
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            ILlmSessionObservationProjectionLease lease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed record MessagesObservationLease(string ActorId, string ResponseId)
+        : ILlmSessionObservationProjectionLease;
+
+    private sealed class NoOpAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private static Microsoft.Extensions.Options.IOptions<ChatRoutingOptions> DefaultToolSetRoutingOptions() =>
@@ -956,6 +1018,20 @@ public sealed class MainnetMessagesEndpointsTests
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
 
+        public Task<IReadOnlyList<LLMStreamChunk>> CollectForCommandAsync(
+            LlmRunRequested command,
+            CancellationToken ct = default)
+        {
+            CaptureDispatchedCommand(command);
+            StreamCallCount++;
+            return Task.FromResult<IReadOnlyList<LLMStreamChunk>>(StreamChunks);
+        }
+
+        public void CaptureDispatchedCommand(LlmRunRequested command)
+        {
+            LastRequest = ToLlmRequest(command);
+        }
+
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -968,6 +1044,78 @@ public sealed class MainnetMessagesEndpointsTests
                 yield return chunk;
                 await Task.Yield();
             }
+        }
+
+        private static LLMRequest ToLlmRequest(LlmRunRequested command)
+        {
+            var toolContext = command.ToolContext == null
+                ? AgentToolExecutionContext.Empty
+                : AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
+            return new LLMRequest
+            {
+                Messages = command.Messages.Select(ToChatMessage).ToList(),
+                RequestId = command.ResponseId,
+                Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
+                CallerContext = new LLMRequestCallerContext(
+                    command.ScopeId,
+                    command.OwnerSubject,
+                    command.ResponseId,
+                    new LLMRequestCallerCredentials(command.BearerToken)),
+                Tools = ToEffectiveTools(command.ToolSelection),
+                ToolContext = toolContext,
+                LlmControl = new LLMControlContext(
+                    NyxIdAccessToken: null,
+                    NyxIdOrgToken: null,
+                    SenderNyxIdAccessToken: null,
+                    ModelOverride: null,
+                    NyxIdRoutePreference: string.IsNullOrWhiteSpace(command.RoutePreference) ? null : command.RoutePreference,
+                    MaxToolRoundsOverride: null,
+                    UserMemoryPrompt: null),
+                Model = command.Model,
+                Temperature = command.HasTemperature ? command.Temperature : null,
+                MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,
+            };
+        }
+
+        private static ChatMessage ToChatMessage(LlmSessionRuntimeChatMessage message)
+        {
+            var toolCalls = message.ToolCalls.Count == 0
+                ? null
+                : message.ToolCalls
+                    .Select(static call => new ToolCall
+                    {
+                        Id = call.CallId,
+                        Name = call.ToolName,
+                        ArgumentsJson = string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson,
+                    })
+                    .ToList();
+            var result = new ChatMessage
+            {
+                Role = message.Role,
+                Content = message.Content,
+                ReasoningContent = string.IsNullOrWhiteSpace(message.ReasoningContent) ? null : message.ReasoningContent,
+                ToolCallId = string.IsNullOrWhiteSpace(message.ToolCallId) ? null : message.ToolCallId,
+                ToolCalls = toolCalls,
+            };
+            return result;
+        }
+
+        private static IReadOnlyList<IAgentTool> ToEffectiveTools(LlmSessionRuntimeToolSelection? selection)
+        {
+            if (selection == null)
+                return [];
+
+            var tools = new List<IAgentTool>();
+            tools.AddRange(selection.ForwardedTools.Select(static tool =>
+                new MessagesStubAgentTool(tool.ToolName, tool.Description, tool.ParametersJson)));
+            tools.AddRange(selection.SubstitutedToolNames.Select(static name =>
+                new MessagesStubAgentTool(name, $"{name} substitute")));
+            tools.AddRange(selection.AdditiveToolNames.Select(static name =>
+                new MessagesStubAgentTool(name, $"{name} additive")));
+            return tools
+                .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
+                .Select(static group => group.First())
+                .ToArray();
         }
     }
 
@@ -1213,17 +1361,21 @@ public sealed class MainnetMessagesEndpointsTests
 
     private sealed class MessagesStubAgentTool : IAgentTool
     {
-        public MessagesStubAgentTool(string name, string description)
+        public MessagesStubAgentTool(
+            string name,
+            string description,
+            string parametersSchema = """{"type":"object","properties":{}}""")
         {
             Name = name;
             Description = description;
+            ParametersSchema = parametersSchema;
         }
 
         public string Name { get; }
 
         public string Description { get; }
 
-        public string ParametersSchema => """{"type":"object","properties":{}}""";
+        public string ParametersSchema { get; }
 
         public bool IsReadOnly => true;
 

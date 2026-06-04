@@ -173,6 +173,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.TryAddSingleton<IChatCompletionsCommandFacade, ChatCompletionsCommandFacade>();
+        builder.Services.TryAddSingleton<ILlmSessionRunObservationService, LlmSessionRunObservationService>();
         builder.Services.TryAddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
         builder.Services.TryAddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.Services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();

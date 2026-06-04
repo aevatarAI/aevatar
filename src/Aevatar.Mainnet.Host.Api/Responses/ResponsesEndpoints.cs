@@ -224,21 +224,6 @@ internal static partial class ResponsesApiEndpoints
             return;
         }
 
-        if (completion.Accepted is not null)
-        {
-            await WriteSseFrameAsync(
-                response,
-                "response.in_progress",
-                new
-                {
-                    type = "response.in_progress",
-                    response = BuildAcceptedResponse(normalized, createdAt),
-                    sequence_number = ++sequenceNumber,
-                },
-                CancellationToken.None);
-            return;
-        }
-
         var sessionCompletion = completion.Completion!;
         var completedText = sessionCompletion.OutputText;
         await WriteSseFrameAsync(

@@ -356,7 +356,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             .Build();
         var dispatch = new RecordingActorDispatchPort(observation);
         var facade = CreateFacade(sessionPort: sessions, dispatchPort: dispatch, observationRuntime: observation);
-        var deltas = new List<ChatCompletionsObservedDelta>();
+        var deltas = new List<LlmSessionRunObservedDelta>();
 
         var result = await facade.StreamAsync(
             BuildStreamPlan(),
@@ -364,10 +364,9 @@ public sealed class ChatCompletionsCommandFacadeTests
             {
                 deltas.Add(delta);
                 return ValueTask.CompletedTask;
-            });
+        });
 
         result.Error.Should().BeNull();
-        result.Accepted.Should().BeNull();
         result.Completion.Should().NotBeNull();
         result.Completion!.OutputText.Should().Be("Hello");
         result.Completion.ToolCalls.Should().ContainSingle();
@@ -380,6 +379,7 @@ public sealed class ChatCompletionsCommandFacadeTests
         var call = dispatch.Calls.Should().ContainSingle().Subject;
         call.ActorId.Should().Be("actor-chatcmpl_stream");
         var command = call.Envelope.Payload.Unpack<LlmRunRequested>();
+        call.Envelope.Propagation!.CorrelationId.Should().Be("chatcmpl_stream");
         command.ResponseId.Should().Be("chatcmpl_stream");
         command.RunId.Should().Be("chatcmpl_stream:llm-run");
         command.Model.Should().Be("gpt-4o-mini");
@@ -484,7 +484,6 @@ public sealed class ChatCompletionsCommandFacadeTests
             401,
             "authentication_required",
             "NyxID authentication required for provider 'test-provider'. Please sign in."));
-        result.Accepted.Should().BeNull();
         result.Completion.Should().BeNull();
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
     }
@@ -510,7 +509,6 @@ public sealed class ChatCompletionsCommandFacadeTests
             429,
             "ratelimited",
             "rate limited"));
-        result.Accepted.Should().BeNull();
         result.Completion.Should().BeNull();
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
     }
@@ -533,7 +531,6 @@ public sealed class ChatCompletionsCommandFacadeTests
             499,
             "client_closed_request",
             "Client closed request."));
-        result.Accepted.Should().BeNull();
         result.Completion.Should().BeNull();
         sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
     }
@@ -659,11 +656,10 @@ public sealed class ChatCompletionsCommandFacadeTests
             chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             new StaticResponsesRouteResolver("route-value"),
             effectiveSessionPort,
-            runtime.ScopePreparationPort,
-            runtime.ProjectionPort,
             dispatchPort ?? new RecordingActorDispatchPort(runtime),
             toolClassificationService ?? new StaticResponsesToolClassificationService(),
             directToolPlanService ?? new StaticResponsesDirectToolPlanService(),
+            new LlmSessionRunObservationService(runtime.ScopePreparationPort, runtime.ProjectionPort),
             NullLogger<ChatCompletionsCommandFacade>.Instance,
             observationTimeout);
     }
