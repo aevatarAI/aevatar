@@ -8,6 +8,19 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class OrnnSearchSkillsToolTests
 {
     [Fact]
+    public void Contract_ShouldAdvertiseCatalogListingWithoutRequiredQuery()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
+
+        tool.Description.Should().Contain("asks which Ornn skills they have");
+        tool.Description.Should().Contain("empty or omitted query");
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("properties").TryGetProperty("query", out _).Should().BeTrue();
+        schema.RootElement.TryGetProperty("required", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ReturnsAuthenticationErrorWhenTokenMissing()
     {
         var previous = AgentToolRequestContext.Current;
@@ -20,6 +33,50 @@ public sealed class OrnnSearchSkillsToolTests
 
             ExtractText(result).Should().Contain("No NyxID access token");
             ExtractStatus(result).Should().Be("error");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AllowsOmittedQueryForCatalogListing()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "total": 1,
+                "items": [
+                  {
+                    "name": "review-commit-push",
+                    "description": "Review local changes and publish them",
+                    "isPrivate": true,
+                    "metadata": { "category": "git" }
+                  }
+                ]
+              }
+            }
+            """);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
+            });
+            var tool = CreateTool(handler);
+
+            var result = await tool.ExecuteAsync("{}");
+            var text = ExtractText(result);
+
+            text.Should().Contain("Found 1 skills");
+            text.Should().Contain("**review-commit-push**");
+            ExtractStatus(result).Should().Be("success");
+
+            var request = handler.Requests.Should().ContainSingle().Subject;
+            request.RequestUri!.ToString().Should().Contain("query=");
+            request.RequestUri!.ToString().Should().Contain("scope=mixed");
         }
         finally
         {

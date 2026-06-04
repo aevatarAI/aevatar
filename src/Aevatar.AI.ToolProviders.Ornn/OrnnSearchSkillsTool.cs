@@ -19,22 +19,23 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         //   New principle: Ornn skill discovery remains the typed instruction-package lookup; nyxid_proxy is only a live downstream proxy surface.
         "Search the user's Ornn skill library for matching skill packages. " +
         "Call this FIRST whenever the user mentions a named skill (in quotes, slug-like, or Title Case), " +
+        "asks which Ornn skills they have, wants to list or browse available skills, " +
         "asks for a specialized capability (translation, content generation, analysis, network or device discovery, " +
         "domain workflows), or says \"挂载/use/load this skill\". " +
         "Also call this when a loaded skill leaves you blocked by a missing capability, unknown workflow step, " +
         "unavailable service, unknown API contract, or repeated tool failure. " +
         "Prefer this over nyxid_proxy path-guessing; proxy discovery lists service APIs, " +
         "this discovers ready-made instruction packages. " +
-        "Returns matching skill names + descriptions; follow up with use_skill to load and activate one.";
+        "Returns matching skill names + descriptions; follow up with use_skill to load and activate one. " +
+        "When the user asks what skills are available without a keyword, call this with an empty or omitted query.";
 
     public string ParametersSchema => """
         {
           "type": "object",
           "properties": {
-            "query": { "type": "string", "description": "Search keywords" },
+            "query": { "type": "string", "description": "Search keywords. Omit or pass an empty string to list/browse available skills." },
             "scope": { "type": "string", "enum": ["public", "private", "mixed"], "description": "Search scope (default: mixed)" }
-          },
-          "required": ["query"]
+          }
         }
         """;
 
