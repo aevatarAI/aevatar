@@ -94,27 +94,9 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
-    public async Task ToolCallModule_ShouldExecuteWorkflowToolDirectly()
+    public async Task ToolCallModule_ShouldPassTypedWorkflowToolExecutionRequestToDirectTool()
     {
-        var tool = new CountingAgentTool("safe_tool", _ => """{"raw":true}""");
-        var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
-
-        await ExecuteToolCallAsync(module, ctx, tool.Name);
-
-        tool.ExecuteCalls.Should().Be(1);
-        var toolResult = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
-        toolResult.Success.Should().BeTrue();
-        toolResult.ResultJson.Should().Be("""{"raw":true}""");
-        var completed = LastCompleted(ctx);
-        completed.Success.Should().BeTrue();
-        completed.Output.Should().Be("""{"raw":true}""");
-    }
-
-    [Fact]
-    public async Task ToolCallModule_ShouldPassActorOwnedCallerCredentialToContextualTool()
-    {
-        var tool = new CapturingContextualTool("nyxid_tool");
+        var tool = new CapturingWorkflowTool("nyxid_tool");
         var module = CreateModule(tool);
         var ctx = new RecordingWorkflowContext();
         ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
@@ -139,14 +121,15 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.StepId.Should().Be("call_proxy");
         tool.LastRequest.ExecutionId.Should().Be("exec-1");
         tool.LastRequest.CallId.Should().Be("workflow:run-1:call_proxy:exec-1");
+        tool.LastRequest.ScopeId.Should().Be("scope-1");
         tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
         LastCompleted(ctx).Success.Should().BeTrue();
     }
 
     [Fact]
-    public async Task ToolCallModule_ShouldIgnoreMetadataOnlyCallerCredentialForContextualTool()
+    public async Task ToolCallModule_ShouldNotUseRequestMetadataAsCallerCredential()
     {
-        var tool = new CapturingContextualTool("nyxid_tool");
+        var tool = new CapturingWorkflowTool("nyxid_tool");
         var module = CreateModule(tool);
         var ctx = new RecordingWorkflowContext();
         ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
@@ -159,6 +142,19 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.Should().NotBeNull();
         tool.LastRequest!.CallerCredential.BearerToken.Should().BeEmpty();
         LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public void IWorkflowTool_ShouldExposeOnlyTypedWorkflowExecutionMethod()
+    {
+        var executeMethods = typeof(IWorkflowTool)
+            .GetMethods()
+            .Where(method => method.Name == nameof(IWorkflowTool.ExecuteAsync))
+            .ToList();
+
+        executeMethods.Should().ContainSingle();
+        executeMethods[0].GetParameters().First().ParameterType.Should().Be(typeof(WorkflowToolExecutionRequest));
+        executeMethods[0].GetParameters().Should().NotContain(parameter => parameter.ParameterType == typeof(string));
     }
 
     private static ToolCallModule CreateModule(IWorkflowTool tool) =>
@@ -206,10 +202,10 @@ public sealed class ToolCallModuleContextTests
     {
         public string Name { get; } = name;
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(execute(argumentsJson));
+            return Task.FromResult(execute(request.ArgumentsJson));
         }
     }
 
@@ -219,28 +215,25 @@ public sealed class ToolCallModuleContextTests
 
         public int ExecuteCalls { get; private set; }
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ExecuteCalls++;
-            return Task.FromResult(execute(argumentsJson));
+            return Task.FromResult(execute(request.ArgumentsJson));
         }
     }
 
-    private sealed class CapturingContextualTool(string name) : IWorkflowContextualTool
+    private sealed class CapturingWorkflowTool(string name) : IWorkflowTool
     {
         public string Name { get; } = name;
 
         public WorkflowToolExecutionRequest? LastRequest { get; private set; }
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            throw new InvalidOperationException("Contextual execution is required.");
-
         public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastRequest = request;
-            return Task.FromResult("""{"contextual":true}""");
+            return Task.FromResult("""{"typed":true}""");
         }
     }
 
@@ -267,6 +260,8 @@ public sealed class ToolCallModuleContextTests
         public string AgentId => "agent-1";
 
         public string RunId => "run-1";
+
+        public string ScopeId => "scope-1";
 
         public IServiceProvider Services { get; } = new EmptyServiceProvider();
 

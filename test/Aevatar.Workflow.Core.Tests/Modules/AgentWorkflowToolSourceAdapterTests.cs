@@ -9,14 +9,13 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class AgentWorkflowToolSourceAdapterTests
 {
     [Fact]
-    public async Task ContextualTool_ShouldMapWorkflowCallerTokenToAgentToolContext()
+    public async Task WorkflowTool_ShouldMapWorkflowRequestToAgentToolExecutionContext()
     {
         var agentTool = new CapturingAgentTool();
         var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
         var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
-        var contextualTool = tool.Should().BeAssignableTo<IWorkflowContextualTool>().Subject;
 
-        var result = await contextualTool.ExecuteAsync(
+        var result = await tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: """{"ok":true}""",
                 RunId: "run-1",
@@ -31,6 +30,9 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         agentTool.ObservedArgumentsJson.Should().Be("""{"ok":true}""");
         agentTool.ObservedAccessToken.Should().Be("token-123");
         agentTool.ObservedOrgToken.Should().Be("token-123");
+        agentTool.ObservedScopeId.Should().Be("scope-1");
+        agentTool.ObservedCallId.Should().Be("call-1");
+        agentTool.ObservedExternalMetadata.Should().NotContainKey("ExecutionId");
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -39,13 +41,13 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     [InlineData("Basic token-123")]
     [InlineData("Bearer token-123")]
     [InlineData("Bearer ")]
-    public async Task ContextualTool_ShouldIgnoreMalformedWorkflowCredential(string authorization)
+    public async Task WorkflowTool_ShouldIgnoreMalformedWorkflowCredential(string authorization)
     {
         var agentTool = new CapturingAgentTool();
         var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
-        var contextualTool = (IWorkflowContextualTool)(await adapter.GetToolsAsync(CancellationToken.None)).Single();
+        var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
 
-        await contextualTool.ExecuteAsync(
+        await workflowTool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: "{}",
                 RunId: "run-1",
@@ -55,20 +57,6 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ScopeId: "scope-1",
                 CallerCredential: new WorkflowCallerCredential { BearerToken = authorization }),
             CancellationToken.None);
-
-        agentTool.ObservedAccessToken.Should().BeNull();
-        agentTool.ObservedOrgToken.Should().BeNull();
-        AgentToolRequestContext.Current.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task PlainToolExecution_ShouldNotPushWorkflowAuthorization()
-    {
-        var agentTool = new CapturingAgentTool();
-        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
-        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
-
-        await tool.ExecuteAsync("{}", CancellationToken.None);
 
         agentTool.ObservedAccessToken.Should().BeNull();
         agentTool.ObservedOrgToken.Should().BeNull();
@@ -89,12 +77,18 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         public string? ObservedOrgToken { get; private set; }
 
+        public string? ObservedScopeId { get; private set; }
+
+        public string? ObservedCallId { get; private set; }
+
+        public IReadOnlyDictionary<string, string> ObservedExternalMetadata { get; private set; } =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ObservedArgumentsJson = argumentsJson;
-            ObservedAccessToken = AgentToolRequestContext.NyxIdAccessToken;
-            ObservedOrgToken = AgentToolRequestContext.NyxIdOrgToken;
+            CaptureContext();
             return ExecuteAsyncCore(ct);
         }
 
@@ -102,9 +96,18 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         {
             await Task.Yield();
             ct.ThrowIfCancellationRequested();
+            CaptureContext();
+            return """{"observed":true}""";
+        }
+
+        private void CaptureContext()
+        {
             ObservedAccessToken = AgentToolRequestContext.NyxIdAccessToken;
             ObservedOrgToken = AgentToolRequestContext.NyxIdOrgToken;
-            return """{"observed":true}""";
+            ObservedScopeId = AgentToolRequestContext.ScopeId;
+            ObservedCallId = AgentToolRequestContext.CallId;
+            ObservedExternalMetadata = AgentToolRequestContext.Current?.ExternalMetadata
+                ?? new Dictionary<string, string>(StringComparer.Ordinal);
         }
     }
 

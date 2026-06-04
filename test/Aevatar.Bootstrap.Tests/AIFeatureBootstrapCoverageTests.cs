@@ -24,6 +24,7 @@ using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -560,7 +561,15 @@ public class AIFeatureBootstrapCoverageTests
             .Subject;
 
         tool.Name.Should().Be("demo_tool");
-        (await tool.ExecuteAsync("{}")).Should().Be("""{"ok":true}""");
+        (await tool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()))).Should().Be("""{"ok":true}""");
     }
 
     [Fact]

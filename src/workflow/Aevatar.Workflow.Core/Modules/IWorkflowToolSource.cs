@@ -6,7 +6,7 @@ public interface IWorkflowTool
 {
     string Name { get; }
 
-    Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default);
+    Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default);
 }
 
 public sealed record WorkflowToolExecutionRequest(
@@ -17,11 +17,6 @@ public sealed record WorkflowToolExecutionRequest(
     string CallId,
     string ScopeId,
     WorkflowCallerCredential CallerCredential);
-
-public interface IWorkflowContextualTool : IWorkflowTool
-{
-    Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default);
-}
 
 public interface IWorkflowToolSource
 {

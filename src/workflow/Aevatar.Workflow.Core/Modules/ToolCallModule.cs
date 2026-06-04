@@ -114,20 +114,17 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (tool is not IWorkflowContextualTool contextualTool)
-            return tool.ExecuteAsync(argumentsJson, ct);
-
         var callerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var credential)
             ? credential
             : new WorkflowCallerCredential();
-        return contextualTool.ExecuteAsync(
+        return tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: argumentsJson,
                 RunId: request.RunId ?? string.Empty,
                 StepId: request.StepId ?? string.Empty,
                 ExecutionId: request.ExecutionId ?? string.Empty,
                 CallId: callId,
-                ScopeId: string.Empty,
+                ScopeId: ctx.ScopeId ?? string.Empty,
                 CallerCredential: callerCredential),
             ct);
     }

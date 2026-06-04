@@ -10,6 +10,8 @@ public interface IWorkflowExecutionContext
 {
     string RunId { get; }
 
+    string ScopeId => string.Empty;
+
     // Refactor (iter89/cluster-089-workflow-module-clock-state):
     //   Old: Workflow modules read process wall clock directly for TTLs,
     //        timeout stamps, buffered signal eviction, and elapsed metrics.
