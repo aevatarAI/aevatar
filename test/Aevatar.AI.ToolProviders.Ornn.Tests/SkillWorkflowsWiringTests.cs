@@ -127,6 +127,88 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
+    public async Task UseSkillTool_RendersScriptHandoffAfterWorkflowAndBeforeAssociatedFiles()
+    {
+        var catalog = new LocalSkillCatalog();
+        catalog.Register(new SkillDefinition
+        {
+            Name = "scripted",
+            Description = "Runs script",
+            Instructions = "Follow these steps.",
+            Source = SkillSource.Local,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "prepare",
+                    WorkflowYamls = ["name: prepare\nsteps: []\n"],
+                },
+            ],
+            Scripts =
+            [
+                new SkillScriptDescriptor
+                {
+                    ScriptId = "scripted-main",
+                    SourceFiles = new Dictionary<string, string>
+                    {
+                        ["scripts/Main.cs"] = "public sealed class MainBehavior {}",
+                    },
+                    ProtoFiles = new Dictionary<string, string>
+                    {
+                        ["scripts/contract.proto"] = "syntax = \"proto3\";",
+                    },
+                    EntryBehaviorTypeName = "MainBehavior",
+                },
+            ],
+            AssociatedFiles = new Dictionary<string, string>
+            {
+                ["docs/readme.md"] = "reference",
+            },
+        });
+
+        var tool = new UseSkillTool(catalog);
+        var output = await tool.ExecuteAsync("""{"skill":"scripted"}""");
+        var text = ExtractText(output);
+
+        text.Should().Contain("## script_compile/script_execute Handoff");
+        text.Should().Contain("Call `script_compile`");
+        text.Should().Contain("### script_compile");
+        text.Should().Contain("\"script_id\": \"scripted-main\"");
+        text.Should().Contain("\"source_files\"");
+        text.Should().Contain("\"scripts/Main.cs\"");
+        text.Should().Contain("\"proto_files\"");
+        text.Should().Contain("\"scripts/contract.proto\"");
+        text.Should().Contain("\"entry_behavior_type_name\": \"MainBehavior\"");
+        text.Should().Contain("### script_execute");
+        text.Should().Contain("\"input\": \"Use the current user request and skill arguments.\"");
+
+        text.IndexOf("## aevatar_start_workflow Handoff", StringComparison.Ordinal)
+            .Should().BeLessThan(text.IndexOf("## script_compile/script_execute Handoff", StringComparison.Ordinal));
+        text.IndexOf("## script_compile/script_execute Handoff", StringComparison.Ordinal)
+            .Should().BeLessThan(text.IndexOf("## Associated Files", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UseSkillTool_OmitsScriptHandoffWhenSkillHasNoScripts()
+    {
+        var catalog = new LocalSkillCatalog();
+        catalog.Register(new SkillDefinition
+        {
+            Name = "plain",
+            Description = "no scripts",
+            Instructions = "body",
+            Source = SkillSource.Local,
+        });
+
+        var tool = new UseSkillTool(catalog);
+        var output = await tool.ExecuteAsync("""{"skill":"plain"}""");
+        var text = ExtractText(output);
+
+        text.Should().NotContain("## script_compile/script_execute Handoff");
+        text.Should().NotContain("script_compile");
+    }
+
+    [Fact]
     public async Task UseSkillTool_MountWorkflowsFalse_DoesNotRequireApprovalAndDoesNotCallCommandPort()
     {
         var catalog = CreateCatalogWithWorkflowSkill();
