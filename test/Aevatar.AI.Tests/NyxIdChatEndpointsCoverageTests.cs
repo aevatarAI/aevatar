@@ -3413,6 +3413,16 @@ public class NyxIdChatEndpointsCoverageTests
                         true));
         }
 
+        async Task<RealtimeSessionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus>>
+            IRealtimeSession<TCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>.ExecuteAsync(
+                TCommand inbound,
+                Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+                Func<NyxIdChatAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+                CancellationToken ct)
+        {
+            return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
+        }
+
         private static (string ActorId, string SessionId) ResolveReceiptParts(TCommand command) =>
             command switch
             {

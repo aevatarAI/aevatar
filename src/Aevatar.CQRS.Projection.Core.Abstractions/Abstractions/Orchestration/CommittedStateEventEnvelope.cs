@@ -1,8 +1,8 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core.Compatibility;
+using Aevatar.Foundation.Abstractions.Compatibility;
 using Google.Protobuf;
 
-namespace Aevatar.CQRS.Projection.Core.Orchestration;
+namespace Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 
 public static class CommittedStateEventEnvelope
 {
@@ -99,9 +99,24 @@ public static class CommittedStateEventEnvelope
             if (published?.StateEvent?.Timestamp != null)
                 return published.StateEvent.Timestamp.ToDateTimeOffset();
 
-            return EventEnvelopeTimestampResolver.Resolve(envelope, fallbackUtcNow);
+            return ResolveEnvelopeTimestamp(envelope, fallbackUtcNow);
         }
 
         return fallbackUtcNow;
+    }
+
+    private static DateTimeOffset ResolveEnvelopeTimestamp(
+        EventEnvelope envelope,
+        DateTimeOffset fallbackUtcNow)
+    {
+        var ts = envelope.Timestamp;
+        if (ts == null)
+            return fallbackUtcNow;
+
+        var dt = ts.ToDateTime();
+        if (dt.Kind != DateTimeKind.Utc)
+            dt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+
+        return new DateTimeOffset(dt);
     }
 }

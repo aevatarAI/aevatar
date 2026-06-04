@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
@@ -82,6 +83,52 @@ public sealed class CommittedStateEventEnvelopeTests
         state.Should().NotBeNull();
         state!.Value.Should().Be("STATE-ROOT");
         stateEvent!.Version.Should().Be(8);
+    }
+
+    [Fact]
+    public void ResolveTimestamp_ShouldUseEnvelopeTimestamp_WhenStateEventTimestampIsMissing()
+    {
+        var envelopeOccurredAt = new DateTimeOffset(2026, 3, 15, 13, 30, 0, TimeSpan.Zero);
+        var fallback = new DateTimeOffset(2026, 3, 15, 14, 0, 0, TimeSpan.Zero);
+        var envelope = new EventEnvelope
+        {
+            Id = "outer-envelope",
+            Timestamp = Timestamp.FromDateTimeOffset(envelopeOccurredAt),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-3",
+                    Version = 9,
+                    EventData = Any.Pack(new StringValue { Value = "fact" }),
+                },
+                StateRoot = Any.Pack(new StringValue { Value = "STATE-ROOT" }),
+            }),
+        };
+
+        CommittedStateEventEnvelope.ResolveTimestamp(envelope, fallback).Should().Be(envelopeOccurredAt);
+    }
+
+    [Fact]
+    public void ResolveTimestamp_ShouldUseFallback_WhenStateEventAndEnvelopeTimestampAreMissing()
+    {
+        var fallback = new DateTimeOffset(2026, 3, 15, 14, 0, 0, TimeSpan.Zero);
+        var envelope = new EventEnvelope
+        {
+            Id = "outer-envelope",
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-4",
+                    Version = 10,
+                    EventData = Any.Pack(new StringValue { Value = "fact" }),
+                },
+                StateRoot = Any.Pack(new StringValue { Value = "STATE-ROOT" }),
+            }),
+        };
+
+        CommittedStateEventEnvelope.ResolveTimestamp(envelope, fallback).Should().Be(fallback);
     }
 
     [Fact]
