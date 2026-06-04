@@ -1164,7 +1164,7 @@ describe("TeamDetailPage", () => {
       name: /Team Alpha Operator.*member-team-alpha/,
     });
     expect(
-      within(alphaRow).getByRole("link", { name: "编辑 Team Alpha Operator" }),
+      within(alphaRow).getByRole("link", { name: "在 Studio 中编辑 Team Alpha Operator" }),
     ).toBeTruthy();
     expect(
       within(alphaRow).getByRole("link", {
@@ -1724,7 +1724,7 @@ describe("TeamDetailPage", () => {
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
     fireEvent.click(
-      await screen.findByRole("link", { name: "编辑 Team Alpha Operator" }),
+      await screen.findByRole("link", { name: "在 Studio 中编辑 Team Alpha Operator" }),
     );
 
     expect(window.location.pathname).toBe("/studio");
