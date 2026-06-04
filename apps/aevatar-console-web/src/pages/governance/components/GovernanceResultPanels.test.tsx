@@ -21,7 +21,7 @@ describe('GovernanceResultPanels', () => {
       <GovernanceSummaryPanel
         actions={
           <button type="button" onClick={openDeployments}>
-            打开 Deployments
+            打开部署
           </button>
         }
         title="绑定目录"
@@ -56,7 +56,7 @@ describe('GovernanceResultPanels', () => {
     expect(screen.getByText('8')).toBeInTheDocument();
     expect(screen.getByText('已加载')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '打开 Deployments' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开部署' }));
 
     expect(openDeployments).toHaveBeenCalledTimes(1);
   });

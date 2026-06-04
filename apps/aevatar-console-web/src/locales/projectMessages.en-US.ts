@@ -4681,6 +4681,7 @@ const projectMessages = {
   "pages.teams.home.view.the.team": "View the team",
   "pages.teams.home.view.the.team.2": "View the team",
   "pages.teams.new.back.to.my.teams": "Back to My Teams",
+  "pages.teams.new.aevatar.teams": "Aevatar / Teams",
   "pages.teams.new.create.team": "Create Team",
   "pages.teams.new.create.team.2": "Create Team",
   "pages.teams.new.create.team.3": "Create Team",

@@ -135,15 +135,15 @@ describe('ServicesPage', () => {
     expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
     expect(screen.getAllByText('Services').length).toBeGreaterThan(0);
     expect(await screen.findByText('可见服务')).toBeTruthy();
-    expect((await screen.findAllByText('已挂 Serving')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('已挂服务态')).length).toBeGreaterThan(0);
     expect(await screen.findByText('缺主 Actor')).toBeTruthy();
-    expect(await screen.findByText('无公开入口')).toBeTruthy();
+    expect(await screen.findByText('没有公开 Endpoint')).toBeTruthy();
     expect(await screen.findByText('查找服务')).toBeTruthy();
     expect(await screen.findByText('Service Alpha')).toBeTruthy();
     expect(screen.getByText('团队/租户')).toBeTruthy();
     expect(screen.getByText('结果窗口')).toBeTruthy();
     expect(screen.getByRole('button', { name: '重置' })).toBeTruthy();
-    expect(screen.getByText('Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、Deployments 或 Topology。')).toBeTruthy();
+    expect(screen.getByText('Services 是 Platform 的权威服务目录，回答当前范围内有什么服务、它当前挂到哪、由谁承载，并指引你继续进入 Governance、部署或 Topology。')).toBeTruthy();
     expect(screen.getByText('服务目录')).toBeTruthy();
     expect(screen.getByText('按行扫描状态、部署和入口，点击行或按钮在抽屉里查看详情。')).toBeTruthy();
     expect(screen.getByText('状态')).toBeTruthy();
@@ -196,7 +196,7 @@ describe('ServicesPage', () => {
 
     expect(await screen.findByText('当前范围没有服务')).toBeTruthy();
     expect(
-      screen.getByText('当前 Team、App 和 Namespace 下没有可见服务。可以调整范围后重新加载。'),
+      screen.getByText('当前团队、App 和 Namespace 下没有可见服务。可以调整范围后重新加载。'),
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '调整服务范围' }));
@@ -214,10 +214,10 @@ describe('ServicesPage', () => {
     expect(await screen.findByText('对象摘要')).toBeTruthy();
     expect(await screen.findByText('服务工作区')).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开 Governance' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '打开 Deployments' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开部署' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开 Topology' })).toBeTruthy();
     expect(screen.getAllByText('tenant-a/app-a/default/service-alpha').length).toBeGreaterThan(0);
-    expect(screen.getByText('当前 serving 版本')).toBeTruthy();
+    expect(screen.getByText('当前服务态版本')).toBeTruthy();
     expect(screen.getByText('权威对象')).toBeTruthy();
     expect(screen.getByRole('tab', { name: '入口' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: '版本与部署' })).toBeTruthy();

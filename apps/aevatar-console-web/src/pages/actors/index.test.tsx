@@ -167,7 +167,7 @@ describe("ActorsPage", () => {
     expect(screen.getByRole("button", { name: "打开追查详情" })).toBeTruthy();
     expect(screen.queryByText("示例数据")).toBeNull();
     expect(container.textContent).toContain("数据源");
-    expect(container.textContent).toContain("Actor Query");
+    expect(container.textContent).toContain("Actor 查询");
     expect(container.textContent).toContain("SupportRoot");
     expect(screen.getAllByRole("button", { name: "查看概览" }).length).toBeGreaterThan(0);
   });

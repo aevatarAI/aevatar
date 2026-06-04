@@ -19,7 +19,7 @@ describe('buildDeploymentDeactivateAvailability', () => {
     const availability = buildDeploymentDeactivateAvailability(null);
 
     expect(availability.enabled).toBe(false);
-    expect(availability.reason).toContain('未选中 deployment');
+    expect(availability.reason).toContain('未选中部署');
   });
 
   it('allows deactivate for active deployments', () => {
@@ -36,7 +36,7 @@ describe('buildDeploymentDeactivateAvailability', () => {
     });
 
     expect(availability.enabled).toBe(false);
-    expect(availability.reason).toContain('只适用于活动 deployment');
+    expect(availability.reason).toContain('只适用于活动部署');
   });
 
   it('disables deactivate for retired deployments', () => {

@@ -44,7 +44,7 @@ describe("governanceCommandReceipt", () => {
   it("keeps missing catalogs in accepted-only state", () => {
     expect(observeGovernanceReceipt(receipt, null)).toMatchObject({
       observed: false,
-      summary: expect.stringContaining("命令已接收"),
+      summary: expect.stringContaining("only command acceptance is known"),
     });
   });
 });

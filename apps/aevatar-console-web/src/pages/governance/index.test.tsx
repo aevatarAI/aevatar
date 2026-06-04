@@ -124,7 +124,7 @@ describe('GovernanceIndexPage', () => {
   it('hands off a governed service to Deployments with service and deployment focus', async () => {
     renderWithQueryClient(React.createElement(GovernanceIndexPage));
 
-    fireEvent.click(await screen.findByRole('button', { name: '打开 Deployments' }));
+    fireEvent.click(await screen.findByRole('button', { name: '打开部署' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/deployments');
@@ -148,7 +148,7 @@ describe('GovernanceIndexPage', () => {
     renderWithQueryClient(React.createElement(GovernanceIndexPage));
 
     expect(await screen.findByRole('button', { name: '新建绑定' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '打开 Deployments' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开部署' })).toBeTruthy();
   });
 
   it('does not auto-select the first service when service context is missing', async () => {

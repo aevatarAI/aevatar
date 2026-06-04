@@ -22,7 +22,7 @@ describe('buildServingTargetPlanStatus', () => {
     ]);
 
     expect(status.enabled).toBe(false);
-    expect(status.reason).toContain('缺少 revision');
+    expect(status.reason).toContain('缺少修订');
   });
 
   it('requires allocation weights to add up to 100 percent', () => {
@@ -52,7 +52,7 @@ describe('buildServingTargetPlanStatus', () => {
     ]);
 
     expect(status.enabled).toBe(false);
-    expect(status.reason).toContain('Serving 状态只能选择');
+    expect(status.reason).toContain('服务态状态只能选择');
   });
 
   it('allows a complete 100 percent serving target plan', () => {

@@ -361,7 +361,7 @@ describe("GovernanceInspectorDrawer", () => {
 
     expect(screen.getByRole("button", { name: "已公开" })).toBeDisabled();
     expect(
-      screen.getByText("当前 endpoint catalog 已经观察到 public 状态，不再显示重复的公开切换。"),
+      screen.getByText("当前入口目录已经观察到公开状态，不再显示重复的公开切换。"),
     ).toBeInTheDocument();
   });
 });

@@ -215,7 +215,7 @@ describe('buildDeploymentReleaseEvidenceSnapshot', () => {
 
     expect(evidence.observedCount).toBe(0);
     expect(evidence.summary).toBe(
-      '3 项证据需要人工核对，避免把旧 readmodel 当作本次完成。',
+      '3 项证据需要人工核对，避免把旧 ReadModel 当作本次完成。',
     );
     expect(evidence.checks.map((check) => check.status)).toEqual([
       'review',
@@ -309,7 +309,7 @@ describe('buildDeploymentReleaseEvidenceSnapshot', () => {
         status: 'pending',
       }),
     );
-    expect(evidence.checks[0].detail).toContain('出现在 catalog');
+    expect(evidence.checks[0].detail).toContain('出现在目录');
   });
 
   it('keeps deactivate catalog pending while the deployment is still active', () => {
@@ -353,7 +353,7 @@ describe('buildDeploymentReleaseEvidenceSnapshot', () => {
     });
 
     expect(evidence.checks[0].status).toBe('pending');
-    expect(evidence.checks[0].detail).toContain('状态离开 active');
+    expect(evidence.checks[0].detail).toContain('状态离开活跃');
   });
 
   it('observes rollback when rollout reaches RolledBack after the handoff', () => {

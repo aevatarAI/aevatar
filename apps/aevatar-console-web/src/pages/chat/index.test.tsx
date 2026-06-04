@@ -898,7 +898,7 @@ describe("ChatPage", () => {
     fireEvent.change(routeSelect, {
       target: { value: "/api/v1/proxy/s/openai" },
     });
-    expect(await screen.findByText("via OpenAI")).toBeTruthy();
+    expect(await screen.findByText("Via OpenAI")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "gpt-5.4-mini" }));
 
     fireEvent.change(await screen.findByPlaceholderText("Send a message..."), {

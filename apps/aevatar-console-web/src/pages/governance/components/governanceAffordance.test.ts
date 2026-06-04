@@ -74,7 +74,7 @@ describe("governanceAffordance", () => {
   it("only exposes a public endpoint action when it can submit a real catalog update", () => {
     expect(resolveEndpointExposureAction(endpoint, endpointCatalog)).toMatchObject({
       disabled: false,
-      label: "公开入口",
+      label: "Public endpoints",
       nextExposureKind: "public",
     });
     expect(
@@ -84,7 +84,7 @@ describe("governanceAffordance", () => {
       ),
     ).toMatchObject({
       disabled: true,
-      label: "已公开",
+      label: "Published",
     });
     expect(resolveEndpointExposureAction(endpoint, null)).toMatchObject({
       disabled: true,
@@ -92,8 +92,8 @@ describe("governanceAffordance", () => {
     });
     expect(resolveEndpointExposureAction({ ...endpoint, exposureKind: "public" }, null)).toMatchObject({
       disabled: true,
-      label: "已公开",
-      reason: expect.stringContaining("确认或提交"),
+      label: "Published",
+      reason: expect.stringContaining("confirmed or submitted"),
     });
   });
 

@@ -190,7 +190,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(invokeWorkspace.children[1]).toBe(invokeComposerDock);
     expect(mainDebugArea).not.toContainElement(invokeComposerDock);
     expect(invokeComposerDock).toContainElement(
-      screen.getByLabelText('调用请求输入'),
+      screen.getByLabelText('Invocation request input'),
     );
     expect(mainDebugArea.style.overflow).toBe('visible');
     expect(mainDebugArea.style.minHeight).toBe('0');
@@ -245,7 +245,7 @@ describe('StudioMemberInvokePanel', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Invoke' }));
 
-    expect(await screen.findByText('请输入 Prompt 后再发起 Invoke。')).toBeTruthy();
+    expect(await screen.findByText('Please enter Prompt before initiating Invoke.')).toBeTruthy();
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(screen.queryByText('调用契约')).toBeNull();
     expect(screen.queryByText('缺少提示词')).toBeNull();
@@ -326,7 +326,7 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
       target: {
         value: 'Give me a quick summary of what this member can do.',
       },
@@ -410,7 +410,7 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
       target: {
         value: 'Classify this support ticket.',
       },
@@ -611,7 +611,7 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
       target: {
         value: 'Run the gagent team.',
       },
@@ -690,7 +690,7 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
       target: {
         value: 'Run the team member.',
       },
@@ -749,7 +749,7 @@ describe('StudioMemberInvokePanel', () => {
       'submit',
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
       target: {
         value: 'Route this escalation to billing review.',
       },
@@ -798,7 +798,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Input')).toBeTruthy();
     expect(screen.getAllByText('Output').length).toBeGreaterThanOrEqual(1);
     expect(
-      screen.getByText('没有返回可展示内容。'),
+      screen.getByText('No displayable content returned.'),
     ).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Details|详情|展开/ })).toBeNull();
     expect(screen.queryByText('运行详情')).toBeNull();
@@ -856,7 +856,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(message.success).toHaveBeenCalledWith('Run id copied.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry as new run' }));
-    expect(screen.getByLabelText('调用请求输入')).toHaveValue(
+    expect(screen.getByLabelText('Invocation request input')).toHaveValue(
       'Route this escalation to billing review.',
     );
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({
@@ -867,13 +867,13 @@ describe('StudioMemberInvokePanel', () => {
       'Prompt restored. Click Invoke to create a new Run.',
     );
 
-    fireEvent.change(screen.getByLabelText('调用请求输入'), {
+    fireEvent.change(screen.getByLabelText('Invocation request input'), {
       target: {
         value: 'Overwrite prompt',
       },
     });
 
-    expect(screen.getByLabelText('调用请求输入')).toHaveValue(
+    expect(screen.getByLabelText('Invocation request input')).toHaveValue(
       'Overwrite prompt',
     );
   });
@@ -941,7 +941,7 @@ describe('StudioMemberInvokePanel', () => {
       );
     });
 
-    fireEvent.change(screen.getByLabelText('调用请求输入'), {
+    fireEvent.change(screen.getByLabelText('Invocation request input'), {
       target: {
         value: 'Route this escalation to billing review.',
       },
@@ -1013,7 +1013,7 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
       target: {
         value: 'hello',
       },
@@ -1068,7 +1068,7 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+    fireEvent.change(await screen.findByLabelText('Invocation request input'), {
       target: {
         value: 'Dispatch this typed command.',
       },

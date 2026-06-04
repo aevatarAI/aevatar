@@ -23,19 +23,19 @@ describe('buildDeploymentReleaseHandoff', () => {
     });
 
     expect(handoff.pendingLabel).toBe('已提交，不代表已完成');
-    expect(handoff.noticeMessage).toContain('等待 rollout/serving 证据刷新');
+    expect(handoff.noticeMessage).toContain('等待发布推进/服务态证据刷新');
     expect(handoff.evidenceDescription).toContain(
-      '尚未说明候选 revision 已经被 serving 观察到',
+      '尚未说明候选修订已经被服务态观察到',
     );
     expect(handoff.evidenceView).toBe('rollout');
     expect(handoff.summaryItems).toEqual(
       expect.arrayContaining([
         {
-          label: '候选 revision',
+          label: '候选修订',
           value: 'rev-12',
         },
         {
-          label: '当前 serving',
+          label: '当前服务态',
           value: 'rev-11',
         },
       ]),
@@ -56,9 +56,9 @@ describe('buildDeploymentReleaseHandoff', () => {
     });
 
     expect(handoff.evidenceView).toBe('serving');
-    expect(handoff.evidenceItems.join(' ')).toContain('Serving generation');
-    expect(handoff.evidenceItems.join(' ')).toContain('Traffic');
-    expect(handoff.noticeMessage).toContain('等待 serving/traffic 证据刷新');
+    expect(handoff.evidenceItems.join(' ')).toContain('服务态代次');
+    expect(handoff.evidenceItems.join(' ')).toContain('流量 Endpoint');
+    expect(handoff.noticeMessage).toContain('等待服务态/流量证据刷新');
   });
 
   it('does not describe rollback as completed serving state', () => {
@@ -75,9 +75,9 @@ describe('buildDeploymentReleaseHandoff', () => {
 
     expect(handoff.noticeTone).toBe('warning');
     expect(handoff.evidenceDescription).toContain(
-      '不代表 serving 已经回到 baseline',
+      '不代表服务态已经回到基线',
     );
-    expect(handoff.evidenceItems.join(' ')).toContain('baseline');
+    expect(handoff.evidenceItems.join(' ')).toContain('基线');
   });
 
   it('keeps deactivate handoff pointed at catalog and serving evidence', () => {
@@ -100,6 +100,6 @@ describe('buildDeploymentReleaseHandoff', () => {
         },
       ]),
     );
-    expect(handoff.evidenceItems.join(' ')).toContain('Serving targets');
+    expect(handoff.evidenceItems.join(' ')).toContain('服务目标');
   });
 });

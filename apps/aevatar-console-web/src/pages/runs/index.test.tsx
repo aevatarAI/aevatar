@@ -363,7 +363,7 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Workflow catalog" })
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "返回团队高级编辑" })
+      screen.queryByRole("button", { name: "Back to advanced team editing" })
     ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Actor explorer" })
@@ -473,7 +473,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "返回团队高级编辑" })
+      await screen.findByRole("button", { name: "Back to advanced team editing" })
     );
 
     expect(window.location.pathname).toBe("/teams");
@@ -492,7 +492,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "返回 Studio" })
+      await screen.findByRole("button", { name: "Back to Studio" })
     );
 
     expect(window.location.pathname).toBe("/studio");
@@ -517,7 +517,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "返回 Workflow Library" })
+      await screen.findByRole("button", { name: "Back to Workflow Library" })
     );
 
     expect(window.location.pathname).toBe("/runtime/workflows");

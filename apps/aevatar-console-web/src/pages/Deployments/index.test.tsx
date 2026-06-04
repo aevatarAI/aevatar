@@ -304,7 +304,7 @@ describe('DeploymentsPage', () => {
     ).toBeInTheDocument();
     expect(
       await screen.findByText(
-        'Deployments 是 Platform 的发布工作台，聚焦当前 serving、rollout 进度和流量分配。',
+        '部署是 Platform 的发布工作台，聚焦当前服务态、发布推进进度和流量分配。',
       ),
     ).toBeInTheDocument();
     expect(await screen.findByText('发布服务列表')).toBeInTheDocument();
@@ -361,7 +361,7 @@ describe('DeploymentsPage', () => {
     expect(await screen.findByText('当前范围没有服务')).toBeInTheDocument();
     expect(
       screen.getByText(
-        '当前 Team、App 和 Namespace 下没有可发布服务。可以调整范围后重新加载。',
+        '当前团队、App 和 Namespace 下没有可发布服务。可以调整范围后重新加载。',
       ),
     ).toBeInTheDocument();
 
@@ -404,7 +404,7 @@ describe('DeploymentsPage', () => {
     );
 
     expect(await screen.findByText('发布摘要')).toBeInTheDocument();
-    expect(await screen.findByText('Deployment 数')).toBeInTheDocument();
+    expect(await screen.findByText('部署数')).toBeInTheDocument();
     expect(
       await screen.findByRole('tab', { name: '部署目录', selected: true }),
     ).toBeInTheDocument();
@@ -422,7 +422,7 @@ describe('DeploymentsPage', () => {
     );
 
     expect(await screen.findByText('发布摘要')).toBeInTheDocument();
-    expect(await screen.findByText('Deployment 数')).toBeInTheDocument();
+    expect(await screen.findByText('部署数')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: '部署候选版本' }),
     ).toBeInTheDocument();
@@ -450,9 +450,9 @@ describe('DeploymentsPage', () => {
     expect(await screen.findByText('发布摘要')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: '发布控制' }));
 
-    expect(await screen.findByText('推进 rollout')).toBeInTheDocument();
+    expect(await screen.findByText('推进发布推进')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: '回滚 rollout' }),
+      screen.getByRole('button', { name: '回滚发布推进' }),
     ).toBeInTheDocument();
   });
 
@@ -567,25 +567,25 @@ describe('DeploymentsPage', () => {
     expect(screen.getByText('已提交，不代表已完成')).toBeInTheDocument();
     expect(
       screen.getByText(
-        '这只表示候选版本部署命令已接收，尚未说明候选 revision 已经被 serving 观察到。',
+        '这只表示候选版本部署命令已接收，尚未说明候选修订已经被服务态观察到。',
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        '3 项证据需要人工核对，避免把旧 readmodel 当作本次完成。',
+        '3 项证据需要人工核对，避免把旧 ReadModel 当作本次完成。',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText('已观察')).toBeNull();
     expect(screen.getAllByText('需核对').length).toBeGreaterThanOrEqual(3);
     expect(
-      screen.getByText(/Serving targets 已包含 rev-12/),
+      screen.getByText(/服务目标已包含 rev-12/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Traffic split 已包含 rev-12/)).toBeInTheDocument();
-    expect(screen.getByText('候选 revision')).toBeInTheDocument();
+    expect(screen.getByText(/流量拆分已包含 rev-12/)).toBeInTheDocument();
+    expect(screen.getByText('候选修订')).toBeInTheDocument();
     expect(screen.getAllByText('rev-12').length).toBeGreaterThan(0);
-    expect(screen.queryByText('候选版本已在 serving 生效')).toBeNull();
+    expect(screen.queryByText('候选版本已在服务态生效')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: '查看Rollout证据' }));
+    fireEvent.click(screen.getByRole('button', { name: '查看发布推进证据' }));
 
     expect(
       await screen.findByRole('tab', { name: 'Rollout', selected: true }),
@@ -600,18 +600,18 @@ describe('DeploymentsPage', () => {
     expect(await screen.findByText('发布摘要')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: '发布控制' }));
     fireEvent.click(
-      await screen.findByRole('button', { name: '回滚 rollout' }),
+      await screen.findByRole('button', { name: '回滚发布推进' }),
     );
 
-    expect(await screen.findByText('Rollout 回滚已提交')).toBeInTheDocument();
+    expect(await screen.findByText('发布推进回滚已提交')).toBeInTheDocument();
     expect(screen.getByText('已提交，不代表已完成')).toBeInTheDocument();
     expect(
       screen.getByText(
-        '这只表示回滚命令已接收，不代表 serving 已经回到 baseline。',
+        '这只表示回滚命令已接收，不代表服务态已经回到基线。',
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('Rollout 回滚请求已提交，等待 baseline 证据刷新。'),
+      screen.getByText('发布推进回滚请求已提交，等待基线证据刷新。'),
     ).toBeInTheDocument();
     expect(screen.getAllByText('待观察').length).toBeGreaterThanOrEqual(3);
     expect(screen.getByText('Traffic split')).toBeInTheDocument();
@@ -626,9 +626,9 @@ describe('DeploymentsPage', () => {
     fireEvent.click(await screen.findByRole('tab', { name: '部署目录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看详情' }));
 
-    expect(await screen.findByText('Deployment 详情')).toBeInTheDocument();
+    expect(await screen.findByText('部署详情')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: '停用 Deployment' }),
+      screen.getByRole('button', { name: '停用部署' }),
     ).toBeInTheDocument();
   });
 
@@ -656,8 +656,8 @@ describe('DeploymentsPage', () => {
     fireEvent.click(await screen.findByRole('tab', { name: '部署目录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看详情' }));
 
-    expect(await screen.findByText('Deployment 详情')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '停用 Deployment' })).toBeNull();
+    expect(await screen.findByText('部署详情')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '停用部署' })).toBeNull();
     expect(screen.getByRole('button', { name: '不可停用' })).toBeDisabled();
   });
 });

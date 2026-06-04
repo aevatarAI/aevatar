@@ -26,7 +26,7 @@ describe('buildRolloutActionAvailability', () => {
     expect(availability.pause.enabled).toBe(false);
     expect(availability.resume.enabled).toBe(false);
     expect(availability.rollback.enabled).toBe(false);
-    expect(availability.advance.reason).toContain('没有活动 rollout');
+    expect(availability.advance.reason).toContain('没有活动发布推进');
   });
 
   it('allows active rollout advance, pause, and rollback while keeping resume honest', () => {
@@ -36,7 +36,7 @@ describe('buildRolloutActionAvailability', () => {
     expect(availability.pause.enabled).toBe(true);
     expect(availability.resume.enabled).toBe(false);
     expect(availability.rollback.enabled).toBe(true);
-    expect(availability.resume.reason).toContain('paused');
+    expect(availability.resume.reason).toContain('暂停状态');
   });
 
   it('allows only resume and rollback when the rollout is paused', () => {

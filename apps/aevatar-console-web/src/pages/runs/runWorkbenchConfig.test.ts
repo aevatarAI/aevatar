@@ -27,15 +27,15 @@ describe("resolveResponsiveComposerWidth", () => {
   it("describes return targets by their source surface", () => {
     expect(
       describeRunReturnTarget("/runtime/workflows?workflow=demo_flow")
-    ).toBe("返回 Workflow Library");
+    ).toBe("Back to Workflow Library");
     expect(
       describeRunReturnTarget("/runtime/explorer/detail?actorId=actor-1")
-    ).toBe("返回 Actor explorer");
-    expect(describeRunReturnTarget("/studio?tab=studio")).toBe("返回 Studio");
+    ).toBe("Back to Actor Explorer");
+    expect(describeRunReturnTarget("/studio?tab=studio")).toBe("Back to Studio");
     expect(describeRunReturnTarget("/teams/scope-a/team-a")).toBe(
-      "返回团队高级编辑"
+      "Back to advanced team editing"
     );
-    expect(describeRunReturnTarget()).toBe("返回团队高级编辑");
+    expect(describeRunReturnTarget()).toBe("Back to advanced team editing");
   });
 });
 
