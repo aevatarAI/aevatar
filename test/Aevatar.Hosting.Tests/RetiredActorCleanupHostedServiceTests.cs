@@ -24,33 +24,28 @@ public sealed class RetiredActorCleanupHostedServiceTests
     public async Task StartAsync_ShouldDestroyRetiredActors_RemoveRelays_AndResetEventStreams()
     {
         var eventStore = new InMemoryEventStore();
-        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
-        await AppendSingleEventAsync(
-            eventStore,
-            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store");
+        await AppendSingleEventAsync(eventStore, SyntheticRetiredActorSpec.ActorBodyId);
+        await AppendSingleEventAsync(eventStore, SyntheticRetiredActorSpec.ProjectionScopeId);
         var kindProbe = new StubActorKindProbe(new Dictionary<string, string?>
         {
-            ["channel-bot-registration-store"] = "channel-runtime.channel-bot-registration",
-            ["projection.durable.scope:channel-bot-registration:channel-bot-registration-store"] =
-                "projection.materialization-scope.channel-bot-registration-materialization-context",
+            [SyntheticRetiredActorSpec.ActorBodyId] = SyntheticRetiredActorSpec.ActorBodyKind,
+            [SyntheticRetiredActorSpec.ProjectionScopeId] = SyntheticRetiredActorSpec.ProjectionScopeKind,
         });
         var runtime = new RecordingActorRuntime();
         var streamProvider = new RecordingStreamProvider();
-        streamProvider.SeedRelay("channel-bot-registration-store", "stale-child-stream");
-        var service = CreateService(kindProbe, runtime, streamProvider, eventStore, CreateChannelRuntimeSpec());
+        streamProvider.SeedRelay(SyntheticRetiredActorSpec.ActorBodyId, "stale-child-stream");
+        var service = CreateService(kindProbe, runtime, streamProvider, eventStore, new SyntheticRetiredActorSpec());
 
         await RunStartupCleanupAsync(service);
 
-        runtime.DestroyedActorIds.Should().Contain("channel-bot-registration-store");
-        runtime.DestroyedActorIds.Should().Contain(
-            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store");
+        runtime.DestroyedActorIds.Should().Contain(SyntheticRetiredActorSpec.ActorBodyId);
+        runtime.DestroyedActorIds.Should().Contain(SyntheticRetiredActorSpec.ProjectionScopeId);
         streamProvider.RemovedRelays.Should().Contain((
-            "channel-bot-registration-store",
-            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store"));
-        streamProvider.RemovedRelays.Should().Contain(("channel-bot-registration-store", "stale-child-stream"));
-        (await eventStore.GetVersionAsync("channel-bot-registration-store")).Should().Be(0);
-        (await eventStore.GetVersionAsync(
-            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store")).Should().Be(0);
+            SyntheticRetiredActorSpec.ActorBodyId,
+            SyntheticRetiredActorSpec.ProjectionScopeId));
+        streamProvider.RemovedRelays.Should().Contain((SyntheticRetiredActorSpec.ActorBodyId, "stale-child-stream"));
+        (await eventStore.GetVersionAsync(SyntheticRetiredActorSpec.ActorBodyId)).Should().Be(0);
+        (await eventStore.GetVersionAsync(SyntheticRetiredActorSpec.ProjectionScopeId)).Should().Be(0);
     }
 
     [Fact]
@@ -254,18 +249,18 @@ public sealed class RetiredActorCleanupHostedServiceTests
         // transient stream-provider failure there must not abort the destroy +
         // event-stream reset path that the cleanup is here to perform.
         var eventStore = new InMemoryEventStore();
-        var projectionScopeActorId =
-            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store";
+        var projectionScopeActorId = SyntheticRetiredActorSpec.ProjectionScopeId;
         await AppendSingleEventAsync(eventStore, projectionScopeActorId);
         var kindProbe = new StubActorKindProbe(new Dictionary<string, string?>
         {
-            [projectionScopeActorId] =
-                "projection.materialization-scope.channel-bot-registration-materialization-context",
+            [projectionScopeActorId] = SyntheticRetiredActorSpec.ProjectionScopeKind,
         });
         var runtime = new RecordingActorRuntime();
-        var streamProvider = new ThrowingRelayStreamProvider("channel-bot-registration-store");
+        // The projection-scope target's incoming-relay cleanup resolves its SourceStreamId
+        // (the actor-body stream); make that throw to assert the destroy + reset path survives.
+        var streamProvider = new ThrowingRelayStreamProvider(SyntheticRetiredActorSpec.ActorBodyId);
         var service = CreateService(
-            kindProbe, runtime, streamProvider, eventStore, CreateChannelRuntimeSpec());
+            kindProbe, runtime, streamProvider, eventStore, new SyntheticRetiredActorSpec());
 
         await RunStartupCleanupAsync(service);
 
@@ -427,33 +422,6 @@ public sealed class RetiredActorCleanupHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldDestroyMidMigrationProjectionScope_AtNewScopeKey()
-    {
-        // Mid-migration deploys may have created the durable projection scope
-        // actor at the *new* scope key (UserAgentCatalog: user-agent-catalog-read-model)
-        // while still bound to the old ChannelRuntime materialization context.
-        // The retired-cleanup spec must target both the old and new scope keys
-        // so a single deploy auto-recovers without manual redis surgery.
-        var newScopeKeyActorId =
-            "projection.durable.scope:user-agent-catalog-read-model:agent-registry-store";
-        var eventStore = new InMemoryEventStore();
-        await AppendSingleEventAsync(eventStore, newScopeKeyActorId);
-        var kindProbe = new StubActorKindProbe(new Dictionary<string, string?>
-        {
-            [newScopeKeyActorId] =
-                "projection.materialization-scope.user-agent-catalog-materialization-context",
-        });
-        var runtime = new RecordingActorRuntime();
-        var service = CreateService(
-            kindProbe, runtime, new RecordingStreamProvider(), eventStore, CreateScheduledSpec());
-
-        await RunStartupCleanupAsync(service);
-
-        runtime.DestroyedActorIds.Should().Contain(newScopeKeyActorId);
-        (await eventStore.GetVersionAsync(newScopeKeyActorId)).Should().Be(0);
-    }
-
-    [Fact]
     public async Task StartAsync_ShouldResetStreamPubSub_ForEachCleanedActor()
     {
         // Stream pub/sub state (Orleans PubSubRendezvousGrain) lives outside the
@@ -463,15 +431,12 @@ public sealed class RetiredActorCleanupHostedServiceTests
         // this hosted service is meant to prevent. Exercise that the cleanup
         // calls the IStreamPubSubMaintenance hook for every cleaned actor.
         var eventStore = new InMemoryEventStore();
-        await AppendSingleEventAsync(eventStore, "channel-bot-registration-store");
-        await AppendSingleEventAsync(
-            eventStore,
-            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store");
+        await AppendSingleEventAsync(eventStore, SyntheticRetiredActorSpec.ActorBodyId);
+        await AppendSingleEventAsync(eventStore, SyntheticRetiredActorSpec.ProjectionScopeId);
         var kindProbe = new StubActorKindProbe(new Dictionary<string, string?>
         {
-            ["channel-bot-registration-store"] = "channel-runtime.channel-bot-registration",
-            ["projection.durable.scope:channel-bot-registration:channel-bot-registration-store"] =
-                "projection.materialization-scope.channel-bot-registration-materialization-context",
+            [SyntheticRetiredActorSpec.ActorBodyId] = SyntheticRetiredActorSpec.ActorBodyKind,
+            [SyntheticRetiredActorSpec.ProjectionScopeId] = SyntheticRetiredActorSpec.ProjectionScopeKind,
         });
         var runtime = new RecordingActorRuntime();
         var pubSub = new RecordingStreamPubSubMaintenance();
@@ -484,14 +449,13 @@ public sealed class RetiredActorCleanupHostedServiceTests
             runtime,
             new RecordingStreamProvider(),
             eventStore,
-            CreateChannelRuntimeSpec(),
+            new SyntheticRetiredActorSpec(),
             serviceCollection.BuildServiceProvider());
 
         await RunStartupCleanupAsync(service);
 
-        pubSub.ResetActorIds.Should().Contain("channel-bot-registration-store");
-        pubSub.ResetActorIds.Should().Contain(
-            "projection.durable.scope:channel-bot-registration:channel-bot-registration-store");
+        pubSub.ResetActorIds.Should().Contain(SyntheticRetiredActorSpec.ActorBodyId);
+        pubSub.ResetActorIds.Should().Contain(SyntheticRetiredActorSpec.ProjectionScopeId);
     }
 
     [Fact]
@@ -783,6 +747,30 @@ public sealed class RetiredActorCleanupHostedServiceTests
                     ? queue.Dequeue()
                     : null);
         }
+    }
+
+    // Exercises the generic retired-actor cleanup mechanism (actor-body target + a
+    // projection-scope target with an incoming source-stream relay) using NON-LIVE kind
+    // tokens. Production specs must never retire a live materialization scope kind — that
+    // invariant is guarded by
+    // ProjectionRuntimeRegistrationTests.RetiredProjectionScopeTokens_ShouldNotRetireLiveMaterializationScopeKinds —
+    // so the destroy/relay/reset mechanism is covered here independently of any real module spec.
+    private sealed class SyntheticRetiredActorSpec : RetiredActorSpec
+    {
+        public const string ActorBodyId = "tests-retired-store";
+        public const string ActorBodyKind = "tests.retired-actor";
+        public const string ProjectionScopeId =
+            "projection.durable.scope:tests-retired:tests-retired-store";
+        public const string ProjectionScopeKind =
+            "projection.materialization-scope.tests-retired-materialization-context";
+
+        public override string SpecId => "tests-synthetic";
+
+        public override IReadOnlyList<RetiredActorTarget> Targets { get; } =
+        [
+            new(ActorBodyId, [ActorBodyKind], CleanupReadModels: true),
+            new(ProjectionScopeId, [ProjectionScopeKind], SourceStreamId: ActorBodyId),
+        ];
     }
 
     private sealed class BlockingDiscoveryRetiredActorSpec(string actorId) : RetiredActorSpec

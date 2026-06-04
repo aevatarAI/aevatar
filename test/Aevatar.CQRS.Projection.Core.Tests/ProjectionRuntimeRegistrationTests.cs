@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -395,30 +396,49 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
-    public void RetiredProjectionScopeTokens_ShouldMatchGeneratedScopeAgentKinds()
+    public void RetiredProjectionScopeTokens_ShouldNotRetireLiveMaterializationScopeKinds()
     {
+        // A retired-actor spec must NEVER list a currently-live materialization scope
+        // kind. RetiredActorTarget.MatchesRuntimeKind compares the probed runtime kind
+        // to the retired tokens by exact ordinal equality, so a live kind in the retired
+        // list destroys the live projection scope on every startup cleanup pass, leaving
+        // its read model un-materialized.
+        //
+        // Regression guard for #1763: the legacy CLR-name tokens
+        // ("Aevatar.GAgents.ChannelRuntime.*MaterializationContext") were translated into
+        // the live "projection.materialization-scope.*" kinds. Because the kind is derived
+        // from the context type's *simple name* (namespace-independent), the old and new
+        // materialization contexts collapse to the same kind, so retiring it silently
+        // killed the channel/device/scheduled read-model projections on every boot.
         var userAgentCatalogKind = ProjectionScopeAgentRegistration
             .Create<ProjectionMaterializationScopeGAgent<UserAgentCatalogMaterializationContext>>()
             .Kind;
         var channelBotRegistrationKind = ProjectionScopeAgentRegistration
             .Create<ProjectionMaterializationScopeGAgent<ChannelBotRegistrationMaterializationContext>>()
             .Kind;
+        var deviceRegistrationKind = ProjectionScopeAgentRegistration
+            .Create<ProjectionMaterializationScopeGAgent<DeviceRegistrationMaterializationContext>>()
+            .Kind;
 
         var scheduledTokens = new ScheduledRetiredActorSpec()
             .Targets
-            .Where(static target => target.ActorId.StartsWith("projection.durable.scope:", StringComparison.Ordinal))
             .SelectMany(static target => target.RetiredKindTokens)
             .ToArray();
         var channelTokens = new ChannelRuntimeRetiredActorSpec()
             .Targets
-            .Where(static target => target.ActorId.StartsWith("projection.durable.scope:", StringComparison.Ordinal))
+            .SelectMany(static target => target.RetiredKindTokens)
+            .ToArray();
+        var deviceTokens = new DeviceRetiredActorSpec()
+            .Targets
             .SelectMany(static target => target.RetiredKindTokens)
             .ToArray();
 
         userAgentCatalogKind.Should().Be("projection.materialization-scope.user-agent-catalog-materialization-context");
         channelBotRegistrationKind.Should().Be("projection.materialization-scope.channel-bot-registration-materialization-context");
-        scheduledTokens.Should().Contain(userAgentCatalogKind);
-        channelTokens.Should().Contain(channelBotRegistrationKind);
+        deviceRegistrationKind.Should().Be("projection.materialization-scope.device-registration-materialization-context");
+        scheduledTokens.Should().NotContain(userAgentCatalogKind);
+        channelTokens.Should().NotContain(channelBotRegistrationKind);
+        deviceTokens.Should().NotContain(deviceRegistrationKind);
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime
