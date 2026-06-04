@@ -17,10 +17,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
 
-    public ScheduledDispatchGAgent(IActorDispatchPort dispatchPort)
+    public ScheduledDispatchGAgent(
+        IActorDispatchPort dispatchPort,
+        IScheduledServiceInvocationDispatchPort serviceInvocationDispatchPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _serviceInvocationDispatchPort = serviceInvocationDispatchPort
+            ?? throw new ArgumentNullException(nameof(serviceInvocationDispatchPort));
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -199,9 +204,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         try
         {
             var prepared = await BuildDispatchEnvelopeAsync(scheduledFireAt, idempotencyKey, ct);
-            var envelope = prepared.Envelope;
-            var admission = await _dispatchPort.DispatchAsync(prepared.TargetActorId, envelope, ct);
-            if (!admission.Accepted)
+            var receipt = await DispatchPreparedTargetAsync(prepared, ct);
+            if (!receipt.Accepted)
             {
                 await PersistFireFailedAsync(
                     scheduledFireAt,
@@ -217,9 +221,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
                     DispatchedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     IdempotencyKey = idempotencyKey,
-                    TargetActorId = prepared.TargetActorId,
-                    CommandId = admission.CommandId,
-                    CorrelationId = admission.CorrelationId,
+                    TargetActorId = receipt.TargetActorId,
+                    CommandId = receipt.CommandId,
+                    CorrelationId = receipt.CorrelationId,
                     Manual = command.Manual,
                 }, ct);
             }
@@ -237,6 +241,31 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         if (!command.Manual)
             await EnsureNextFireScheduledAsync(scheduledFireAt, CancellationToken.None);
+    }
+
+    private async Task<ScheduledDispatchReceipt> DispatchPreparedTargetAsync(
+        ScheduledDispatchEnvelope prepared,
+        CancellationToken ct)
+    {
+        if (prepared.TargetKind == ScheduledDispatchTargetKindState.ServiceInvocation)
+        {
+            if (prepared.Envelope.Payload?.TryUnpack<ServiceInvocationRequest>(out var request) != true)
+                throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
+
+            var receipt = await _serviceInvocationDispatchPort.DispatchAsync(request, ct);
+            return new ScheduledDispatchReceipt(
+                receipt.Accepted,
+                receipt.CommandId,
+                receipt.TargetActorId,
+                receipt.CorrelationId);
+        }
+
+        var admission = await _dispatchPort.DispatchAsync(prepared.TargetActorId, prepared.Envelope, ct);
+        return new ScheduledDispatchReceipt(
+            admission.Accepted,
+            admission.CommandId,
+            admission.ActorId,
+            admission.CorrelationId);
     }
 
     private async Task PersistFireFailedAsync(
@@ -282,7 +311,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             serviceInvocationRequest.CommandId = idempotencyKey;
             serviceInvocationRequest.CorrelationId = propagation.CorrelationId;
             envelope.Payload = Any.Pack(serviceInvocationRequest);
-            return new ScheduledDispatchEnvelope(ResolveDispatchTargetActorId(), envelope);
+            return new ScheduledDispatchEnvelope(
+                ResolveDispatchTargetActorId(),
+                ResolveTargetKind(),
+                envelope);
         }
 
         if (envelope.Payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
@@ -293,7 +325,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             envelope.Payload = Any.Pack(chatRequest);
         }
 
-        return new ScheduledDispatchEnvelope(ResolveDispatchTargetActorId(), envelope);
+        return new ScheduledDispatchEnvelope(
+            ResolveDispatchTargetActorId(),
+            ResolveTargetKind(),
+            envelope);
     }
 
     private IReadOnlyDictionary<string, string> BuildFireHeaders(
@@ -308,7 +343,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private sealed record ScheduledDispatchEnvelope(
         string TargetActorId,
+        ScheduledDispatchTargetKindState TargetKind,
         EventEnvelope Envelope);
+
+    private sealed record ScheduledDispatchReceipt(
+        bool Accepted,
+        string CommandId,
+        string TargetActorId,
+        string CorrelationId);
 
     private async Task EnsureNextFireScheduledAsync(DateTimeOffset fromUtc, CancellationToken ct)
     {
@@ -392,6 +434,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         string.IsNullOrWhiteSpace(State.TargetActorId)
             ? ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId
             : State.TargetActorId.Trim();
+
+    private ScheduledDispatchTargetKindState ResolveTargetKind() =>
+        State.Target?.Kind == ScheduledDispatchTargetKindState.ServiceInvocation
+            ? ScheduledDispatchTargetKindState.ServiceInvocation
+            : ScheduledDispatchTargetKindState.Envelope;
 
     private bool IsConfigured() =>
         !string.IsNullOrWhiteSpace(State.ScheduleId) &&

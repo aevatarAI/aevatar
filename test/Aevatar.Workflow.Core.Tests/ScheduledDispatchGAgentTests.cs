@@ -249,7 +249,8 @@ public sealed class ScheduledDispatchGAgentTests
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateAgent(eventStore, dispatch);
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch, serviceInvocationDispatch: serviceInvocationDispatch);
         await agent.ActivateAsync();
         var invocation = new ServiceInvocationRequest
         {
@@ -288,20 +289,17 @@ public sealed class ScheduledDispatchGAgentTests
         });
 
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstFireAt);
-        dispatch.Dispatches.Should().ContainSingle();
-        dispatch.Dispatches[0].ActorId.Should().Be(ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId);
-        dispatch.Dispatches[0].Envelope.Route.GetTargetActorId().Should().Be(ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId);
-        dispatch.Dispatches[0].Envelope.Id.Should().Be(idempotencyKey);
-        dispatch.Dispatches[0].Envelope.Propagation!.Baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        dispatch.Dispatches[0].Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.FireAtUtc]
-            .Should().Be(firstFireAt.ToUniversalTime().ToString("O"));
-        dispatch.Dispatches[0].Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
-        var serviceRequest = dispatch.Dispatches[0].Envelope.Payload.Unpack<ServiceInvocationRequest>();
+        dispatch.Dispatches.Should().BeEmpty();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        var serviceRequest = serviceInvocationDispatch.Requests.Single();
         serviceRequest.Identity.ServiceId.Should().Be("daily-workflow");
         serviceRequest.EndpointId.Should().Be("chat");
         serviceRequest.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("run daily");
         serviceRequest.CommandId.Should().Be(idempotencyKey);
         serviceRequest.CorrelationId.Should().Be("template-correlation");
+        agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("service-run-actor");
+        agent.State.FireRecords[idempotencyKey].CommandId.Should().Be(idempotencyKey);
+        agent.State.FireRecords[idempotencyKey].CorrelationId.Should().Be("template-correlation");
     }
 
     [Fact]
@@ -612,9 +610,12 @@ public sealed class ScheduledDispatchGAgentTests
     private static ScheduledDispatchGAgent CreateAgent(
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
-        RecordingRuntimeCallbackScheduler? callbackScheduler = null)
+        RecordingRuntimeCallbackScheduler? callbackScheduler = null,
+        RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null)
     {
-        var agent = new ScheduledDispatchGAgent(dispatch)
+        var agent = new ScheduledDispatchGAgent(
+            dispatch,
+            serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort())
         {
             Services = new TestServiceProvider(callbackScheduler),
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(eventStore),
@@ -738,6 +739,33 @@ public sealed class ScheduledDispatchGAgentTests
                 throw DispatchException;
 
             return Task.FromResult(AdmissionFactory(actorId, envelope));
+        }
+    }
+
+    private sealed class RecordingScheduledServiceInvocationDispatchPort : IScheduledServiceInvocationDispatchPort
+    {
+        public List<ServiceInvocationRequest> Requests { get; } = [];
+
+        public Func<ServiceInvocationRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
+            request => new ScheduledServiceInvocationDispatchReceipt(
+                true,
+                request.CommandId,
+                DateTimeOffset.UtcNow,
+                "service-run-actor",
+                request.CorrelationId);
+
+        public Exception? DispatchException { get; set; }
+
+        public Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request.Clone());
+            if (DispatchException != null)
+                throw DispatchException;
+
+            return Task.FromResult(ReceiptFactory(request));
         }
     }
 

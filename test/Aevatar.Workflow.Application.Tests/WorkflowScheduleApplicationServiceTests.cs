@@ -37,8 +37,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 [" trace "] = " enabled ",
                 [" "] = "ignored",
             },
-            ScopeId: " scope-1 ",
-            SourceActorId: " actor-1 "));
+            ScopeId: " scope-1 "));
 
         receipt.ScheduleId.Should().Be("daily-report");
         receipt.ScheduleActorId.Should().Be("actor:daily-report");
@@ -304,7 +303,6 @@ public sealed class WorkflowScheduleApplicationServiceTests
                     ["workflow.schedule.source_actor_id"] = "caller-extension",
                 },
                 ScopeId: " ",
-                SourceActorId: " ",
                 TenantId: "tenant-1"));
 
         receipt.Should().Be(new WorkflowScheduleMutationReceipt("route-schedule", "actor:route-schedule", true));
@@ -478,8 +476,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
             {
                 ["caller"] = "kept",
             },
-            ScopeId: "scope-1",
-            SourceActorId: "source-1"));
+            ScopeId: "scope-1"));
 
         var created = actorPort.Created.Single();
         created.Configuration.Headers.Should().Contain(new KeyValuePair<string, string>("caller", "kept"));

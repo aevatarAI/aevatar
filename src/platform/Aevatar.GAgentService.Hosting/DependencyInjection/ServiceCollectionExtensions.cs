@@ -83,11 +83,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
         services.TryAddTransient<ScheduledDispatchGAgent>();
-        DecorateScheduledServiceInvocationDispatchPort(services);
         services.TryAddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>, StaticGAgentStreamInvocationApplicationService>();
         services.AddScopeGAgentDraftRunInteraction();
         services.AddScriptServiceRunInteraction();
@@ -107,48 +107,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeScriptSaveObservationPort, ScopeScriptSaveObservationService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, GAgentServiceDemoBootstrapHostedService>());
         return services;
-    }
-
-    private static void DecorateScheduledServiceInvocationDispatchPort(IServiceCollection services)
-    {
-        var existing = services.LastOrDefault(static descriptor => descriptor.ServiceType == typeof(IActorDispatchPort));
-        if (existing == null)
-            return;
-
-        services.Remove(existing);
-        services.Add(ServiceDescriptor.Describe(
-            typeof(ScheduledDispatchTransportDelegate),
-            sp => new ScheduledDispatchTransportDelegate(CreateInnerDispatchPort(existing, sp)),
-            existing.Lifetime));
-        services.Add(ServiceDescriptor.Describe(
-            typeof(IActorDispatchPort),
-            sp => new ScheduledServiceInvocationDispatchAdapterPort(
-                sp.GetRequiredService<ScheduledDispatchTransportDelegate>().Inner,
-                () => sp.GetService<IServiceInvocationPort>()),
-            existing.Lifetime));
-    }
-
-    private static IActorDispatchPort CreateInnerDispatchPort(
-        ServiceDescriptor descriptor,
-        IServiceProvider serviceProvider)
-    {
-        if (descriptor.ImplementationInstance is IActorDispatchPort instance)
-            return instance;
-
-        if (descriptor.ImplementationFactory != null)
-            return (IActorDispatchPort)descriptor.ImplementationFactory(serviceProvider)!;
-
-        if (descriptor.ImplementationType != null)
-            return (IActorDispatchPort)ActivatorUtilities.CreateInstance(
-                serviceProvider,
-                descriptor.ImplementationType);
-
-        throw new InvalidOperationException("IActorDispatchPort registration is not supported.");
-    }
-
-    private sealed class ScheduledDispatchTransportDelegate(IActorDispatchPort inner)
-    {
-        public IActorDispatchPort Inner { get; } = inner;
     }
 
     public static IServiceCollection AddGAgentServiceProjectionReadModelProviders(

@@ -115,7 +115,6 @@ public sealed class WorkflowScheduleEndpointsTests
                 Enabled = true,
                 Headers = new Dictionary<string, string> { ["trace"] = "1" },
                 ScopeId = "scope-1",
-                SourceActorId = "actor-1",
             },
             service);
 
@@ -133,8 +132,24 @@ public sealed class WorkflowScheduleEndpointsTests
                 "UTC",
                 true,
                 new Dictionary<string, string> { ["trace"] = "1" },
-                "scope-1",
-                "actor-1"));
+                "scope-1"));
+    }
+
+    [Fact]
+    public void WorkflowScheduleModels_ShouldNotExposeDeadSourceActorIdField()
+    {
+        typeof(WorkflowScheduleConfigurationHttpRequest)
+            .GetProperty("SourceActorId")
+            .Should()
+            .BeNull();
+        typeof(WorkflowScheduleConfiguration)
+            .GetProperty("SourceActorId")
+            .Should()
+            .BeNull();
+        typeof(WorkflowScheduleSummary)
+            .GetProperty("SourceActorId")
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -394,51 +409,31 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchAdapterPort_ShouldResolveServiceInvocationPortOnlyForInvocationTarget()
+    public async Task ScheduledServiceInvocationDispatchPort_ShouldInvokeExplicitServiceInvocationPort()
     {
-        var inner = new RecordingActorDispatchPort();
-        var resolverCallCount = 0;
         var invocationPort = new RecordingServiceInvocationPort();
-        var adapter = new ScheduledServiceInvocationDispatchAdapterPort(
-            inner,
-            () =>
-            {
-                resolverCallCount++;
-                return invocationPort;
-            });
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort);
 
-        var normalEnvelope = new EventEnvelope
-        {
-            Id = "cmd-normal",
-            Payload = Any.Pack(new Empty()),
-        };
-
-        await adapter.DispatchAsync("regular-actor", normalEnvelope);
-
-        resolverCallCount.Should().Be(0);
-        inner.Envelopes.Should().ContainSingle(x => x.ActorId == "regular-actor");
-
-        var invocationEnvelope = new EventEnvelope
-        {
-            Id = "cmd-invoke",
-            Payload = Any.Pack(new ServiceInvocationRequest
+        var receipt = await port.DispatchAsync(
+            new ServiceInvocationRequest
             {
                 CommandId = "cmd-invoke",
                 CorrelationId = "corr-invoke",
                 Payload = Any.Pack(new Empty()),
-            }),
-        };
+            });
 
-        var admission = await adapter.DispatchAsync(
-            ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
-            invocationEnvelope);
-
-        resolverCallCount.Should().Be(1);
         invocationPort.Requests.Should().ContainSingle();
-        inner.Envelopes.Should().ContainSingle(x => x.ActorId == "regular-actor");
-        admission.CommandId.Should().Be("cmd-invoke");
-        admission.ActorId.Should().Be("service-actor");
-        admission.CorrelationId.Should().Be("corr-invoke");
+        receipt.CommandId.Should().Be("cmd-invoke");
+        receipt.TargetActorId.Should().Be("service-actor");
+        receipt.CorrelationId.Should().Be("corr-invoke");
+    }
+
+    [Fact]
+    public void ScheduledServiceInvocationDispatchPort_ShouldNotImplementActorDispatchPort()
+    {
+        typeof(ScheduledServiceInvocationDispatchPort)
+            .Should()
+            .NotBeAssignableTo<IActorDispatchPort>();
     }
 
     private static DefaultHttpContext CreateHttpContext()

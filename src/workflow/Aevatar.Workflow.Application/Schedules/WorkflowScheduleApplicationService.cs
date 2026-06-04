@@ -190,7 +190,6 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             summary.FailureCount,
             summary.Headers,
             ResolveScopeId(summary.ServiceKey),
-            string.Empty,
             summary.ScheduleActorId,
             summary.TargetActorId);
 

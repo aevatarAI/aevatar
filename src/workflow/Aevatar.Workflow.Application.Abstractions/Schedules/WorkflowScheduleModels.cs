@@ -12,7 +12,6 @@ public sealed record WorkflowScheduleConfiguration(
     bool Enabled,
     IReadOnlyDictionary<string, string> Headers,
     string? ScopeId = null,
-    string? SourceActorId = null,
     string? TenantId = null,
     string? AppId = null,
     string? Namespace = null,
@@ -38,7 +37,6 @@ public sealed record WorkflowScheduleSummary(
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
     string ScopeId,
-    string SourceActorId,
     string ScheduleActorId,
     string TargetActorId);
 

@@ -55,66 +55,33 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task DispatchAdapter_ShouldForwardOnlyServiceInvocationAdapterTarget()
+    public async Task ScheduledServiceInvocationDispatchPort_ShouldInvokeExplicitServiceInvocationPort()
     {
-        var inner = new RecordingDispatchPort();
         var invocationPort = new RecordingServiceInvocationPort();
-        var resolverCallCount = 0;
-        var adapter = new ScheduledServiceInvocationDispatchAdapterPort(
-            inner,
-            () =>
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort);
+
+        var receipt = await port.DispatchAsync(
+            new ServiceInvocationRequest
             {
-                resolverCallCount++;
-                return invocationPort;
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Payload = Any.Pack(new StringValue { Value = "invoke" }),
             });
 
-        await adapter.DispatchAsync(
-            "regular-actor",
-            new EventEnvelope
-            {
-                Id = "cmd-regular",
-                Payload = Any.Pack(new StringValue { Value = "regular" }),
-            });
-
-        resolverCallCount.Should().Be(0);
-        inner.Calls.Should().ContainSingle().Which.ActorId.Should().Be("regular-actor");
-
-        var admission = await adapter.DispatchAsync(
-            ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
-            new EventEnvelope
-            {
-                Id = "cmd-invoke",
-                Payload = Any.Pack(new ServiceInvocationRequest
-                {
-                    CommandId = "cmd-invoke",
-                    CorrelationId = "corr-invoke",
-                    Payload = Any.Pack(new StringValue { Value = "invoke" }),
-                }),
-            });
-
-        resolverCallCount.Should().Be(1);
         invocationPort.Requests.Should().ContainSingle()
             .Which.Payload.Unpack<StringValue>().Value.Should().Be("invoke");
-        inner.Calls.Should().ContainSingle();
-        admission.Accepted.Should().BeTrue();
-        admission.CommandId.Should().Be("cmd-invoke");
-        admission.CorrelationId.Should().Be("corr-invoke");
-        admission.ActorId.Should().Be("service-actor");
+        receipt.Accepted.Should().BeTrue();
+        receipt.CommandId.Should().Be("cmd-invoke");
+        receipt.CorrelationId.Should().Be("corr-invoke");
+        receipt.TargetActorId.Should().Be("service-actor");
     }
 
-    private sealed class RecordingDispatchPort : IActorDispatchPort
+    [Fact]
+    public void ScheduledServiceInvocationDispatchPort_ShouldNotImplementActorDispatchPort()
     {
-        public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
-
-        public Task<DispatchAdmission> DispatchAsync(
-            string actorId,
-            EventEnvelope envelope,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Calls.Add((actorId, envelope.Clone()));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
-        }
+        typeof(ScheduledServiceInvocationDispatchPort)
+            .Should()
+            .NotBeAssignableTo<IActorDispatchPort>();
     }
 
     private sealed class RecordingServiceInvocationPort : IServiceInvocationPort

@@ -152,6 +152,20 @@ public interface IScheduledDispatchQueryPort
         CancellationToken ct = default);
 }
 
+public sealed record ScheduledServiceInvocationDispatchReceipt(
+    bool Accepted,
+    string CommandId,
+    DateTimeOffset AcceptedAt,
+    string TargetActorId,
+    string CorrelationId);
+
+public interface IScheduledServiceInvocationDispatchPort
+{
+    Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
+        ServiceInvocationRequest request,
+        CancellationToken ct = default);
+}
+
 public interface IScheduledDispatchApplicationService
 {
     Task<ScheduledDispatchMutationReceipt> CreateAsync(

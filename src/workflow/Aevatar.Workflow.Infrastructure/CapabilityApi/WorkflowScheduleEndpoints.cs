@@ -213,7 +213,6 @@ public sealed record WorkflowScheduleConfigurationHttpRequest
     public bool Enabled { get; init; } = true;
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
     public string? ScopeId { get; init; }
-    public string? SourceActorId { get; init; }
 
     public WorkflowScheduleConfiguration ToConfiguration(string? fallbackScheduleId) =>
         new(
@@ -225,8 +224,7 @@ public sealed record WorkflowScheduleConfigurationHttpRequest
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
             Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            ScopeId: ScopeId,
-            SourceActorId: SourceActorId);
+            ScopeId: ScopeId);
 }
 
 public sealed record WorkflowSchedulePreviewHttpRequest
