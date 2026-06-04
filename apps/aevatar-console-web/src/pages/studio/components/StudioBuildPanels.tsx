@@ -197,7 +197,7 @@ const sectionEyebrowStyle: React.CSSProperties = {
   color: '#8b7b63',
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.08em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -376,7 +376,7 @@ const workflowFieldLabelStyle: React.CSSProperties = {
   color: '#8b7b63',
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.08em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 

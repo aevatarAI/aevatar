@@ -465,7 +465,7 @@ const inventorySelectionLabelStyle: React.CSSProperties = {
   color: '#9a8b73',
   flexShrink: 0,
   fontSize: 9.5,
-  letterSpacing: '0.06em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -543,7 +543,7 @@ const memberEmptyStateTitleStyle: React.CSSProperties = {
   color: '#1f2937',
   fontSize: 24,
   fontWeight: 700,
-  letterSpacing: '-0.02em',
+  letterSpacing: 0,
   lineHeight: '30px',
   margin: 0,
 };
@@ -604,7 +604,7 @@ const inventoryCreateFieldLabelStyle: React.CSSProperties = {
   color: '#6b5f4f',
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.04em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -6210,7 +6210,7 @@ const StudioPage: React.FC = () => {
                 style={{
                   color: '#991b1b',
                   fontSize: 12,
-                  letterSpacing: '0.02em',
+                  letterSpacing: 0,
                 }}
               >
                 {t("pages.studio.index.draft.only.2", "Draft only")}</Typography.Text>
@@ -9884,7 +9884,7 @@ const StudioPage: React.FC = () => {
             color: '#8b7b63',
             fontSize: 10,
             fontWeight: 700,
-            letterSpacing: '0.08em',
+            letterSpacing: 0,
             textTransform: 'uppercase',
           }}
         >
@@ -10395,7 +10395,7 @@ const StudioPage: React.FC = () => {
           fontSize: 11,
           fontWeight: 700,
           gap: 4,
-          letterSpacing: '0.02em',
+          letterSpacing: 0,
           padding: 0,
         }}
       >
@@ -10415,7 +10415,7 @@ const StudioPage: React.FC = () => {
             color: '#1d2129',
             fontSize: 16,
             fontWeight: 700,
-            letterSpacing: '-0.02em',
+            letterSpacing: 0,
             lineHeight: '22px',
             minWidth: 0,
           }}

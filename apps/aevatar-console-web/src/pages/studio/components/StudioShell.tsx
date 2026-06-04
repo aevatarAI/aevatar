@@ -125,7 +125,7 @@ const railSectionHeaderStyle: React.CSSProperties = {
   fontSize: 10,
   fontWeight: 700,
   gap: 6,
-  letterSpacing: '0.08em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
 };
 
@@ -791,7 +791,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   color: '#6b7280',
                   fontSize: 10,
                   fontWeight: 700,
-                  letterSpacing: '0.08em',
+                  letterSpacing: 0,
                   textTransform: 'uppercase',
                 }}
               >

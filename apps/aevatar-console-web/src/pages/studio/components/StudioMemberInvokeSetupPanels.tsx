@@ -80,7 +80,7 @@ const promptKickerStyle: React.CSSProperties = {
   color: studioInvokeColors.accent,
   fontSize: 10.5,
   fontWeight: 800,
-  letterSpacing: 1,
+  letterSpacing: 0,
   lineHeight: '14px',
   textTransform: 'uppercase',
 };

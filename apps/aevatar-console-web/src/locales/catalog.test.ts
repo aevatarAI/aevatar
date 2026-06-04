@@ -223,6 +223,7 @@ describe('console locale catalogs', () => {
       '准备推广',
       '基本网址',
       '默认标头',
+      '不可触摸',
     ];
 
     expect(

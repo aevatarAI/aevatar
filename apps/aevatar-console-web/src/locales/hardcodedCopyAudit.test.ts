@@ -452,6 +452,124 @@ function collectHardcodedUiTextFromSource(
   return violations;
 }
 
+function collectHardcodedEnglishUiReturnText(filePath: string): string[] {
+  const sourceText = fs.readFileSync(filePath, 'utf8');
+  return collectHardcodedEnglishUiReturnTextFromSource(sourceText, filePath);
+}
+
+function collectHardcodedEnglishUiReturnTextFromSource(
+  sourceText: string,
+  fileName = 'fixture.tsx',
+): string[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const violations: string[] = [];
+
+  function getTemplateStaticText(node: ts.TemplateExpression): string {
+    return [
+      node.head.text,
+      ...node.templateSpans.map((span) => span.literal.text),
+    ].join('');
+  }
+
+  function addViolation(node: ts.Node, text: string): void {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(
+      node.getStart(sourceFile),
+    );
+    violations.push(
+      `${path.relative(sourceRoot, fileName)}:${line + 1}:${character + 1} ${text
+        .replace(/\s+/g, ' ')
+        .trim()}`,
+    );
+  }
+
+  function getEnclosingFunctionName(node: ts.Node): string | null {
+    for (let parent = node.parent; parent; parent = parent.parent) {
+      if (
+        (ts.isFunctionDeclaration(parent) ||
+          ts.isFunctionExpression(parent) ||
+          ts.isMethodDeclaration(parent)) &&
+        parent.name
+      ) {
+        return parent.name.getText(sourceFile);
+      }
+
+      if (ts.isArrowFunction(parent)) {
+        if (
+          ts.isVariableDeclaration(parent.parent) &&
+          ts.isIdentifier(parent.parent.name)
+        ) {
+          return parent.parent.name.text;
+        }
+
+        if (ts.isPropertyAssignment(parent.parent)) {
+          return getObjectPropertyName(parent.parent.name);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function isUiCopyReturnHelper(node: ts.ReturnStatement): boolean {
+    const functionName = getEnclosingFunctionName(node);
+    return Boolean(
+      functionName &&
+        /handoff|feedbackmessage|nextstep|observationevidence/i.test(
+          functionName,
+        ),
+    );
+  }
+
+  function visitReturnExpression(node: ts.Node): void {
+    if (
+      ts.isJsxElement(node) ||
+      ts.isJsxFragment(node) ||
+      ts.isJsxSelfClosingElement(node)
+    ) {
+      return;
+    }
+
+    if (
+      (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
+      !isInsideExistingI18nCall(node) &&
+      !isObjectPropertyName(node) &&
+      isLikelyHardcodedEnglishUiText(node.text, 'string')
+    ) {
+      addViolation(node, node.text);
+      return;
+    }
+
+    if (
+      ts.isTemplateExpression(node) &&
+      !isInsideExistingI18nCall(node) &&
+      isLikelyHardcodedEnglishUiText(getTemplateStaticText(node), 'string')
+    ) {
+      addViolation(node, node.getText(sourceFile));
+      return;
+    }
+
+    ts.forEachChild(node, visitReturnExpression);
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isReturnStatement(node) && node.expression && isUiCopyReturnHelper(node)) {
+      visitReturnExpression(node.expression);
+      return;
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return violations;
+}
+
 function isFunctionLike(node: ts.Node): boolean {
   return ts.isFunctionLike(node) || ts.isArrowFunction(node);
 }
@@ -728,6 +846,37 @@ describe('console-wide i18n migration guard', () => {
       'Send Signal',
       'No message',
     ]);
+  });
+
+  it('detects hardcoded English copy returned from UI handoff helpers', () => {
+    const violations = collectHardcodedEnglishUiReturnTextFromSource(`
+      function getObserveHandoffText(active: boolean) {
+        return active
+          ? "Observe will follow backend events."
+          : t("demo.localized.handoff", "Already localized handoff.");
+      }
+
+      const buildActionFeedbackMessage = () => {
+        return \`Runtime accepted \${commandId}.\`;
+      };
+
+      function formatRuntimeStatus(status: string) {
+        return "running";
+      }
+    `);
+
+    expect(violations.map((item) => item.replace(/^.*? /, ''))).toEqual([
+      'Observe will follow backend events.',
+      '`Runtime accepted ${commandId}.`',
+    ]);
+  });
+
+  it('keeps helper-returned UI handoff copy inside i18n', () => {
+    const violations = collectProductionSourceFiles(sourceRoot).flatMap(
+      collectHardcodedEnglishUiReturnText,
+    );
+
+    expect(violations).toEqual([]);
   });
 
   it('keeps runtime-formatted copy out of static initialization paths', () => {

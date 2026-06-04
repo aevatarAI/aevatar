@@ -8,6 +8,7 @@ import {
   formatInterventionLabel,
   formatMissionLabel,
 } from './presentation';
+import { t } from '@/shared/i18n/messages';
 
 export type MissionOperatorHandoff = {
   readonly actionLabel: string;
@@ -22,26 +23,50 @@ export type MissionOperatorHandoff = {
 function describeInterventionInput(kind: MissionInterventionKind): string {
   switch (kind) {
     case 'waiting_signal':
-      return 'Submit the signal payload requested by the paused step.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.submit.the.signal.payload',
+        'Submit the signal payload requested by the paused step.',
+      );
     case 'human_input':
-      return 'Add the missing operator context, then resume the run.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.add.the.missing.operator.context',
+        'Add the missing operator context, then resume the run.',
+      );
     case 'human_approval':
-      return 'Approve or reject with a short decision note.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.approve.or.reject.with.a.short',
+        'Approve or reject with a short decision note.',
+      );
     default:
-      return 'Review the operator prompt before acting.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.review.the.operator.prompt.before',
+        'Review the operator prompt before acting.',
+      );
   }
 }
 
 function describeExpectedResult(kind: MissionInterventionKind): string {
   switch (kind) {
     case 'waiting_signal':
-      return 'After the signal is accepted, Mission Control waits for the next runtime snapshot before showing progress.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.after.the.signal.is.accepted',
+        'After the signal is accepted, Mission Control waits for the next runtime snapshot before showing progress.',
+      );
     case 'human_input':
-      return 'After resume is accepted, the run should continue from the blocked step and new evidence will appear in the dock.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.after.resume.is.accepted',
+        'After resume is accepted, the run should continue from the blocked step and new evidence will appear in the dock.',
+      );
     case 'human_approval':
-      return 'After approve or reject is accepted, Mission Control waits for runtime confirmation of advance, stop, or rollback.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.after.approve.or.reject',
+        'After approve or reject is accepted, Mission Control waits for runtime confirmation of advance, stop, or rollback.',
+      );
     default:
-      return 'After the action is accepted, wait for runtime confirmation before treating the run as advanced.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.after.the.action.is.accepted',
+        'After the action is accepted, wait for runtime confirmation before treating the run as advanced.',
+      );
   }
 }
 
@@ -51,33 +76,58 @@ function describeConnection(
 ): string {
   if (!hasIntervention) {
     if (status === 'idle') {
-      return 'Attach Mission Control to a live run before taking action.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.attach.mission.control.to.a.live',
+        'Attach Mission Control to a live run before taking action.',
+      );
     }
 
     if (status === 'disconnected') {
-      return 'Runtime is disconnected; this view can show only the last known facts.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.runtime.is.disconnected.this.view',
+        'Runtime is disconnected; this view can show only the last known facts.',
+      );
     }
 
     if (status === 'degraded') {
-      return 'Live stream is degraded; use the snapshot and dock as eventually consistent evidence.';
+      return t(
+        'pages.missioncontrol.operatorhandoff.live.stream.is.degraded.use',
+        'Live stream is degraded; use the snapshot and dock as eventually consistent evidence.',
+      );
     }
 
-    return `Connection is ${formatConnectionLabel(status)}; no operator action is currently required.`;
+    return t(
+      'pages.missioncontrol.operatorhandoff.connection.is.no.operator.action',
+      'Connection is {connectionStatus}; no operator action is currently required.',
+      { connectionStatus: formatConnectionLabel(status) },
+    );
   }
 
   if (status === 'disconnected') {
-    return 'Action is blocked because runtime is disconnected. Keep the evidence visible and retry after recovery.';
+    return t(
+      'pages.missioncontrol.operatorhandoff.action.is.blocked.because.runtime',
+      'Action is blocked because runtime is disconnected. Keep the evidence visible and retry after recovery.',
+    );
   }
 
   if (status === 'degraded') {
-    return 'Action is available, but evidence may lag because the live stream is degraded.';
+    return t(
+      'pages.missioncontrol.operatorhandoff.action.is.available.but.evidence',
+      'Action is available, but evidence may lag because the live stream is degraded.',
+    );
   }
 
   if (status === 'connecting') {
-    return 'Mission Control is still connecting; wait for runtime state before submitting an action.';
+    return t(
+      'pages.missioncontrol.operatorhandoff.mission.control.is.still.connecting',
+      'Mission Control is still connecting; wait for runtime state before submitting an action.',
+    );
   }
 
-  return 'Runtime is reachable; submit only after checking the prompt and recent evidence.';
+  return t(
+    'pages.missioncontrol.operatorhandoff.runtime.is.reachable.submit.only',
+    'Runtime is reachable; submit only after checking the prompt and recent evidence.',
+  );
 }
 
 export function buildMissionOperatorHandoff(
@@ -86,16 +136,39 @@ export function buildMissionOperatorHandoff(
 ): MissionOperatorHandoff {
   const intervention = snapshot.intervention;
   if (!intervention) {
+    const eventCount = snapshot.events.length;
+    const eventUnit =
+      eventCount === 1
+        ? t('pages.missioncontrol.operatorhandoff.event', 'event')
+        : t('pages.missioncontrol.operatorhandoff.events', 'events');
+
     return {
-      actionLabel: 'No operator action',
-      actionDetail: `${formatMissionLabel(snapshot.summary.status)} - ${snapshot.summary.activeStageLabel}`,
+      actionLabel: t(
+        'pages.missioncontrol.operatorhandoff.no.operator.action',
+        'No operator action',
+      ),
+      actionDetail: t(
+        'pages.missioncontrol.operatorhandoff.status.stage',
+        '{status} - {stage}',
+        {
+          stage: snapshot.summary.activeStageLabel,
+          status: formatMissionLabel(snapshot.summary.status),
+        },
+      ),
       connectionDetail: describeConnection(connectionStatus, false),
-      evidenceDetail: `Use the event dock as read-only evidence. ${snapshot.events.length} recent event${
-        snapshot.events.length === 1 ? '' : 's'
-      } are available.`,
-      expectedResult:
+      evidenceDetail: t(
+        'pages.missioncontrol.operatorhandoff.use.the.event.dock.as.read',
+        'Use the event dock as read-only evidence. {eventCount} recent {eventUnit} are available.',
+        { eventCount, eventUnit },
+      ),
+      expectedResult: t(
+        'pages.missioncontrol.operatorhandoff.continue.observing.if.a.blocker',
         'Continue observing. If a blocker appears, Mission Control will open the intervention panel.',
-      inputLabel: 'Observation only',
+      ),
+      inputLabel: t(
+        'pages.missioncontrol.operatorhandoff.observation.only',
+        'Observation only',
+      ),
       isActionable: false,
     };
   }
@@ -105,10 +178,16 @@ export function buildMissionOperatorHandoff(
 
   return {
     actionLabel: formatInterventionLabel(intervention.kind),
-    actionDetail: `${intervention.title} - step ${intervention.stepId}`,
+    actionDetail: t(
+      'pages.missioncontrol.operatorhandoff.title.step',
+      '{title} - step {stepId}',
+      { stepId: intervention.stepId, title: intervention.title },
+    ),
     connectionDetail: describeConnection(connectionStatus, true),
-    evidenceDetail:
+    evidenceDetail: t(
+      'pages.missioncontrol.operatorhandoff.read.the.intervention.prompt',
       'Read the intervention prompt, selected node state, and event dock before submitting an action.',
+    ),
     expectedResult: describeExpectedResult(intervention.kind),
     inputLabel: describeInterventionInput(intervention.kind),
     isActionable: !actionBlocked,
