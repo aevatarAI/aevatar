@@ -159,7 +159,6 @@ public sealed class SkillScriptExtractorTests
         script.EntryBehaviorTypeName.Should().Be("Local.EntryBehavior");
     }
 
-    // refactor helper, no behavior change
     private sealed class TempDirectory : IDisposable
     {
         public string Path { get; }

@@ -46,7 +46,6 @@ public sealed class ScriptCompileToolTests
             .Should().Be("scripts/Main.cs(1,1): error CS1002: ; expected");
     }
 
-    // refactor helper, no behavior change
     private sealed class RecordingCompilationAdapter : IScriptToolCompilationAdapter
     {
         public List<ScriptCompilationRequest> Requests { get; } = [];
