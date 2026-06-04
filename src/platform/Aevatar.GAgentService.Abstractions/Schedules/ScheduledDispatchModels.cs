@@ -98,6 +98,13 @@ public sealed record ScheduledDispatchListResult(
     string? NextCursor,
     long? TotalCount);
 
+public sealed record ScheduledDispatchListQuery(
+    int Take = 50,
+    string? Cursor = null,
+    bool IncludeTotalCount = false,
+    ScheduledDispatchTargetKind? TargetKind = null,
+    string? ServiceEndpointId = null);
+
 public interface IScheduledDispatchActorPort
 {
     Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default);
@@ -150,6 +157,10 @@ public interface IScheduledDispatchQueryPort
         string? cursor = null,
         bool includeTotalCount = false,
         CancellationToken ct = default);
+
+    Task<ScheduledDispatchListResult> ListAsync(
+        ScheduledDispatchListQuery query,
+        CancellationToken ct = default);
 }
 
 public sealed record ScheduledServiceInvocationDispatchReceipt(
@@ -194,6 +205,10 @@ public interface IScheduledDispatchApplicationService
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchListResult> ListAsync(
+        ScheduledDispatchListQuery query,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchPreview> PreviewAsync(

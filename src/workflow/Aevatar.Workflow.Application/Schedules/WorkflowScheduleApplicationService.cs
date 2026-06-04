@@ -56,7 +56,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         CancellationToken ct = default)
     {
         var detail = await _scheduledDispatches.GetAsync(scheduleId, ct);
-        return detail == null ? null : ToWorkflowDetail(detail);
+        return detail == null || !IsWorkflowCompatibilitySchedule(detail.Schedule) ? null : ToWorkflowDetail(detail);
     }
 
     public async Task<WorkflowScheduleListResult> ListAsync(
@@ -65,10 +65,15 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         bool includeTotalCount = false,
         CancellationToken ct = default)
     {
-        var result = await _scheduledDispatches.ListAsync(take, cursor, includeTotalCount, ct);
+        var result = await _scheduledDispatches.ListAsync(new ScheduledDispatchListQuery(
+            take,
+            cursor,
+            includeTotalCount,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            "chat"), ct);
         return new WorkflowScheduleListResult(
             result.Items
-                .Where(IsWorkflowCompatibilitySchedule)
+                .Where(static x => !string.IsNullOrWhiteSpace(x.ServiceId))
                 .Select(ToWorkflowSummary)
                 .ToArray(),
             result.NextCursor,

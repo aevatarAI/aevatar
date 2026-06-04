@@ -458,6 +458,50 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldReturnNullForNonWorkflowScheduledDispatch()
+    {
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["generic"] = CreateDetail("generic") with
+        {
+            Schedule = CreateDetail("generic").Schedule with
+            {
+                TargetKind = ScheduledDispatchTargetKind.Envelope,
+                ServiceEndpointId = string.Empty,
+                ServiceId = string.Empty,
+            },
+        };
+        var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
+
+        var detail = await service.GetAsync("generic");
+
+        detail.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldRequestWorkflowFilteredReadModelPage()
+    {
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.ListResult = new ScheduledDispatchListResult(
+            [CreateDetail("workflow-1").Schedule],
+            "next-workflow",
+            1);
+        var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
+
+        var result = await service.ListAsync(25, "cursor", includeTotalCount: true);
+
+        result.Items.Should().ContainSingle()
+            .Which.ScheduleId.Should().Be("workflow-1");
+        result.NextCursor.Should().Be("next-workflow");
+        result.TotalCount.Should().Be(1);
+        queryPort.LastQuery.Should().Be(new ScheduledDispatchListQuery(
+            25,
+            "cursor",
+            true,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            "chat"));
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldKeepHeadersAsDispatchExtensionsOnly()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
@@ -618,6 +662,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public int? LastTake { get; private set; }
         public string? LastCursor { get; private set; }
         public bool? LastIncludeTotalCount { get; private set; }
+        public ScheduledDispatchListQuery? LastQuery { get; private set; }
+        public ScheduledDispatchListResult ListResult { get; set; } = new([], null, null);
 
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
         {
@@ -629,12 +675,18 @@ public sealed class WorkflowScheduleApplicationServiceTests
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,
+            CancellationToken ct = default) =>
+            ListAsync(new ScheduledDispatchListQuery(take, cursor, includeTotalCount), ct);
+
+        public Task<ScheduledDispatchListResult> ListAsync(
+            ScheduledDispatchListQuery query,
             CancellationToken ct = default)
         {
-            LastTake = take;
-            LastCursor = cursor;
-            LastIncludeTotalCount = includeTotalCount;
-            return Task.FromResult(new ScheduledDispatchListResult([], null, null));
+            LastTake = query.Take;
+            LastCursor = query.Cursor;
+            LastIncludeTotalCount = query.IncludeTotalCount;
+            LastQuery = query;
+            return Task.FromResult(ListResult);
         }
     }
 

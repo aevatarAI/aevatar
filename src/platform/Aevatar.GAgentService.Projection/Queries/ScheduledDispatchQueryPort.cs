@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Projection.ReadModels;
 
@@ -21,23 +22,56 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
         return document == null ? null : MapDetail(document);
     }
 
-    public async Task<ScheduledDispatchListResult> ListAsync(
+    public Task<ScheduledDispatchListResult> ListAsync(
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
+        CancellationToken ct = default) =>
+        ListAsync(new ScheduledDispatchListQuery(take, cursor, includeTotalCount), ct);
+
+    public async Task<ScheduledDispatchListResult> ListAsync(
+        ScheduledDispatchListQuery query,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(query);
         var result = await _documentReader.QueryAsync(new ProjectionDocumentQuery
         {
-            Take = Math.Clamp(take, 1, 200),
-            Cursor = cursor,
-            IncludeTotalCount = includeTotalCount,
+            Take = Math.Clamp(query.Take, 1, 200),
+            Cursor = query.Cursor,
+            IncludeTotalCount = query.IncludeTotalCount,
+            Filters = BuildFilters(query),
         }, ct);
 
         return new ScheduledDispatchListResult(
             result.Items.Select(MapSummary).ToArray(),
             result.NextCursor,
             result.TotalCount);
+    }
+
+    private static ProjectionDocumentFilter[] BuildFilters(ScheduledDispatchListQuery query)
+    {
+        var filters = new List<ProjectionDocumentFilter>();
+        if (query.TargetKind != null)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.TargetKind),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.TargetKind.Value.ToString()),
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.ServiceEndpointId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.ServiceEndpointId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.ServiceEndpointId.Trim()),
+            });
+        }
+
+        return filters.ToArray();
     }
 
     private static ScheduledDispatchDetail MapDetail(ScheduledDispatchDocument document) =>

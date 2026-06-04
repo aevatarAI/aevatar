@@ -93,7 +93,15 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         string? cursor = null,
         bool includeTotalCount = false,
         CancellationToken ct = default) =>
-        _queryPort.ListAsync(Math.Clamp(take, 1, 200), cursor, includeTotalCount, ct);
+        ListAsync(new ScheduledDispatchListQuery(take, cursor, includeTotalCount), ct);
+
+    public Task<ScheduledDispatchListResult> ListAsync(
+        ScheduledDispatchListQuery query,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return _queryPort.ListAsync(query with { Take = Math.Clamp(query.Take, 1, 200) }, ct);
+    }
 
     public Task<ScheduledDispatchPreview> PreviewAsync(
         string cronExpression,

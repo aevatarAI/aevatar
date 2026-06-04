@@ -507,6 +507,16 @@ public sealed class ScheduledDispatchEndpointsTests
             return Task.FromResult(new ScheduledDispatchListResult([], null, includeTotalCount ? 0 : null));
         }
 
+        public Task<ScheduledDispatchListResult> ListAsync(
+            ScheduledDispatchListQuery query,
+            CancellationToken ct = default)
+        {
+            LastListTake = query.Take;
+            LastListCursor = query.Cursor;
+            LastListIncludeTotalCount = query.IncludeTotalCount;
+            return Task.FromResult(new ScheduledDispatchListResult([], null, query.IncludeTotalCount ? 0 : null));
+        }
+
         public Task<ScheduledDispatchPreview> PreviewAsync(
             string cronExpression,
             string? timezone,

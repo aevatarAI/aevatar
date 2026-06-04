@@ -1,8 +1,11 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules;
+using Aevatar.GAgentService.Projection.Queries;
+using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -223,14 +226,81 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var invalidPreview = () => service.PreviewAsync("invalid", "UTC", 5);
 
         queryPort.GetScheduleIds.Should().ContainSingle().Which.Should().Be("schedule-1");
-        queryPort.ListRequests.Should().HaveCount(2);
-        queryPort.ListRequests[0].Take.Should().Be(1);
-        queryPort.ListRequests[0].Cursor.Should().Be("cursor-1");
-        queryPort.ListRequests[0].IncludeTotalCount.Should().BeTrue();
-        queryPort.ListRequests[1].Take.Should().Be(200);
+        await service.ListAsync(new ScheduledDispatchListQuery(
+            25,
+            "cursor-2",
+            true,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            "chat"));
+        queryPort.FilteredListRequests.Should().HaveCount(3);
+        queryPort.FilteredListRequests[0].Should().Be(new ScheduledDispatchListQuery(1, "cursor-1", true));
+        queryPort.FilteredListRequests[1].Should().Be(new ScheduledDispatchListQuery(200));
+        queryPort.FilteredListRequests[2].Should().Be(new ScheduledDispatchListQuery(
+            25,
+            "cursor-2",
+            true,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            "chat"));
         preview.Timezone.Should().Be("UTC");
         preview.NextFireTimes.Should().HaveCount(100);
         await invalidPreview.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldApplyTypedFiltersBeforePaging()
+    {
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items =
+                [
+                    new ScheduledDispatchDocument
+                    {
+                        ScheduleId = "workflow-1",
+                        TargetKind = ScheduledDispatchTargetKind.ServiceInvocation.ToString(),
+                        ServiceEndpointId = "chat",
+                        ServiceId = "daily",
+                    },
+                ],
+                NextCursor = "workflow-cursor",
+                TotalCount = 1,
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(
+            25,
+            "cursor",
+            true,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            "chat"));
+
+        result.Items.Should().ContainSingle()
+            .Which.ScheduleId.Should().Be("workflow-1");
+        result.NextCursor.Should().Be("workflow-cursor");
+        result.TotalCount.Should().Be(1);
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Take.Should().Be(25);
+        reader.LastQuery.Cursor.Should().Be("cursor");
+        reader.LastQuery.IncludeTotalCount.Should().BeTrue();
+        reader.LastQuery.Filters.Should().BeEquivalentTo(
+            new[]
+            {
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ScheduledDispatchDocument.TargetKind),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(ScheduledDispatchTargetKind.ServiceInvocation.ToString()),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ScheduledDispatchDocument.ServiceEndpointId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("chat"),
+                },
+            },
+            options => options.ComparingByMembers<ProjectionDocumentValue>());
     }
 
     [Fact]
@@ -425,10 +495,28 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new(true, "cmd-1", DateTimeOffset.UtcNow, actorId, "corr-1");
     }
 
+    private sealed class RecordingScheduledDispatchDocumentReader : IProjectionDocumentReader<ScheduledDispatchDocument, string>
+    {
+        public ProjectionDocumentQuery? LastQuery { get; private set; }
+        public ProjectionDocumentQueryResult<ScheduledDispatchDocument> Result { get; set; } = new();
+
+        public Task<ScheduledDispatchDocument?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<ScheduledDispatchDocument?>(null);
+
+        public Task<ProjectionDocumentQueryResult<ScheduledDispatchDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            LastQuery = query;
+            return Task.FromResult(Result);
+        }
+    }
+
     private sealed class RecordingScheduledDispatchQueryPort : IScheduledDispatchQueryPort
     {
         public List<string> GetScheduleIds { get; } = [];
         public List<(int Take, string? Cursor, bool IncludeTotalCount)> ListRequests { get; } = [];
+        public List<ScheduledDispatchListQuery> FilteredListRequests { get; } = [];
 
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
         {
@@ -446,6 +534,15 @@ public sealed class ScheduledDispatchApplicationServiceTests
             ct.ThrowIfCancellationRequested();
             ListRequests.Add((take, cursor, includeTotalCount));
             return Task.FromResult(new ScheduledDispatchListResult([], null, includeTotalCount ? 0 : null));
+        }
+
+        public Task<ScheduledDispatchListResult> ListAsync(
+            ScheduledDispatchListQuery query,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            FilteredListRequests.Add(query);
+            return Task.FromResult(new ScheduledDispatchListResult([], null, query.IncludeTotalCount ? 0 : null));
         }
     }
 }
