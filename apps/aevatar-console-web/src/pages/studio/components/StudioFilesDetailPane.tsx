@@ -1420,7 +1420,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     >
                       {role.id || 'role_id'}
                     </span>
-                    {role.model ? ` / ${role.model}` : ''}
+                    {role.model ? t("pages.studio.studiofilesdetailpane.copy", "/ {value1}", { value1: role.model }) : ''}
                     {role.connectorsText
                       ? t("pages.studio.studiofilesdetailpane.connector.count.suffix", " / {count} connector(s)", {
                           count: splitCatalogLines(role.connectorsText).length,

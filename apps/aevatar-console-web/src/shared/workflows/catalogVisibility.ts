@@ -46,7 +46,7 @@ export function buildWorkflowCatalogOptions(
 ): WorkflowCatalogOption[] {
   const visibleItems = listVisibleWorkflowCatalogItems(items);
   const options = visibleItems.map((item) => ({
-    label: `${item.name} · ${item.groupLabel}`,
+    label: t("shared.workflows.catalogvisibility.copy", "{value1} · {value2}", { value1: item.name, value2: item.groupLabel }),
     value: item.name,
   }));
   const normalizedCurrentWorkflowName = trimOptional(currentWorkflowName);

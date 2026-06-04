@@ -78,6 +78,17 @@ export function buildRuntimeRunsHref(options?: {
   });
 }
 
+export function buildRuntimeWorkflowRunHref(workflowName: string): string {
+  const workflow = workflowName.trim();
+
+  return buildRuntimeRunsHref({
+    workflow: workflow || undefined,
+    returnTo: buildRuntimeWorkflowsHref({
+      workflow: workflow || undefined,
+    }),
+  });
+}
+
 export function buildRuntimeMissionControlHref(options?: {
   actorId?: string;
   autoStream?: boolean;

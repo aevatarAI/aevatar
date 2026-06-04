@@ -13,7 +13,6 @@ import {
   Typography,
   theme,
 } from "antd";
-import { useIntl } from "@umijs/max";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
@@ -23,10 +22,10 @@ import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
-import type {
-  StudioMemberLifecycleStage,
-  StudioMemberSummary,
-  StudioTeamSummary,
+import {
+  formatStudioMemberLifecycleStage,
+  type StudioMemberSummary,
+  type StudioTeamSummary,
 } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
@@ -79,8 +78,6 @@ type TeamRosterPreview = {
   readonly updatedAt: string | null;
 };
 
-type TeamsHomeFormatMessage = ReturnType<typeof useIntl>["formatMessage"];
-
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
@@ -107,193 +104,68 @@ function pickMeaningfulLabel(
   return "";
 }
 
-function formatTeamHomeMessage(
-  formatMessage: TeamsHomeFormatMessage,
-  id: string,
-  defaultMessage: string,
-  values?: Record<string, string | number>,
-): string {
-  return formatMessage({ defaultMessage, id }, values);
-}
-
-function formatMemberLifecycleStageLabel(
-  formatMessage: TeamsHomeFormatMessage,
-  value: StudioMemberLifecycleStage | string | null | undefined,
-): string {
-  switch (trimOptional(value).toLowerCase()) {
-    case "created":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.lifecycle.created",
-        t("pages.teams.home.created", "Created"),
-      );
-    case "build_ready":
-    case "buildready":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.lifecycle.buildReady",
-        t("pages.teams.home.buildable", "Buildable"),
-      );
-    case "bind_ready":
-    case "bindready":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.lifecycle.bindReady",
-        t("pages.teams.home.callable", "callable"),
-      );
-    default:
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.lifecycle.unknown",
-        t("pages.teams.home.status.unknown", "Status unknown"),
-      );
-  }
-}
-
 // Refactor (v1/issue1444-first):
 //   Old: workflow run status labels leaked raw runtime terms directly into the teams UI.
 //   New: run status mapping keeps UI display labels stable while preserving the underlying status semantics.
-function formatRunStatusLabel(
-  formatMessage: TeamsHomeFormatMessage,
-  status: string | null | undefined,
-): string {
+function formatRunStatusLabel(status: string | null | undefined): string {
   switch (trimOptional(status).toLowerCase()) {
     case "waiting":
     case "waiting_approval":
     case "waiting_signal":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.needsAttention",
-        t("pages.teams.home.to.be.noticed", "To be noticed"),
-      );
+      return t("pages.teams.home.copy", "Needs attention");
     case "failed":
     case "error":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.failed",
-        t("pages.teams.home.abnormal", "abnormal"),
-      );
+      return t("pages.teams.home.copy.2", "Abnormal");
     case "completed":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.completed",
-        t("pages.teams.home.completed", "Completed"),
-      );
+      return t("pages.teams.home.copy.3", "Completed");
     default:
-      return (
-        trimOptional(status) ||
-        formatTeamHomeMessage(
-          formatMessage,
-          "teams.home.status.unknown",
-          t("pages.teams.home.unknown", "unknown"),
-        )
-      );
+      return trimOptional(status) || t("pages.teams.home.copy.4", "Unknown");
   }
 }
 
 function formatOperationalStatusLabel(
-  formatMessage: TeamsHomeFormatMessage,
   status: string | null | undefined,
   attention: TeamOperationalAttention,
 ): string {
   const normalizedStatus = trimOptional(status);
   if (normalizedStatus) {
-    return formatRunStatusLabel(formatMessage, normalizedStatus);
+    return formatRunStatusLabel(normalizedStatus);
   }
 
   switch (attention) {
     case "healthy":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.running",
-        t("pages.teams.home.running", "Running"),
-      );
+      return t("pages.teams.home.copy.5", "Running");
     case "waiting":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.needsAttention",
-        t("pages.teams.home.to.be.noticed.2", "To be noticed"),
-      );
+      return t("pages.teams.home.copy.6", "Needs attention");
     case "failed":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.failed",
-        t("pages.teams.home.abnormal.2", "abnormal"),
-      );
+      return t("pages.teams.home.copy.7", "Abnormal");
     case "draft":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.draft",
-        t("pages.teams.home.in.draft", "In draft"),
-      );
+      return t("pages.teams.home.copy.8", "Drafting");
     case "no-bound-service":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.bindingPending",
-        t("pages.teams.home.to.be.bound", "To be bound"),
-      );
+      return t("pages.teams.home.copy.9", "Waiting for bind");
     case "no-recent-runs":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.runPending",
-        t("pages.teams.home.to.be.run", "To be run"),
-      );
+      return t("pages.teams.home.copy.10", "Waiting to run");
     default:
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.status.unknown",
-        t("pages.teams.home.unknown.2", "unknown"),
-      );
+      return t("pages.teams.home.copy.11", "Unknown");
   }
 }
 
-function formatAttentionLabel(
-  formatMessage: TeamsHomeFormatMessage,
-  attention: TeamOperationalAttention,
-): string {
+function formatAttentionLabel(attention: TeamOperationalAttention): string {
   switch (attention) {
     case "failed":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.attention.failed",
-        t("pages.teams.home.pending", "Pending"),
-      );
+      return t("pages.teams.home.copy.12", "Pending");
     case "waiting":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.attention.waiting",
-        t("pages.teams.home.to.be.noticed.3", "To be noticed"),
-      );
+      return t("pages.teams.home.copy.13", "Needs attention");
     case "healthy":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.attention.healthy",
-        t("pages.teams.home.running.2", "Running"),
-      );
+      return t("pages.teams.home.copy.14", "Running");
     case "draft":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.attention.draft",
-        t("pages.teams.home.in.draft.2", "In draft"),
-      );
+      return t("pages.teams.home.copy.15", "Drafting");
     case "no-bound-service":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.attention.noBoundService",
-        t("pages.teams.home.to.be.bound.2", "To be bound"),
-      );
+      return t("pages.teams.home.copy.16", "Waiting for bind");
     case "no-recent-runs":
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.attention.noRecentRuns",
-        t("pages.teams.home.to.be.run.2", "To be run"),
-      );
+      return t("pages.teams.home.copy.17", "Waiting to run");
     default:
-      return formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.attention.unknown",
-        t("pages.teams.home.to.be.confirmed", "To be confirmed"),
-      );
+      return t("pages.teams.home.copy.18", "Waiting for confirmation");
   }
 }
 
@@ -590,7 +462,6 @@ function resolveMemberPreviewService(input: {
 }
 
 function buildMemberRosterPreview(input: {
-  readonly formatMessage: TeamsHomeFormatMessage;
   readonly member: StudioMemberSummary;
   readonly runsByMemberId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
   readonly scopeId: string;
@@ -609,76 +480,32 @@ function buildMemberRosterPreview(input: {
   const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
   const serviceLabel =
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
-    (trimOptional(input.member.lastBoundRevisionId)
-      ? formatTeamHomeMessage(
-          input.formatMessage,
-          "teams.home.service.boundPending",
-          t("pages.teams.home.already.bound.to.be", "Already bound to be confirmed"),
-        )
-      : formatTeamHomeMessage(
-          input.formatMessage,
-          "teams.home.service.unbound",
-          t("pages.teams.home.not.bound", "Not bound"),
-        ));
-  const title =
-    pickMeaningfulLabel(input.member.displayName, input.member.memberId) ||
-    formatTeamHomeMessage(
-      input.formatMessage,
-      "teams.home.member.unnamed",
-      t("pages.teams.home.unnamed.member", "unnamed member"),
-    );
+    (trimOptional(input.member.lastBoundRevisionId) ? t("pages.teams.home.copy.19", "Bound, awaiting confirmation") : t("pages.teams.home.copy.20", "Unbound"));
+  const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || t("pages.teams.home.copy.21", "Unnamed member");
 
   let attention: TeamOperationalAttention = "draft";
-  let attentionDetail = formatTeamHomeMessage(
-    input.formatMessage,
-    "teams.home.attentionDetail.memberStage",
-    t("pages.teams.home.the.current.member.is", "The current member is still in {stage}."),
-    {
-      stage: formatMemberLifecycleStageLabel(
-        input.formatMessage,
-        input.member.lifecycleStage,
-      ),
-    },
-  );
+  let attentionDetail = t("pages.teams.home.copy.22", "The current member is still in the {value1} stage.", { value1: formatStudioMemberLifecycleStage(input.member.lifecycleStage) });
 
   if (latestRun && isFailedRun(latestRun)) {
     attention = "failed";
-    attentionDetail = trimOptional(latestRun.lastError) || formatTeamHomeMessage(
-      input.formatMessage,
-      "teams.home.attentionDetail.memberFailed",
-      t("pages.teams.home.the.latest.member.operation", "The latest member operation was in an abnormal state."),
-    );
+    attentionDetail =
+      trimOptional(latestRun.lastError) || t("pages.teams.home.copy.23", "The latest member run is abnormal.");
   } else if (latestRun && isWaitingRun(latestRun)) {
     attention = "waiting";
-    attentionDetail = trimOptional(latestRun.lastError) || formatTeamHomeMessage(
-      input.formatMessage,
-      "teams.home.attentionDetail.memberWaiting",
-      t("pages.teams.home.the.last.member.run", "The last member run was waiting for a manual or external signal."),
-    );
+    attentionDetail =
+      trimOptional(latestRun.lastError) || t("pages.teams.home.copy.24", "The latest member run is waiting for a human or external signal.");
   } else if (latestRun && isSuccessfulRun(latestRun)) {
     attention = "healthy";
-    attentionDetail = formatTeamHomeMessage(
-      input.formatMessage,
-      "teams.home.attentionDetail.memberHealthy",
-      t("pages.teams.home.the.latest.member.operation.2", "The latest member operation is normal, you can continue to enter the details to view."),
-    );
+    attentionDetail = t("pages.teams.home.copy.25", "The latest member run is healthy; open details to continue.");
   } else if (serviceId || matchedService) {
     attention = "no-recent-runs";
-    attentionDetail = formatTeamHomeMessage(
-      input.formatMessage,
-      "teams.home.attentionDetail.memberNoRecentRuns",
-      t("pages.teams.home.the.member.has.been", "The member has been bound to the service and has no recent running records."),
-    );
+    attentionDetail = t("pages.teams.home.copy.26", "The member has been bound to a service. Next: open team details and test the team to generate the first visible run.");
   } else if (
     trimOptional(input.member.lastBoundRevisionId) ||
     input.member.lifecycleStage === "bind_ready"
   ) {
     attention = "no-bound-service";
-    attentionDetail = formatTeamHomeMessage(
-      input.formatMessage,
-      "teams.home.attentionDetail.memberNoBoundService",
-      t("pages.teams.home.the.current.member.is.2", "The current member is ready to be bound, but there is no stable member calling entrance yet."),
-    );
+    attentionDetail = t("pages.teams.home.copy.27", "The current member is ready to bind, but it does not have a stable member invoke entry yet.");
   }
 
   return {
@@ -698,7 +525,6 @@ function buildMemberRosterPreview(input: {
 }
 
 function buildTeamRosterPreview(input: {
-  readonly formatMessage: TeamsHomeFormatMessage;
   readonly members: readonly StudioMemberSummary[];
   readonly runsByMemberId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
   readonly scopeId: string;
@@ -707,7 +533,6 @@ function buildTeamRosterPreview(input: {
 }): TeamRosterPreview {
   const memberPreviews = input.members.map((member) =>
     buildMemberRosterPreview({
-      formatMessage: input.formatMessage,
       member,
       runsByMemberId: input.runsByMemberId,
       scopeId: input.scopeId,
@@ -747,52 +572,19 @@ function buildTeamRosterPreview(input: {
     memberCount > 0
       ? firstMemberLabel
         ? memberCount > 1
-          ? formatTeamHomeMessage(
-              input.formatMessage,
-              "teams.home.member.previewWithMore",
-              t("pages.teams.home.and.members", "{name} and {count} members"),
-              {
-                count: memberCount,
-                name: firstMemberLabel,
-              },
-            )
+          ? t("pages.teams.home.copy.28", "{value1} and {value2} other members", { value1: firstMemberLabel, value2: memberCount })
           : firstMemberLabel
-        : formatTeamHomeMessage(
-            input.formatMessage,
-            "teams.home.member.count",
-            t("pages.teams.home.members", "{count} members"),
-            {
-              count: memberCount,
-            },
-          )
-      : formatTeamHomeMessage(
-          input.formatMessage,
-          "teams.home.member.none",
-          t("pages.teams.home.no.members.yet", "No members yet"),
-        );
+        : t("pages.teams.home.copy.29", "{value1} members", { value1: memberCount })
+      : t("pages.teams.home.copy.30", "No members yet");
   const serviceLabels = memberPreviews
     .map((preview) => preview.serviceLabel)
-    .filter(
-      (label) =>
-        label &&
-        label !==
-          formatTeamHomeMessage(
-            input.formatMessage,
-            "teams.home.service.unbound",
-            t("pages.teams.home.not.bound.2", "Not bound"),
-          ),
-    );
+    .filter((label) => label && label !== t("pages.teams.home.copy.31", "Unbound"));
   const uniqueServiceLabels = Array.from(new Set(serviceLabels));
   const memberPreviewTooltip =
     sortedMembers.length > 0
       ? sortedMembers
           .map((member) =>
-            pickMeaningfulLabel(member.displayName, member.memberId) ||
-            formatTeamHomeMessage(
-              input.formatMessage,
-              "teams.home.member.unnamed",
-              t("pages.teams.home.unnamed.member.2", "unnamed member"),
-            ),
+            pickMeaningfulLabel(member.displayName, member.memberId) || t("pages.teams.home.copy.32", "Unnamed member"),
           )
           .join(" / ")
       : undefined;
@@ -810,18 +602,10 @@ function buildTeamRosterPreview(input: {
 
   let attention: TeamOperationalAttention =
     mostImportantMemberPreview?.attention ?? "draft";
-  let attentionDetail = formatTeamHomeMessage(
-    input.formatMessage,
-    "teams.home.attentionDetail.teamNoMembers",
-    t("pages.teams.home.backend.fact.already.exists", "A backend fact already exists for this team, but no members have been assigned yet."),
-  );
+  let attentionDetail = t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
   if (input.team.lifecycleStage === "archived") {
     attention = "draft";
-    attentionDetail = formatTeamHomeMessage(
-      input.formatMessage,
-      "teams.home.attentionDetail.teamArchived",
-      t("pages.teams.home.this.team.is.archived", "This team is archived and only its backend roster facts remain in the list."),
-    );
+    attentionDetail = t("pages.teams.home.team.roster", "This team has been archived; the list keeps only its backend roster fact.");
   } else if (mostImportantMemberPreview) {
     attentionDetail = mostImportantMemberPreview.attentionDetail;
   }
@@ -836,21 +620,11 @@ function buildTeamRosterPreview(input: {
     serviceLabel:
       uniqueServiceLabels.length > 0
         ? uniqueServiceLabels.slice(0, 2).join(" / ")
-        : formatTeamHomeMessage(
-            input.formatMessage,
-            "teams.home.service.none",
-            t("pages.teams.home.no.binding.service.yet", "No binding service yet"),
-          ),
+        : t("pages.teams.home.copy.33", "No bound service yet"),
     serviceTooltip,
     team: input.team,
     teamId: input.team.teamId,
-    title:
-      pickMeaningfulLabel(input.team.displayName, input.team.teamId) ||
-      formatTeamHomeMessage(
-        input.formatMessage,
-        "teams.home.team.unnamed",
-        t("pages.teams.home.unnamed.team", "Unnamed team"),
-      ),
+    title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || t("pages.teams.home.team.2", "Unnamed team"),
     updatedAt:
       latestRun?.lastUpdatedAt ||
       mostImportantMemberPreview?.updatedAt ||
@@ -860,9 +634,8 @@ function buildTeamRosterPreview(input: {
 }
 
 const TeamRosterCard: React.FC<{
-  readonly formatMessage: TeamsHomeFormatMessage;
   readonly preview: TeamRosterPreview;
-}> = ({ formatMessage, preview }) => {
+}> = ({ preview }) => {
   const { token } = theme.useToken();
 
   return (
@@ -915,7 +688,7 @@ const TeamRosterCard: React.FC<{
             whiteSpace: "nowrap",
           }}
         >
-          {formatAttentionLabel(formatMessage, preview.attention)}
+          {formatAttentionLabel(preview.attention)}
         </span>
       </div>
 
@@ -925,17 +698,10 @@ const TeamRosterCard: React.FC<{
         style={{
           color: token.colorTextSecondary,
           display: "block",
-          fontSize: 13,
+          fontSize: 12,
         }}
       >
-        {formatTeamHomeMessage(
-          formatMessage,
-          "teams.home.team.identity",
-          t("pages.teams.home.team.id", "team ID: {teamId}"),
-          {
-            teamId: preview.teamId,
-          },
-        )}
+        {t("pages.teams.home.id", "ID：")}{preview.teamId}
       </Typography.Text>
 
       <div
@@ -948,23 +714,14 @@ const TeamRosterCard: React.FC<{
         }}
       >
         <TeamFact
-          label={formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.facts.currentStatus",
-            t("pages.teams.home.current.status", "Current status"),
-          )}
+          label={t("pages.teams.home.copy.34", "Current status")}
           value={formatOperationalStatusLabel(
-            formatMessage,
             preview.latestRun?.completionStatus,
             preview.attention,
           )}
         />
         <TeamFact
-          label={formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.facts.latestUpdate",
-            t("pages.teams.home.latest.updates", "Latest updates"),
-          )}
+          label={t("pages.teams.home.copy.35", "Latest update")}
           value={formatShortTime(preview.updatedAt)}
         />
       </div>
@@ -979,20 +736,12 @@ const TeamRosterCard: React.FC<{
         }}
       >
         <TeamFact
-          label={formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.facts.teamMembers",
-            t("pages.teams.home.team.member", "team member"),
-          )}
+          label={t("pages.teams.home.team.3", "Team members")}
           tooltip={preview.memberPreviewTooltip}
           value={preview.memberPreviewLabel}
         />
         <TeamFact
-          label={formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.facts.relatedServices",
-            t("pages.teams.home.related.services", "Related services"),
-          )}
+          label={t("pages.teams.home.copy.36", "Related service")}
           tooltip={preview.serviceTooltip}
           value={preview.serviceLabel}
         />
@@ -1004,21 +753,15 @@ const TeamRosterCard: React.FC<{
           size="large"
           type="primary"
         >
-          {formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.actions.viewTeam",
-            t("pages.teams.home.view.the.team", "View the team"),
-          )}
-        </Button>
+          {t("pages.teams.home.copy.37", "View team")}</Button>
       </Space>
     </article>
   );
 };
 
 const TeamRosterRow: React.FC<{
-  readonly formatMessage: TeamsHomeFormatMessage;
   readonly preview: TeamRosterPreview;
-}> = ({ formatMessage, preview }) => {
+}> = ({ preview }) => {
   const { token } = theme.useToken();
 
   return (
@@ -1062,7 +805,7 @@ const TeamRosterRow: React.FC<{
                 whiteSpace: "nowrap",
               }}
             >
-              {formatAttentionLabel(formatMessage, preview.attention)}
+              {formatAttentionLabel(preview.attention)}
             </span>
           </Space>
           <Typography.Paragraph
@@ -1082,29 +825,17 @@ const TeamRosterRow: React.FC<{
             style={{
               color: token.colorTextSecondary,
               display: "block",
-              fontSize: 13,
+              fontSize: 12,
               marginTop: 4,
             }}
           >
-            {formatTeamHomeMessage(
-              formatMessage,
-              "teams.home.team.identity",
-              t("pages.teams.home.team.id.2", "team ID: {teamId}"),
-              {
-                teamId: preview.teamId,
-              },
-            )}
+            {t("pages.teams.home.id.2", "ID：")}{preview.teamId}
           </Typography.Text>
         </div>
 
         <Space className="teams-home-roster-row-actions" wrap>
           <Button onClick={() => history.push(preview.detailHref)} type="primary">
-            {formatTeamHomeMessage(
-              formatMessage,
-              "teams.home.actions.viewTeam",
-              t("pages.teams.home.view.the.team.2", "View the team"),
-            )}
-          </Button>
+            {t("pages.teams.home.copy.38", "View team")}</Button>
         </Space>
       </div>
 
@@ -1118,40 +849,20 @@ const TeamRosterRow: React.FC<{
         }}
       >
         <TeamFact
-          label={formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.facts.status",
-            t("pages.teams.home.state", "state"),
-          )}
+          label={t("pages.teams.home.copy.39", "Status")}
           value={formatOperationalStatusLabel(
-            formatMessage,
             preview.latestRun?.completionStatus,
             preview.attention,
           )}
         />
+        <TeamFact label={t("pages.teams.home.copy.40", "Update")} value={formatShortTime(preview.updatedAt)} />
         <TeamFact
-          label={formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.facts.update",
-            t("pages.teams.home.renew", "renew"),
-          )}
-          value={formatShortTime(preview.updatedAt)}
-        />
-        <TeamFact
-          label={formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.facts.members",
-            t("pages.teams.home.member", "member"),
-          )}
+          label={t("pages.teams.home.copy.41", "Members")}
           tooltip={preview.memberPreviewTooltip}
           value={preview.memberPreviewLabel}
         />
         <TeamFact
-          label={formatTeamHomeMessage(
-            formatMessage,
-            "teams.home.facts.services",
-            t("pages.teams.home.serve", "Serve"),
-          )}
+          label={t("pages.teams.home.copy.42", "Service")}
           tooltip={preview.serviceTooltip}
           value={preview.serviceLabel}
         />
@@ -1162,7 +873,6 @@ const TeamRosterRow: React.FC<{
 
 const TeamsHomePage: React.FC = () => {
   const { token } = theme.useToken();
-  const { formatMessage } = useIntl();
   const [routeScopeId, setRouteScopeId] = React.useState(
     () => readScopeQueryDraft().scopeId.trim(),
   );
@@ -1201,13 +911,9 @@ const TeamsHomePage: React.FC = () => {
 
     return describeError(
       authSessionQuery.error,
-      formatTeamHomeMessage(
-        formatMessage,
-        "teams.home.alerts.authUnavailableDescription",
-        t("pages.teams.home.the.login.status.is", "The login status is temporarily unavailable, please refresh and try again."),
-      ),
+      t("pages.teams.home.copy.43", "Login status is temporarily unavailable. Refresh and try again."),
     );
-  }, [authSessionQuery.error, authSessionQuery.isError, formatMessage]);
+  }, [authSessionQuery.error, authSessionQuery.isError]);
 
   React.useEffect(() => {
     if (!resolvedScope?.scopeId) {
@@ -1321,7 +1027,6 @@ const TeamsHomePage: React.FC = () => {
     () =>
       studioTeams.map((team) =>
         buildTeamRosterPreview({
-          formatMessage,
           members: membersByTeamId.get(team.teamId) ?? [],
           runsByMemberId,
           scopeId,
@@ -1331,7 +1036,6 @@ const TeamsHomePage: React.FC = () => {
       ),
     [
       membersByTeamId,
-      formatMessage,
       runsByMemberId,
       queryScopeId,
       scopeId,
@@ -1352,31 +1056,11 @@ const TeamsHomePage: React.FC = () => {
   const useCompactRoster = resolvedRosterView === "list";
   const emptyRosterHint =
     canLoadRoster
-      ? formatTeamHomeMessage(
-          formatMessage,
-          "teams.home.empty.description",
-          t("pages.teams.home.no.team.has.been", "No team has been created for the current account. Once created, your AI team list will be displayed here."),
-        )
-      : formatTeamHomeMessage(
-          formatMessage,
-          "teams.home.alerts.noScope",
-          t("pages.teams.home.the.current.login.status", "The current login status has not resolved the available team scope, please refresh and try again."),
-        );
+      ? t("pages.teams.home.team.ai", "This account has not created any teams yet. Your AI team list will appear here after you create one.")
+      : t("pages.teams.home.copy.44", "The current login status has not resolved an available team scope. Refresh and try again.");
   const partialIssues = [
-    membersQuery.isError
-      ? formatTeamHomeMessage(
-          formatMessage,
-          "teams.home.alerts.membersUnavailable",
-          t("pages.teams.home.the.member.list.of", "The member list of the current workspace is temporarily invisible."),
-        )
-      : null,
-    teamsQuery.isError
-      ? formatTeamHomeMessage(
-          formatMessage,
-          "teams.home.alerts.teamsUnavailable",
-          t("pages.teams.home.the.team.roster.for", "The team roster for the current workspace is temporarily invisible."),
-        )
-      : null,
+    membersQuery.isError ? t("pages.teams.home.copy.45", "The member list for the current workspace is temporarily unavailable.") : null,
+    teamsQuery.isError ? t("pages.teams.home.team.roster.2", "The team roster for the current workspace is temporarily unavailable.") : null,
   ].filter((issue): issue is string => Boolean(issue));
 
   const titleNode = (
@@ -1387,24 +1071,14 @@ const TeamsHomePage: React.FC = () => {
           fontSize: 14,
         }}
       >
-        {formatTeamHomeMessage(
-          formatMessage,
-          "teams.home.breadcrumb",
-          "Aevatar / Teams",
-        )}
-      </Typography.Text>
+        {t("pages.teams.home.aevatar.teams", "Aevatar / Teams")}</Typography.Text>
       <Typography.Title
         level={1}
         style={{
           margin: 0,
         }}
       >
-        {formatTeamHomeMessage(
-          formatMessage,
-          "teams.home.title",
-          t("pages.teams.home.my.ai.team", "My AI team"),
-        )}
-      </Typography.Title>
+        {t("pages.teams.home.ai", "My AI teams")}</Typography.Title>
     </div>
   );
 
@@ -1420,12 +1094,7 @@ const TeamsHomePage: React.FC = () => {
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
-            {formatTeamHomeMessage(
-              formatMessage,
-              "teams.home.actions.createTeam",
-              t("pages.teams.home.form.new.team", "Form a new team"),
-            )}
-          </Button>
+            {t("pages.teams.home.copy.46", "Create team")}</Button>
         </Space>
       }
       layoutMode="document"
@@ -1441,11 +1110,7 @@ const TeamsHomePage: React.FC = () => {
         {!scopeId ? (
           <Alert
             showIcon
-            title={formatTeamHomeMessage(
-              formatMessage,
-              "teams.home.alerts.noScope",
-              t("pages.teams.home.the.current.login.status.2", "The current login status has not resolved the available team scope, please refresh and try again."),
-            )}
+            title={t("pages.teams.home.copy.47", "The current login status has not resolved an available team scope. Refresh and try again.")}
             type="info"
           />
         ) : null}
@@ -1454,11 +1119,7 @@ const TeamsHomePage: React.FC = () => {
           <Alert
             description={partialIssues.join(" ")}
             showIcon
-            title={formatTeamHomeMessage(
-              formatMessage,
-              "teams.home.alerts.partialSignals",
-              t("pages.teams.home.some.team.signals.are", "Some team signals are temporarily unavailable"),
-            )}
+            title={t("pages.teams.home.copy.48", "Some team signals are temporarily unavailable")}
             type="warning"
           />
         ) : null}
@@ -1467,29 +1128,14 @@ const TeamsHomePage: React.FC = () => {
           <Alert
             description={
               resolvedScope?.scopeId
-                ? formatTeamHomeMessage(
-                    formatMessage,
-                    "teams.home.alerts.localAuthFallbackDescription",
-                    t("pages.teams.home.loading.of.teams.has", "{issue} Loading of teams has continued using local login information."),
-                    {
-                      issue: authSessionIssue,
-                    },
-                  )
+                ? t("pages.teams.home.copy.49", "{value1} continued loading teams with local login information.", { value1: authSessionIssue })
                 : authSessionIssue
             }
             showIcon
             title={
               resolvedScope?.scopeId
-                ? formatTeamHomeMessage(
-                    formatMessage,
-                    "teams.home.alerts.localAuthFallbackTitle",
-                    t("pages.teams.home.the.current.login.status.3", "The current login status verification failed, local login information has been used"),
-                  )
-                : formatTeamHomeMessage(
-                    formatMessage,
-                    "teams.home.alerts.authFailedTitle",
-                    t("pages.teams.home.current.login.status.verification", "Current login status verification failed"),
-                  )
+                ? t("pages.teams.home.copy.50", "Current login verification failed; local login information was used")
+                : t("pages.teams.home.copy.51", "Current login verification failed")
             }
             type="warning"
           />
@@ -1504,49 +1150,17 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard
-                accent
-                label={formatTeamHomeMessage(
-                  formatMessage,
-                  "teams.home.summary.total",
-                  t("pages.teams.home.total.number.of.ai", "Total number of AI Teams"),
-                )}
-                value={visibleTeamCount}
-              />
-              <SummaryStatCard
-                label={formatTeamHomeMessage(
-                  formatMessage,
-                  "teams.home.summary.actionable",
-                  t("pages.teams.home.pending.team", "Pending team"),
-                )}
-                value={actionableTeamCount}
-              />
-              <SummaryStatCard
-                label={formatTeamHomeMessage(
-                  formatMessage,
-                  "teams.home.summary.healthy",
-                  t("pages.teams.home.stable.operation", "Stable operation"),
-                )}
-                value={healthyTeamCount}
-              />
+              <SummaryStatCard accent label={t("pages.teams.home.ai.team", "Total AI teams")} value={visibleTeamCount} />
+              <SummaryStatCard label={t("pages.teams.home.team.4", "Teams needing action")} value={actionableTeamCount} />
+              <SummaryStatCard label={t("pages.teams.home.copy.52", "Stable runs exist")} value={healthyTeamCount} />
             </div>
 
             {teamsQuery.isLoading ? (
-              <AevatarInspectorEmpty
-                description={formatTeamHomeMessage(
-                  formatMessage,
-                  "teams.home.loading.roster",
-                  t("pages.teams.home.reading.team.list", "Reading team list."),
-                )}
-              />
+              <AevatarInspectorEmpty description={t("pages.teams.home.copy.53", "Reading the team list.")} />
             ) : teamsQuery.isError ? (
               <Alert
                 showIcon
-                title={formatTeamHomeMessage(
-                  formatMessage,
-                  "teams.home.errors.rosterUnavailable",
-                  t("pages.teams.home.the.team.list.cannot", "The team list cannot be loaded at the moment."),
-                )}
+                title={t("pages.teams.home.copy.54", "The team list cannot be loaded right now.")}
                 type="error"
               />
             ) : teamPreviews.length > 0 ? (
@@ -1573,54 +1187,24 @@ const TeamsHomePage: React.FC = () => {
                         margin: 0,
                       }}
                     >
-                      {formatTeamHomeMessage(
-                        formatMessage,
-                        "teams.home.roster.title",
-                        t("pages.teams.home.team.list", "team list"),
-                      )}
-                    </Typography.Title>
+                      {t("pages.teams.home.copy.55", "Team list")}</Typography.Title>
                     <Typography.Text type="secondary">
-                      {formatTeamHomeMessage(
-                        formatMessage,
-                        "teams.home.roster.description",
-                        t("pages.teams.home.aggregate.members.and.recent", "Aggregate members and recent running signals by team to prioritize exceptions or items of concern."),
-                      )}
-                    </Typography.Text>
+                      {t("pages.teams.home.team.5", "Aggregate members and recent run signals by team, prioritizing abnormal or attention-needed items.")}</Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (
                     <Space.Compact>
-                      <Tooltip
-                        title={formatTeamHomeMessage(
-                          formatMessage,
-                          "teams.home.view.cards",
-                          t("pages.teams.home.card.view", "card view"),
-                        )}
-                      >
+                      <Tooltip title={t("pages.teams.home.copy.56", "Card view")}>
                         <Button
-                          aria-label={formatTeamHomeMessage(
-                            formatMessage,
-                            "teams.home.view.switchToCards",
-                            t("pages.teams.home.switch.to.card.view", "Switch to card view"),
-                          )}
+                          aria-label={t("pages.teams.home.copy.57", "Switch to card view")}
                           icon={<AppstoreOutlined />}
                           onClick={() => setManualRosterView("cards")}
                           style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "cards" ? "primary" : "default"}
                         />
                       </Tooltip>
-                      <Tooltip
-                        title={formatTeamHomeMessage(
-                          formatMessage,
-                          "teams.home.view.list",
-                          t("pages.teams.home.list.view", "list view"),
-                        )}
-                      >
+                      <Tooltip title={t("pages.teams.home.copy.58", "List view")}>
                         <Button
-                          aria-label={formatTeamHomeMessage(
-                            formatMessage,
-                            "teams.home.view.switchToList",
-                            t("pages.teams.home.switch.to.list.view", "Switch to list view"),
-                          )}
+                          aria-label={t("pages.teams.home.copy.59", "Switch to list view")}
                           icon={<BarsOutlined />}
                           onClick={() => setManualRosterView("list")}
                           style={{ height: 44, width: 44 }}
@@ -1632,11 +1216,7 @@ const TeamsHomePage: React.FC = () => {
                 </div>
                 {useCompactRoster ? (
                   <ul
-                    aria-label={formatTeamHomeMessage(
-                      formatMessage,
-                      "teams.home.view.compactAria",
-                      t("pages.teams.home.team.compact.view", "team compact view"),
-                    )}
+                    aria-label={t("pages.teams.home.copy.60", "Team compact view")}
                     style={{
                       display: "flex",
                       flexDirection: "column",
@@ -1648,20 +1228,13 @@ const TeamsHomePage: React.FC = () => {
                   >
                     {teamPreviews.map((preview) => (
                       <li key={preview.teamId}>
-                        <TeamRosterRow
-                          formatMessage={formatMessage}
-                          preview={preview}
-                        />
+                        <TeamRosterRow preview={preview} />
                       </li>
                     ))}
                   </ul>
                 ) : (
                   <ul
-                    aria-label={formatTeamHomeMessage(
-                      formatMessage,
-                      "teams.home.view.cardsAria",
-                      t("pages.teams.home.team.card.view", "team card view"),
-                    )}
+                    aria-label={t("pages.teams.home.copy.61", "Team card view")}
                     style={{
                       display: "grid",
                       gap: 16,
@@ -1673,10 +1246,7 @@ const TeamsHomePage: React.FC = () => {
                   >
                     {teamPreviews.map((preview) => (
                       <li key={preview.teamId}>
-                        <TeamRosterCard
-                          formatMessage={formatMessage}
-                          preview={preview}
-                        />
+                        <TeamRosterCard preview={preview} />
                       </li>
                     ))}
                   </ul>
@@ -1693,12 +1263,7 @@ const TeamsHomePage: React.FC = () => {
                   }
                   type="primary"
                 >
-                  {formatTeamHomeMessage(
-                    formatMessage,
-                    "teams.home.actions.createTeam",
-                    t("pages.teams.home.form.new.team.2", "Form a new team"),
-                  )}
-                </Button>
+                  {t("pages.teams.home.copy.62", "Create team")}</Button>
               </Empty>
             )}
 

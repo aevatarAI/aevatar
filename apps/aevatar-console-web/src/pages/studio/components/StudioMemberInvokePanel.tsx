@@ -208,12 +208,16 @@ function createPendingHistoryEntry(input: {
 function writeClipboardText(value: string, label: string): boolean {
   const normalized = trimOptional(value);
   if (!normalized) {
-    void message.warning(`No ${label} available to copy.`);
+    void message.warning(
+      t("pages.studio.studiomemberinvokepanel.no.value.available.to.copy", "No {label} available to copy.", { label }),
+    );
     return false;
   }
 
   void globalThis.navigator?.clipboard?.writeText(normalized);
-  void message.success(`${label} copied.`);
+  void message.success(
+    t("pages.studio.studiomemberinvokepanel.value.copied", "{label} copied.", { label }),
+  );
   return true;
 }
 
@@ -525,6 +529,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(endpointContract?.revisionId) ||
     trimOptional(memberRevision?.revisionId);
   const lifecycleLabel = getLifecycleLabel(memberRevision);
+  const invokeBlockedReason = !scopeId
+    ? t("pages.studio.studiomemberinvokepanel.missing.workspace.scope", "Missing workspace scope.")
+    : !normalizedMemberId
+      ? t("pages.studio.studiomemberinvokepanel.missing.team.member.target", "Missing Team member target.")
+      : !selectedService
+        ? t("pages.studio.studiomemberinvokepanel.select.published.member.service", "Select a published member service before invoking.")
+        : !selectedEndpoint
+          ? t("pages.studio.studiomemberinvokepanel.select.endpoint.before.invoking", "Select an endpoint before invoking.")
+          : '';
   const runViewMode = selectedHistoryId ? 'historical' : 'latest';
 
   useEffect(() => {
@@ -809,7 +822,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const restorePromptForNewRun = useCallback((nextPrompt: string) => {
     const normalizedPrompt = trimOptional(nextPrompt);
     if (!normalizedPrompt) {
-      void message.warning('No input available to retry.');
+      void message.warning(
+        t("pages.studio.studiomemberinvokepanel.no.input.available.to.retry", "No input available to retry."),
+      );
       return;
     }
 
@@ -823,7 +838,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ?.querySelector<HTMLTextAreaElement>('textarea')
         ?.focus();
     }, 0);
-    void message.info('Prompt restored. Click Invoke to create a new Run.');
+    void message.info(
+      t("pages.studio.studiomemberinvokepanel.prompt.restored.click.invoke", "Prompt restored. Click Invoke to create a new Run."),
+    );
   }, []);
 
   const handleAbort = useCallback(() => {
@@ -1357,18 +1374,34 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             data-testid="studio-invoke-target-summary"
             style={targetSummaryStyle}
           >
-            <div style={{ minWidth: 0 }}>
-              <div title={currentMemberLabel} style={targetTitleStyle}>
-                {currentMemberLabel}
+              <div style={{ minWidth: 0 }}>
+                <div title={currentMemberLabel} style={targetTitleStyle}>
+                  {currentMemberLabel}
+                </div>
+                <div style={targetMetaStyle}>
+                  {normalizedTeamId ? (
+                    <>
+                      <span>Team: {normalizedTeamId}</span>
+                      <span>·</span>
+                    </>
+                  ) : null}
+                  <span>Member: {normalizedMemberId || t("pages.studio.studiomemberinvokepanel.not.selected", "not selected")}</span>
+                  <span>·</span>
+                  <span>Service: {selectedService?.displayName || selectedServiceId || t("pages.studio.studiomemberinvokepanel.not.selected.2", "not selected")}</span>
+                  <span>·</span>
+                  <span>Endpoint: {endpointSummaryLabel}</span>
+                  <span>·</span>
+                  <span>{currentImplementationKind}</span>
+                  <span>·</span>
+                  <span>Lifecycle: {lifecycleLabel}</span>
+                  {invokeBlockedReason ? (
+                    <>
+                      <span>·</span>
+                      <span>{invokeBlockedReason}</span>
+                    </>
+                  ) : null}
+                </div>
               </div>
-              <div style={targetMetaStyle}>
-                <span>Endpoint: {endpointSummaryLabel}</span>
-                <span>·</span>
-                <span>{currentImplementationKind}</span>
-                <span>·</span>
-                <span>Lifecycle: {lifecycleLabel}</span>
-              </div>
-            </div>
             <div style={targetPillStyle}>
               <span
                 style={{
@@ -1386,6 +1419,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             style={invokeComposerDockStyle}
           >
             <StudioMemberInvokeComposerPanel
+              blockedReason={invokeBlockedReason}
               canInvoke={canInvoke}
               defaultPrompt={effectiveDefaultPrompt}
               formError={formError}

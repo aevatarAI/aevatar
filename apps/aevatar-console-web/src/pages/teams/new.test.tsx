@@ -59,7 +59,7 @@ describe('TeamCreatePage', () => {
   it('renders the simplified Team create page', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    expect(await screen.findByText('Aevatar / Teams')).toBeTruthy();
+    expect(await screen.findByText('阿凡达/团队')).toBeTruthy();
     expect(screen.getByRole('heading', { level: 2, name: '创建团队' })).toBeTruthy();
     expect(screen.getByText('团队信息')).toBeTruthy();
     expect(screen.getByLabelText('队名')).toBeTruthy();
@@ -123,7 +123,7 @@ describe('TeamCreatePage', () => {
     const params = new URLSearchParams(window.location.search);
     expect(params.get('scopeId')).toBeNull();
     expect(params.get('teamId')).toBeNull();
-    expect(message.success).toHaveBeenCalledWith('已创建 Team。');
+    expect(message.success).toHaveBeenCalledWith('已创建团队。');
   });
 
   it('ignores legacy scopeId=new links and creates under the authenticated scope', async () => {
