@@ -22,7 +22,9 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
     public async Task AddScopeGAgentDraftRunInteraction_ShouldExposeBusinessPortAndSharedRealtimeSession()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
+        services.AddSingleton<RecordingActorRuntime>();
+        services.AddSingleton<IActorRuntime>(sp => sp.GetRequiredService<RecordingActorRuntime>());
+        services.AddSingleton<IAgentKindVerifier>(sp => sp.GetRequiredService<RecordingActorRuntime>());
         services.AddSingleton<IActorDispatchPort, RecordingActorDispatchPort>();
         services.AddSingleton<IGAgentActorRegistryCommandPort, RecordingRegistryCommandPort>();
         services.AddSingleton<IScopeResourceAdmissionPort, AllowingAdmissionPort>();
@@ -79,9 +81,10 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         emitted.Should().ContainSingle(x => x.EventCase == AGUIEvent.EventOneofCase.RunFinished);
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorRuntime : IActorRuntime, IAgentKindVerifier
     {
         private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _actorKinds = new(StringComparer.Ordinal);
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -95,6 +98,7 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
                 : id.Trim();
             var actor = new TestActor(actorId);
             _actors[actorId] = actor;
+            _actorKinds[actorId] = TestAgentKind;
             return Task.FromResult<IActor>(actor);
         }
 
@@ -106,6 +110,7 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
                 : id.Trim();
             var actor = new TestActor(actorId);
             _actors[actorId] = actor;
+            _actorKinds[actorId] = agentKind;
             return Task.FromResult<IActor>(actor);
         }
 
@@ -113,6 +118,7 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         {
             ct.ThrowIfCancellationRequested();
             _actors.Remove(id);
+            _actorKinds.Remove(id);
             return Task.CompletedTask;
         }
 
@@ -127,6 +133,14 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<bool> IsExpectedKindAsync(string actorId, string expectedKind, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                _actorKinds.TryGetValue(actorId, out var kind) &&
+                string.Equals(kind, expectedKind, StringComparison.Ordinal));
+        }
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort

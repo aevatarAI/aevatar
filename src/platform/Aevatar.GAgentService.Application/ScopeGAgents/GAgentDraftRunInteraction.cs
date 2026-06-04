@@ -310,13 +310,6 @@ internal sealed class GAgentDraftRunCommandTargetResolver
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedKind);
 
-        if (_agentKindRegistry != null &&
-            _agentKindRegistry.TryGetKindForAgentType(actor.Agent.GetType(), out var localKind) &&
-            string.Equals(localKind, expectedKind, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
         if (_agentKindVerifier == null)
             return false;
 
