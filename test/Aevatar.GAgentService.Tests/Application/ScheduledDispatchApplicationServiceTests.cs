@@ -94,6 +94,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 new Dictionary<string, string>()));
 
         receipt.ScheduleId.Should().Be("schedule-1");
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
         var updated = actorPort.Updated.Should().ContainSingle().Which;
         updated.ActorId.Should().Be("actor:schedule-1");
         updated.Configuration.Target.ActorId.Should().BeNull();
@@ -103,6 +104,23 @@ public sealed class ScheduledDispatchApplicationServiceTests
         updated.Configuration.Target.ServiceInvocation.RevisionId.Should().Be("rev-1");
         updated.Configuration.Timezone.Should().Be("UTC");
         updated.Dispatch.TargetActorId.Should().Be(ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenScheduleMissing_ShouldThrowNotFoundWithoutEnsuringActor()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        actorPort.MissingScheduleIds.Add("missing");
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        var act = () => service.UpdateAsync(" missing ", CreateEnvelopeConfiguration("ignored"));
+
+        await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
     }
 
     [Theory]
@@ -116,6 +134,28 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var act = () => service.CreateAsync(CreateEnvelopeConfiguration(scheduleId));
 
         await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+    }
+
+    [Theory]
+    [InlineData("abc")]
+    [InlineData("ABC")]
+    [InlineData("abc-123_DEF:ghi.jkl")]
+    public void ScheduledDispatchActorIdFormat_ShouldAcceptAsciiScheduleIds(string scheduleId)
+    {
+        ScheduledDispatchActorId.Format($" {scheduleId} ")
+            .Should().Be($"scheduled-dispatch:{scheduleId}");
+    }
+
+    [Theory]
+    [InlineData("计划")]
+    [InlineData("éclair")]
+    [InlineData("emoji-🙂")]
+    public void ScheduledDispatchActorIdFormat_ShouldRejectNonAsciiScheduleIds(string scheduleId)
+    {
+        var act = () => ScheduledDispatchActorId.Format(scheduleId);
+
+        act.Should().Throw<ArgumentException>()
             .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
     }
 

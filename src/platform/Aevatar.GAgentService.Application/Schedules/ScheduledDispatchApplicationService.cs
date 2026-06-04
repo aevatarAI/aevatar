@@ -53,7 +53,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             BuildScheduleCommandId(normalized.ScheduleId),
             BuildScheduleCorrelationId(normalized.ScheduleId),
             ct);
-        var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
+        var actorId = await ResolveScheduleActorAsync(normalized.ScheduleId, ct);
         var admission = await _actorPort.DispatchUpdateAsync(actorId, normalized, dispatch, ct);
         return new ScheduledDispatchMutationReceipt(normalized.ScheduleId, actorId, admission.Accepted);
     }

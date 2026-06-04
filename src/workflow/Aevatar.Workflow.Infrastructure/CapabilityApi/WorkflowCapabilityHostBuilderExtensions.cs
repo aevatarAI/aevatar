@@ -21,8 +21,6 @@ public static class WorkflowCapabilityHostBuilderExtensions
                 "/api/agents",
                 "/api/primitives",
                 "/api/workflows",
-                "/api/scheduled-dispatches",
-                "/api/workflow-schedules",
                 "/api/capabilities",
             ],
             ProbeAsync = static async (serviceProvider, cancellationToken) =>

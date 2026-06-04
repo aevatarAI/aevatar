@@ -3,6 +3,7 @@ namespace Aevatar.GAgentService.Infrastructure.Schedules;
 public static class ScheduledDispatchActorId
 {
     private const string Prefix = "scheduled-dispatch:";
+    private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-";
 
     public static string Format(string scheduleId)
     {
@@ -10,7 +11,7 @@ public static class ScheduledDispatchActorId
             ? throw new ArgumentException("Schedule id is required.", nameof(scheduleId))
             : scheduleId.Trim();
 
-        if (!normalized.All(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or ':' or '.'))
+        if (normalized.Any(static ch => ScheduleIdAllowedCharacters.IndexOf(ch) < 0))
             throw new ArgumentException("Schedule id may only contain letters, digits, '.', '_', ':', and '-'.", nameof(scheduleId));
 
         return $"{Prefix}{normalized}";

@@ -23,7 +23,7 @@ public sealed class ScheduledDispatchGAgentTests
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
 
     [Fact]
-    public async Task HandleFireAsync_ShouldSuppressDuplicateDispatchAfterStartedRecordIsDurable()
+    public async Task HandleFireAsync_ShouldSuppressDuplicateDispatchAfterTerminalRecordIsDurable()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
@@ -50,6 +50,40 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_WhenStartedRecordFromCanceledDispatchExists_ShouldRetry()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort
+        {
+            DispatchException = new OperationCanceledException("shutdown"),
+        };
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        var canceled = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        await canceled.Should().ThrowAsync<OperationCanceledException>();
+        dispatch.DispatchException = null;
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        dispatch.Dispatches.Should().HaveCount(2);
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleConfigureAsync_WhenEnabled_ShouldRegisterDurableNextFireCallback()
     {
         var eventStore = new TestEventStore();
@@ -73,6 +107,11 @@ public sealed class ScheduledDispatchGAgentTests
         fireCommand.ScheduledFireAt.Should().NotBeNull();
         var scheduledFireAt = fireCommand.ScheduledFireAt.ToDateTimeOffset();
         scheduledFireAt.Should().Be(agent.State.NextFireAt);
+        agent.State.UpdatedAt.Should().Be(eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchNextFireScheduledEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Select(x => x.EventData.Unpack<ScheduledDispatchNextFireScheduledEvent>())
+            .Single()
+            .ScheduledAt.ToDateTimeOffset());
 
         agent.State.NextFireLease.Should().NotBeNull();
         agent.State.NextFireLease!.ActorId.Should().Be(ScheduleActorId);
@@ -103,6 +142,30 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleConfigureAsync_WhenReplacingNextFirePersistFails_ShouldKeepPreviousLeaseActiveAndCancelOnlyNewLease()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+        var previousLease = agent.State.NextFireLease!.Clone();
+        eventStore.ThrowOnAppendEventType = ScheduledDispatchNextFireScheduledEvent.Descriptor.FullName;
+
+        var act = () => agent.HandleConfigureAsync(CreateUpdateCommand(
+            cronExpression: "*/5 * * * *",
+            enabled: true));
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.Canceled.Should().ContainSingle();
+        scheduler.Canceled[0].Generation.Should().Be(2);
+        agent.State.NextFireLease.Should().BeEquivalentTo(previousLease);
+        agent.State.NextFireLease!.Generation.Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleDisableAsync_ShouldCancelExistingLeaseBeforeDisabledStateClearsIt()
     {
         var eventStore = new TestEventStore();
@@ -124,6 +187,26 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.Enabled.Should().BeFalse();
         agent.State.NextFireAt.Should().BeNull();
         agent.State.NextFireLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WhenEnabledUpdatePersistsNextFire_ShouldCancelPreviousLeaseAfterNewLeaseIsDurable()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        await agent.HandleConfigureAsync(CreateUpdateCommand(
+            cronExpression: "*/5 * * * *",
+            enabled: true));
+
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.Canceled.Should().ContainSingle();
+        scheduler.Canceled[0].Generation.Should().Be(1);
+        agent.State.NextFireLease!.Generation.Should().Be(2);
     }
 
     [Fact]
@@ -607,6 +690,41 @@ public sealed class ScheduledDispatchGAgentTests
         inMemory!.Backend.Should().Be(RuntimeCallbackBackend.InMemory);
     }
 
+    [Fact]
+    public void ScheduledDispatchStateReplay_ShouldUsePersistedNextFireScheduledAtForUpdatedAt()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        var scheduledAt = new DateTimeOffset(2026, 5, 29, 8, 59, 0, TimeSpan.Zero);
+        var nextFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        var transition = typeof(ScheduledDispatchGAgent)
+            .GetMethod("TransitionState", BindingFlags.Instance | BindingFlags.NonPublic);
+        transition.Should().NotBeNull();
+
+        var replayed = transition!.Invoke(agent,
+            [
+                new ScheduledDispatchState(),
+                new ScheduledDispatchNextFireScheduledEvent
+                {
+                    NextFireAt = Timestamp.FromDateTimeOffset(nextFireAt),
+                    ScheduledAt = Timestamp.FromDateTimeOffset(scheduledAt),
+                    Lease = new ScheduledDispatchRuntimeCallbackLeaseState
+                    {
+                        ActorId = ScheduleActorId,
+                        CallbackId = NextFireCallbackId,
+                        Generation = 7,
+                        Backend = ScheduledDispatchRuntimeCallbackBackendState.Dedicated,
+                    },
+                },
+            ]) as ScheduledDispatchState;
+
+        replayed.Should().NotBeNull();
+        replayed!.NextFireAt.Should().Be(nextFireAt);
+        replayed.UpdatedAt.Should().Be(scheduledAt);
+        replayed.NextFireLease!.Generation.Should().Be(7);
+    }
+
     private static ScheduledDispatchGAgent CreateAgent(
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
@@ -839,6 +957,11 @@ public sealed class ScheduledDispatchGAgentTests
         private readonly Dictionary<string, List<StateEvent>> _streams = new(StringComparer.Ordinal);
         public bool ThrowOnAppend { get; set; }
         public string? ThrowOnAppendEventType { get; set; }
+
+        public IReadOnlyList<StateEvent> GetEvents(string agentId) =>
+            (_streams.GetValueOrDefault(agentId) ?? [])
+            .Select(x => x.Clone())
+            .ToArray();
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,

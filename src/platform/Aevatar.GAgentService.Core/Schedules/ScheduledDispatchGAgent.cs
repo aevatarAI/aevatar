@@ -181,7 +181,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         var scheduledFireAt = ResolveScheduledFireAt(command);
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
-        if (State.FireRecords.ContainsKey(idempotencyKey))
+        if (HasTerminalFireRecord(idempotencyKey))
         {
             Logger.LogInformation(
                 "Scheduled dispatch {ActorId} ignored duplicate fire {IdempotencyKey}.",
@@ -368,7 +368,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         ct.ThrowIfCancellationRequested();
-        await CancelNextFireLeaseAsync(ct);
+        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
         var lease = await ScheduleSelfDurableTimeoutAsync(
             NextFireCallbackId,
@@ -386,6 +386,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             {
                 NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
                 Lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToState(lease),
+                ScheduledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             }, ct);
         }
         catch
@@ -393,6 +394,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             await CancelNextFireLeaseAsync(lease, CancellationToken.None);
             throw;
         }
+
+        await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
 
     private async Task CancelNextFireLeaseAsync(CancellationToken ct)
@@ -416,6 +419,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
+    }
+
+    private bool HasTerminalFireRecord(string idempotencyKey)
+    {
+        if (!State.FireRecords.TryGetValue(idempotencyKey, out var record))
+            return false;
+
+        return record.Status is ScheduledDispatchFireStatusState.Dispatched or ScheduledDispatchFireStatusState.Failed;
     }
 
     private DateTimeOffset ResolveScheduledFireAt(ScheduledDispatchFireCommand command)
@@ -578,7 +589,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var next = current.Clone();
         next.NextFireAt = evt.NextFireAt?.ToDateTimeOffset();
         next.NextFireLease = evt.Lease?.Clone();
-        next.UpdatedAt = DateTimeOffset.UtcNow;
+        next.UpdatedAt =
+            evt.ScheduledAt?.ToDateTimeOffset() ??
+            evt.NextFireAt?.ToDateTimeOffset() ??
+            DateTimeOffset.UtcNow;
         return next;
     }
 
