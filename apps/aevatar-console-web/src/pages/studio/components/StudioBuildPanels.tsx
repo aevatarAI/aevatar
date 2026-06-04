@@ -547,14 +547,14 @@ function renderRunOutput(state: DraftRunState): string {
   }
 
   if (state.status === 'running') {
-    return 'Waiting for assistant output...';
+    return t("pages.studio.studiobuildpanels.waiting.for.assistant.output", "Waiting for assistant output...");
   }
 
   if (state.status === 'success' && getRunDebugLines(state).length > 0) {
-    return 'Run completed, but no assistant output was returned.';
+    return t("pages.studio.studiobuildpanels.run.completed.but.no", "Run completed, but no assistant output was returned.");
   }
 
-  return 'Run the current draft to inspect the assistant output here.';
+  return t("pages.studio.studiobuildpanels.run.the.current.draft", "Run the current draft to inspect the assistant output here.");
 }
 
 function renderRunSummary(state: DraftRunState): string {
@@ -563,15 +563,15 @@ function renderRunSummary(state: DraftRunState): string {
 
 function getGAgentDraftRunRecoveryText(state: DraftRunState): string {
   if (state.status === 'running') {
-    return 'Draft run is still waiting for backend events. Keep the Build definition visible while this request completes.';
+    return t("pages.studio.studiobuildpanels.draft.run.waiting.backend.events", "Draft run is still waiting for backend events. Keep the Build definition visible while this request completes.");
   }
 
   if (state.status === 'error') {
-    return 'This only failed the Build dry-run. Adjust the prompt or tools and retry, or continue to Bind when the member definition is ready to publish.';
+    return t("pages.studio.studiobuildpanels.build.dry.run.failed.recovery", "This only failed the Build dry-run. Adjust the prompt or tools and retry, or continue to Bind when the member definition is ready to publish.");
   }
 
   if (state.status === 'success') {
-    return 'Draft run finished. Continue to Bind when you are ready to publish the callable member contract.';
+    return t("pages.studio.studiobuildpanels.draft.run.finished.continue.bind", "Draft run finished. Continue to Bind when you are ready to publish the callable member contract.");
   }
 
   return '';
@@ -632,7 +632,7 @@ function getParameterDisplayLabel(
   parameter: WorkflowPrimitiveDescriptor['parameters'][number],
 ): string {
   return isLLMPromptInstructionParameter(stepType, parameter.name)
-    ? 'Prompt instruction'
+    ? t("pages.studio.studiobuildpanels.prompt.instruction", "Prompt instruction")
     : parameter.name;
 }
 
@@ -641,10 +641,10 @@ function getParameterDisplayDescription(
   parameter: WorkflowPrimitiveDescriptor['parameters'][number],
 ): string {
   if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
-    return 'Instruction added before each workflow run input reaches the LLM.';
+    return t("pages.studio.studiobuildpanels.prompt.instruction.description", "Instruction added before each workflow run input reaches the LLM.");
   }
 
-  return parameter.description || `Type: ${parameter.type}`;
+  return parameter.description || t("pages.studio.studiobuildpanels.type.parameter", "Type: {type}", { type: parameter.type });
 }
 
 function getParameterPlaceholder(
@@ -652,10 +652,10 @@ function getParameterPlaceholder(
   parameter: WorkflowPrimitiveDescriptor['parameters'][number],
 ): string {
   if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
-    return 'e.g. Translate the user input to Japanese';
+    return t("pages.studio.studiobuildpanels.prompt.instruction.placeholder", "e.g. Translate the user input to Japanese");
   }
 
-  return parameter.default || parameter.type || 'Value';
+  return parameter.default || parameter.type || t("pages.studio.studiobuildpanels.value.placeholder", "Value");
 }
 
 function shouldUseParameterDefault(
@@ -987,17 +987,17 @@ function ScriptLeaveDialog(props: {
       <Typography.Text strong style={{ fontSize: 16 }}>
         {t("pages.studio.studiobuildpanels.leave.script.build.2", "Leave Script Build?")}</Typography.Text>
       <Typography.Text type="secondary">
-        {t("pages.studio.studiobuildpanels.build.source.editor", "当前脚本草稿还没有保存。离开 Build 会丢掉这次 source editor 里的未保存修改。")}</Typography.Text>
+        {t("pages.studio.studiobuildpanels.build.source.editor", "The current script draft is not saved. Leaving Build will discard unsaved changes in the source editor.")}</Typography.Text>
       <Space>
         <Button className={AEVATAR_INTERACTIVE_BUTTON_CLASS} onClick={props.onStay}>
-          {t("pages.studio.studiobuildpanels.copy", "继续编辑")}</Button>
+          {t("pages.studio.studiobuildpanels.copy", "Keep editing")}</Button>
         <Button
           className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
           danger
           type="primary"
           onClick={props.onLeave}
         >
-          {t("pages.studio.studiobuildpanels.copy.2", "离开页面")}</Button>
+          {t("pages.studio.studiobuildpanels.copy.2", "Leave page")}</Button>
       </Space>
     </div>
   );
@@ -1329,7 +1329,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       const disconnectedProvider = rawMessage.match(/Provider '([^']+)' not connected/i);
       const visibleMessage =
         disconnectedProvider
-          ? t("pages.studio.studiobuildpanels.dry.run.provider.provider", "Dry-run 还不能运行，因为 {value1} provider 还没有连好。先连接可用 provider，再回来运行当前 workflow draft。", { value1: disconnectedProvider[1] })
+          ? t("pages.studio.studiobuildpanels.dry.run.provider.provider", "Dry-run cannot run because the {value1} provider is not connected yet. Connect an available provider, then run the current workflow draft again.", { value1: disconnectedProvider[1] })
           : rawMessage;
       setWorkflowRunError(
         visibleMessage,
@@ -1503,7 +1503,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           <div style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
             <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.build.actions.2", "Build actions")}</div>
             <Tag color={canSaveWorkflow ? 'gold' : 'default'}>
-              {canSaveWorkflow ? t("pages.studio.studiobuildpanels.draft.ready.2", "draft ready") : 'saved'}
+              {canSaveWorkflow ? t("pages.studio.studiobuildpanels.draft.ready.2", "draft ready") : t("pages.studio.studiobuildpanels.saved", "saved")}
             </Tag>
           </div>
           <Space wrap size={[8, 8]}>
@@ -1591,7 +1591,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
               <div data-testid="workflow-step-type-picker" style={workflowTypePickerStyle}>
                 <div style={workflowSectionHeadingStyle}>{t("pages.studio.studiobuildpanels.choose.step.type.2", "Choose step type")}</div>
                 <div style={workflowInlineMetaStyle}>
-                  {t("pages.studio.studiobuildpanels.step", "先决定要插入哪种 step，再把它接到当前选中的节点后面。")}</div>
+                  {t("pages.studio.studiobuildpanels.step", "Choose which step type to insert, then connect it after the currently selected node.")}</div>
                 <div
                   data-testid="workflow-step-type-picker-grid"
                   style={workflowTypePickerGridStyle}
@@ -1651,7 +1651,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   <Tag color="blue">{t("pages.studio.studiobuildpanels.raw.draft.2", "raw draft")}</Tag>
                 </div>
                 <Input.TextArea
-                  aria-label={t("pages.studio.studiobuildpanels.yaml.2", "定义 YAML")}
+                  aria-label={t("pages.studio.studiobuildpanels.yaml.2", "Define YAML")}
                   autoSize={{ minRows: 18, maxRows: 28 }}
                   value={draftYaml}
                   onChange={(event) => onSetDraftYaml(event.target.value)}
@@ -1737,7 +1737,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                       label: t("pages.studio.studiobuildpanels.copy.4", "{value1} ({value2})", { value1: role.name, value2: role.id }),
                       value: role.id,
                     }))}
-                    placeholder={workflowRoleIds[0] || 'Select role'}
+                    placeholder={workflowRoleIds[0] || t("pages.studio.studiobuildpanels.select.role", "Select role")}
                     value={stepDraft.targetRole || undefined}
                     onChange={(value) =>
                       updateStepDraft((current) =>
@@ -1873,7 +1873,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                     </div>
                   ) : (
                     <div style={workflowInlineMetaStyle}>
-                      {t("pages.studio.studiobuildpanels.step.type.raw.json", "当前 step type 没有声明可引导参数，直接使用下面的 raw JSON 编辑。")}</div>
+                      {t("pages.studio.studiobuildpanels.step.type.raw.json", "The current step type has no guided parameters declared. Edit the raw JSON below directly.")}</div>
                   )}
                   <details style={workflowAdvancedSectionStyle}>
                     <summary style={{ ...workflowSectionHeadingStyle, cursor: 'pointer' }}>
@@ -1964,10 +1964,10 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
         </div>
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={workflowInlineMetaStyle}>
-            Route: {dryRunRouteLabel || t("pages.studio.studiobuildpanels.config.default.2", "Config default")}
+            {t("pages.studio.studiobuildpanels.route.label", "Route: ")}{dryRunRouteLabel || t("pages.studio.studiobuildpanels.config.default.2", "Config default")}
           </div>
           <div style={workflowInlineMetaStyle}>
-            Model: {dryRunModelLabel || t("pages.studio.studiobuildpanels.use.configured.default.2", "Use configured default")}
+            {t("pages.studio.studiobuildpanels.model.label", "Model: ")}{dryRunModelLabel || t("pages.studio.studiobuildpanels.use.configured.default.2", "Use configured default")}
           </div>
         </div>
         {dryRunBlockedReason ? (
@@ -2854,7 +2854,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.script.source.2", "Script Source")}</div>
             <div style={sectionDescriptionStyle}>
               {hasActiveScript
-                ? t("pages.studio.studiobuildpanels.script.mode.script.draft", "Script mode 只做一件事：围绕当前 script draft 的 typed source、lints 和 dry-run 迭代实现。")
+                ? t("pages.studio.studiobuildpanels.script.mode.script.draft", "Script mode does one thing: iterate on the current script draft's typed source, lint results, and dry-run implementation.")
                 : t("pages.studio.studiobuildpanels.create.script.to.start.editing.saved", "Create a script to start editing. Saved workspace scripts appear here when this catalog has one.")}
             </div>
           </div>
@@ -3248,7 +3248,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 {t("pages.studio.studiobuildpanels.draft.input.2", "Draft input")}</span>
             </div>
             <div style={sectionDescriptionStyle}>
-              {t("pages.studio.studiobuildpanels.draft.run.source.editor", "Draft-run 会直接调用当前 source editor 里的脚本，不需要先把 scope 默认服务切到这个 script。")}</div>
+              {t("pages.studio.studiobuildpanels.draft.run.source.editor", "Draft-run directly calls the script in the current source editor; you do not need to switch the scope default service to this script first.")}</div>
             <Input.TextArea
               aria-label={t("pages.studio.studiobuildpanels.script.dry.run.input.2", "Script dry run input")}
               autoSize={{ minRows: 6, maxRows: 10 }}
@@ -3564,7 +3564,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           <div style={{ display: 'grid', gap: 4 }}>
             <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.gagent.definition.2", "GAgent Definition")}</div>
             <div style={sectionDescriptionStyle}>
-              {t("pages.studio.studiobuildpanels.gagent.mode.build.member", "GAgent mode 在 Build 里定义当前 member 的 actor 类型、展示名、角色、初始提示词、工具和状态持久化语义。")}</div>
+              {t("pages.studio.studiobuildpanels.gagent.mode.build.member", "GAgent mode defines the current member's Actor type, display name, role, initial Prompt, tools, and state persistence semantics in Build.")}</div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <Space wrap size={[8, 8]}>
@@ -3655,7 +3655,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
 
         <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between' }}>
           <Typography.Text type="secondary">
-            {t("pages.studio.studiobuildpanels.gagent.build.actor.service", "GAgent Build 只负责定义 actor 语义；真正发布 service / endpoint 还是下一步去 Bind。")}</Typography.Text>
+            {t("pages.studio.studiobuildpanels.gagent.build.actor.service", "GAgent Build only defines Actor semantics. Publish the Service and Endpoint in Bind.")}</Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
             disabled={!selectedTypeName}
@@ -3676,7 +3676,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             {t("pages.studio.studiobuildpanels.draft.input.3", "Draft input")}</span>
         </div>
         <div style={sectionDescriptionStyle}>
-          {t("pages.studio.studiobuildpanels.gagent.prompt.transcript", "这里用当前选中的 GAgent 类型直接做一次草稿运行，验证 prompt 和 transcript 是否符合预期。")}</div>
+          {t("pages.studio.studiobuildpanels.gagent.prompt.transcript", "Run the currently selected GAgent type as a draft to verify that the prompt and transcript match expectations.")}</div>
         <Input.TextArea
           aria-label={t("pages.studio.studiobuildpanels.gagent.dry.run.input.2", "GAgent dry run input")}
           autoSize={{ minRows: 6, maxRows: 10 }}
@@ -3709,10 +3709,10 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             showIcon
             message={
               runState.status === 'error'
-                ? 'Build dry-run needs attention'
+                ? t("pages.studio.studiobuildpanels.build.dry.run.needs.attention", "Build dry-run needs attention")
                 : runState.status === 'success'
-                  ? 'Build dry-run is ready'
-                  : 'Build dry-run is running'
+                  ? t("pages.studio.studiobuildpanels.build.dry.run.ready", "Build dry-run is ready")
+                  : t("pages.studio.studiobuildpanels.build.dry.run.running", "Build dry-run is running")
             }
             description={getGAgentDraftRunRecoveryText(runState)}
             type={runState.status === 'error' ? 'warning' : 'info'}
@@ -3753,7 +3753,7 @@ export function getDefaultBuildModeCards(scriptsEnabled: boolean): readonly Stud
         t("pages.studio.studiobuildpanels.write.typed.script.that.handles.2", "Write a typed script that handles deterministic business logic and code-level branches."),
       hint: scriptsEnabled
         ? 'When · You need code-level control'
-        : t("pages.studio.studiobuildpanels.copy.3", "当前环境暂未启用脚本能力。"),
+        : t("pages.studio.studiobuildpanels.copy.3", "Script capability is not enabled in the current environment."),
       disabled: !scriptsEnabled,
     },
     {

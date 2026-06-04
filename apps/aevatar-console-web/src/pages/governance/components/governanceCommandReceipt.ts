@@ -56,7 +56,7 @@ export function observeGovernanceReceipt(
     return {
       catalogLabel,
       observed: false,
-      summary: t("pages.governance.governancecommandreceipt.copy", "{value1} 还没有返回更新时间；当前只知道命令已接收。", { value1: catalogLabel }),
+      summary: t("pages.governance.governancecommandreceipt.copy", "{value1} has not returned an update time yet; currently only command acceptance is known.", { value1: catalogLabel }),
     };
   }
 
@@ -70,8 +70,8 @@ export function observeGovernanceReceipt(
     catalogLabel,
     observed,
     summary: observed
-      ? t("pages.governance.governancecommandreceipt.copy.2", "{value1} 已在 {value2} 之后刷新。", { value1: catalogLabel, value2: formatGovernanceTimestamp(updatedAt) })
-      : t("pages.governance.governancecommandreceipt.copy.3", "{value1} 更新时间仍早于本次命令接收时间，暂不能当作已观察。", { value1: catalogLabel }),
+      ? t("pages.governance.governancecommandreceipt.copy.2", "{value1} refreshed after {value2}.", { value1: catalogLabel, value2: formatGovernanceTimestamp(updatedAt) })
+      : t("pages.governance.governancecommandreceipt.copy.3", "{value1} update time is still earlier than this command acceptance time, so it cannot be treated as observed yet.", { value1: catalogLabel }),
     updatedAt,
   };
 }

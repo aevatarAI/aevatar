@@ -68,6 +68,20 @@ type StudioShellProps = {
   readonly children: React.ReactNode;
 };
 
+function formatMemberTone(tone: StudioShellMemberTone | undefined): string {
+  switch (tone) {
+    case 'live':
+      return t("pages.studio.studioshell.live", "Live");
+    case 'draft':
+      return t("pages.studio.studioshell.draft", "Draft");
+    case 'planned':
+      return t("pages.studio.studioshell.planned", "Planned");
+    case 'idle':
+    default:
+      return t("pages.studio.studioshell.idle", "Idle");
+  }
+}
+
 const shellRootStyle: React.CSSProperties = {
   background: '#f7f8fb',
   display: 'flex',
@@ -371,9 +385,9 @@ function formatMemberKindLabel(kind: StudioShellMemberKind | undefined): string 
     case 'gagent':
       return 'GAgent';
     case 'member':
-      return 'Member';
+      return t("pages.studio.studioshell.member", "Member");
     default:
-      return 'Focus';
+      return t("pages.studio.studioshell.focus", "Focus");
   }
 }
 
@@ -437,7 +451,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
     return [
       {
         key: 'all' as const,
-        label: 'All',
+        label: t("pages.studio.studioshell.all", "All"),
         count: members.length,
       },
       {
@@ -457,7 +471,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
       },
       {
         key: 'member' as const,
-        label: 'Member',
+        label: t("pages.studio.studioshell.member", "Member"),
         count: counts.member ?? 0,
       },
     ].filter((item) => item.key === 'all' || item.count > 0);
@@ -530,8 +544,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
               {t("pages.studio.studioshell.team.members.4", "Team members")}</Typography.Title>
             <span style={railPillStyle}>{members.length}</span>
             <InlineInfoButton
-              ariaLabel="Open team members help"
-              content="Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench."
+              ariaLabel={t("pages.studio.studioshell.open.team.members.help", "Open team members help")}
+              content={t("pages.studio.studioshell.keep.one.member.in", "Keep one member in focus while Build, Bind, Invoke, and Observe gradually converge into the same workbench.")}
             />
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
@@ -742,7 +756,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                             width: 7,
                           }}
                         />
-                        {member.tone ?? 'idle'}
+                        {formatMemberTone(member.tone)}
                       </div>
                     </div>
                   </div>

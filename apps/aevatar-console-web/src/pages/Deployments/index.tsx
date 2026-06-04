@@ -3342,7 +3342,7 @@ const DeploymentsPage: React.FC = () => {
                       <DetailFieldCard
                         key={`${target.deploymentId}-${target.revisionId}`}
                         label={`${target.revisionId} · ${target.deploymentId}`}
-                        value={t("pages.deployments.index.copy.2", "{value1}% · {value2} · {value3}", { value1: target.allocationWeight, value2: formatAevatarStatusLabel(target.servingState || 'unknown'), value3: target.primaryActorId || t("pages.deployments.index.actor", "暂无 Actor") })}
+                        value={t("pages.deployments.index.copy.2", "{value1}% · {value2} · {value3}", { value1: target.allocationWeight, value2: formatAevatarStatusLabel(target.servingState || 'unknown'), value3: target.primaryActorId || t("pages.deployments.index.actor", "No Actor yet") })}
                       />
                     ))}
                   </div>

@@ -208,12 +208,16 @@ function createPendingHistoryEntry(input: {
 function writeClipboardText(value: string, label: string): boolean {
   const normalized = trimOptional(value);
   if (!normalized) {
-    void message.warning(`No ${label} available to copy.`);
+    void message.warning(
+      t("pages.studio.studiomemberinvokepanel.no.value.available.to.copy", "No {label} available to copy.", { label }),
+    );
     return false;
   }
 
   void globalThis.navigator?.clipboard?.writeText(normalized);
-  void message.success(`${label} copied.`);
+  void message.success(
+    t("pages.studio.studiomemberinvokepanel.value.copied", "{label} copied.", { label }),
+  );
   return true;
 }
 
@@ -526,13 +530,13 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(memberRevision?.revisionId);
   const lifecycleLabel = getLifecycleLabel(memberRevision);
   const invokeBlockedReason = !scopeId
-    ? 'Missing workspace scope.'
+    ? t("pages.studio.studiomemberinvokepanel.missing.workspace.scope", "Missing workspace scope.")
     : !normalizedMemberId
-      ? 'Missing Team member target.'
+      ? t("pages.studio.studiomemberinvokepanel.missing.team.member.target", "Missing Team member target.")
       : !selectedService
-        ? 'Select a published member service before invoking.'
+        ? t("pages.studio.studiomemberinvokepanel.select.published.member.service", "Select a published member service before invoking.")
         : !selectedEndpoint
-          ? 'Select an endpoint before invoking.'
+          ? t("pages.studio.studiomemberinvokepanel.select.endpoint.before.invoking", "Select an endpoint before invoking.")
           : '';
   const runViewMode = selectedHistoryId ? 'historical' : 'latest';
 
@@ -818,7 +822,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const restorePromptForNewRun = useCallback((nextPrompt: string) => {
     const normalizedPrompt = trimOptional(nextPrompt);
     if (!normalizedPrompt) {
-      void message.warning('No input available to retry.');
+      void message.warning(
+        t("pages.studio.studiomemberinvokepanel.no.input.available.to.retry", "No input available to retry."),
+      );
       return;
     }
 
@@ -832,7 +838,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ?.querySelector<HTMLTextAreaElement>('textarea')
         ?.focus();
     }, 0);
-    void message.info('Prompt restored. Click Invoke to create a new Run.');
+    void message.info(
+      t("pages.studio.studiomemberinvokepanel.prompt.restored.click.invoke", "Prompt restored. Click Invoke to create a new Run."),
+    );
   }, []);
 
   const handleAbort = useCallback(() => {

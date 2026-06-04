@@ -774,7 +774,7 @@ function describeSavedWorkflowLocation(
     return filePath;
   }
 
-  return directoryLabel || fileName || t("pages.studio.index.copy", "当前工作区");
+  return directoryLabel || fileName || t("pages.studio.index.copy", "Current workspace");
 }
 
 function hasWorkflowGraphContent(
@@ -1455,12 +1455,12 @@ function readInitialStudioSurface(state: StudioRouteState): StudioSurface {
 }
 
 function readInitialBuildSurface(state: StudioRouteState): BuildSurface {
-  if (state.tab === 'gagents') {
-    return 'gagent';
-  }
-
   const buildFocus = parseStudioBuildFocus(state.focusKey);
   const routeMember = parseStudioRouteMember(state.memberKey);
+  if (buildFocus.kind === 'workflow' || routeMember.kind === 'workflow') {
+    return 'editor';
+  }
+
   if (
     state.tab === 'scripts' ||
     buildFocus.kind === 'script' ||
@@ -1469,7 +1469,29 @@ function readInitialBuildSurface(state: StudioRouteState): BuildSurface {
     return 'scripts';
   }
 
+  if (state.tab === 'gagents') {
+    return 'gagent';
+  }
+
   return 'editor';
+}
+
+function resolveRouteRequestedBuildSurface(state: StudioRouteState): BuildSurface | '' {
+  if (state.step !== 'build') {
+    return '';
+  }
+
+  const buildFocus = parseStudioBuildFocus(state.focusKey);
+  const routeMember = parseStudioRouteMember(state.memberKey);
+  if (buildFocus.kind === 'workflow' || routeMember.kind === 'workflow') {
+    return 'editor';
+  }
+
+  if (buildFocus.kind === 'script' || routeMember.kind === 'script') {
+    return 'scripts';
+  }
+
+  return '';
 }
 
 function findPublishedStudioMemberByMemberKey(
@@ -3584,11 +3606,11 @@ const StudioPage: React.FC = () => {
     'Config default';
   const workflowDryRunBlockedReason = useMemo(() => {
     if (userLlmSettingsQuery.isLoading) {
-      return t("pages.studio.index.studio.provider", "Studio 正在检查可用 provider，请稍后再运行。");
+      return t("pages.studio.index.studio.provider", "Studio is checking available providers. Try running again shortly.");
     }
 
     if (readyUserRoutes.length === 0) {
-      return t("pages.studio.index.ready.ai.provider.provider", "当前没有 ready 的 AI provider。先连接 provider，再回来运行这个 workflow draft。");
+      return t("pages.studio.index.ready.ai.provider.provider", "No ready AI provider is available. Connect a provider, then return to run this workflow draft.");
     }
 
     return '';
@@ -5532,7 +5554,7 @@ const StudioPage: React.FC = () => {
         }));
       }
       void message.success(
-        t("pages.studio.index.copy.2", "已保存到 {value1}。", { value1: describeSavedWorkflowLocation(savedWorkflow) }),
+        t("pages.studio.index.copy.2", "Saved to {value1}.", { value1: describeSavedWorkflowLocation(savedWorkflow) }),
       );
     } catch (error) {
       setSaveNotice({
@@ -5636,7 +5658,9 @@ const StudioPage: React.FC = () => {
   const handleCreateMember = useCallback(async (selectedCreateMemberKind: BuildMode) => {
     if (selectedCreateMemberKind !== 'workflow') {
       if (selectedCreateMemberKind === 'script' && !appContextQuery.data?.features.scripts) {
-        void message.warning('Script builder is not enabled for this workspace.');
+        void message.warning(
+          t("pages.studio.index.script.builder.not.enabled", "Script builder is not enabled for this workspace."),
+        );
         return;
       }
 
@@ -5648,12 +5672,16 @@ const StudioPage: React.FC = () => {
         const scriptDisplayName = trimOptional(createMemberName);
         const scriptId = buildScriptIdSlug(scriptDisplayName);
         if (!scriptId) {
-          void message.warning('Script name is required.');
+          void message.warning(
+            t("pages.studio.index.script.name.required", "Script name is required."),
+          );
           return;
         }
 
         if (availableScopeScriptIds.has(scriptId)) {
-          void message.warning('A workspace script with the same id already exists.');
+          void message.warning(
+            t("pages.studio.index.workspace.script.same.id.exists", "A workspace script with the same id already exists."),
+          );
           return;
         }
 
@@ -5666,7 +5694,9 @@ const StudioPage: React.FC = () => {
               buildScriptIdSlug(member.memberId) === scriptId,
           )
         ) {
-          void message.warning('A Script member with the same id already exists.');
+          void message.warning(
+            t("pages.studio.index.script.member.same.id.exists", "A Script member with the same id already exists."),
+          );
           return;
         }
 
@@ -5705,8 +5735,8 @@ const StudioPage: React.FC = () => {
             setInventoryBusyAction('');
             void message.error(
               memberError instanceof Error
-                ? `Studio could not register the Script member authority: ${memberError.message}`
-                : 'Studio could not register the Script member authority.',
+                ? t("pages.studio.index.script.member.authority.error.with.detail", "Studio could not register the Script member authority: {detail}", { detail: memberError.message })
+                : t("pages.studio.index.script.member.authority.error", "Studio could not register the Script member authority."),
             );
             return;
           }
@@ -5748,15 +5778,17 @@ const StudioPage: React.FC = () => {
         setInventoryBusyAction('');
         void message.success(
           createdScriptMember
-            ? `Created Script member ${createdScriptMember.displayName} and opened its draft.`
-            : `Created Script draft ${scriptId}.`,
+            ? t("pages.studio.index.created.script.member.opened.draft", "Created Script member {member} and opened its draft.", { member: createdScriptMember.displayName })
+            : t("pages.studio.index.created.script.draft", "Created Script draft {scriptId}.", { scriptId }),
         );
         return;
       }
 
       const gAgentDisplayName = trimOptional(createMemberName);
       if (!gAgentDisplayName) {
-        void message.warning('GAgent member name is required.');
+        void message.warning(
+          t("pages.studio.index.gagent.member.name.required", "GAgent member name is required."),
+        );
         return;
       }
 
@@ -5769,12 +5801,16 @@ const StudioPage: React.FC = () => {
               'gagent',
         )
       ) {
-        void message.warning('A GAgent member with the same name already exists.');
+        void message.warning(
+          t("pages.studio.index.gagent.member.same.name.exists", "A GAgent member with the same name already exists."),
+        );
         return;
       }
 
       if (!resolvedStudioScopeId) {
-        void message.warning('Connect a workspace before creating a GAgent member.');
+        void message.warning(
+          t("pages.studio.index.connect.workspace.before.creating.gagent.member", "Connect a workspace before creating a GAgent member."),
+        );
         return;
       }
 
@@ -5822,13 +5858,13 @@ const StudioPage: React.FC = () => {
         setBuildSurface('gagent');
         setStudioSurface('build');
         void message.success(
-          `Created GAgent member ${createdGAgentMember.displayName} and opened Build.`,
+          t("pages.studio.index.created.gagent.member.opened.build", "Created GAgent member {member} and opened Build.", { member: createdGAgentMember.displayName }),
         );
       } catch (memberError) {
         void message.error(
           memberError instanceof Error
-            ? `Studio could not register the GAgent member authority: ${memberError.message}`
-            : 'Studio could not register the GAgent member authority.',
+            ? t("pages.studio.index.gagent.member.authority.error.with.detail", "Studio could not register the GAgent member authority: {detail}", { detail: memberError.message })
+            : t("pages.studio.index.gagent.member.authority.error", "Studio could not register the GAgent member authority."),
         );
       } finally {
         setInventoryBusyKey('');
@@ -5840,13 +5876,15 @@ const StudioPage: React.FC = () => {
     const workflowName = trimOptional(createMemberName);
     const directoryId = trimOptional(createMemberDirectoryId) || inventoryDirectoryId;
     if (!workflowName) {
-      void message.warning('Member name is required.');
+      void message.warning(
+        t("pages.studio.index.member.name.required", "Member name is required."),
+      );
       return;
     }
 
     if (!directoryId) {
       void message.error(
-        'Add a workflow directory in Config before creating a workflow draft here.',
+        t("pages.studio.index.add.workflow.directory.before.creating.here", "Add a workflow directory in Config before creating a workflow draft here."),
       );
       return;
     }
@@ -5856,7 +5894,9 @@ const StudioPage: React.FC = () => {
         (workflow) => normalizeComparableText(workflow.name) === workflowName.toLowerCase(),
       )
     ) {
-      void message.warning('A workflow draft with the same name already exists.');
+      void message.warning(
+        t("pages.studio.index.workflow.draft.same.name.exists", "A workflow draft with the same name already exists."),
+      );
       return;
     }
 
@@ -5866,7 +5906,9 @@ const StudioPage: React.FC = () => {
           normalizeComparableText(member.displayName) === workflowName.toLowerCase(),
       )
     ) {
-      void message.warning('A team member with the same name already exists.');
+      void message.warning(
+        t("pages.studio.index.team.member.same.name.exists", "A team member with the same name already exists."),
+      );
       return;
     }
 
@@ -5889,7 +5931,7 @@ const StudioPage: React.FC = () => {
       if (!resolvedStudioScopeId) {
         setCreateMemberTeamId('');
         void message.success(
-          `Created workflow draft for member ${workflowName}. Connect a workspace to register the backend member authority.`,
+          t("pages.studio.index.created.workflow.draft.connect.workspace", "Created workflow draft for member {member}. Connect a workspace to register the backend member authority.", { member: workflowName }),
         );
         return;
       }
@@ -5939,13 +5981,13 @@ const StudioPage: React.FC = () => {
           tab: 'studio',
         }));
         void message.success(
-          `Created member ${workflowName} and opened its workflow draft.`,
+          t("pages.studio.index.created.member.opened.workflow.draft", "Created member {member} and opened its workflow draft.", { member: workflowName }),
         );
       } catch (memberError) {
         void message.error(
           memberError instanceof Error
-            ? `Workflow draft created, but Studio could not register the member authority: ${memberError.message}`
-            : 'Workflow draft created, but Studio could not register the member authority.',
+            ? t("pages.studio.index.workflow.draft.created.member.authority.error.with.detail", "Workflow draft created, but Studio could not register the member authority: {detail}", { detail: memberError.message })
+            : t("pages.studio.index.workflow.draft.created.member.authority.error", "Workflow draft created, but Studio could not register the member authority."),
         );
       }
       setCreateMemberTeamId('');
@@ -5953,7 +5995,7 @@ const StudioPage: React.FC = () => {
       void message.error(
         error instanceof Error
           ? error.message
-          : 'Failed to create a workflow draft for this member.',
+          : t("pages.studio.index.failed.create.workflow.draft.member", "Failed to create a workflow draft for this member."),
       );
     } finally {
       setInventoryBusyKey('');
@@ -6000,7 +6042,10 @@ const StudioPage: React.FC = () => {
           : '') ||
         'workflow';
       const nextWorkflowName = trimOptional(
-        window.prompt('Rename workflow member', currentWorkflowName) ?? '',
+        window.prompt(
+          t("pages.studio.index.rename.member.label", "Rename {member}", { member: currentWorkflowName }),
+          currentWorkflowName,
+        ) ?? '',
       );
 
       if (!nextWorkflowName || nextWorkflowName === currentWorkflowName) {
@@ -6014,7 +6059,9 @@ const StudioPage: React.FC = () => {
             workflow.name.trim().toLowerCase() === nextWorkflowName.toLowerCase(),
         )
       ) {
-        void message.warning('A workflow member with the same name already exists.');
+        void message.warning(
+          t("pages.studio.index.workflow.member.same.name.exists", "A workflow member with the same name already exists."),
+        );
         return;
       }
 
@@ -6084,10 +6131,14 @@ const StudioPage: React.FC = () => {
             (isSelectedWorkflow ? draftWorkflowLayout : null) ||
             fallbackWorkflowFile.layout,
         });
-        void message.success(`Renamed workflow member to ${nextWorkflowName}.`);
+        void message.success(
+          t("pages.studio.index.renamed.workflow.member", "Renamed workflow member to {member}.", { member: nextWorkflowName }),
+        );
       } catch (error) {
         void message.error(
-          error instanceof Error ? error.message : 'Failed to rename workflow member.',
+          error instanceof Error
+            ? error.message
+            : t("pages.studio.index.failed.rename.workflow.member", "Failed to rename workflow member."),
         );
       } finally {
         setInventoryBusyKey('');
@@ -6196,7 +6247,7 @@ const StudioPage: React.FC = () => {
                 void message.error(
                   error instanceof Error
                     ? error.message
-                    : 'Failed to delete workflow member.',
+                    : t("pages.studio.index.failed.delete.workflow.member", "Failed to delete workflow member."),
                 );
                 return;
               }
@@ -6245,12 +6296,14 @@ const StudioPage: React.FC = () => {
               }
             }
 
-            void message.success(`Deleted workflow member ${workflowLabel}.`);
+            void message.success(
+              t("pages.studio.index.deleted.workflow.member", "Deleted workflow member {member}.", { member: workflowLabel }),
+            );
           } catch (error) {
             void message.error(
               error instanceof Error
                 ? error.message
-                : 'Failed to delete workflow member.',
+                : t("pages.studio.index.failed.delete.workflow.member", "Failed to delete workflow member."),
             );
           } finally {
             setInventoryBusyKey('');
@@ -6913,39 +6966,6 @@ const StudioPage: React.FC = () => {
     },
     [],
   );
-  const handleSelectBuildMode = useCallback(
-    async (nextBuildMode: BuildMode) => {
-      if (nextBuildMode === activeBuildMode) {
-        return;
-      }
-
-      if (!(await confirmScriptsStudioLeave())) {
-        return;
-      }
-
-      if (nextBuildMode === 'workflow') {
-        applyStudioTarget('build', 'editor');
-        return;
-      }
-
-      if (nextBuildMode === 'script') {
-        if (!appContextQuery.data?.features.scripts) {
-          return;
-        }
-
-        applyStudioTarget('build', 'scripts');
-        return;
-      }
-
-      applyStudioTarget('build', 'gagent');
-    },
-    [
-      activeBuildMode,
-      appContextQuery.data?.features.scripts,
-      applyStudioTarget,
-      confirmScriptsStudioLeave,
-    ],
-  );
   const handleInvokeSelectionChange = useCallback(
     (selection: { serviceId: string; endpointId: string }) => {
       invokeSelectionRef.current = selection;
@@ -7012,7 +7032,7 @@ const StudioPage: React.FC = () => {
       };
       if (!resolvedMemberId) {
         void message.warning(
-          'Invoke needs a backend Team member identity. Select or create a member before continuing.',
+          t("pages.studio.index.invoke.needs.backend.team.member", "Invoke needs a backend Team member identity. Select or create a member before continuing."),
         );
         return;
       }
@@ -7045,18 +7065,18 @@ const StudioPage: React.FC = () => {
   );
   const pageTitle =
     isBuildEditorSurface
-      ? t("pages.studio.index.workflow", "Workflow 构建")
+      ? t("pages.studio.index.workflow", "Workflow Build")
       : isBuildScriptsSurface
-        ? t("pages.studio.index.copy.3", "脚本行为")
+        ? t("pages.studio.index.copy.3", "Script behavior")
       : isBuildGAgentSurface
-        ? t("pages.studio.index.gagent", "GAgent 构建")
+        ? t("pages.studio.index.gagent", "GAgent Build")
       : isBindSurface
-        ? t("pages.studio.index.copy.4", "成员绑定")
+        ? t("pages.studio.index.copy.4", "Member binding")
       : isInvokeSurface
-        ? t("pages.studio.index.copy.5", "成员调用")
+        ? t("pages.studio.index.copy.5", "Member invoke")
       : isObserveSurface
-        ? t("pages.studio.index.copy.6", "测试运行")
-        : t("pages.studio.index.copy.7", "行为定义");
+        ? t("pages.studio.index.copy.6", "Test run")
+        : t("pages.studio.index.copy.7", "Behavior definition");
   const currentLifecycleStep =
     isBindSurface
       ? 'bind'
@@ -7413,6 +7433,15 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    const routeRequestedBuildSurface = resolveRouteRequestedBuildSurface(routeState);
+    if (
+      studioSurface === 'build' &&
+      routeRequestedBuildSurface &&
+      routeRequestedBuildSurface !== buildSurface
+    ) {
+      return;
+    }
+
     const tab: StudioTab | undefined =
       studioSurface === 'bind'
         ? 'bindings'
@@ -7510,6 +7539,9 @@ const StudioPage: React.FC = () => {
     routeSelectedMember.kind,
     routeSelectedMemberKey,
     routeState.legacyServiceId,
+    routeState.focusKey,
+    routeState.memberKey,
+    routeState.step,
     routeState.teamId,
     routeState.returnTo,
     runPrompt,
@@ -7730,6 +7762,65 @@ const StudioPage: React.FC = () => {
       ? currentServiceRevisionByServiceId.get(serviceId) ?? null
       : null;
   }, [currentServiceRevisionByServiceId, workbenchPublishedService?.serviceId]);
+  const lockedBuildMode = useMemo<BuildMode | ''>(() => {
+    const implementationKind = normalizeStudioMemberBindingImplementationKind(
+      workbenchStudioMemberDetailQuery.data?.implementationRef
+        ?.implementationKind ||
+        workbenchStudioMember?.implementationKind ||
+        workbenchStudioMemberSummary?.implementationKind ||
+        workbenchPublishedServiceRevision?.implementationKind,
+    );
+
+    return implementationKind === 'workflow' ||
+      implementationKind === 'script' ||
+      implementationKind === 'gagent'
+      ? implementationKind
+      : '';
+  }, [
+    workbenchPublishedServiceRevision?.implementationKind,
+    workbenchStudioMember?.implementationKind,
+    workbenchStudioMemberDetailQuery.data?.implementationRef?.implementationKind,
+    workbenchStudioMemberSummary?.implementationKind,
+  ]);
+  const buildModeLocked = Boolean(lockedBuildMode);
+  const handleSelectBuildMode = useCallback(
+    async (nextBuildMode: BuildMode) => {
+      if (nextBuildMode === activeBuildMode) {
+        return;
+      }
+
+      if (buildModeLocked) {
+        return;
+      }
+
+      if (!(await confirmScriptsStudioLeave())) {
+        return;
+      }
+
+      if (nextBuildMode === 'workflow') {
+        applyStudioTarget('build', 'editor');
+        return;
+      }
+
+      if (nextBuildMode === 'script') {
+        if (!appContextQuery.data?.features.scripts) {
+          return;
+        }
+
+        applyStudioTarget('build', 'scripts');
+        return;
+      }
+
+      applyStudioTarget('build', 'gagent');
+    },
+    [
+      activeBuildMode,
+      appContextQuery.data?.features.scripts,
+      applyStudioTarget,
+      buildModeLocked,
+      confirmScriptsStudioLeave,
+    ],
+  );
   const workbenchMemberIsTeamEntry = Boolean(
     workbenchStudioMemberId &&
       resolvedStudioTeamId &&
@@ -7797,7 +7888,9 @@ const StudioPage: React.FC = () => {
     async (options?: { test?: boolean }) => {
       const candidate = resolveTeamEntryCandidate();
       if (!candidate) {
-        void message.warning('Resolve a Team member before setting Team entry.');
+        void message.warning(
+          t("pages.studio.index.resolve.team.member.before.entry", "Resolve a Team member before setting Team entry."),
+        );
         return;
       }
 
@@ -7851,11 +7944,11 @@ const StudioPage: React.FC = () => {
           testTeam: options?.test && entryVisible,
           teamId: candidate.teamId,
         });
-        void message.info(t("pages.studio.index.team.entry", "Team entry 变更已提交，正在等待同步确认。"));
+        void message.info(t("pages.studio.index.team.entry", "Team entry change submitted. Waiting for sync confirmation."));
         if (options?.test) {
           if (!entryVisible) {
             void message.warning(
-              t("pages.studio.index.team.entry.team.detail", "Team entry 已被后端受理，但读模型还没有确认新入口成员。请稍后在 Team Detail 中重试 Test Team。"),
+              t("pages.studio.index.team.entry.team.detail", "Team entry was accepted by the backend, but the read model has not confirmed the new entry member yet. Retry Test Team from Team Detail shortly."),
             );
           }
           history.push(targetHref);
@@ -8385,9 +8478,9 @@ const StudioPage: React.FC = () => {
     ],
   );
   const currentMemberLabel = !hasSelectedMemberFocus
-    ? 'Select a member'
+    ? t("pages.studio.index.select.member", "Select a member")
     : workbenchMemberKey.startsWith('workflow:')
-        ? trimOptional(activeWorkflowName) || 'Workflow member'
+        ? trimOptional(activeWorkflowName) || t("pages.studio.index.workflow.member", "Workflow member")
     : workbenchMemberKey.startsWith('script:')
         ? trimOptional(selectedScriptId) || 'Script member'
     : workbenchMemberKey.startsWith('member:')
@@ -8402,10 +8495,10 @@ const StudioPage: React.FC = () => {
               trimOptional(workbenchPublishedService?.displayName) ||
               trimOptional(workbenchPublishedService?.serviceId) ||
               trimOptional(routeSelectedBackendMemberId) ||
-              'Current member'
+              t("pages.studio.index.current.member", "Current member")
             : trimOptional(activeWorkflowName) ||
               (isBuildScriptsSurface ? trimOptional(selectedScriptId) : '') ||
-              'Current member';
+              t("pages.studio.index.current.member", "Current member");
   const currentMemberImplementationLabel = !hasSelectedMemberFocus
     ? ''
     : workbenchMemberKey.startsWith('member:')
@@ -8454,8 +8547,8 @@ const StudioPage: React.FC = () => {
                   trimOptional(workbenchStudioMemberBinding?.revisionId) ||
                   trimOptional(workbenchPublishedServiceRevision?.revisionId) ||
                   trimOptional(workbenchPublishedService?.deploymentStatus) ||
-                  'Published member',
-              }) || 'Published member ready for Bind, Invoke, or Observe.'
+              t("pages.studio.index.published.member", "Published member"),
+              }) || t("pages.studio.index.published.member.ready", "Published member ready for Bind, Invoke, or Observe.")
             : formatStudioAssetMeta({
                 primary: currentMemberImplementationLabel,
                 secondary:
@@ -8675,26 +8768,26 @@ const StudioPage: React.FC = () => {
 
     if (hasSelectedMemberFocus && !hasInvokeTargetMemberSelection) {
       return {
-        message: t("pages.studio.index.copy.8", "当前选择还不能直接调用。"),
+        message: t("pages.studio.index.copy.8", "The current selection cannot be invoked directly yet."),
         description:
-          t("pages.studio.index.copy.9", "调用页面只会固定到已发布的成员。请先为这个成员完成绑定，再回到这里继续调用。"),
+          t("pages.studio.index.copy.9", "Invoke only pins to published members. Bind this member first, then return here to invoke it."),
         type: 'info' as const,
       };
     }
 
     if (!hasInvokeTargetMemberSelection) {
       return {
-        message: t("pages.studio.index.copy.10", "请选择要调用的成员。"),
+        message: t("pages.studio.index.copy.10", "Select a member to invoke."),
         description:
-          t("pages.studio.index.copy.11", "请先在“团队成员”里选择成员，或从绑定页面继续进入，这样调用页面才会稳定固定到单个成员。"),
+          t("pages.studio.index.copy.11", "Select a member from Team members first, or continue from Bind, so Invoke stays pinned to one member."),
         type: 'info' as const,
       };
     }
 
     return {
-      message: t("pages.studio.index.copy.12", "{value1} 还不能直接调用。", { value1: invokeTargetLabel || '当前成员' }),
+      message: t("pages.studio.index.copy.12", "{value1} cannot be invoked directly yet.", { value1: invokeTargetLabel || '当前成员' }),
       description:
-        t("pages.studio.index.copy.13", "当前团队上下文里，这个成员还没有暴露可调用的已发布调用契约。"),
+        t("pages.studio.index.copy.13", "In the current team context, this member does not expose a published callable contract yet."),
       type: 'warning' as const,
     };
   }, [
@@ -8854,12 +8947,12 @@ const StudioPage: React.FC = () => {
           queryKey: ['teams', 'roster', resolvedStudioScopeId],
         }),
       ]);
-      void message.info(t("pages.studio.index.team.entry.2", "Team entry 变更已提交，正在等待同步确认。"));
+      void message.info(t("pages.studio.index.team.entry.2", "Team entry change submitted. Waiting for sync confirmation."));
     } catch (error) {
       void message.error(
         error instanceof Error
-          ? `Entry member update failed: ${error.message}`
-          : 'Entry member update failed.',
+          ? t("pages.studio.index.entry.member.update.failed.with.detail", "Entry member update failed: {detail}", { detail: error.message })
+          : t("pages.studio.index.entry.member.update.failed", "Entry member update failed."),
       );
     } finally {
       setInventoryBusyKey('');
@@ -9147,7 +9240,7 @@ const StudioPage: React.FC = () => {
               );
             } else {
               void message.warning(
-                `Could not find a workflow draft for ${memberImplementationName || 'this member'}.`,
+                t("pages.studio.index.could.not.find.workflow.draft.for.member", "Could not find a workflow draft for {member}.", { member: memberImplementationName || t("pages.studio.index.this.member", "this member") }),
               );
             }
             return;
@@ -9189,7 +9282,7 @@ const StudioPage: React.FC = () => {
               );
             } else {
               void message.warning(
-                `Could not find a workspace script for ${memberImplementationName || 'this member'}.`,
+                t("pages.studio.index.could.not.find.workspace.script.for.member", "Could not find a workspace script for {member}.", { member: memberImplementationName || t("pages.studio.index.this.member", "this member") }),
               );
             }
             return;
@@ -9238,7 +9331,7 @@ const StudioPage: React.FC = () => {
           }
 
           void message.warning(
-            `Could not find a published service for ${memberImplementationName || 'this member'}.`,
+            t("pages.studio.index.could.not.find.published.service.for.member", "Could not find a published service for {member}.", { member: memberImplementationName || t("pages.studio.index.this.member", "this member") }),
           );
           return;
         }
@@ -9292,6 +9385,10 @@ const StudioPage: React.FC = () => {
         }
 
         if (selectedWorkflowIdForMember) {
+          if (selectedMemberId) {
+            pinnedRouteBackendMemberIdRef.current = selectedMemberId;
+            setPinnedRouteBackendMemberId(selectedMemberId);
+          }
           history.push(
             buildStudioRoute({
               scopeId: resolvedStudioScopeId || undefined,
@@ -9306,6 +9403,10 @@ const StudioPage: React.FC = () => {
         }
 
         if (selectedScriptIdForMember) {
+          if (selectedMemberId) {
+            pinnedRouteBackendMemberIdRef.current = selectedMemberId;
+            setPinnedRouteBackendMemberId(selectedMemberId);
+          }
           history.push(
             buildStudioRoute({
               scopeId: resolvedStudioScopeId || undefined,
@@ -9792,7 +9893,7 @@ const StudioPage: React.FC = () => {
           ariaLabel="Open construction mode help"
           content={
             <div style={{ display: 'grid', gap: 8 }}>
-              <div>{t("pages.studio.index.build.member.workbench.authoring", "Build 阶段先确定当前 member 采用哪种实现方式，然后在同一块 workbench 里直接完成 authoring 和 dry-run。")}</div>
+              <div>{t("pages.studio.index.build.member.workbench.authoring", "The Build phase first determines which implementation method is used for the current member, and then directly completes authoring and dry-run in the same workbench.")}</div>
               {buildModeDefinitions.map((item) => (
                 <div
                   key={item.key}
@@ -9823,6 +9924,7 @@ const StudioPage: React.FC = () => {
       >
         {buildModeDefinitions.map((item) => {
           const active = activeBuildMode === item.key;
+          const disabled = item.disabled || buildModeLocked;
 
           return (
             <button
@@ -9830,15 +9932,20 @@ const StudioPage: React.FC = () => {
               type="button"
               aria-pressed={active}
               className={AEVATAR_INTERACTIVE_CHIP_CLASS}
-              disabled={item.disabled}
+              disabled={disabled}
               onClick={() => void handleSelectBuildMode(item.key)}
+              title={
+                buildModeLocked
+                  ? t("pages.studio.index.member.type.locked.after.creation", "Member type is fixed after this member is created.")
+                  : undefined
+              }
               style={{
                 alignItems: 'center',
                 background: active ? '#eef4ff' : '#faf7f0',
                 border: active ? '1px solid #6b8cff' : '1px solid #eadfcd',
                 borderRadius: 999,
                 color: active ? '#2f54eb' : '#1f2937',
-                cursor: item.disabled ? 'not-allowed' : 'pointer',
+                cursor: disabled ? 'not-allowed' : 'pointer',
                 display: 'inline-flex',
                 flex: 1,
                 fontSize: 11,
@@ -9846,7 +9953,7 @@ const StudioPage: React.FC = () => {
                 height: 28,
                 justifyContent: 'center',
                 minWidth: 0,
-                opacity: item.disabled ? 0.58 : 1,
+                opacity: disabled && !active ? 0.58 : 1,
                 padding: '0 10px',
                 transition:
                   'border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease',
@@ -10012,57 +10119,57 @@ const StudioPage: React.FC = () => {
     showWorkflowEntryEmptyState
       ? hasSelectedMemberFocus
         ? currentMemberLabel
-        : 'Select a member'
+      : t("pages.studio.index.select.member", "Select a member")
       : isBuildEditorSurface
-        ? activeWorkflowName || templateWorkflow || t("pages.studio.index.workflow.2", "Workflow 构建")
+        ? activeWorkflowName || templateWorkflow || t("pages.studio.index.workflow.2", "Workflow Build")
         : isBuildGAgentSurface
           ? hasSelectedMemberFocus
             ? currentMemberLabel
-            : t("pages.studio.index.gagent.2", "GAgent 构建")
+            : t("pages.studio.index.gagent.2", "GAgent Build")
         : isBuildScriptsSurface
           ? isScriptBuildLaunchpadEmpty
-            ? 'Create a script'
-            : selectedScriptId || t("pages.studio.index.script", "Script 构建")
+            ? t("pages.studio.index.create.script", "Create a script")
+            : selectedScriptId || t("pages.studio.index.script", "Script Build")
         : isObserveSurface
           ? hasSelectedMemberFocus
             ? currentMemberLabel
-            : 'Select a member'
+            : t("pages.studio.index.select.member", "Select a member")
         : isBindSurface
           ? hasSelectedMemberFocus
             ? currentMemberLabel
-            : t("pages.studio.index.copy.14", "成员绑定")
+            : t("pages.studio.index.copy.14", "Member binding")
           : isInvokeSurface
-            ? currentMemberLabel || t("pages.studio.index.copy.15", "成员调用")
+            ? currentMemberLabel || t("pages.studio.index.copy.15", "Member invoke")
             : pageTitle;
   const studioContextDescriptor =
     showWorkflowEntryEmptyState
       ? hasSelectedMemberFocus
-        ? t("pages.studio.index.member.build.surface.bind", "当前 member 还没有可继续编辑的 Build surface。你可以先去 Bind / Invoke，或显式创建新的 member。")
+        ? t("pages.studio.index.member.build.surface.bind", "The current member has no editable Build surface yet. You can continue to Bind or Invoke, or explicitly create a new member.")
         : memberItems.length > 0
-        ? t("pages.studio.index.member.build.create.member", "先从左侧选一个已有 member，再继续 Build；如果要新增，再显式点击 Create member。")
-        : t("pages.studio.index.team.member.create.member", "这个 team 还没有 member。显式点击 Create member，再进入新的实现草稿。")
+        ? t("pages.studio.index.member.build.create.member", "Select an existing member from the left rail before continuing Build. To add one, explicitly click Create member.")
+        : t("pages.studio.index.team.member.create.member", "This team has no members yet. Explicitly click Create member before entering a new implementation draft.")
       : isBuildEditorSurface
-        ? t("pages.studio.index.member.workflow.canvas.step", "围绕当前 member 的 workflow canvas、step detail 和 dry-run 继续构建")
+        ? t("pages.studio.index.member.workflow.canvas.step", "Continue building around the current member workflow canvas, step details, and dry-run")
         : isBuildGAgentSurface
-          ? t("pages.studio.index.build.gagent.prompt", "在 Build 内定义 GAgent 类型、角色、初始 prompt、工具和状态持久化")
+          ? t("pages.studio.index.build.gagent.prompt", "Define the GAgent type, role, initial prompt, tools, and state persistence in Build")
         : isBuildScriptsSurface
           ? isScriptBuildLaunchpadEmpty
-            ? 'Start a script draft before Studio opens editing, validation, or run controls.'
-            : t("pages.studio.index.script.source.diagnostics.dry", "围绕 script source、diagnostics 和 dry-run 继续迭代当前 member")
+            ? t("pages.studio.index.start.script.draft.before.studio", "Start a script draft before Studio opens editing, validation, or run controls.")
+            : t("pages.studio.index.script.source.diagnostics.dry", "Continue iterating over the current member around script source, diagnostics, and dry-run")
         : isObserveSurface
-          ? t("pages.studio.index.member", "围绕当前 member 的最近运行、回放和基线继续观察")
-          : isBindSurface
-            ? t("pages.studio.index.member.published.contract.invoke", "确认当前 member 的 published contract，并继续去 Invoke")
+          ? t("pages.studio.index.member", "Continue observing the current member's recent runs, replay, and baseline")
+        : isBindSurface
+            ? t("pages.studio.index.member.published.contract.invoke", "Confirm the current member's published contract and continue to Invoke")
             : isInvokeSurface
-              ? t("pages.studio.index.copy.16", "调用当前成员并保留运行观察上下文")
-              : t("pages.studio.index.copy.17", "成员工作台");
+              ? t("pages.studio.index.copy.16", "Invoke the current member and keep the run observation context")
+              : t("pages.studio.index.copy.17", "Member workbench");
   const studioBoundServiceLabel =
     hasSelectedMemberFocus
       ? trimOptional(routeState.legacyServiceId) ||
         trimOptional(workbenchPublishedService?.serviceId) ||
         trimOptional(workbenchStudioMember?.publishedServiceId) ||
         trimOptional(workbenchStudioMemberSummary?.publishedServiceId) ||
-        'No bound service'
+        t("pages.studio.index.no.bound.service", "No bound service")
       : '';
   const studioContextMetaParts = [
     studioContextDescriptor,
@@ -10093,7 +10200,7 @@ const StudioPage: React.FC = () => {
               undefined,
           }))
     : buildTeamsHref();
-  const studioReturnLabel = t("pages.studio.index.copy.18", "返回团队");
+  const studioReturnLabel = t("pages.studio.index.copy.18", "Back to Team");
   const currentStudioReturnTo =
     routeState.returnTo ||
     (typeof window === 'undefined'
@@ -10410,6 +10517,13 @@ const StudioPage: React.FC = () => {
           (routeSelectedMemberKey.startsWith('member:')
             ? routeSelectedMemberKey
             : '');
+        if (!memberKeyForBind) {
+          void message.warning(
+            t("pages.studio.index.select.or.create.member.before.bind.script", "Select or create a member before opening Bind for this Script."),
+          );
+          return;
+        }
+
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
@@ -10441,7 +10555,7 @@ const StudioPage: React.FC = () => {
           gap: 4,
         }}
       >
-        <strong>{t("pages.studio.index.copy.19", "当前环境暂不支持脚本行为")}</strong>
+        <strong>{t("pages.studio.index.copy.19", "Script behavior is not supported in the current environment")}</strong>
       </div>
     </div>
   );

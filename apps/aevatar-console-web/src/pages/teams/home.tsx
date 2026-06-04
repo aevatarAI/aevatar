@@ -112,14 +112,14 @@ function formatRunStatusLabel(status: string | null | undefined): string {
     case "waiting":
     case "waiting_approval":
     case "waiting_signal":
-      return t("pages.teams.home.copy", "待关注");
+      return t("pages.teams.home.copy", "Needs attention");
     case "failed":
     case "error":
-      return t("pages.teams.home.copy.2", "异常");
+      return t("pages.teams.home.copy.2", "Abnormal");
     case "completed":
-      return t("pages.teams.home.copy.3", "已完成");
+      return t("pages.teams.home.copy.3", "Completed");
     default:
-      return trimOptional(status) || t("pages.teams.home.copy.4", "未知");
+      return trimOptional(status) || t("pages.teams.home.copy.4", "Unknown");
   }
 }
 
@@ -134,38 +134,38 @@ function formatOperationalStatusLabel(
 
   switch (attention) {
     case "healthy":
-      return t("pages.teams.home.copy.5", "运行中");
+      return t("pages.teams.home.copy.5", "Running");
     case "waiting":
-      return t("pages.teams.home.copy.6", "待关注");
+      return t("pages.teams.home.copy.6", "Needs attention");
     case "failed":
-      return t("pages.teams.home.copy.7", "异常");
+      return t("pages.teams.home.copy.7", "Abnormal");
     case "draft":
-      return t("pages.teams.home.copy.8", "草稿中");
+      return t("pages.teams.home.copy.8", "Drafting");
     case "no-bound-service":
-      return t("pages.teams.home.copy.9", "待绑定");
+      return t("pages.teams.home.copy.9", "Waiting for bind");
     case "no-recent-runs":
-      return t("pages.teams.home.copy.10", "待运行");
+      return t("pages.teams.home.copy.10", "Waiting to run");
     default:
-      return t("pages.teams.home.copy.11", "未知");
+      return t("pages.teams.home.copy.11", "Unknown");
   }
 }
 
 function formatAttentionLabel(attention: TeamOperationalAttention): string {
   switch (attention) {
     case "failed":
-      return t("pages.teams.home.copy.12", "待处理");
+      return t("pages.teams.home.copy.12", "Pending");
     case "waiting":
-      return t("pages.teams.home.copy.13", "待关注");
+      return t("pages.teams.home.copy.13", "Needs attention");
     case "healthy":
-      return t("pages.teams.home.copy.14", "运行中");
+      return t("pages.teams.home.copy.14", "Running");
     case "draft":
-      return t("pages.teams.home.copy.15", "草稿中");
+      return t("pages.teams.home.copy.15", "Drafting");
     case "no-bound-service":
-      return t("pages.teams.home.copy.16", "待绑定");
+      return t("pages.teams.home.copy.16", "Waiting for bind");
     case "no-recent-runs":
-      return t("pages.teams.home.copy.17", "待运行");
+      return t("pages.teams.home.copy.17", "Waiting to run");
     default:
-      return t("pages.teams.home.copy.18", "待确认");
+      return t("pages.teams.home.copy.18", "Waiting for confirmation");
   }
 }
 
@@ -480,32 +480,32 @@ function buildMemberRosterPreview(input: {
   const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
   const serviceLabel =
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
-    (trimOptional(input.member.lastBoundRevisionId) ? t("pages.teams.home.copy.19", "已绑定待确认") : t("pages.teams.home.copy.20", "未绑定"));
-  const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || t("pages.teams.home.copy.21", "未命名成员");
+    (trimOptional(input.member.lastBoundRevisionId) ? t("pages.teams.home.copy.19", "Bound, awaiting confirmation") : t("pages.teams.home.copy.20", "Unbound"));
+  const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || t("pages.teams.home.copy.21", "Unnamed member");
 
   let attention: TeamOperationalAttention = "draft";
-  let attentionDetail = t("pages.teams.home.copy.22", "当前成员还处于 {value1} 阶段。", { value1: formatStudioMemberLifecycleStage(input.member.lifecycleStage) });
+  let attentionDetail = t("pages.teams.home.copy.22", "The current member is still in the {value1} stage.", { value1: formatStudioMemberLifecycleStage(input.member.lifecycleStage) });
 
   if (latestRun && isFailedRun(latestRun)) {
     attention = "failed";
     attentionDetail =
-      trimOptional(latestRun.lastError) || t("pages.teams.home.copy.23", "最近一次成员运行处于异常状态。");
+      trimOptional(latestRun.lastError) || t("pages.teams.home.copy.23", "The latest member run is abnormal.");
   } else if (latestRun && isWaitingRun(latestRun)) {
     attention = "waiting";
     attentionDetail =
-      trimOptional(latestRun.lastError) || t("pages.teams.home.copy.24", "最近一次成员运行正在等待人工或外部信号。");
+      trimOptional(latestRun.lastError) || t("pages.teams.home.copy.24", "The latest member run is waiting for a human or external signal.");
   } else if (latestRun && isSuccessfulRun(latestRun)) {
     attention = "healthy";
-    attentionDetail = t("pages.teams.home.copy.25", "最近一次成员运行正常，可继续进入详情查看。");
+    attentionDetail = t("pages.teams.home.copy.25", "The latest member run is healthy; open details to continue.");
   } else if (serviceId || matchedService) {
     attention = "no-recent-runs";
-    attentionDetail = t("pages.teams.home.copy.26", "成员已绑定服务。下一步：进入团队详情后测试团队，生成第一条可见运行。");
+    attentionDetail = t("pages.teams.home.copy.26", "The member has been bound to a service. Next: open team details and test the team to generate the first visible run.");
   } else if (
     trimOptional(input.member.lastBoundRevisionId) ||
     input.member.lifecycleStage === "bind_ready"
   ) {
     attention = "no-bound-service";
-    attentionDetail = t("pages.teams.home.copy.27", "当前成员已经准备好绑定，但还没有稳定的成员调用入口。");
+    attentionDetail = t("pages.teams.home.copy.27", "The current member is ready to bind, but it does not have a stable member invoke entry yet.");
   }
 
   return {
@@ -572,19 +572,19 @@ function buildTeamRosterPreview(input: {
     memberCount > 0
       ? firstMemberLabel
         ? memberCount > 1
-          ? t("pages.teams.home.copy.28", "{value1} 等 {value2} 个成员", { value1: firstMemberLabel, value2: memberCount })
+          ? t("pages.teams.home.copy.28", "{value1} and {value2} other members", { value1: firstMemberLabel, value2: memberCount })
           : firstMemberLabel
-        : t("pages.teams.home.copy.29", "{value1} 个成员", { value1: memberCount })
-      : t("pages.teams.home.copy.30", "暂无成员");
+        : t("pages.teams.home.copy.29", "{value1} members", { value1: memberCount })
+      : t("pages.teams.home.copy.30", "No members yet");
   const serviceLabels = memberPreviews
     .map((preview) => preview.serviceLabel)
-    .filter((label) => label && label !== t("pages.teams.home.copy.31", "未绑定"));
+    .filter((label) => label && label !== t("pages.teams.home.copy.31", "Unbound"));
   const uniqueServiceLabels = Array.from(new Set(serviceLabels));
   const memberPreviewTooltip =
     sortedMembers.length > 0
       ? sortedMembers
           .map((member) =>
-            pickMeaningfulLabel(member.displayName, member.memberId) || t("pages.teams.home.copy.32", "未命名成员"),
+            pickMeaningfulLabel(member.displayName, member.memberId) || t("pages.teams.home.copy.32", "Unnamed member"),
           )
           .join(" / ")
       : undefined;
@@ -602,10 +602,10 @@ function buildTeamRosterPreview(input: {
 
   let attention: TeamOperationalAttention =
     mostImportantMemberPreview?.attention ?? "draft";
-  let attentionDetail = t("pages.teams.home.team", "这个 Team 还没有成员。下一步：添加入口成员后再测试团队。");
+  let attentionDetail = t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
   if (input.team.lifecycleStage === "archived") {
     attention = "draft";
-    attentionDetail = t("pages.teams.home.team.roster", "这个 Team 已归档，列表中仅保留它的后端 roster 事实。");
+    attentionDetail = t("pages.teams.home.team.roster", "This team has been archived; the list keeps only its backend roster fact.");
   } else if (mostImportantMemberPreview) {
     attentionDetail = mostImportantMemberPreview.attentionDetail;
   }
@@ -620,11 +620,11 @@ function buildTeamRosterPreview(input: {
     serviceLabel:
       uniqueServiceLabels.length > 0
         ? uniqueServiceLabels.slice(0, 2).join(" / ")
-        : t("pages.teams.home.copy.33", "暂无绑定服务"),
+        : t("pages.teams.home.copy.33", "No bound service yet"),
     serviceTooltip,
     team: input.team,
     teamId: input.team.teamId,
-    title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || t("pages.teams.home.team.2", "未命名 Team"),
+    title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || t("pages.teams.home.team.2", "Unnamed team"),
     updatedAt:
       latestRun?.lastUpdatedAt ||
       mostImportantMemberPreview?.updatedAt ||
@@ -714,14 +714,14 @@ const TeamRosterCard: React.FC<{
         }}
       >
         <TeamFact
-          label={t("pages.teams.home.copy.34", "当前状态")}
+          label={t("pages.teams.home.copy.34", "Current status")}
           value={formatOperationalStatusLabel(
             preview.latestRun?.completionStatus,
             preview.attention,
           )}
         />
         <TeamFact
-          label={t("pages.teams.home.copy.35", "最近更新")}
+          label={t("pages.teams.home.copy.35", "Latest update")}
           value={formatShortTime(preview.updatedAt)}
         />
       </div>
@@ -736,12 +736,12 @@ const TeamRosterCard: React.FC<{
         }}
       >
         <TeamFact
-          label={t("pages.teams.home.team.3", "Team 成员")}
+          label={t("pages.teams.home.team.3", "Team members")}
           tooltip={preview.memberPreviewTooltip}
           value={preview.memberPreviewLabel}
         />
         <TeamFact
-          label={t("pages.teams.home.copy.36", "关联服务")}
+          label={t("pages.teams.home.copy.36", "Related service")}
           tooltip={preview.serviceTooltip}
           value={preview.serviceLabel}
         />
@@ -753,7 +753,7 @@ const TeamRosterCard: React.FC<{
           size="large"
           type="primary"
         >
-          {t("pages.teams.home.copy.37", "测试或配置团队")}</Button>
+          {t("pages.teams.home.copy.37", "View team")}</Button>
       </Space>
     </article>
   );
@@ -835,7 +835,7 @@ const TeamRosterRow: React.FC<{
 
         <Space className="teams-home-roster-row-actions" wrap>
           <Button onClick={() => history.push(preview.detailHref)} type="primary">
-            {t("pages.teams.home.copy.38", "测试或配置团队")}</Button>
+            {t("pages.teams.home.copy.38", "View team")}</Button>
         </Space>
       </div>
 
@@ -849,20 +849,20 @@ const TeamRosterRow: React.FC<{
         }}
       >
         <TeamFact
-          label={t("pages.teams.home.copy.39", "状态")}
+          label={t("pages.teams.home.copy.39", "Status")}
           value={formatOperationalStatusLabel(
             preview.latestRun?.completionStatus,
             preview.attention,
           )}
         />
-        <TeamFact label={t("pages.teams.home.copy.40", "更新")} value={formatShortTime(preview.updatedAt)} />
+        <TeamFact label={t("pages.teams.home.copy.40", "Update")} value={formatShortTime(preview.updatedAt)} />
         <TeamFact
-          label={t("pages.teams.home.copy.41", "成员")}
+          label={t("pages.teams.home.copy.41", "Members")}
           tooltip={preview.memberPreviewTooltip}
           value={preview.memberPreviewLabel}
         />
         <TeamFact
-          label={t("pages.teams.home.copy.42", "服务")}
+          label={t("pages.teams.home.copy.42", "Service")}
           tooltip={preview.serviceTooltip}
           value={preview.serviceLabel}
         />
@@ -911,7 +911,7 @@ const TeamsHomePage: React.FC = () => {
 
     return describeError(
       authSessionQuery.error,
-      t("pages.teams.home.copy.43", "登录状态暂时不可用，请刷新后重试。"),
+      t("pages.teams.home.copy.43", "Login status is temporarily unavailable. Refresh and try again."),
     );
   }, [authSessionQuery.error, authSessionQuery.isError]);
 
@@ -1056,11 +1056,11 @@ const TeamsHomePage: React.FC = () => {
   const useCompactRoster = resolvedRosterView === "list";
   const emptyRosterHint =
     canLoadRoster
-      ? t("pages.teams.home.team.ai", "当前账号还没有创建任何 Team。创建后，这里会展示你的 AI 团队列表。")
-      : t("pages.teams.home.copy.44", "当前登录状态还没有解析出可用的团队范围，请刷新后重试。");
+      ? t("pages.teams.home.team.ai", "This account has not created any teams yet. Your AI team list will appear here after you create one.")
+      : t("pages.teams.home.copy.44", "The current login status has not resolved an available team scope. Refresh and try again.");
   const partialIssues = [
-    membersQuery.isError ? t("pages.teams.home.copy.45", "当前工作空间的成员清单暂时不可见。") : null,
-    teamsQuery.isError ? t("pages.teams.home.team.roster.2", "当前工作空间的 Team roster 暂时不可见。") : null,
+    membersQuery.isError ? t("pages.teams.home.copy.45", "The member list for the current workspace is temporarily unavailable.") : null,
+    teamsQuery.isError ? t("pages.teams.home.team.roster.2", "The team roster for the current workspace is temporarily unavailable.") : null,
   ].filter((issue): issue is string => Boolean(issue));
 
   const titleNode = (
@@ -1078,7 +1078,7 @@ const TeamsHomePage: React.FC = () => {
           margin: 0,
         }}
       >
-        {t("pages.teams.home.ai", "我的 AI 团队")}</Typography.Title>
+        {t("pages.teams.home.ai", "My AI teams")}</Typography.Title>
     </div>
   );
 
@@ -1094,7 +1094,7 @@ const TeamsHomePage: React.FC = () => {
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
-            {t("pages.teams.home.copy.46", "组建新团队")}</Button>
+            {t("pages.teams.home.copy.46", "Create team")}</Button>
         </Space>
       }
       layoutMode="document"
@@ -1110,7 +1110,7 @@ const TeamsHomePage: React.FC = () => {
         {!scopeId ? (
           <Alert
             showIcon
-            title={t("pages.teams.home.copy.47", "当前登录状态还没有解析出可用的团队范围，请刷新后重试。")}
+            title={t("pages.teams.home.copy.47", "The current login status has not resolved an available team scope. Refresh and try again.")}
             type="info"
           />
         ) : null}
@@ -1119,7 +1119,7 @@ const TeamsHomePage: React.FC = () => {
           <Alert
             description={partialIssues.join(" ")}
             showIcon
-            title={t("pages.teams.home.copy.48", "部分团队信号暂时不可见")}
+            title={t("pages.teams.home.copy.48", "Some team signals are temporarily unavailable")}
             type="warning"
           />
         ) : null}
@@ -1128,14 +1128,14 @@ const TeamsHomePage: React.FC = () => {
           <Alert
             description={
               resolvedScope?.scopeId
-                ? t("pages.teams.home.copy.49", "{value1} 已使用本地登录信息继续加载团队。", { value1: authSessionIssue })
+                ? t("pages.teams.home.copy.49", "{value1} continued loading teams with local login information.", { value1: authSessionIssue })
                 : authSessionIssue
             }
             showIcon
             title={
               resolvedScope?.scopeId
-                ? t("pages.teams.home.copy.50", "当前登录态校验失败，已使用本地登录信息")
-                : t("pages.teams.home.copy.51", "当前登录态校验失败")
+                ? t("pages.teams.home.copy.50", "Current login verification failed; local login information was used")
+                : t("pages.teams.home.copy.51", "Current login verification failed")
             }
             type="warning"
           />
@@ -1150,17 +1150,17 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label={t("pages.teams.home.ai.team", "AI Team 总数")} value={visibleTeamCount} />
-              <SummaryStatCard label={t("pages.teams.home.team.4", "待启动 Team")} value={actionableTeamCount} />
-              <SummaryStatCard label={t("pages.teams.home.copy.52", "已有稳定运行")} value={healthyTeamCount} />
+              <SummaryStatCard accent label={t("pages.teams.home.ai.team", "Total AI teams")} value={visibleTeamCount} />
+              <SummaryStatCard label={t("pages.teams.home.team.4", "Teams needing action")} value={actionableTeamCount} />
+              <SummaryStatCard label={t("pages.teams.home.copy.52", "Stable runs exist")} value={healthyTeamCount} />
             </div>
 
             {teamsQuery.isLoading ? (
-              <AevatarInspectorEmpty description={t("pages.teams.home.copy.53", "正在读取团队列表。")} />
+              <AevatarInspectorEmpty description={t("pages.teams.home.copy.53", "Reading the team list.")} />
             ) : teamsQuery.isError ? (
               <Alert
                 showIcon
-                title={t("pages.teams.home.copy.54", "团队列表暂时无法加载。")}
+                title={t("pages.teams.home.copy.54", "The team list cannot be loaded right now.")}
                 type="error"
               />
             ) : teamPreviews.length > 0 ? (
@@ -1187,24 +1187,24 @@ const TeamsHomePage: React.FC = () => {
                         margin: 0,
                       }}
                     >
-                      {t("pages.teams.home.copy.55", "团队列表")}</Typography.Title>
+                      {t("pages.teams.home.copy.55", "Team list")}</Typography.Title>
                     <Typography.Text type="secondary">
-                      {t("pages.teams.home.team.5", "按 Team 聚合成员与最近运行信号，优先处理异常或待关注项。")}</Typography.Text>
+                      {t("pages.teams.home.team.5", "Aggregate members and recent run signals by team, prioritizing abnormal or attention-needed items.")}</Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (
                     <Space.Compact>
-                      <Tooltip title={t("pages.teams.home.copy.56", "卡片视图")}>
+                      <Tooltip title={t("pages.teams.home.copy.56", "Card view")}>
                         <Button
-                          aria-label={t("pages.teams.home.copy.57", "切换到卡片视图")}
+                          aria-label={t("pages.teams.home.copy.57", "Switch to card view")}
                           icon={<AppstoreOutlined />}
                           onClick={() => setManualRosterView("cards")}
                           style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "cards" ? "primary" : "default"}
                         />
                       </Tooltip>
-                      <Tooltip title={t("pages.teams.home.copy.58", "列表视图")}>
+                      <Tooltip title={t("pages.teams.home.copy.58", "List view")}>
                         <Button
-                          aria-label={t("pages.teams.home.copy.59", "切换到列表视图")}
+                          aria-label={t("pages.teams.home.copy.59", "Switch to list view")}
                           icon={<BarsOutlined />}
                           onClick={() => setManualRosterView("list")}
                           style={{ height: 44, width: 44 }}
@@ -1216,7 +1216,7 @@ const TeamsHomePage: React.FC = () => {
                 </div>
                 {useCompactRoster ? (
                   <ul
-                    aria-label={t("pages.teams.home.copy.60", "团队紧凑视图")}
+                    aria-label={t("pages.teams.home.copy.60", "Team compact view")}
                     style={{
                       display: "flex",
                       flexDirection: "column",
@@ -1234,7 +1234,7 @@ const TeamsHomePage: React.FC = () => {
                   </ul>
                 ) : (
                   <ul
-                    aria-label={t("pages.teams.home.copy.61", "团队卡片视图")}
+                    aria-label={t("pages.teams.home.copy.61", "Team card view")}
                     style={{
                       display: "grid",
                       gap: 16,
@@ -1263,7 +1263,7 @@ const TeamsHomePage: React.FC = () => {
                   }
                   type="primary"
                 >
-                  {t("pages.teams.home.copy.62", "组建新团队")}</Button>
+                  {t("pages.teams.home.copy.62", "Create team")}</Button>
               </Empty>
             )}
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import enUSMessages from './en-US';
 
 const sourceRoot = path.resolve(__dirname, '..');
 const chineseTextPattern = /\p{Script=Han}/u;
@@ -21,9 +22,12 @@ const jsxTextAttributeNames = new Set([
   'okText',
   'placeholder',
   'subtitle',
+  'text',
   'title',
   'titleHelp',
   'tooltip',
+  'testTeamHint',
+  'testTeamLabel',
   'value',
 ]);
 
@@ -42,6 +46,22 @@ const sampleInputPropertyNames = new Set([
   'prompt',
   'sampleInput',
 ]);
+
+type I18nFallbackDefault = {
+  defaultMessage: string;
+  id: string;
+  location: string;
+};
+
+function collectPlaceholders(value: string): string[] {
+  const names = new Set<string>();
+
+  for (const match of value.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    names.add(match[1]);
+  }
+
+  return [...names].sort();
+}
 
 function collectProductionSourceFiles(
   directory: string,
@@ -448,6 +468,140 @@ function getCallExpressionName(node: ts.CallExpression): string | null {
   return null;
 }
 
+function getStaticStringValue(node: ts.Node | undefined): string | null {
+  if (
+    node &&
+    (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node))
+  ) {
+    return node.text;
+  }
+
+  return null;
+}
+
+function getObjectPropertyName(node: ts.PropertyName): string | null {
+  if (
+    ts.isIdentifier(node) ||
+    ts.isStringLiteral(node) ||
+    ts.isNumericLiteral(node)
+  ) {
+    return node.text;
+  }
+
+  return null;
+}
+
+function getObjectStringProperty(
+  node: ts.ObjectLiteralExpression,
+  propertyName: string,
+): string | null {
+  for (const property of node.properties) {
+    if (
+      ts.isPropertyAssignment(property) &&
+      getObjectPropertyName(property.name) === propertyName
+    ) {
+      return getStaticStringValue(property.initializer);
+    }
+  }
+
+  return null;
+}
+
+function getJsxStringAttribute(
+  node: ts.JsxOpeningLikeElement,
+  attributeName: string,
+): string | null {
+  for (const property of node.attributes.properties) {
+    if (
+      ts.isJsxAttribute(property) &&
+      ts.isIdentifier(property.name) &&
+      property.name.text === attributeName &&
+      property.initializer
+    ) {
+      return getStaticStringValue(property.initializer);
+    }
+  }
+
+  return null;
+}
+
+function collectI18nFallbackDefaults(filePath: string): I18nFallbackDefault[] {
+  const sourceText = fs.readFileSync(filePath, 'utf8');
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const defaults: I18nFallbackDefault[] = [];
+
+  function locationOf(node: ts.Node): string {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(
+      node.getStart(sourceFile),
+    );
+    return `${path.relative(sourceRoot, filePath)}:${line + 1}:${character + 1}`;
+  }
+
+  function addDefault(
+    node: ts.Node,
+    id: string | null,
+    defaultMessage: string | null,
+  ): void {
+    if (!id || !defaultMessage) {
+      return;
+    }
+
+    defaults.push({
+      defaultMessage,
+      id,
+      location: locationOf(node),
+    });
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const callName = getCallExpressionName(node);
+
+      if (callName === 't') {
+        addDefault(
+          node,
+          getStaticStringValue(node.arguments[0]),
+          getStaticStringValue(node.arguments[1]),
+        );
+      }
+
+      if (
+        callName === 'formatMessage' &&
+        node.arguments[0] &&
+        ts.isObjectLiteralExpression(node.arguments[0])
+      ) {
+        addDefault(
+          node,
+          getObjectStringProperty(node.arguments[0], 'id'),
+          getObjectStringProperty(node.arguments[0], 'defaultMessage'),
+        );
+      }
+    }
+
+    if (
+      (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
+      node.tagName.getText(sourceFile) === 'T'
+    ) {
+      addDefault(
+        node,
+        getJsxStringAttribute(node, 'id'),
+        getJsxStringAttribute(node, 'defaultMessage'),
+      );
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return defaults;
+}
+
 function containsI18nFormattingCall(node: ts.Node): boolean {
   let found = false;
 
@@ -582,5 +736,33 @@ describe('console-wide i18n migration guard', () => {
     );
 
     expect(violations).toEqual([]);
+  });
+
+  it('keeps i18n fallback defaults backed by the English catalog', () => {
+    const enUSCatalog: Record<string, string> = enUSMessages;
+    const defaults = collectProductionSourceFiles(sourceRoot).flatMap(
+      collectI18nFallbackDefaults,
+    );
+    const defaultsWithChineseCopy = defaults
+      .filter(({ defaultMessage }) => chineseTextPattern.test(defaultMessage))
+      .map(({ defaultMessage, id, location }) => `${location} ${id}: ${defaultMessage}`);
+    const missingCatalogEntries = defaults
+      .filter(({ id }) => enUSCatalog[id] === undefined)
+      .map(({ defaultMessage, id, location }) => `${location} ${id}: ${defaultMessage}`);
+    const placeholderMismatches = defaults
+      .filter(
+        ({ defaultMessage, id }) =>
+          enUSCatalog[id] !== undefined &&
+          JSON.stringify(collectPlaceholders(enUSCatalog[id])) !==
+            JSON.stringify(collectPlaceholders(defaultMessage)),
+      )
+      .map(
+        ({ defaultMessage, id, location }) =>
+          `${location} ${id}: ${defaultMessage} <> ${enUSCatalog[id]}`,
+      );
+
+    expect(defaultsWithChineseCopy).toEqual([]);
+    expect(missingCatalogEntries).toEqual([]);
+    expect(placeholderMismatches).toEqual([]);
   });
 });

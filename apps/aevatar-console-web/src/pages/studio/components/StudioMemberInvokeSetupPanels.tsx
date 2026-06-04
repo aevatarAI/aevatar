@@ -131,7 +131,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
 }) => {
   const isRunning = invokeStatus === 'running';
   const promptPlaceholder =
-    defaultPrompt || t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke", "输入 Prompt，发起一次独立 Invoke。");
+    defaultPrompt || t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke", "Enter a prompt to start an independent Invoke.");
   const primaryButtonLabel = isRunning ? 'Stop' : 'Invoke';
   const primaryButtonIcon = isRunning ? (
     <StopOutlined />
@@ -158,7 +158,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={dockComposerRowStyle}
           >
             <Input.TextArea
-              aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy", "调用请求输入")}
+              aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy", "Invocation request input")}
               autoSize={{ minRows: 1, maxRows: 4 }}
               placeholder={promptPlaceholder}
               style={dockComposerInputStyle}
@@ -196,7 +196,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
           </div>
         ) : (
           <Input.TextArea
-            aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy.2", "调用请求输入")}
+            aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy.2", "Invocation request input")}
             autoSize={{ minRows: 4, maxRows: 8 }}
             placeholder={promptPlaceholder}
             value={prompt}
@@ -219,7 +219,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={composerGuidanceStyle}
           >
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              {blockedReason || t("pages.studio.studiomemberinvokesetuppanels.team.member.endpoint", "请选择可调用的 Team member 和 endpoint。")}
+              {blockedReason || t("pages.studio.studiomemberinvokesetuppanels.team.member.endpoint", "Select a callable Team member and endpoint.")}
             </Typography.Text>
           </div>
         ) : isChatEndpoint ? (
@@ -227,10 +227,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
             type="secondary"
           >
-            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run", "输入 Prompt，发起一次独立 Invoke。每次 Invoke 都会创建新的 Run。")}</Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run", "Enter a prompt to start an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
         ) : (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run.2", "输入 Prompt，发起一次独立 Invoke。每次 Invoke 都会创建新的 Run。")}</Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run.2", "Enter a prompt to start an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
         )}
       </div>
 
@@ -306,8 +306,8 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     <AevatarPanel
       layoutMode="document"
       padding={14}
-      title={t("pages.studio.studiomemberinvokesetuppanels.copy.3", "调试台")}
-      titleHelp={t("pages.studio.studiomemberinvokesetuppanels.prompt.2", "先输入 prompt 或载荷，再直接执行当前成员调用。")}
+      title={t("pages.studio.studiomemberinvokesetuppanels.copy.3", "Debug console")}
+      titleHelp={t("pages.studio.studiomemberinvokesetuppanels.prompt.2", "Enter a prompt or payload first, then invoke the current member directly.")}
     >
       {content}
     </AevatarPanel>

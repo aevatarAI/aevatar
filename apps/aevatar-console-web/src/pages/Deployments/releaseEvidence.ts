@@ -229,7 +229,7 @@ export function buildDeploymentReleaseEvidenceSnapshot({
           serving?.updatedAt,
           t("pages.deployments.releaseevidence.serving.targets.already.contain", "serving targets already contain {value1} after this commit", { value1: candidateRevisionId }),
           t("pages.deployments.releaseevidence.serving.targets.already.contain.2", "serving targets already contain {value1}, but updatedAt is earlier than this submission, please wait for readmodel to refresh", { value1: candidateRevisionId }),
-          t("pages.deployments.releaseevidence.wait.for.serving.targets", "Wait for serving targets {value1} to appear", { value1: candidateRevisionId || t("pages.deployments.releaseevidence.revision", "候选 revision") }),
+          t("pages.deployments.releaseevidence.wait.for.serving.targets", "Wait for serving targets {value1} to appear", { value1: candidateRevisionId || t("pages.deployments.releaseevidence.revision", "Candidate revision") }),
           handoff,
         ),
       ),
@@ -295,11 +295,11 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         buildFreshDetail(
           inactive,
           deployment?.updatedAt,
-          t("pages.deployments.releaseevidence.has.left.active.after", "{value1} has left active after this commit", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment", "目标 deployment") }),
-          t("pages.deployments.releaseevidence.is.no.longer.displayed", "{value1} is no longer displayed as active, but updatedAt is earlier than this submission, please wait for the catalog to refresh", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.2", "目标 deployment") }),
+          t("pages.deployments.releaseevidence.has.left.active.after", "{value1} has left active after this commit", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment", "Target deployment") }),
+          t("pages.deployments.releaseevidence.is.no.longer.displayed", "{value1} is no longer displayed as active, but updatedAt is earlier than this submission, please wait for the catalog to refresh", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.2", "Target deployment") }),
           deployment
-            ? t("pages.deployments.releaseevidence.wait.for.state.to", "Wait for {value1} state to leave active", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.3", "目标 deployment") })
-            : t("pages.deployments.releaseevidence.wait.for.to.appear", "Wait for {value1} to appear in catalog and show inactive status", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.4", "目标 deployment") }),
+            ? t("pages.deployments.releaseevidence.wait.for.state.to", "Wait for {value1} state to leave active", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.3", "Target deployment") })
+            : t("pages.deployments.releaseevidence.wait.for.to.appear", "Wait for {value1} to appear in catalog and show inactive status", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.4", "Target deployment") }),
           handoff,
         ),
       ),

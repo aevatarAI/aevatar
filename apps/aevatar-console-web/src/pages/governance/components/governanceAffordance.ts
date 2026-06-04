@@ -38,8 +38,8 @@ export function resolvePolicyAffordance(
     status,
     statusLabel: formatAevatarStatusLabel(status),
     summary: policy.retired
-      ? t("pages.governance.governanceaffordance.copy", "这条策略已经退役，是治理目录中的历史事实，不能继续保存或再次下线。")
-      : t("pages.governance.governanceaffordance.copy.2", "这条策略仍处于激活目录中，可以修改规则或提交下线请求。"),
+      ? t("pages.governance.governanceaffordance.copy", "This policy has been retired and is a historical fact in the governance directory. It cannot be saved or taken offline again.")
+      : t("pages.governance.governanceaffordance.copy.2", "This policy is still in the activation directory, and you can modify the rules or submit an offline request."),
   };
 }
 
@@ -52,8 +52,8 @@ export function resolveBindingAffordance(
     status,
     statusLabel: formatAevatarStatusLabel(status),
     summary: binding.retired
-      ? t("pages.governance.governanceaffordance.copy.3", "这条绑定已经退役，是治理目录中的历史事实，不能继续保存或再次下线。")
-      : t("pages.governance.governanceaffordance.copy.4", "这条绑定仍处于激活目录中，可以修改目标、挂载策略或提交下线请求。"),
+      ? t("pages.governance.governanceaffordance.copy.3", "This binding has been retired and is a historical fact in the governance directory. It cannot be saved or taken offline again.")
+      : t("pages.governance.governanceaffordance.copy.4", "This binding is still in the activation directory, and you can modify the target, mount strategy, or submit an offline request."),
   };
 }
 
@@ -68,8 +68,8 @@ export function resolveEndpointAffordance(
     status,
     statusLabel: formatAevatarStatusLabel(status),
     summary: hasCatalog
-      ? t("pages.governance.governanceaffordance.endpoint.catalog", "暴露状态来自当前 endpoint catalog；保存入口会提交整份目录更新。")
-      : t("pages.governance.governanceaffordance.endpoint.catalog.2", "当前无法读取 endpoint catalog，只能查看这条入口事实，不能提交修改。"),
+      ? t("pages.governance.governanceaffordance.endpoint.catalog", "The exposed state comes from the current endpoint catalog; saving the entry commits the entire catalog update.")
+      : t("pages.governance.governanceaffordance.endpoint.catalog.2", "Currently, the endpoint catalog cannot be read. You can only view the entry facts and cannot submit modifications."),
   };
 }
 
@@ -81,25 +81,25 @@ export function resolveEndpointExposureAction(
   if (!catalog) {
     return {
       disabled: true,
-      label: currentExposure === "public" ? t("pages.governance.governanceaffordance.copy.5", "已公开") : t("pages.governance.governanceaffordance.copy.6", "公开入口"),
+      label: currentExposure === "public" ? t("pages.governance.governanceaffordance.copy.5", "Published") : t("pages.governance.governanceaffordance.copy.6", "Public endpoints"),
       nextExposureKind: "public",
-      reason: t("pages.governance.governanceaffordance.endpoint.catalog.3", "需要先读取 endpoint catalog，才能确认或提交暴露状态更新。"),
+      reason: t("pages.governance.governanceaffordance.endpoint.catalog.3", "The endpoint catalog needs to be read before exposure status updates can be confirmed or submitted."),
     };
   }
 
   if (currentExposure === "public") {
     return {
       disabled: true,
-      label: t("pages.governance.governanceaffordance.copy.7", "已公开"),
+      label: t("pages.governance.governanceaffordance.copy.7", "Published"),
       nextExposureKind: "public",
-      reason: t("pages.governance.governanceaffordance.endpoint.catalog.public", "当前 endpoint catalog 已经观察到 public 状态，不再显示重复的公开切换。"),
+      reason: t("pages.governance.governanceaffordance.endpoint.catalog.public", "The current endpoint catalog has observed the public status and no longer displays repeated public switching."),
     };
   }
 
   return {
     disabled: false,
-    label: t("pages.governance.governanceaffordance.copy.8", "公开入口"),
+    label: t("pages.governance.governanceaffordance.copy.8", "Public endpoints"),
     nextExposureKind: "public",
-    reason: t("pages.governance.governanceaffordance.endpoint.catalog.public.2", "提交后需要等待 endpoint catalog 再次刷新，才表示 public 状态已被观察到。"),
+    reason: t("pages.governance.governanceaffordance.endpoint.catalog.public.2", "After submission, you need to wait for the endpoint catalog to be refreshed again to indicate that the public status has been observed."),
   };
 }

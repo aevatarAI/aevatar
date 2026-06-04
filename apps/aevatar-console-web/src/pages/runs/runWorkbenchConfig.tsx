@@ -900,24 +900,24 @@ export function buildRunReadinessSummary({
 export function describeRunReturnTarget(returnTo?: string | null): string {
   const normalized = trimOptional(returnTo);
   if (!normalized) {
-    return t("pages.runs.runworkbenchconfig.copy", "返回团队高级编辑");
+    return t("pages.runs.runworkbenchconfig.copy", "Back to advanced team editing");
   }
 
   const pathname = normalized.split("#")[0].split("?")[0];
   if (pathname === "/teams" || pathname.startsWith("/teams/")) {
-    return t("pages.runs.runworkbenchconfig.copy.2", "返回团队高级编辑");
+    return t("pages.runs.runworkbenchconfig.copy.2", "Back to advanced team editing");
   }
 
   switch (pathname) {
     case "/runtime/workflows":
-      return t("pages.runs.runworkbenchconfig.workflow.library", "返回 Workflow Library");
+      return t("pages.runs.runworkbenchconfig.workflow.library", "Back to Workflow Library");
     case "/studio":
-      return t("pages.runs.runworkbenchconfig.studio", "返回 Studio");
+      return t("pages.runs.runworkbenchconfig.studio", "Back to Studio");
     case "/runtime/explorer":
     case "/runtime/explorer/detail":
-      return t("pages.runs.runworkbenchconfig.actor.explorer", "返回 Actor explorer");
+      return t("pages.runs.runworkbenchconfig.actor.explorer", "Back to Actor Explorer");
     default:
-      return t("pages.runs.runworkbenchconfig.copy.3", "返回上一页");
+      return t("pages.runs.runworkbenchconfig.copy.3", "Back to previous page");
   }
 }
 

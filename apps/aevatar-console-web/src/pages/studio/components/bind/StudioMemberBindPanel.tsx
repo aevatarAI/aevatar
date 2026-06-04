@@ -626,15 +626,15 @@ function buildBindingSectionTitle(count: number): string {
 }
 
 function describeEndpointKind(endpoint: ServiceEndpointSnapshot): string {
-  return isChatServiceEndpoint(endpoint) ? t("pages.studio.bind.studiomemberbindpanel.copy", "默认测试") : t("pages.studio.bind.studiomemberbindpanel.copy.2", "高级输入");
+  return isChatServiceEndpoint(endpoint) ? t("pages.studio.bind.studiomemberbindpanel.copy", "Default test") : t("pages.studio.bind.studiomemberbindpanel.copy.2", "Advanced input");
 }
 
 function describeEndpointPurpose(endpoint: ServiceEndpointSnapshot): string {
   if (isChatServiceEndpoint(endpoint)) {
-    return t("pages.studio.bind.studiomemberbindpanel.copy.3", "输入一句话，快速确认成员能不能正常响应。");
+    return t("pages.studio.bind.studiomemberbindpanel.copy.3", "Enter one sentence to quickly confirm whether the member responds correctly.");
   }
 
-  return t("pages.studio.bind.studiomemberbindpanel.api.sdk", "给需要固定输入格式的 API/SDK 调用场景使用。");
+  return t("pages.studio.bind.studiomemberbindpanel.api.sdk", "Use this for API/SDK calls that require a fixed input shape.");
 }
 
 function renderPostBindEntryAction(
@@ -645,26 +645,26 @@ function renderPostBindEntryAction(
       {postBindEntryActions.isEntryMember ? (
         <>
           <Typography.Text>
-            {t("pages.studio.bind.studiomemberbindpanel.team", "当前成员已经是团队入口。可以直接返回 Team 页面测试完整链路。")}</Typography.Text>
+            {t("pages.studio.bind.studiomemberbindpanel.team", "This member is already the team entry. You can return to the Team page to test the full path.")}</Typography.Text>
           <Button
             loading={postBindEntryActions.busy}
             onClick={postBindEntryActions.onSetEntryAndTest}
             size="small"
             type="primary"
           >
-            {t("pages.studio.bind.studiomemberbindpanel.team.2", "测试 Team")}</Button>
+            {t("pages.studio.bind.studiomemberbindpanel.team.2", "Test Team")}</Button>
         </>
       ) : (
         <>
           <Typography.Text>
-            {t("pages.studio.bind.studiomemberbindpanel.bind.team", "Bind 已完成。下一步建议设为团队入口，并返回 Team 页面测试完整链路。")}</Typography.Text>
+            {t("pages.studio.bind.studiomemberbindpanel.bind.team", "Bind is complete. Next, set it as the team entry and return to the Team page to test the full path.")}</Typography.Text>
           <Button
             loading={postBindEntryActions.busy}
             onClick={postBindEntryActions.onSetEntryAndTest}
             size="small"
             type="primary"
           >
-            {t("pages.studio.bind.studiomemberbindpanel.team.3", "设为入口并测试 Team")}</Button>
+            {t("pages.studio.bind.studiomemberbindpanel.team.3", "Set as entry and test Team")}</Button>
         </>
       )}
     </Space>
@@ -1294,7 +1294,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Space direction="vertical" size={2}>
                   <Typography.Text type="secondary">{t("pages.studio.bind.studiomemberbindpanel.test.mode.2", "Test mode")}</Typography.Text>
                   <Typography.Text type="secondary">
-                    {t("pages.studio.bind.studiomemberbindpanel.copy.4", "普通测试直接输入一句话即可；需要固定格式时再选高级输入。")}</Typography.Text>
+                    {t("pages.studio.bind.studiomemberbindpanel.copy.4", "For ordinary tests, you can directly enter a sentence; when you need a fixed format, choose advanced input.")}</Typography.Text>
                 </Space>
                 {selectedService && hasEndpointOptions ? (
                   <div style={endpointChoiceRowStyle}>
@@ -1470,8 +1470,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             title={t("pages.studio.bind.studiomemberbindpanel.quick.smoke.test.2", "Quick smoke test")}
             titleHelp={
               runsCurrentWorkflowDraft
-                ? 'Quick smoke test runs the current Studio workflow draft before publish. Continue to Invoke when you want to verify the published contract and endpoint.'
-                : 'Use a light contract check here, then move into Invoke for the full transcript and event stream.'
+                ? t("pages.studio.bind.studiomemberbindpanel.quick.smoke.test.workflow.draft.help", "Quick smoke test runs the current Studio workflow draft before publish. Continue to Invoke when you want to verify the published contract and endpoint.")
+                : t("pages.studio.bind.studiomemberbindpanel.quick.smoke.test.invoke.help", "Use a light contract check here, then move into Invoke for the full transcript and event stream.")
             }
           >
             <div
@@ -1524,10 +1524,10 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               !isChatServiceEndpoint(selectedEndpoint) ? (
                 <Alert
                   showIcon
-                  message={t("pages.studio.bind.studiomemberbindpanel.copy.5", "固定格式输入")}
+                  message={t("pages.studio.bind.studiomemberbindpanel.copy.5", "Fixed-format input")}
                   description={
                     <Typography.Text style={smokeTypedPayloadDescriptionStyle}>
-                      {t("pages.studio.bind.studiomemberbindpanel.api.sdk.invoke", "这个入口主要给 API/SDK 调用。当前输入会作为简单文本发送； 需要调试完整固定格式输入时，请继续到 Invoke。")}<br />
+                      {t("pages.studio.bind.studiomemberbindpanel.api.sdk.invoke", "This entry is primarily for API/SDK calls. The current input is sent as simple text; continue to Invoke when you need to debug the full fixed-format input.")}<br />
                       {t("pages.studio.bind.studiomemberbindpanel.request.type.2", "Request type:")}{bindContract.requestTypeUrl}
                     </Typography.Text>
                   }

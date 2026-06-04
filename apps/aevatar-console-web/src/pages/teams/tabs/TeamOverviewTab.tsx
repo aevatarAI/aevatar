@@ -116,7 +116,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                 {intl.formatMessage({ id: "teams.detail.overview.status.title" })}
               </Typography.Text>
               <Typography.Text type="secondary">
-                {t("pages.teams.tabs.teamoverviewtab.copy", "启动状态")}</Typography.Text>
+                {t("pages.teams.tabs.teamoverviewtab.copy", "Startup status")}</Typography.Text>
               <DetailPill
                 style={currentHeaderStatusStyle}
                 text={currentHeaderStatusFriendly}
