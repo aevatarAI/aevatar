@@ -311,7 +311,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                 ["connector.http.authorization"] = "Bearer metadata-secret",
             },
             ScopeId: "u-1001",
-            ConnectorHttpAuthorization: " Bearer typed-secret ");
+            CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(" Bearer typed-secret "));
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
@@ -324,7 +324,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
         request.ScopeId.Should().Be("u-1001");
-        request.ConnectorHttpAuthorization.Should().Be("Bearer typed-secret");
+        request.CallerCredential.NyxIdBearer.Should().Be("Bearer typed-secret");
         request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
         request.Headers["source"].Should().Be("headers");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");

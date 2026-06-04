@@ -49,11 +49,11 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var connectorAuthorization = ConnectorHttpAuthorizationExtractor.Extract(http);
+            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
                 defaultMetadata,
-                trustedConnectorHttpAuthorization: connectorAuthorization);
+                trustedCallerCredential: callerCredential);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);

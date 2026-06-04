@@ -29,7 +29,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         AppendMetadata(chatRequest.Metadata, command.Metadata);
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToProto(command.LlmControl);
-        chatRequest.ConnectorHttpAuthorization = Normalize(command.ConnectorHttpAuthorization);
+        chatRequest.CallerCredential = ToProto(command.CallerCredential);
 
         var envelope = new EventEnvelope
         {
@@ -83,6 +83,13 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             payload.MaxToolRoundsOverride = source.MaxToolRoundsOverride.Value;
         return payload;
     }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential ToProto(
+        Application.Abstractions.Runs.WorkflowCallerCredential? source) =>
+        new()
+        {
+            NyxIdBearer = Normalize(source?.NyxIdBearer),
+        };
 
     private static void AppendMetadata(
         Google.Protobuf.Collections.MapField<string, string> destination,

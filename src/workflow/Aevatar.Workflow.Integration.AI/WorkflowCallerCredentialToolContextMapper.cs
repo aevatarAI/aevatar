@@ -1,14 +1,15 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Integration.AI;
 
-internal static class WorkflowConnectorAuthorizationToolContextMapper
+internal static class WorkflowCallerCredentialToolContextMapper
 {
     private const string BearerPrefix = "Bearer ";
 
-    public static AgentToolExecutionContext FromAuthorization(string? authorization)
+    public static AgentToolExecutionContext FromCredential(WorkflowCallerCredential? credential)
     {
-        var token = ExtractBearerToken(authorization);
+        var token = ExtractBearerToken(credential?.NyxIdBearer);
         if (token == null)
             return AgentToolExecutionContext.Empty;
 

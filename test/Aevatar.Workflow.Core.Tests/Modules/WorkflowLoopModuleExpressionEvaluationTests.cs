@@ -206,7 +206,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
 
@@ -253,8 +253,8 @@ public class WorkflowLoopModuleExpressionEvaluationTests
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
@@ -266,11 +266,11 @@ public class WorkflowLoopModuleExpressionEvaluationTests
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization,
+                NyxIdBearer = delta.CallerCredential.NyxIdBearer,
             };
         }
     }

@@ -447,7 +447,7 @@ public static class ScopeWorkflowEndpoints
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
-                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                CallerCredential: WorkflowCallerCredentialExtractor.Extract(http),
                 LlmControl: ToWorkflowLlmControl(llmControl),
                 Headers: headers),
             chatRunService,
@@ -558,7 +558,6 @@ public static class ScopeWorkflowEndpoints
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
         scopedHeaders.Remove(LegacyConnectorHttpAuthorizationBlockedKey);
-        // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses WorkflowChatRunRequest.ConnectorHttpAuthorization.
 
         return scopedHeaders;
     }

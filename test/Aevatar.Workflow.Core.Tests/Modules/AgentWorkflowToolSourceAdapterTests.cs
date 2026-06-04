@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
@@ -23,7 +24,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                ConnectorHttpAuthorization: "Bearer token-123"),
+                CallerCredential: new WorkflowCallerCredential { NyxIdBearer = "Bearer token-123" }),
             CancellationToken.None);
 
         result.Should().Be("""{"observed":true}""");
@@ -52,7 +53,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ExecutionId: "exec-1",
                 CallId: "call-1",
                 ScopeId: "scope-1",
-                ConnectorHttpAuthorization: authorization),
+                CallerCredential: new WorkflowCallerCredential { NyxIdBearer = authorization }),
             CancellationToken.None);
 
         agentTool.ObservedAccessToken.Should().BeNull();

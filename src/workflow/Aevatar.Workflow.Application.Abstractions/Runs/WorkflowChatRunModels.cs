@@ -27,6 +27,8 @@ public sealed record WorkflowLlmControl(
     int? MaxToolRoundsOverride = null,
     string? UserMemoryPrompt = null);
 
+public sealed record WorkflowCallerCredential(string? NyxIdBearer = null);
+
 public enum WorkflowChatSourceKind
 {
     Unspecified = 0,
@@ -132,8 +134,7 @@ public sealed record WorkflowChatRunRequest(
     //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null,
     WorkflowLlmControl? LlmControl = null,
-    // Refactor (iter169/cluster-issue1551): Old pattern: trusted connector bearer was smuggled through Metadata. New principle: Host/Application pass connector HTTP authorization as a typed command scalar.
-    string? ConnectorHttpAuthorization = null,
+    WorkflowCallerCredential? CallerCredential = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     string? CommandIdSeed = null,
     string? CorrelationIdSeed = null,

@@ -234,16 +234,16 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldPopulateConnectorAuthorizationFromActorOwnedExecutionState()
+    public async Task LlmCallModule_ShouldPopulateCallerCredentialFromActorOwnedExecutionState()
     {
         var module = new LLMCallModule();
         var ctx = new RecordingWorkflowContext
         {
             ExecutionContextState =
             {
-                Connector = new WorkflowConnectorExecutionContextState
+                CallerCredential = new WorkflowCallerCredentialState
                 {
-                    HttpAuthorization = " Bearer typed-token ",
+                    NyxIdBearer = " Bearer typed-token ",
                 },
             },
         };
@@ -265,13 +265,13 @@ public sealed class WorkflowRuntimeModuleBranchTests
             CancellationToken.None);
 
         var intent = DispatchedLlmIntent(ctx);
-        intent.ConnectorHttpAuthorization.Should().Be("Bearer typed-token");
+        intent.CallerCredential.NyxIdBearer.Should().Be("Bearer typed-token");
         intent.Headers.Should().Contain("trace-id", "trace-1");
         intent.Headers.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldIgnoreMetadataOnlyConnectorAuthorization()
+    public async Task LlmCallModule_ShouldIgnoreMetadataOnlyCallerCredential()
     {
         var module = new LLMCallModule();
         var ctx = new RecordingWorkflowContext();
@@ -292,7 +292,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             CancellationToken.None);
 
         var intent = DispatchedLlmIntent(ctx);
-        intent.ConnectorHttpAuthorization.Should().BeEmpty();
+        intent.CallerCredential.NyxIdBearer.Should().BeEmpty();
         intent.Headers.Should().NotContainKey("connector.http.authorization");
     }
 
@@ -1014,8 +1014,8 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ct.ThrowIfCancellationRequested();
             if (delta.ClearLlm)
                 ExecutionContextState.Llm = null;
-            if (delta.ClearConnector)
-                ExecutionContextState.Connector = null;
+            if (delta.ClearCallerCredential)
+                ExecutionContextState.CallerCredential = null;
             if (delta.Llm != null)
             {
                 ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
@@ -1027,11 +1027,11 @@ public sealed class WorkflowRuntimeModuleBranchTests
                     ExecutionContextState.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
             }
 
-            if (delta.Connector != null)
+            if (delta.CallerCredential != null)
             {
-                ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+                ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
                 {
-                    HttpAuthorization = delta.Connector.HttpAuthorization,
+                    NyxIdBearer = delta.CallerCredential.NyxIdBearer,
                 };
             }
 
@@ -1042,7 +1042,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
         {
             ct.ThrowIfCancellationRequested();
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
 

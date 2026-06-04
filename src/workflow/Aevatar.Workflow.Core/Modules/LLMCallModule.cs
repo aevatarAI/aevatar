@@ -393,8 +393,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
-        if (WorkflowRunExecutionContextStateAccess.TryGetConnectorAuthorization(ctx, out var connectorAuthorization))
-            intent.ConnectorHttpAuthorization = connectorAuthorization;
+        intent.CallerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var callerCredential)
+            ? callerCredential
+            : new WorkflowCallerCredential();
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);

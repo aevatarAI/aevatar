@@ -146,7 +146,9 @@ message WorkflowRunState
 message WorkflowRunExecutionContextState
 {
   WorkflowLlmExecutionContextState llm = 1;
-  WorkflowConnectorExecutionContextState connector = 2;
+  reserved 2;
+  reserved "connector";
+  WorkflowCallerCredentialState caller_credential = 3;
 }
 
 message WorkflowLlmExecutionContextState
@@ -158,9 +160,9 @@ message WorkflowLlmExecutionContextState
   string user_memory_prompt = 5;
 }
 
-message WorkflowConnectorExecutionContextState
+message WorkflowCallerCredentialState
 {
-  string http_authorization = 1;
+  string nyx_id_bearer = 1;
 }
 
 enum WorkflowRuntimeCallbackBackendState

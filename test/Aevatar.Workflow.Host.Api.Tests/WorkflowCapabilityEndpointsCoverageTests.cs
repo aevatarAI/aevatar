@@ -804,7 +804,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldScrubConnectorAuthorizationMetadata_AndUseTrustedTypedCarrier()
+    public void ChatRunRequestNormalizer_ShouldScrubConnectorAuthorizationMetadata_AndUseTrustedCallerCredential()
     {
         var input = new ChatInput
         {
@@ -823,10 +823,10 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = ChatRunRequestNormalizer.Normalize(
             input,
             defaultMetadata: defaultMetadata,
-            trustedConnectorHttpAuthorization: " Bearer trusted ");
+            trustedCallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(" Bearer trusted "));
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.ConnectorHttpAuthorization.Should().Be("Bearer trusted");
+        result.Request!.CallerCredential!.NyxIdBearer.Should().Be("Bearer trusted");
         result.Request.Metadata.Should().Contain("trace", "trace-1");
         result.Request.Metadata.Should().NotContainKey("connector.http.authorization");
     }
