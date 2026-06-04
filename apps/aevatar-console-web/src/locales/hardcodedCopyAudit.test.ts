@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import enUSMessages from './en-US';
 
 const sourceRoot = path.resolve(__dirname, '..');
 const chineseTextPattern = /\p{Script=Han}/u;
@@ -21,9 +22,12 @@ const jsxTextAttributeNames = new Set([
   'okText',
   'placeholder',
   'subtitle',
+  'text',
   'title',
   'titleHelp',
   'tooltip',
+  'testTeamHint',
+  'testTeamLabel',
   'value',
 ]);
 
@@ -42,6 +46,22 @@ const sampleInputPropertyNames = new Set([
   'prompt',
   'sampleInput',
 ]);
+
+type I18nFallbackDefault = {
+  defaultMessage: string;
+  id: string;
+  location: string;
+};
+
+function collectPlaceholders(value: string): string[] {
+  const names = new Set<string>();
+
+  for (const match of value.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    names.add(match[1]);
+  }
+
+  return [...names].sort();
+}
 
 function collectProductionSourceFiles(
   directory: string,
@@ -432,6 +452,124 @@ function collectHardcodedUiTextFromSource(
   return violations;
 }
 
+function collectHardcodedEnglishUiReturnText(filePath: string): string[] {
+  const sourceText = fs.readFileSync(filePath, 'utf8');
+  return collectHardcodedEnglishUiReturnTextFromSource(sourceText, filePath);
+}
+
+function collectHardcodedEnglishUiReturnTextFromSource(
+  sourceText: string,
+  fileName = 'fixture.tsx',
+): string[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const violations: string[] = [];
+
+  function getTemplateStaticText(node: ts.TemplateExpression): string {
+    return [
+      node.head.text,
+      ...node.templateSpans.map((span) => span.literal.text),
+    ].join('');
+  }
+
+  function addViolation(node: ts.Node, text: string): void {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(
+      node.getStart(sourceFile),
+    );
+    violations.push(
+      `${path.relative(sourceRoot, fileName)}:${line + 1}:${character + 1} ${text
+        .replace(/\s+/g, ' ')
+        .trim()}`,
+    );
+  }
+
+  function getEnclosingFunctionName(node: ts.Node): string | null {
+    for (let parent = node.parent; parent; parent = parent.parent) {
+      if (
+        (ts.isFunctionDeclaration(parent) ||
+          ts.isFunctionExpression(parent) ||
+          ts.isMethodDeclaration(parent)) &&
+        parent.name
+      ) {
+        return parent.name.getText(sourceFile);
+      }
+
+      if (ts.isArrowFunction(parent)) {
+        if (
+          ts.isVariableDeclaration(parent.parent) &&
+          ts.isIdentifier(parent.parent.name)
+        ) {
+          return parent.parent.name.text;
+        }
+
+        if (ts.isPropertyAssignment(parent.parent)) {
+          return getObjectPropertyName(parent.parent.name);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function isUiCopyReturnHelper(node: ts.ReturnStatement): boolean {
+    const functionName = getEnclosingFunctionName(node);
+    return Boolean(
+      functionName &&
+        /handoff|feedbackmessage|nextstep|observationevidence/i.test(
+          functionName,
+        ),
+    );
+  }
+
+  function visitReturnExpression(node: ts.Node): void {
+    if (
+      ts.isJsxElement(node) ||
+      ts.isJsxFragment(node) ||
+      ts.isJsxSelfClosingElement(node)
+    ) {
+      return;
+    }
+
+    if (
+      (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
+      !isInsideExistingI18nCall(node) &&
+      !isObjectPropertyName(node) &&
+      isLikelyHardcodedEnglishUiText(node.text, 'string')
+    ) {
+      addViolation(node, node.text);
+      return;
+    }
+
+    if (
+      ts.isTemplateExpression(node) &&
+      !isInsideExistingI18nCall(node) &&
+      isLikelyHardcodedEnglishUiText(getTemplateStaticText(node), 'string')
+    ) {
+      addViolation(node, node.getText(sourceFile));
+      return;
+    }
+
+    ts.forEachChild(node, visitReturnExpression);
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isReturnStatement(node) && node.expression && isUiCopyReturnHelper(node)) {
+      visitReturnExpression(node.expression);
+      return;
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return violations;
+}
+
 function isFunctionLike(node: ts.Node): boolean {
   return ts.isFunctionLike(node) || ts.isArrowFunction(node);
 }
@@ -446,6 +584,140 @@ function getCallExpressionName(node: ts.CallExpression): string | null {
   }
 
   return null;
+}
+
+function getStaticStringValue(node: ts.Node | undefined): string | null {
+  if (
+    node &&
+    (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node))
+  ) {
+    return node.text;
+  }
+
+  return null;
+}
+
+function getObjectPropertyName(node: ts.PropertyName): string | null {
+  if (
+    ts.isIdentifier(node) ||
+    ts.isStringLiteral(node) ||
+    ts.isNumericLiteral(node)
+  ) {
+    return node.text;
+  }
+
+  return null;
+}
+
+function getObjectStringProperty(
+  node: ts.ObjectLiteralExpression,
+  propertyName: string,
+): string | null {
+  for (const property of node.properties) {
+    if (
+      ts.isPropertyAssignment(property) &&
+      getObjectPropertyName(property.name) === propertyName
+    ) {
+      return getStaticStringValue(property.initializer);
+    }
+  }
+
+  return null;
+}
+
+function getJsxStringAttribute(
+  node: ts.JsxOpeningLikeElement,
+  attributeName: string,
+): string | null {
+  for (const property of node.attributes.properties) {
+    if (
+      ts.isJsxAttribute(property) &&
+      ts.isIdentifier(property.name) &&
+      property.name.text === attributeName &&
+      property.initializer
+    ) {
+      return getStaticStringValue(property.initializer);
+    }
+  }
+
+  return null;
+}
+
+function collectI18nFallbackDefaults(filePath: string): I18nFallbackDefault[] {
+  const sourceText = fs.readFileSync(filePath, 'utf8');
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const defaults: I18nFallbackDefault[] = [];
+
+  function locationOf(node: ts.Node): string {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(
+      node.getStart(sourceFile),
+    );
+    return `${path.relative(sourceRoot, filePath)}:${line + 1}:${character + 1}`;
+  }
+
+  function addDefault(
+    node: ts.Node,
+    id: string | null,
+    defaultMessage: string | null,
+  ): void {
+    if (!id || !defaultMessage) {
+      return;
+    }
+
+    defaults.push({
+      defaultMessage,
+      id,
+      location: locationOf(node),
+    });
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const callName = getCallExpressionName(node);
+
+      if (callName === 't') {
+        addDefault(
+          node,
+          getStaticStringValue(node.arguments[0]),
+          getStaticStringValue(node.arguments[1]),
+        );
+      }
+
+      if (
+        callName === 'formatMessage' &&
+        node.arguments[0] &&
+        ts.isObjectLiteralExpression(node.arguments[0])
+      ) {
+        addDefault(
+          node,
+          getObjectStringProperty(node.arguments[0], 'id'),
+          getObjectStringProperty(node.arguments[0], 'defaultMessage'),
+        );
+      }
+    }
+
+    if (
+      (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
+      node.tagName.getText(sourceFile) === 'T'
+    ) {
+      addDefault(
+        node,
+        getJsxStringAttribute(node, 'id'),
+        getJsxStringAttribute(node, 'defaultMessage'),
+      );
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return defaults;
 }
 
 function containsI18nFormattingCall(node: ts.Node): boolean {
@@ -576,11 +848,70 @@ describe('console-wide i18n migration guard', () => {
     ]);
   });
 
+  it('detects hardcoded English copy returned from UI handoff helpers', () => {
+    const violations = collectHardcodedEnglishUiReturnTextFromSource(`
+      function getObserveHandoffText(active: boolean) {
+        return active
+          ? "Observe will follow backend events."
+          : t("demo.localized.handoff", "Already localized handoff.");
+      }
+
+      const buildActionFeedbackMessage = () => {
+        return \`Runtime accepted \${commandId}.\`;
+      };
+
+      function formatRuntimeStatus(status: string) {
+        return "running";
+      }
+    `);
+
+    expect(violations.map((item) => item.replace(/^.*? /, ''))).toEqual([
+      'Observe will follow backend events.',
+      '`Runtime accepted ${commandId}.`',
+    ]);
+  });
+
+  it('keeps helper-returned UI handoff copy inside i18n', () => {
+    const violations = collectProductionSourceFiles(sourceRoot).flatMap(
+      collectHardcodedEnglishUiReturnText,
+    );
+
+    expect(violations).toEqual([]);
+  });
+
   it('keeps runtime-formatted copy out of static initialization paths', () => {
     const violations = collectProductionSourceFiles(sourceRoot).flatMap(
       collectStaticI18nFormatting,
     );
 
     expect(violations).toEqual([]);
+  });
+
+  it('keeps i18n fallback defaults backed by the English catalog', () => {
+    const enUSCatalog: Record<string, string> = enUSMessages;
+    const defaults = collectProductionSourceFiles(sourceRoot).flatMap(
+      collectI18nFallbackDefaults,
+    );
+    const defaultsWithChineseCopy = defaults
+      .filter(({ defaultMessage }) => chineseTextPattern.test(defaultMessage))
+      .map(({ defaultMessage, id, location }) => `${location} ${id}: ${defaultMessage}`);
+    const missingCatalogEntries = defaults
+      .filter(({ id }) => enUSCatalog[id] === undefined)
+      .map(({ defaultMessage, id, location }) => `${location} ${id}: ${defaultMessage}`);
+    const placeholderMismatches = defaults
+      .filter(
+        ({ defaultMessage, id }) =>
+          enUSCatalog[id] !== undefined &&
+          JSON.stringify(collectPlaceholders(enUSCatalog[id])) !==
+            JSON.stringify(collectPlaceholders(defaultMessage)),
+      )
+      .map(
+        ({ defaultMessage, id, location }) =>
+          `${location} ${id}: ${defaultMessage} <> ${enUSCatalog[id]}`,
+      );
+
+    expect(defaultsWithChineseCopy).toEqual([]);
+    expect(missingCatalogEntries).toEqual([]);
+    expect(placeholderMismatches).toEqual([]);
   });
 });

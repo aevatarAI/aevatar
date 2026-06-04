@@ -1,7 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { Grid } from "antd";
 import React from "react";
-import { setLocale } from "@umijs/max";
 import {
   loadDraftRunPayload,
   saveDraftRunPayload,
@@ -9,7 +8,6 @@ import {
   saveObservedRunSessionPayload,
 } from "@/shared/runs/draftRunSession";
 import { saveRecentRun } from "@/shared/runs/recentRuns";
-import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
@@ -235,7 +233,26 @@ jest.mock("./components/RunsLaunchRail", () => {
     return React.createElement(
       "section",
       null,
-      React.createElement("div", null, "Run setup"),
+      React.createElement(
+        "div",
+        null,
+        props.variant === "chat" ? "Run context" : "Run setup"
+      ),
+      props.runReadiness
+        ? React.createElement(
+            "div",
+            {
+              "data-testid": "mock-run-readiness",
+            },
+            [
+              props.runReadiness.ready ? "Ready to send" : "Send readiness",
+              props.runReadiness.blockingReason ?? "",
+              ...props.runReadiness.items.map(
+                (item: any) => `${item.label}: ${item.value}`
+              ),
+            ].join(" | ")
+          )
+        : null,
       props.showPromptField !== false
         ? React.createElement("textarea", {
             "aria-label": "Prompt",
@@ -250,11 +267,13 @@ jest.mock("./components/RunsLaunchRail", () => {
         : null,
       React.createElement("input", {
         "aria-label": "Workspace ID",
-        onChange: (event: any) =>
+        onChange: (event: any) => {
+          props.onScopeIdChange?.(event.target.value);
           setValues((current: Record<string, unknown>) => ({
             ...current,
             scopeId: event.target.value,
-          })),
+          }));
+        },
         value: values.scopeId ?? "",
       }),
       props.showSubmitActions !== false
@@ -299,13 +318,9 @@ describe("RunsPage", () => {
     signal: jest.Mock;
     stop: jest.Mock;
   };
-  const mockedRuntimeActorsApi = runtimeActorsApi as unknown as {
-    getActorSnapshot: jest.Mock;
-  };
   const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
-    setLocale("en-US");
     jest.restoreAllMocks();
     window.history.replaceState({}, "", "/runtime/runs");
     window.sessionStorage.clear();
@@ -321,14 +336,6 @@ describe("RunsPage", () => {
     mockSession.pendingHumanInput = undefined;
     mockSession.runId = "";
     mockSession.error = undefined;
-    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
-      xs: false,
-      sm: false,
-      md: true,
-      lg: true,
-      xl: true,
-      xxl: false,
-    });
     mockedRuntimeRunsApi.invokeEndpoint.mockResolvedValue({
       requestId: "cmd-1",
       targetActorId: "actor-1",
@@ -339,22 +346,6 @@ describe("RunsPage", () => {
       body: {},
     });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
-    mockedRuntimeActorsApi.getActorSnapshot.mockResolvedValue({
-      actorId: "actor-1",
-      workflowName: "default",
-      lastCommandId: "cmd-1",
-      completionStatusValue: 0,
-      stateVersion: 1,
-      lastEventId: "evt-1",
-      lastUpdatedAt: "2026-01-01T00:00:00Z",
-      lastSuccess: null,
-      lastOutput: "",
-      lastError: "",
-      totalSteps: 0,
-      requestedSteps: 0,
-      completedSteps: 0,
-      roleReplyCount: 0,
-    });
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
     mockedParseBackendSSEStream.mockImplementation(
       () => (async function* () {})()
@@ -372,23 +363,85 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Workflow catalog" })
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Return to team editor" })
+      screen.queryByRole("button", { name: "Back to advanced team editing" })
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Actor explorer" })
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: "Actor explorer" })
+    ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Mission Control" })
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: "Mission Control" })
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Open observability hub" })
     ).toBeNull();
     expect(
       screen.getByPlaceholderText("Describe the task to run.")
     ).toBeTruthy();
-    expect(container.textContent).toContain("Run setup");
+    expect(container.textContent).toContain("Run context");
     expect(container.textContent).toContain("Conversation");
+    expect(container.textContent).toContain("Workspace: required");
+    expect(container.textContent).toContain("Route: direct");
+    expect(container.textContent).toContain("Endpoint: chat");
+    expect(container.textContent).toContain(
+      "Workspace is required before the prompt can be sent."
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Send readiness"
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Workspace: Required"
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("enables the conversation composer only after a workspace is set", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?prompt=Run%20it"
+    );
+
+    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+
+    await screen.findByDisplayValue("Run it");
+    expect(container.textContent).toContain("Workspace: required");
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    expect(sendButton).toBeDisabled();
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Send readiness"
+    );
+
+    fireEvent.change(screen.getByLabelText("Workspace ID"), {
+      target: { value: "scope-1" },
+    });
+
+    expect(container.textContent).toContain("Workspace: scope-1");
+    expect(container.textContent).not.toContain(
+      "Workspace is required before the prompt can be sent."
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Ready to send"
+    );
+    expect(screen.getByTestId("mock-run-readiness").textContent).toContain(
+      "Workspace: scope-1"
+    );
+    expect(sendButton).toBeEnabled();
+
+    fireEvent.click(sendButton);
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
+        "scope-1",
+        expect.objectContaining({
+          prompt: "Run it",
+        }),
+        expect.any(AbortSignal),
+        {
+          serviceId: "direct",
+        }
+      );
+    });
   });
 
   it("stacks the chat setup and conversation panes on compact screens", async () => {
@@ -420,7 +473,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Return to team editor" })
+      await screen.findByRole("button", { name: "Back to advanced team editing" })
     );
 
     expect(window.location.pathname).toBe("/teams");
@@ -439,7 +492,7 @@ describe("RunsPage", () => {
     renderWithQueryClient(React.createElement(RunsPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Return to team editor" })
+      await screen.findByRole("button", { name: "Back to Studio" })
     );
 
     expect(window.location.pathname).toBe("/studio");
@@ -451,6 +504,25 @@ describe("RunsPage", () => {
     );
     expect(new URLSearchParams(window.location.search).get("template")).toBe(
       "hello-chat"
+    );
+  });
+
+  it("returns to the originating workflow inspector when a workflow handoff provides return context", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?route=demo_flow&returnTo=%2Fruntime%2Fworkflows%3Fworkflow%3Ddemo_flow"
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Back to Workflow Library" })
+    );
+
+    expect(window.location.pathname).toBe("/runtime/workflows");
+    expect(new URLSearchParams(window.location.search).get("workflow")).toBe(
+      "demo_flow"
     );
   });
 
@@ -519,7 +591,7 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(screen.getByText("Action required")).toBeInTheDocument();
+    expect(screen.getAllByText("Action required").length).toBeGreaterThan(0);
     expect(screen.getByText("Review and continue the run")).toBeInTheDocument();
     expect(
       screen.getByRole("switch", { name: "Approved" })

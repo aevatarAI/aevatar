@@ -23,6 +23,10 @@ import type {
   MissionTopologyNode,
   MissionTopologyNodeKind,
 } from './models';
+import {
+  buildMissionEventHandoffCue,
+  buildMissionNodeHandoffCue,
+} from './runtimeHandoff';
 import { t } from "@/shared/i18n/messages";
 
 type MissionSessionLike = {
@@ -415,17 +419,14 @@ function buildTimelineIntervention(
         `Runtime is waiting for signal ${signalName} before ${stepId} can continue.`,
       signalName,
       stepId,
-      summary: t(
-        "pages.missioncontrol.runtimeadapter.runtime.paused.external.signal.gate",
-        "Runtime is paused at an external signal gate and cannot continue until the signal arrives.",
-      ),
+      summary: t("pages.missioncontrol.runtimeadapter.runtime.is.paused.at.an.external", "Runtime is paused at an external signal gate and cannot continue until the signal arrives."),
       timeoutLabel:
         Number.isFinite(timeoutMs) && timeoutMs > 0
           ? `Times out in ${Math.max(1, Math.round(timeoutMs / 1000))}s`
           : undefined,
-      title: t("pages.missioncontrol.runtimeadapter.waiting.for.signal.name", "Waiting for {signalName}", { signalName }),
-      primaryActionLabel: t("pages.missioncontrol.runtimeadapter.send.signal", "Send Signal"),
-      secondaryActionLabel: t("pages.missioncontrol.runtimeadapter.inspect.gate", "Inspect Gate"),
+      title: t("pages.missioncontrol.runtimeadapter.waiting.for", "Waiting for {value1}", { value1: signalName }),
+      primaryActionLabel: t("pages.missioncontrol.runtimeadapter.send.signal.2", "Send Signal"),
+      secondaryActionLabel: t("pages.missioncontrol.runtimeadapter.inspect.gate.2", "Inspect Gate"),
     };
   }
 
@@ -447,27 +448,15 @@ function buildTimelineIntervention(
       `${stepId} needs operator input before runtime can continue.`,
     stepId,
     summary: isApproval
-      ? t(
-          "pages.missioncontrol.runtimeadapter.runtime.paused.waiting.approval",
-          "Runtime is paused and waiting for approval before it can enter the execution path.",
-        )
-      : t(
-          "pages.missioncontrol.runtimeadapter.runtime.paused.waiting.operator.context",
-          "Runtime is paused and waiting for additional operator context before it can continue.",
-        ),
+      ? 'Runtime is paused and waiting for approval before it can enter the execution path.'
+      : 'Runtime is paused and waiting for additional operator context before it can continue.',
     timeoutLabel:
       Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
         ? `Times out in ${Math.max(1, Math.round(timeoutSeconds))}s`
         : undefined,
-    title: isApproval
-      ? t("pages.missioncontrol.runtimeadapter.waiting.for.approval", "Waiting for approval")
-      : t("pages.missioncontrol.runtimeadapter.input.required", "Input required"),
-    primaryActionLabel: isApproval
-      ? t("pages.missioncontrol.runtimeadapter.approve", "Approve")
-      : t("pages.missioncontrol.runtimeadapter.resume", "Resume"),
-    secondaryActionLabel: isApproval
-      ? t("pages.missioncontrol.runtimeadapter.reject", "Reject")
-      : t("pages.missioncontrol.runtimeadapter.inspect.gate", "Inspect Gate"),
+    title: isApproval ? 'Waiting for approval' : 'Input required',
+    primaryActionLabel: isApproval ? 'Approve' : 'Resume',
+    secondaryActionLabel: isApproval ? 'Reject' : 'Inspect Gate',
   };
 }
 
@@ -499,17 +488,14 @@ function buildIntervention(
       prompt: waitingSignal.prompt ?? 'Runtime is waiting for an external signal.',
       signalName: waitingSignal.signalName ?? 'continue',
       stepId: waitingSignal.stepId,
-      summary: t(
-        "pages.missioncontrol.runtimeadapter.runtime.paused.waiting.external.signal.resume",
-        "Runtime is paused and waiting for an external signal to resume control flow.",
-      ),
+      summary: t("pages.missioncontrol.runtimeadapter.runtime.is.paused.and.waiting.for", "Runtime is paused and waiting for an external signal to resume control flow."),
       timeoutLabel:
         typeof waitingSignal.timeoutMs === 'number'
           ? `Times out in ${Math.max(1, Math.round(waitingSignal.timeoutMs / 1000))}s`
           : undefined,
-      title: t("pages.missioncontrol.runtimeadapter.waiting.for.signal.name.2", "Waiting for {signalName}", { signalName: waitingSignal.signalName ?? 'signal' }),
-      primaryActionLabel: t("pages.missioncontrol.runtimeadapter.send.signal", "Send Signal"),
-      secondaryActionLabel: t("pages.missioncontrol.runtimeadapter.inspect.gate", "Inspect Gate"),
+      title: t("pages.missioncontrol.runtimeadapter.waiting.for.2", "Waiting for {value1}", { value1: waitingSignal.signalName ?? 'signal' }),
+      primaryActionLabel: t("pages.missioncontrol.runtimeadapter.send.signal.3", "Send Signal"),
+      secondaryActionLabel: t("pages.missioncontrol.runtimeadapter.inspect.gate.3", "Inspect Gate"),
     };
   }
 
@@ -527,35 +513,18 @@ function buildIntervention(
     kind: isApproval ? 'human_approval' : 'human_input',
     nodeId:
       stepNodeIds.get(session.pendingHumanInput.stepId) ?? graph.subgraph.rootNodeId,
-    prompt:
-      session.pendingHumanInput.prompt ||
-      t(
-        "pages.missioncontrol.runtimeadapter.step.requires.operator.intervention",
-        "This step requires operator intervention.",
-      ),
+    prompt: session.pendingHumanInput.prompt || 'This step requires operator intervention.',
     stepId: session.pendingHumanInput.stepId,
     summary: isApproval
-      ? t(
-          "pages.missioncontrol.runtimeadapter.runtime.requires.approval",
-          "Runtime requires approval before it can continue into execution.",
-        )
-      : t(
-          "pages.missioncontrol.runtimeadapter.runtime.requires.operator.context",
-          "Runtime requires additional operator context before it can continue.",
-        ),
+      ? 'Runtime requires approval before it can continue into execution.'
+      : 'Runtime requires additional operator context before it can continue.',
     timeoutLabel:
       typeof session.pendingHumanInput.timeoutSeconds === 'number'
         ? `Times out in ${session.pendingHumanInput.timeoutSeconds}s`
         : undefined,
-    title: isApproval
-      ? t("pages.missioncontrol.runtimeadapter.waiting.for.approval", "Waiting for approval")
-      : t("pages.missioncontrol.runtimeadapter.input.required", "Input required"),
-    primaryActionLabel: isApproval
-      ? t("pages.missioncontrol.runtimeadapter.approve", "Approve")
-      : t("pages.missioncontrol.runtimeadapter.resume", "Resume"),
-    secondaryActionLabel: isApproval
-      ? t("pages.missioncontrol.runtimeadapter.reject", "Reject")
-      : t("pages.missioncontrol.runtimeadapter.pause", "Pause"),
+    title: isApproval ? 'Waiting for approval' : 'Input required',
+    primaryActionLabel: isApproval ? 'Approve' : 'Resume',
+    secondaryActionLabel: isApproval ? 'Reject' : 'Pause',
   };
 }
 
@@ -632,11 +601,8 @@ function buildReasoningChain(
     return [
       {
         id: `${node.nodeId}/reasoning/fallback`,
-        title: t("pages.missioncontrol.runtimeadapter.no.standalone.reasoning.yet", "No standalone reasoning yet"),
-        summary: t(
-          "pages.missioncontrol.runtimeadapter.no.independent.timeline.evidence",
-          "This node does not have independent timeline evidence yet, so the inspector is showing graph properties and the latest synchronized state.",
-        ),
+        title: t("pages.missioncontrol.runtimeadapter.no.standalone.reasoning.yet.2", "No standalone reasoning yet"),
+        summary: t("pages.missioncontrol.runtimeadapter.this.node.does.not.have.independent", "This node does not have independent timeline evidence yet, so the inspector is showing graph properties and the latest synchronized state."),
         evidence: Object.entries(node.properties)
           .filter(([, value]) => value.length > 0)
           .slice(0, 4)
@@ -966,6 +932,19 @@ export function buildMissionSnapshotFromRuntime(
         terminal && node.nodeType !== 'WorkflowStep',
       );
 
+      const status = nodeStatusFromRuntime(
+        node,
+        runStatus,
+        activityMap,
+        input.nowMs,
+        intervention,
+      );
+      const label =
+        node.properties.targetRole ||
+        node.properties.stepId ||
+        node.properties.workflowName ||
+        node.nodeId;
+
       return {
         id: node.nodeId,
         kind,
@@ -979,12 +958,17 @@ export function buildMissionSnapshotFromRuntime(
             : undefined,
         freshnessLabel: formatFreshness(ageSeconds),
         freshnessSeconds: ageSeconds ?? Number.POSITIVE_INFINITY,
+        handoff: buildMissionNodeHandoffCue({
+          connectionStatus: input.connectionStatus,
+          freshnessLabel: formatFreshness(ageSeconds),
+          isInterventionNode: intervention?.nodeId === node.nodeId,
+          kind,
+          label,
+          observationStatus,
+          status,
+        }),
         lane: laneForKind(kind),
-        label:
-          node.properties.targetRole ||
-          node.properties.stepId ||
-          node.properties.workflowName ||
-          node.nodeId,
+        label,
         lastLatencyMs:
           Number(
             relatedTimeline[relatedTimeline.length - 1]?.data.durationMs ||
@@ -997,7 +981,7 @@ export function buildMissionSnapshotFromRuntime(
         role:
           node.properties.stepType || node.properties.targetRole || node.nodeType,
         snapshot: buildNodeSnapshot(node, artifacts.graph, session),
-        status: nodeStatusFromRuntime(node, runStatus, activityMap, input.nowMs, intervention),
+        status,
         summary: buildNodeSummary(node, relatedTimeline, artifacts.graph.snapshot),
         toolCalls: buildToolCalls(node, relatedTimeline),
       } satisfies MissionTopologyNode;
@@ -1034,16 +1018,29 @@ export function buildMissionSnapshotFromRuntime(
   });
 
   const timelineTail = artifacts.timeline.slice(-24);
-  const events: MissionExecutionEvent[] = timelineTail.map((item, index) => ({
-    id: `timeline-${index}-${item.timestamp}`,
-    actorId: item.agentId || undefined,
-    detail: item.message,
-    severity: mapTimelineSeverity(item.eventType),
-    stepId: item.stepId || undefined,
-    timestamp: item.timestamp,
-    title: item.stage || item.eventType || 'Runtime event',
-    type: mapTimelineEventType(item.eventType),
-  }));
+  const events: MissionExecutionEvent[] = timelineTail.map((item, index) => {
+    const type = mapTimelineEventType(item.eventType);
+    const actorId = item.agentId || undefined;
+    const stepId = item.stepId || undefined;
+    return {
+      id: `timeline-${index}-${item.timestamp}`,
+      actorId,
+      detail: item.message,
+      handoff: buildMissionEventHandoffCue({
+        actorId,
+        detail: item.message,
+        intervention,
+        runStatus,
+        stepId,
+        type,
+      }),
+      severity: mapTimelineSeverity(item.eventType),
+      stepId,
+      timestamp: item.timestamp,
+      title: item.stage || item.eventType || 'Runtime event',
+      type,
+    };
+  });
 
   return {
     summary: {
@@ -1068,25 +1065,25 @@ export function buildMissionSnapshotFromRuntime(
     metrics: [
       {
         key: 'steps',
-        label: t("pages.missioncontrol.runtimeadapter.completed.steps", "Completed Steps"),
+        label: t("pages.missioncontrol.runtimeadapter.completed.steps.3", "Completed Steps"),
         trend: 'steady',
         value: `${artifacts.graph.snapshot.completedSteps}/${artifacts.graph.snapshot.totalSteps}`,
       },
       {
         key: 'replies',
-        label: t("pages.missioncontrol.runtimeadapter.role.replies", "Role Replies"),
+        label: t("pages.missioncontrol.runtimeadapter.role.replies.3", "Role Replies"),
         trend: 'up',
         value: String(artifacts.graph.snapshot.roleReplyCount),
       },
       {
         key: 'state-version',
-        label: t("pages.missioncontrol.runtimeadapter.state.version", "State Version"),
+        label: t("pages.missioncontrol.runtimeadapter.state.version.3", "State Version"),
         trend: 'steady',
         value: String(artifacts.graph.snapshot.stateVersion),
       },
       {
         key: 'last-success',
-        label: t("pages.missioncontrol.runtimeadapter.last.success", "Last Success"),
+        label: t("pages.missioncontrol.runtimeadapter.last.success.2", "Last Success"),
         tone: artifacts.graph.snapshot.lastSuccess === false ? 'warning' : 'success',
         trend: 'steady',
         value:
@@ -1122,15 +1119,7 @@ export function buildMissionRuntimePlaceholderSnapshot(input: {
 
   return {
     summary: {
-      activeStageLabel: idle
-        ? t(
-            "pages.missioncontrol.runtimeadapter.awaiting.runtime.context",
-            "Awaiting runtime context",
-          )
-        : t(
-            "pages.missioncontrol.runtimeadapter.runtime.connection.pending",
-            "Runtime connection pending",
-          ),
+      activeStageLabel: idle ? 'Awaiting runtime context' : 'Runtime connection pending',
       definitionActorId: input.context?.actorId || 'n/a',
       observationStatus,
       runId: input.context?.runId || (idle ? 'attach-run' : 'pending'),
@@ -1138,32 +1127,27 @@ export function buildMissionRuntimePlaceholderSnapshot(input: {
       startedAt: timestamp,
       status: idle ? 'idle' : 'running',
       updatedAt: timestamp,
-      workflowName: idle
-        ? t("pages.missioncontrol.runtimeadapter.mission.control", "Mission Control")
-        : t(
-            "pages.missioncontrol.runtimeadapter.mission.control.runtime",
-            "Mission Control Runtime",
-          ),
+      workflowName: idle ? 'Mission Control' : 'Mission Control Runtime',
     },
     metrics: [
-      { key: 'steps', label: t("pages.missioncontrol.runtimeadapter.completed.steps.2", "Completed Steps"), trend: 'steady', value: '--' },
-      { key: 'replies', label: t("pages.missioncontrol.runtimeadapter.role.replies.2", "Role Replies"), trend: 'steady', value: '--' },
-      { key: 'state-version', label: t("pages.missioncontrol.runtimeadapter.state.version.2", "State Version"), trend: 'steady', value: '--' },
+      { key: 'steps', label: t("pages.missioncontrol.runtimeadapter.completed.steps.4", "Completed Steps"), trend: 'steady', value: '--' },
+      { key: 'replies', label: t("pages.missioncontrol.runtimeadapter.role.replies.4", "Role Replies"), trend: 'steady', value: '--' },
+      { key: 'state-version', label: t("pages.missioncontrol.runtimeadapter.state.version.4", "State Version"), trend: 'steady', value: '--' },
       {
         key: 'connection',
-        label: t("pages.missioncontrol.runtimeadapter.connection", "Connection"),
+        label: 'Connection',
         tone: input.connectionStatus === 'disconnected' ? 'warning' : 'default',
         trend: 'steady',
         value:
           input.connectionStatus === 'idle'
-            ? t("pages.missioncontrol.runtimeadapter.detached", "Detached")
+            ? 'Detached'
             : input.connectionStatus === 'connecting'
-              ? t("pages.missioncontrol.runtimeadapter.connecting", "Connecting")
+              ? 'Connecting'
               : input.connectionStatus === 'live'
-                ? t("pages.missioncontrol.runtimeadapter.live", "Live")
+                ? 'Live'
                 : input.connectionStatus === 'degraded'
-                  ? t("pages.missioncontrol.runtimeadapter.fallback.sync", "Fallback Sync")
-                  : t("pages.missioncontrol.runtimeadapter.disconnected", "Disconnected"),
+                  ? 'Fallback Sync'
+                  : 'Disconnected',
       },
     ],
     nodes: [],

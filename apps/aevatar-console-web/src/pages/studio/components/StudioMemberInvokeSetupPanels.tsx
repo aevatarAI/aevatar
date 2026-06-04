@@ -14,6 +14,7 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokeComposerPanelProps = {
+  readonly blockedReason?: string;
   readonly canInvoke: boolean;
   readonly defaultPrompt: string;
   readonly formError: string;
@@ -96,9 +97,21 @@ const typedPayloadGridStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
+const composerGuidanceStyle: React.CSSProperties = {
+  background: studioInvokeColors.surfaceActive,
+  border: `1px solid ${studioInvokeColors.borderStrong}`,
+  borderRadius: 8,
+  color: studioInvokeColors.textSoft,
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+  padding: '8px 10px',
+};
+
 export const StudioMemberInvokeComposerPanel: React.FC<
   StudioMemberInvokeComposerPanelProps
 > = ({
+  blockedReason = '',
   canInvoke,
   defaultPrompt,
   formError,
@@ -118,7 +131,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
 }) => {
   const isRunning = invokeStatus === 'running';
   const promptPlaceholder =
-    defaultPrompt || t("pages.studio.studiomemberinvokesetuppanels.enter.prompt.to.initiate", "Enter Prompt to initiate an independent Invoke.");
+    defaultPrompt || t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke", "Enter a prompt to start an independent Invoke.");
   const primaryButtonLabel = isRunning ? 'Stop' : 'Invoke';
   const primaryButtonIcon = isRunning ? (
     <StopOutlined />
@@ -133,10 +146,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     >
       <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
         <div style={promptLabelRowStyle}>
-          <span style={promptKickerStyle}>{t("pages.studio.studiomemberinvokesetuppanels.prompt", "Prompt")}</span>
+          <span style={promptKickerStyle}>{t("pages.studio.studiomemberinvokesetuppanels.prompt.3", "Prompt")}</span>
           {layout === 'dock' ? (
             <Typography.Text style={promptDockHintStyle} type="secondary">
-              {t("pages.studio.studiomemberinvokesetuppanels.new.run.per.invoke", "New run per Invoke")}</Typography.Text>
+              {t("pages.studio.studiomemberinvokesetuppanels.new.run.per.invoke.2", "New run per Invoke")}</Typography.Text>
           ) : null}
         </div>
         {layout === 'dock' ? (
@@ -145,7 +158,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             style={dockComposerRowStyle}
           >
             <Input.TextArea
-              aria-label={t("pages.studio.studiomemberinvokesetuppanels.call.request.input", "call request input")}
+              aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy", "Invocation request input")}
               autoSize={{ minRows: 1, maxRows: 4 }}
               placeholder={promptPlaceholder}
               style={dockComposerInputStyle}
@@ -169,7 +182,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                 size="large"
                 style={dockComposerSecondaryButtonStyle}
               >
-                {t("pages.studio.studiomemberinvokesetuppanels.stop", "Stop")}</Button>
+                {t("pages.studio.studiomemberinvokesetuppanels.stop.3", "Stop")}</Button>
             ) : null}
             {layout === 'dock' ? (
               <Button
@@ -178,12 +191,12 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                 style={dockComposerSecondaryButtonStyle}
                 onClick={onClear}
               >
-                {t("pages.studio.studiomemberinvokesetuppanels.clear", "Clear")}</Button>
+                {t("pages.studio.studiomemberinvokesetuppanels.clear.3", "Clear")}</Button>
             ) : null}
           </div>
         ) : (
           <Input.TextArea
-            aria-label={t("pages.studio.studiomemberinvokesetuppanels.call.request.input.2", "call request input")}
+            aria-label={t("pages.studio.studiomemberinvokesetuppanels.copy.2", "Invocation request input")}
             autoSize={{ minRows: 4, maxRows: 8 }}
             placeholder={promptPlaceholder}
             value={prompt}
@@ -193,41 +206,48 @@ export const StudioMemberInvokeComposerPanel: React.FC<
         {formError ? (
           <Typography.Text type="danger">{formError}</Typography.Text>
         ) : isHistoricalRunSelected ? (
-          <Typography.Text
-            style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
-            type="secondary"
+          <div
+            data-testid="studio-invoke-composer-guidance"
+            style={composerGuidanceStyle}
           >
-            {t("pages.studio.studiomemberinvokesetuppanels.sending.this.prompt.will.create", "Sending this prompt will create a new independent Run.")}</Typography.Text>
+            <Typography.Text style={promptDockHintStyle} type="secondary">
+              {t("pages.studio.studiomemberinvokesetuppanels.historical.run.is.read.only", "Historical run is read-only. Sending this prompt creates a new independent Run and fresh Observe handoff.")}</Typography.Text>
+          </div>
         ) : !canInvoke ? (
-          <Typography.Text style={promptDockHintStyle} type="secondary">
-            {t("pages.studio.studiomemberinvokesetuppanels.please.select.callable.team", "Please select a callable team member and endpoint.")}</Typography.Text>
+          <div
+            data-testid="studio-invoke-composer-guidance"
+            style={composerGuidanceStyle}
+          >
+            <Typography.Text style={promptDockHintStyle} type="secondary">
+              {blockedReason || t("pages.studio.studiomemberinvokesetuppanels.team.member.endpoint", "Select a callable Team member and endpoint.")}
+            </Typography.Text>
+          </div>
         ) : isChatEndpoint ? (
           <Typography.Text
             style={layout === 'dock' ? promptDockHintStyle : helperTextStyle}
             type="secondary"
           >
-            {t("pages.studio.studiomemberinvokesetuppanels.enter.prompt.to.initiate.2", "Enter Prompt to initiate an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run", "Enter a prompt to start an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
         ) : (
           <Typography.Text style={promptDockHintStyle} type="secondary">
-            {t("pages.studio.studiomemberinvokesetuppanels.enter.prompt.to.initiate.3", "Enter Prompt to initiate an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
+            {t("pages.studio.studiomemberinvokesetuppanels.prompt.invoke.invoke.run.2", "Enter a prompt to start an independent Invoke. Each Invoke creates a new Run.")}</Typography.Text>
         )}
       </div>
 
       {!isChatEndpoint ? (
-        <Collapse
-          bordered={false}
-          defaultActiveKey={['typed-payload']}
-          items={[
+          <Collapse
+            bordered={false}
+            items={[
             {
               key: 'typed-payload',
-              label: t("pages.studio.studiomemberinvokesetuppanels.advanced.typed.payload", "Advanced typed payload"),
+              label: t("pages.studio.studiomemberinvokesetuppanels.advanced.typed.payload.2", "Advanced typed payload"),
               children: (
                 <div style={typedPayloadGridStyle}>
                   <div style={typedPayloadGridStyle}>
                     <Typography.Text style={helperTextStyle} type="secondary">
-                      {t("pages.studio.studiomemberinvokesetuppanels.payload.type.url", "Payload type URL")}</Typography.Text>
+                      {t("pages.studio.studiomemberinvokesetuppanels.payload.type.url.3", "Payload type URL")}</Typography.Text>
                     <Input
-                      aria-label={t("pages.studio.studiomemberinvokesetuppanels.payload.type.url.2", "Payload type URL")}
+                      aria-label={t("pages.studio.studiomemberinvokesetuppanels.payload.type.url.4", "Payload type URL")}
                       placeholder="type.googleapis.com/google.protobuf.StringValue"
                       value={payloadTypeUrl}
                       onChange={(event) =>
@@ -237,11 +257,11 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                   </div>
                   <div style={typedPayloadGridStyle}>
                     <Typography.Text style={helperTextStyle} type="secondary">
-                      {t("pages.studio.studiomemberinvokesetuppanels.payload.base64", "Payload base64")}</Typography.Text>
+                      {t("pages.studio.studiomemberinvokesetuppanels.payload.base64.3", "Payload base64")}</Typography.Text>
                     <Input.TextArea
-                      aria-label={t("pages.studio.studiomemberinvokesetuppanels.payload.base64.2", "Payload base64")}
+                      aria-label={t("pages.studio.studiomemberinvokesetuppanels.payload.base64.4", "Payload base64")}
                       autoSize={{ minRows: 2, maxRows: 5 }}
-                      placeholder={t("pages.studio.studiomemberinvokesetuppanels.paste.encoded.protobuf.payload.when", "Paste encoded protobuf payload when this type cannot be built from text.")}
+                      placeholder={t("pages.studio.studiomemberinvokesetuppanels.paste.encoded.protobuf.payload.when.2", "Paste encoded protobuf payload when this type cannot be built from text.")}
                       value={payloadBase64}
                       onChange={(event) =>
                         onPayloadBase64Change(event.target.value)
@@ -270,9 +290,9 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             {primaryButtonLabel}
           </Button>
           <Button disabled={!isRunning} icon={<StopOutlined />} onClick={onAbort}>
-            {t("pages.studio.studiomemberinvokesetuppanels.stop.2", "Stop")}</Button>
+            {t("pages.studio.studiomemberinvokesetuppanels.stop.4", "Stop")}</Button>
           <Button icon={<ClearOutlined />} onClick={onClear}>
-            {t("pages.studio.studiomemberinvokesetuppanels.clear.2", "Clear")}</Button>
+            {t("pages.studio.studiomemberinvokesetuppanels.clear.4", "Clear")}</Button>
         </div>
       )}
     </div>
@@ -286,8 +306,8 @@ export const StudioMemberInvokeComposerPanel: React.FC<
     <AevatarPanel
       layoutMode="document"
       padding={14}
-      title={t("pages.studio.studiomemberinvokesetuppanels.debugging.bench", "Debugging bench")}
-      titleHelp={t("pages.studio.studiomemberinvokesetuppanels.enter.prompt.or.payload", "Enter prompt or payload first, and then directly execute the current member call.")}
+      title={t("pages.studio.studiomemberinvokesetuppanels.copy.3", "Debug console")}
+      titleHelp={t("pages.studio.studiomemberinvokesetuppanels.prompt.2", "Enter a prompt or payload first, then invoke the current member directly.")}
     >
       {content}
     </AevatarPanel>

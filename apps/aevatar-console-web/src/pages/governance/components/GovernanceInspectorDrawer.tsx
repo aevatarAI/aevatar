@@ -40,6 +40,12 @@ import {
 } from "@/shared/ui/aevatarWorkbench";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import type { GovernanceAuditEvent } from "./GovernanceAuditTimeline";
+import {
+  resolveBindingAffordance,
+  resolveEndpointAffordance,
+  resolveEndpointExposureAction,
+  resolvePolicyAffordance,
+} from "./governanceAffordance";
 import { t } from "@/shared/i18n/messages";
 
 export type GovernanceInspectorTarget =
@@ -173,7 +179,7 @@ function renderMetric(
 
 function renderList(values: string[]) {
   if (values.length === 0) {
-    return <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.none.yet", "None yet")}</Typography.Text>;
+    return <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.none.yet.2", "None yet")}</Typography.Text>;
   }
 
   return (
@@ -185,14 +191,24 @@ function renderList(values: string[]) {
   );
 }
 
+function renderFactNotice(summary: string) {
+  return (
+    <Alert
+      message={summary}
+      showIcon
+      type="info"
+    />
+  );
+}
+
 function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.ReactNode {
   if (!target) {
-    return t("pages.governance.governanceinspectordrawer.governance.details", "Governance details");
+    return t("pages.governance.governanceinspectordrawer.governance.details.3", "Governance details");
   }
 
   if (target.kind === "policy") {
     return target.mode === "create" ? (
-      t("pages.governance.governanceinspectordrawer.new.strategy", "New strategy")
+      t("pages.governance.governanceinspectordrawer.new.strategy.2", "New strategy")
     ) : (
       <AevatarCompactText monospace value={target.record.policyId} />
     );
@@ -200,7 +216,7 @@ function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.Re
 
   if (target.kind === "binding") {
     return target.mode === "create" ? (
-      t("pages.governance.governanceinspectordrawer.new.binding", "New binding")
+      t("pages.governance.governanceinspectordrawer.new.binding.2", "New binding")
     ) : (
       <AevatarCompactText monospace value={target.record.bindingId} />
     );
@@ -208,21 +224,21 @@ function buildInspectorTitle(target: GovernanceInspectorTarget | null): React.Re
 
   if (target.kind === "endpoint") {
     return target.mode === "create" ? (
-      t("pages.governance.governanceinspectordrawer.new.entrance", "New entrance")
+      t("pages.governance.governanceinspectordrawer.new.entrance.2", "New entrance")
     ) : (
       <AevatarCompactText monospace value={target.record.endpointId} />
     );
   }
 
   if (target.kind === "activation") {
-    return t("pages.governance.governanceinspectordrawer.activation.verification", "activation verification");
+    return t("pages.governance.governanceinspectordrawer.activation.verification.2", "activation verification");
   }
 
   if (target.kind === "audit") {
-    return t("pages.governance.governanceinspectordrawer.change.history", "Change history");
+    return t("pages.governance.governanceinspectordrawer.change.history.2", "Change history");
   }
 
-  return t("pages.governance.governanceinspectordrawer.governance.details.2", "Governance details");
+  return t("pages.governance.governanceinspectordrawer.governance.details.4", "Governance details");
 }
 
 const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
@@ -311,6 +327,28 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
   const canManage = Boolean(identity && serviceId.trim());
   const bindingKind = Form.useWatch("bindingKind", bindingForm) ?? "service";
+  const policyAffordance =
+    target?.kind === "policy" ? resolvePolicyAffordance(target.record) : null;
+  const bindingAffordance =
+    target?.kind === "binding" ? resolveBindingAffordance(target.record) : null;
+  const endpointAffordance =
+    target?.kind === "endpoint" && target.mode === "edit"
+      ? resolveEndpointAffordance(target.record, endpointCatalog)
+      : null;
+  const endpointExposureAction =
+    target?.kind === "endpoint" && target.mode === "edit"
+      ? resolveEndpointExposureAction(target.record, endpointCatalog)
+      : null;
+  const canEditPolicy =
+    canManage && (target?.kind !== "policy" || policyAffordance?.editMode === "writable");
+  const canEditBinding =
+    canManage &&
+    (target?.kind !== "binding" || bindingAffordance?.editMode === "writable");
+  const canEditEndpoint =
+    canManage &&
+    (target?.kind !== "endpoint" ||
+      target.mode === "create" ||
+      endpointAffordance?.editMode === "writable");
 
   const policyAction =
     target?.kind === "policy" && target.mode === "create"
@@ -440,7 +478,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
       <div style={aevatarDrawerScrollStyle}>
         {!canManage ? (
           <Alert
-            message={t("pages.governance.governanceinspectordrawer.please.select.service.first", "Please select a service first")}
+            message={t("pages.governance.governanceinspectordrawer.please.select.service.first.2", "Please select a service first")}
             type="info"
           />
         ) : null}
@@ -460,7 +498,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <SafetyCertificateOutlined />
                 <Typography.Text strong>
                   {target.mode === "create"
-                    ? t("pages.governance.governanceinspectordrawer.create.new.governance.policy", "Create a new governance policy")
+                    ? t("pages.governance.governanceinspectordrawer.create.new.governance.policy.2", "Create a new governance policy")
                     : target.record.displayName || (
                         <AevatarCompactText monospace value={target.record.policyId} />
                       )}
@@ -470,53 +508,56 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     style={buildAevatarTagStyle(
                       surfaceToken,
                       "governance",
-                      buildPolicyStatus(target.record),
+                      policyAffordance?.status ?? buildPolicyStatus(target.record),
                     )}
                   >
-                    {formatAevatarStatusLabel(buildPolicyStatus(target.record))}
+                    {policyAffordance?.statusLabel ??
+                      formatAevatarStatusLabel(buildPolicyStatus(target.record))}
                   </span>
                 ) : null}
               </Space>
 
+              {policyAffordance ? renderFactNotice(policyAffordance.summary) : null}
+
               <Form<PolicyFormValues>
                 form={policyForm}
                 layout="vertical"
-                disabled={!canManage}
+                disabled={!canEditPolicy}
               >
                 <Form.Item
-                  label={t("pages.governance.governanceinspectordrawer.policy.id", "Policy ID")}
+                  label={t("pages.governance.governanceinspectordrawer.policy.id.2", "Policy ID")}
                   name="policyId"
-                  rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the", "Please fill in the policy ID.") }]}
+                  rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.9", "Please fill in the policy ID.") }]}
                 >
                   <Input disabled={target.mode === "edit"} />
                 </Form.Item>
                 <Form.Item
-                  label={t("pages.governance.governanceinspectordrawer.display.name", "display name")}
+                  label={t("pages.governance.governanceinspectordrawer.display.name.4", "display name")}
                   name="displayName"
-                  rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.enter.display.name", "Please enter a display name.") }]}
+                  rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.enter.display.name.4", "Please enter a display name.") }]}
                 >
                   <Input />
                 </Form.Item>
                 <Form.Item
-                  label={t("pages.governance.governanceinspectordrawer.activate.dependency.binding", "Activate dependency binding")}
+                  label={t("pages.governance.governanceinspectordrawer.activate.dependency.binding.2", "Activate dependency binding")}
                   name="activationRequiredBindingIds"
                 >
                   <Input.TextArea
                     autoSize={{ minRows: 3, maxRows: 6 }}
-                    placeholder={t("pages.governance.governanceinspectordrawer.one.binding.id.per", "One binding ID per line")}
+                    placeholder={t("pages.governance.governanceinspectordrawer.one.binding.id.per.2", "One binding ID per line")}
                   />
                 </Form.Item>
                 <Form.Item
-                  label={t("pages.governance.governanceinspectordrawer.service.key.allowed.to", "Service Key allowed to be called")}
+                  label={t("pages.governance.governanceinspectordrawer.service.key.allowed.to.2", "Service Key allowed to be called")}
                   name="invokeAllowedCallerServiceKeys"
                 >
                   <Input.TextArea
                     autoSize={{ minRows: 3, maxRows: 6 }}
-                    placeholder={t("pages.governance.governanceinspectordrawer.team.app.namespace.service", "team/app/namespace/service")}
+                    placeholder={t("pages.governance.governanceinspectordrawer.team.app.namespace.service.2", "team/app/namespace/service")}
                   />
                 </Form.Item>
                 <Form.Item
-                  label={t("pages.governance.governanceinspectordrawer.requires.deployment.to.be", "Requires deployment to be activated")}
+                  label={t("pages.governance.governanceinspectordrawer.requires.deployment.to.be.2", "Requires deployment to be activated")}
                   name="invokeRequiresActiveDeployment"
                   valuePropName="checked"
                 >
@@ -525,20 +566,22 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               </Form>
 
               <Space wrap>
-                <Button
-                  loading={busyAction === policyAction}
-                  onClick={() => void submitPolicy()}
-                  type="primary"
-                >
-                  {target.mode === "create" ? t("pages.governance.governanceinspectordrawer.create.policy", "Create a policy") : t("pages.governance.governanceinspectordrawer.save.strategy", "Save strategy")}
-                </Button>
-                {target.mode === "edit" ? (
+                {canEditPolicy ? (
+                  <Button
+                    loading={busyAction === policyAction}
+                    onClick={() => void submitPolicy()}
+                    type="primary"
+                  >
+                    {target.mode === "create" ? t("pages.governance.governanceinspectordrawer.create.policy.2", "Create policy") : t("pages.governance.governanceinspectordrawer.save.strategy.2", "Save strategy")}
+                  </Button>
+                ) : null}
+                {target.mode === "edit" && canEditPolicy ? (
                   <Button
                     danger
                     loading={busyAction === "retire-policy"}
                     onClick={() => void onRetirePolicy(target.record.policyId)}
                   >
-                    {t("pages.governance.governanceinspectordrawer.offline.strategy", "Offline strategy")}</Button>
+                    {t("pages.governance.governanceinspectordrawer.offline.strategy.2", "Offline strategy")}</Button>
                 ) : null}
               </Space>
             </Space>
@@ -560,7 +603,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <LinkOutlined />
                 <Typography.Text strong>
                   {target.mode === "create"
-                    ? t("pages.governance.governanceinspectordrawer.create.new.governance.binding", "Create a new governance binding")
+                    ? t("pages.governance.governanceinspectordrawer.create.new.governance.binding.2", "Create a new governance binding")
                     : target.record.displayName || (
                         <AevatarCompactText monospace value={target.record.bindingId} />
                       )}
@@ -570,18 +613,21 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     style={buildAevatarTagStyle(
                       surfaceToken,
                       "governance",
-                      buildBindingStatus(target.record),
+                      bindingAffordance?.status ?? buildBindingStatus(target.record),
                     )}
                   >
-                    {formatAevatarStatusLabel(buildBindingStatus(target.record))}
+                    {bindingAffordance?.statusLabel ??
+                      formatAevatarStatusLabel(buildBindingStatus(target.record))}
                   </span>
                 ) : null}
               </Space>
 
+              {bindingAffordance ? renderFactNotice(bindingAffordance.summary) : null}
+
               <Form<BindingFormValues>
                 form={bindingForm}
                 layout="vertical"
-                disabled={!canManage}
+                disabled={!canEditBinding}
               >
                 <div
                   style={{
@@ -591,16 +637,16 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                   }}
                 >
                   <Form.Item
-                    label={t("pages.governance.governanceinspectordrawer.binding.id", "Binding ID")}
+                    label={t("pages.governance.governanceinspectordrawer.binding.id.2", "Binding ID")}
                     name="bindingId"
-                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.2", "Please fill in the binding ID.") }]}
+                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.10", "Please fill in the binding ID.") }]}
                   >
                     <Input disabled={target.mode === "edit"} />
                   </Form.Item>
                   <Form.Item
-                    label={t("pages.governance.governanceinspectordrawer.display.name.2", "display name")}
+                    label={t("pages.governance.governanceinspectordrawer.display.name.5", "display name")}
                     name="displayName"
-                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.enter.display.name.2", "Please enter a display name.") }]}
+                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.enter.display.name.5", "Please enter a display name.") }]}
                   >
                     <Input />
                   </Form.Item>
@@ -614,9 +660,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                   }}
                 >
                   <Form.Item
-                    label={t("pages.governance.governanceinspectordrawer.binding.type", "binding type")}
+                    label={t("pages.governance.governanceinspectordrawer.binding.type.2", "binding type")}
                     name="bindingKind"
-                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.select.binding.type", "Please select a binding type.") }]}
+                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.select.binding.type.2", "Please select a binding type.") }]}
                   >
                     <Select
                       options={[
@@ -626,14 +672,14 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                       ]}
                     />
                   </Form.Item>
-                  <Form.Item label={t("pages.governance.governanceinspectordrawer.mount.strategy", "Mount strategy")} name="policyIds">
+                  <Form.Item label={t("pages.governance.governanceinspectordrawer.mount.strategy.3", "Mount strategy")} name="policyIds">
                     <Select
                       mode="tags"
                       options={policyOptions.map((policyId) => ({
                         label: policyId,
                         value: policyId,
                       }))}
-                      placeholder={t("pages.governance.governanceinspectordrawer.select.or.enter.policy", "Select or enter policy ID")}
+                      placeholder={t("pages.governance.governanceinspectordrawer.select.or.enter.policy.3", "Select or enter policy ID")}
                     />
                   </Form.Item>
                 </div>
@@ -648,13 +694,13 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                       }}
                     >
                       <Form.Item
-                        label={t("pages.governance.governanceinspectordrawer.target.service.id", "Target service ID")}
+                        label={t("pages.governance.governanceinspectordrawer.target.service.id.2", "Target service ID")}
                         name="serviceId"
-                        rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.3", "Please fill in the target service ID.") }]}
+                        rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.11", "Please fill in the target service ID.") }]}
                       >
                         <Input placeholder="dependency-service" />
                       </Form.Item>
-                      <Form.Item label={t("pages.governance.governanceinspectordrawer.target.endpoint", "target endpoint")} name="endpointId">
+                      <Form.Item label={t("pages.governance.governanceinspectordrawer.target.endpoint.2", "target endpoint")} name="endpointId">
                         <Input placeholder="chat" />
                       </Form.Item>
                     </div>
@@ -666,23 +712,23 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                       }}
                     >
                       <Form.Item
-                        label={t("pages.governance.governanceinspectordrawer.target.tenant", "Target tenant")}
+                        label={t("pages.governance.governanceinspectordrawer.target.tenant.2", "Target tenant")}
                         name="serviceTenantId"
-                        extra={t("pages.governance.governanceinspectordrawer.leave.blank.to.reuse", "Leave blank to reuse the tenant of the current service.")}
+                        extra={t("pages.governance.governanceinspectordrawer.leave.blank.to.reuse.4", "Leave blank to reuse the tenant of the current service.")}
                       >
                         <Input placeholder={identity?.tenantId ?? ""} />
                       </Form.Item>
                       <Form.Item
-                        label={t("pages.governance.governanceinspectordrawer.target.app", "target app")}
+                        label={t("pages.governance.governanceinspectordrawer.target.app.2", "target app")}
                         name="serviceAppId"
-                        extra={t("pages.governance.governanceinspectordrawer.leave.blank.to.reuse.2", "Leave blank to reuse the current serving app.")}
+                        extra={t("pages.governance.governanceinspectordrawer.leave.blank.to.reuse.5", "Leave blank to reuse the current serving app.")}
                       >
                         <Input placeholder={identity?.appId ?? ""} />
                       </Form.Item>
                       <Form.Item
-                        label={t("pages.governance.governanceinspectordrawer.target.namespace", "target namespace")}
+                        label={t("pages.governance.governanceinspectordrawer.target.namespace.2", "target namespace")}
                         name="serviceNamespace"
-                        extra={t("pages.governance.governanceinspectordrawer.leave.blank.to.reuse.3", "Leave blank to reuse the namespace of the current service.")}
+                        extra={t("pages.governance.governanceinspectordrawer.leave.blank.to.reuse.6", "Leave blank to reuse the namespace of the current service.")}
                       >
                         <Input placeholder={identity?.namespace ?? ""} />
                       </Form.Item>
@@ -699,16 +745,16 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     }}
                   >
                     <Form.Item
-                      label={t("pages.governance.governanceinspectordrawer.connector.type", "Connector type")}
+                      label={t("pages.governance.governanceinspectordrawer.connector.type.2", "Connector type")}
                       name="connectorType"
-                      rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.4", "Please fill in the connector type.") }]}
+                      rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.12", "Please fill in the connector type.") }]}
                     >
                       <Input placeholder="mcp" />
                     </Form.Item>
                     <Form.Item
-                      label={t("pages.governance.governanceinspectordrawer.connector.id", "Connector ID")}
+                      label={t("pages.governance.governanceinspectordrawer.connector.id.2", "Connector ID")}
                       name="connectorId"
-                      rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.5", "Please fill in the connector ID.") }]}
+                      rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.13", "Please fill in the connector ID.") }]}
                     >
                       <Input placeholder="connector-1" />
                     </Form.Item>
@@ -717,9 +763,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
                 {bindingKind === "secret" ? (
                   <Form.Item
-                    label={t("pages.governance.governanceinspectordrawer.secret.name", "Secret name")}
+                    label={t("pages.governance.governanceinspectordrawer.secret.name.2", "Secret name")}
                     name="secretName"
-                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.6", "Please fill in the secret name.") }]}
+                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.14", "Please fill in the secret name.") }]}
                   >
                     <Input placeholder="api-key" />
                   </Form.Item>
@@ -727,20 +773,22 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               </Form>
 
               <Space wrap>
-                <Button
-                  loading={busyAction === bindingAction}
-                  onClick={() => void submitBinding()}
-                  type="primary"
-                >
-                  {target.mode === "create" ? t("pages.governance.governanceinspectordrawer.create.binding", "Create binding") : t("pages.governance.governanceinspectordrawer.save.binding", "save binding")}
-                </Button>
-                {target.mode === "edit" ? (
+                {canEditBinding ? (
+                  <Button
+                    loading={busyAction === bindingAction}
+                    onClick={() => void submitBinding()}
+                    type="primary"
+                  >
+                    {target.mode === "create" ? t("pages.governance.governanceinspectordrawer.create.binding.2", "Create binding") : t("pages.governance.governanceinspectordrawer.save.binding.2", "save binding")}
+                  </Button>
+                ) : null}
+                {target.mode === "edit" && canEditBinding ? (
                   <Button
                     danger
                     loading={busyAction === "retire-binding"}
                     onClick={() => void onRetireBinding(target.record.bindingId)}
                   >
-                    {t("pages.governance.governanceinspectordrawer.offline.binding", "Offline binding")}</Button>
+                    {t("pages.governance.governanceinspectordrawer.offline.binding.2", "Offline binding")}</Button>
                 ) : null}
               </Space>
             </Space>
@@ -762,7 +810,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <ApiOutlined />
                 <Typography.Text strong>
                   {target.mode === "create"
-                    ? t("pages.governance.governanceinspectordrawer.add.new.management.entrance", "Add a new management entrance")
+                    ? t("pages.governance.governanceinspectordrawer.add.new.management.entrance.2", "Add a new management entrance")
                     : target.record.displayName || (
                         <AevatarCompactText monospace value={target.record.endpointId} />
                       )}
@@ -772,18 +820,21 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     style={buildAevatarTagStyle(
                       surfaceToken,
                       "governance",
-                      buildEndpointStatus(target.record),
+                      endpointAffordance?.status ?? buildEndpointStatus(target.record),
                     )}
                   >
-                    {formatAevatarStatusLabel(buildEndpointStatus(target.record))}
+                    {endpointAffordance?.statusLabel ??
+                      formatAevatarStatusLabel(buildEndpointStatus(target.record))}
                   </span>
                 ) : null}
               </Space>
 
+              {endpointAffordance ? renderFactNotice(endpointAffordance.summary) : null}
+
               <Form<EndpointFormValues>
                 form={endpointForm}
                 layout="vertical"
-                disabled={!canManage || (target.mode === "edit" && !endpointCatalog)}
+                disabled={!canEditEndpoint}
               >
                 <div
                   style={{
@@ -793,16 +844,16 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                   }}
                 >
                   <Form.Item
-                    label={t("pages.governance.governanceinspectordrawer.portal.id", "Portal ID")}
+                    label={t("pages.governance.governanceinspectordrawer.portal.id.2", "Portal ID")}
                     name="endpointId"
-                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.7", "Please fill in the portal ID.") }]}
+                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.15", "Please fill in the portal ID.") }]}
                   >
                     <Input disabled={target.mode === "edit"} />
                   </Form.Item>
                   <Form.Item
-                    label={t("pages.governance.governanceinspectordrawer.display.name.3", "display name")}
+                    label={t("pages.governance.governanceinspectordrawer.display.name.6", "display name")}
                     name="displayName"
-                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.enter.display.name.3", "Please enter a display name.") }]}
+                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.enter.display.name.6", "Please enter a display name.") }]}
                   >
                     <Input />
                   </Form.Item>
@@ -816,9 +867,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                   }}
                 >
                   <Form.Item
-                    label={t("pages.governance.governanceinspectordrawer.entrance.type", "Entrance type")}
+                    label={t("pages.governance.governanceinspectordrawer.entrance.type.2", "Entrance type")}
                     name="kind"
-                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.select.an.entrance", "Please select an entrance type.") }]}
+                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.select.an.entrance.2", "Please select an entrance type.") }]}
                   >
                     <Select
                       options={[
@@ -828,9 +879,9 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                     />
                   </Form.Item>
                   <Form.Item
-                    label={t("pages.governance.governanceinspectordrawer.exposure.status", "exposure status")}
+                    label={t("pages.governance.governanceinspectordrawer.exposure.status.2", "exposure status")}
                     name="exposureKind"
-                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.select.an.exposure", "Please select an exposure status.") }]}
+                    rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.select.an.exposure.2", "Please select an exposure status.") }]}
                   >
                     <Select
                       options={[
@@ -843,26 +894,26 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 </div>
 
                 <Form.Item
-                  label={t("pages.governance.governanceinspectordrawer.request.type", "Request type")}
+                  label={t("pages.governance.governanceinspectordrawer.request.type.2", "Request type")}
                   name="requestTypeUrl"
-                  rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.8", "Please fill in the request type.") }]}
+                  rules={[{ required: true, message: t("pages.governance.governanceinspectordrawer.please.fill.in.the.16", "Please fill in the request type.") }]}
                 >
                   <Input />
                 </Form.Item>
-                <Form.Item label={t("pages.governance.governanceinspectordrawer.response.type", "response type")} name="responseTypeUrl">
+                <Form.Item label={t("pages.governance.governanceinspectordrawer.response.type.2", "response type")} name="responseTypeUrl">
                   <Input />
                 </Form.Item>
-                <Form.Item label={t("pages.governance.governanceinspectordrawer.describe", "describe")} name="description">
+                <Form.Item label={t("pages.governance.governanceinspectordrawer.describe.2", "describe")} name="description">
                   <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} />
                 </Form.Item>
-                <Form.Item label={t("pages.governance.governanceinspectordrawer.mount.strategy.2", "Mount strategy")} name="policyIds">
+                <Form.Item label={t("pages.governance.governanceinspectordrawer.mount.strategy.4", "Mount strategy")} name="policyIds">
                   <Select
                     mode="tags"
                     options={policyOptions.map((policyId) => ({
                       label: policyId,
                       value: policyId,
                     }))}
-                    placeholder={t("pages.governance.governanceinspectordrawer.select.or.enter.policy.2", "Select or enter policy ID")}
+                    placeholder={t("pages.governance.governanceinspectordrawer.select.or.enter.policy.4", "Select or enter policy ID")}
                   />
                 </Form.Item>
               </Form>
@@ -871,8 +922,8 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
                 <Alert
                   message={
                     target.mode === "create"
-                      ? t("pages.governance.governanceinspectordrawer.there.is.currently.no", "There is currently no entry catalog, and the first endpoint catalog will be created after saving.")
-                      : t("pages.governance.governanceinspectordrawer.the.entry.directory.cannot", "The entry directory cannot be read currently, and the exposure status cannot be modified at the moment.")
+                      ? t("pages.governance.governanceinspectordrawer.there.is.currently.no.2", "There is currently no entry catalog, and the first endpoint catalog will be created after saving.")
+                      : t("pages.governance.governanceinspectordrawer.the.entry.directory.cannot.2", "The entry directory cannot be read currently, and the exposure status cannot be modified at the moment.")
                   }
                   type={target.mode === "create" ? "info" : "warning"}
                 />
@@ -880,23 +931,33 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
               <Space wrap>
                 <Button
-                  disabled={!canManage || (target.mode === "edit" && !endpointCatalog)}
+                  disabled={!canEditEndpoint}
                   loading={busyAction === endpointAction}
                   onClick={() => void submitEndpoint()}
                   type="primary"
                 >
-                  {target.mode === "create" ? t("pages.governance.governanceinspectordrawer.create.portal", "Create portal") : t("pages.governance.governanceinspectordrawer.save.entry", "Save entry")}
+                  {target.mode === "create" ? t("pages.governance.governanceinspectordrawer.create.portal.2", "Create portal") : t("pages.governance.governanceinspectordrawer.save.entry.2", "Save entry")}
                 </Button>
-                {target.mode === "edit" ? (
+                {target.mode === "edit" && endpointExposureAction ? (
                   <Button
+                    disabled={endpointExposureAction.disabled}
                     loading={busyAction === "set-endpoint-exposure:public"}
                     onClick={() =>
-                      void onSetEndpointExposure(target.record.endpointId, "public")
+                      void onSetEndpointExposure(
+                        target.record.endpointId,
+                        endpointExposureAction.nextExposureKind,
+                      )
                     }
                   >
-                    {t("pages.governance.governanceinspectordrawer.quick.public", "quick public")}</Button>
+                    {endpointExposureAction.label}
+                  </Button>
                 ) : null}
               </Space>
+              {target.mode === "edit" && endpointExposureAction ? (
+                <Typography.Text type="secondary">
+                  {endpointExposureAction.reason}
+                </Typography.Text>
+              ) : null}
             </Space>
           </div>
         ) : null}
@@ -912,14 +973,17 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
             }}
           >
             <Space orientation="vertical" size={16} style={{ display: "flex" }}>
+              {renderFactNotice(
+                t("pages.governance.governanceinspectordrawer.activation.verification.is.read", "Activation verification is a read-only diagnostic fact of the current revision and governance directory; configuration changes are not committed here."),
+              )}
               <Space size={8} wrap>
-                <Typography.Text strong>{t("pages.governance.governanceinspectordrawer.version", "Version")}</Typography.Text>
+                <Typography.Text strong>{t("pages.governance.governanceinspectordrawer.version.2", "Version")}</Typography.Text>
                 {target.record.revisionId ? (
                   <AevatarCompactText monospace value={target.record.revisionId} />
                 ) : (
-                  <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.unresolved", "Unresolved")}</Typography.Text>
+                  <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.unresolved.2", "Unresolved")}</Typography.Text>
                 )}
-                <Typography.Text strong>{t("pages.governance.governanceinspectordrawer.activation.check", "activation check")}</Typography.Text>
+                <Typography.Text strong>{t("pages.governance.governanceinspectordrawer.activation.check.2", "activation check")}</Typography.Text>
               </Space>
               <div
                 style={{
@@ -930,22 +994,22 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               >
                 {renderMetric(
                   surfaceToken,
-                  t("pages.governance.governanceinspectordrawer.binding", "binding"),
+                  t("pages.governance.governanceinspectordrawer.binding.2", "binding"),
                   String(target.record.bindings.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  t("pages.governance.governanceinspectordrawer.strategy", "Strategy"),
+                  t("pages.governance.governanceinspectordrawer.strategy.2", "Strategy"),
                   String(target.record.policies.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  t("pages.governance.governanceinspectordrawer.entrance", "Entrance"),
+                  t("pages.governance.governanceinspectordrawer.entrance.2", "Entrance"),
                   String(target.record.endpoints.length),
                 )}
                 {renderMetric(
                   surfaceToken,
-                  t("pages.governance.governanceinspectordrawer.missing.strategy", "missing strategy"),
+                  t("pages.governance.governanceinspectordrawer.missing.strategy.3", "missing strategy"),
                   String(target.record.missingPolicyIds.length),
                   target.record.missingPolicyIds.length > 0
                     ? "warning"
@@ -954,7 +1018,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               </div>
 
               <div>
-                <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.missing.strategy.2", "missing strategy")}</Typography.Text>
+                <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.missing.strategy.4", "missing strategy")}</Typography.Text>
                 <div style={{ marginTop: 8 }}>
                   {renderList(target.record.missingPolicyIds)}
                 </div>
@@ -995,14 +1059,14 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
               <Space orientation="vertical" size={8} style={{ display: "flex" }}>
                 <Typography.Text type="secondary">
-                  {t("pages.governance.governanceinspectordrawer.source", "source:")}{target.event.actor}
+                  {t("pages.governance.governanceinspectordrawer.source.2", "source:")}{target.event.actor}
                 </Typography.Text>
                 <Space size={6} wrap>
-                  <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.object", "Object:")}</Typography.Text>
+                  <Typography.Text type="secondary">{t("pages.governance.governanceinspectordrawer.object.2", "Object:")}</Typography.Text>
                   <AevatarCompactText value={target.event.targetLabel} />
                 </Space>
                 <Typography.Text type="secondary">
-                  {t("pages.governance.governanceinspectordrawer.time", "time:")}{target.event.at}
+                  {t("pages.governance.governanceinspectordrawer.time.2", "time:")}{target.event.at}
                 </Typography.Text>
               </Space>
             </Space>

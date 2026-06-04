@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import {
   formatGovernanceTimestamp,
@@ -15,9 +15,15 @@ describe('GovernanceResultPanels', () => {
 
   it('renders the selected governance scope and summary metrics', () => {
     const formattedSnapshot = formatGovernanceTimestamp('2026-03-25T08:00:00Z');
+    const openDeployments = jest.fn();
 
     render(
       <GovernanceSummaryPanel
+        actions={
+          <button type="button" onClick={openDeployments}>
+            打开部署
+          </button>
+        }
         title="绑定目录"
         description="查看绑定目标和已挂接策略。"
         draft={{
@@ -49,14 +55,29 @@ describe('GovernanceResultPanels', () => {
     expect(screen.getByText('绑定')).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
     expect(screen.getByText('已加载')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '打开部署' }));
+
+    expect(openDeployments).toHaveBeenCalledTimes(1);
   });
 
   it('renders a lightweight selection notice', () => {
+    const inspect = jest.fn();
+
     render(
-      <GovernanceSelectionNotice title="选择服务" />,
+      <GovernanceSelectionNotice
+        actions={
+          <button type="button" onClick={inspect}>
+            检查激活
+          </button>
+        }
+        title="选择服务"
+      />,
     );
 
     expect(screen.getByText('选择服务')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '检查激活' }));
+    expect(inspect).toHaveBeenCalledTimes(1);
   });
 
   it('can omit default identity fields when the context is already shown elsewhere', () => {
