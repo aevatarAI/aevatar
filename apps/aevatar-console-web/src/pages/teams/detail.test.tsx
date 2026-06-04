@@ -1508,6 +1508,11 @@ describe("TeamDetailPage", () => {
         name: "构建 / 绑定 Unpublished Ready Member",
       }),
     ).toHaveAttribute("href", expect.stringContaining("member-unpublished"));
+    expect(
+      within(unpublishedRow).getByRole("link", {
+        name: "构建 / 绑定 Unpublished Ready Member",
+      }),
+    ).toHaveAttribute("href", expect.stringContaining("step=build"));
   });
 
   it("sets a ready member as entry before testing when the Team has no entry", async () => {
@@ -1690,7 +1695,7 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText("后端暂不支持团队测试")).toBeNull();
   });
 
-  it("routes member build actions into Studio with Team context", async () => {
+  it("routes ready member build actions into the Studio Bind surface", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
@@ -1706,8 +1711,8 @@ describe("TeamDetailPage", () => {
     expect(params.get("scopeId")).toBe("scope-1");
     expect(params.get("teamId")).toBe("t-alpha");
     expect(params.get("member")).toBe("member:member-team-alpha");
-    expect(params.get("step")).toBe("build");
-    expect(params.get("tab")).toBeNull();
+    expect(params.get("step")).toBe("bind");
+    expect(params.get("tab")).toBe("bindings");
     expect(params.get("returnTo")).toBe(
       "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
     );

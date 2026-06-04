@@ -1055,6 +1055,21 @@ function readStudioReturnToParam(params: URLSearchParams): string {
   return returnTo ? sanitizeReturnTo(returnTo) : '';
 }
 
+function getStudioExplicitReturnLabel(returnTo: string): string {
+  const sanitizedReturnTo = sanitizeReturnTo(returnTo);
+  const returnPath = sanitizedReturnTo.split(/[?#]/, 1)[0];
+
+  if (returnPath === '/runtime/primitives' || returnPath === '/primitives') {
+    return t("pages.studio.index.back.to.connectors", "Back to Connectors");
+  }
+
+  if (returnPath === '/runtime/workflows' || returnPath === '/workflows') {
+    return t("pages.studio.index.back.to.workflow.library", "Back to Workflow Library");
+  }
+
+  return '';
+}
+
 function getCurrentStudioReturnTo(): string {
   if (typeof window === 'undefined') {
     return '/studio';
@@ -10177,30 +10192,27 @@ const StudioPage: React.FC = () => {
   ]
     .map((value) => trimOptional(value))
     .filter(Boolean);
-  const studioReturnHref = resolvedStudioScopeId
-    ? routeState.returnTo ||
-      (routeState.teamId
-        ? buildTeamDetailHref({
-            scopeId: resolvedStudioScopeId,
-            teamId: routeState.teamId,
-            tab: 'overview',
-            memberId:
-              currentCanonicalMemberId ||
-              trimOptional(routeSelectedBackendMemberId) ||
-              readMemberIdFromMemberKey(routeState.memberKey) ||
-              undefined,
-            serviceId: trimOptional(workbenchPublishedService?.serviceId) || undefined,
-          })
-        : buildTeamDetailHref({
-            scopeId: resolvedStudioScopeId,
-            tab: 'overview',
-            serviceId:
-              trimOptional(workbenchPublishedService?.serviceId) ||
-              trimOptional(routeState.legacyServiceId) ||
-              undefined,
-          }))
-    : buildTeamsHref();
-  const studioReturnLabel = t("pages.studio.index.copy.18", "Back to Team");
+  const studioReturnHref =
+    routeState.returnTo ||
+    (routeState.teamId && resolvedStudioScopeId
+      ? buildTeamDetailHref({
+          scopeId: resolvedStudioScopeId,
+          teamId: routeState.teamId,
+          tab: 'overview',
+          memberId:
+            currentCanonicalMemberId ||
+            trimOptional(routeSelectedBackendMemberId) ||
+            readMemberIdFromMemberKey(routeState.memberKey) ||
+            undefined,
+          serviceId: trimOptional(workbenchPublishedService?.serviceId) || undefined,
+        })
+      : buildTeamsHref());
+  const explicitReturnLabel = getStudioExplicitReturnLabel(routeState.returnTo);
+  const studioReturnLabel =
+    explicitReturnLabel ||
+    (routeState.teamId
+      ? t("pages.studio.index.copy.18", "Back to Team")
+      : t("pages.studio.index.back.to.teams", "Back to Teams"));
   const currentStudioReturnTo =
     routeState.returnTo ||
     (typeof window === 'undefined'

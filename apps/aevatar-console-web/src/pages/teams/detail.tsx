@@ -770,19 +770,20 @@ const TeamDetailPage: React.FC = () => {
     () =>
       (teamMembersQuery.data?.members ?? []).map((member) => {
         const publishedServiceId = trimText(member.publishedServiceId);
+        const memberLifecycleStage = normalizeStatus(member.lifecycleStage);
+        const canInvokeAsEntry =
+          memberLifecycleStage === "bind_ready" && publishedServiceId.length > 0;
 
         return {
           buildStudioHref: buildTeamStudioHref({
             memberId: member.memberId,
-            mode: "build-member",
+            mode: canInvokeAsEntry ? "bind-member" : "build-member",
             returnTo: buildTeamReturnHref(member.memberId),
             scopeId,
             teamId: selectedTeamId,
           }),
           description: trimText(member.description),
-          canInvokeAsEntry:
-            normalizeStatus(member.lifecycleStage) === "bind_ready" &&
-            publishedServiceId.length > 0,
+          canInvokeAsEntry,
           editStudioHref: buildTeamStudioHref({
             memberId: member.memberId,
             mode: "edit-member",

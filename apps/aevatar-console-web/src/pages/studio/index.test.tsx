@@ -3559,7 +3559,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Teams" })).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("service-alpha");
       expect(window.location.search).toContain("member=member%3Amember-alpha");
@@ -3589,7 +3589,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Teams" })).toBeTruthy();
     await waitFor(() => {
       expect(window.location.search).toContain("member=member%3Aworkspace-demo");
     });
@@ -3679,7 +3679,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Teams" })).toBeTruthy();
     await waitFor(() => {
       expect(window.location.search).toContain("member=member%3Amember-alpha");
     });
@@ -3688,7 +3688,7 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-b&scopeLabel=%E5%9B%A2%E9%98%9F+B&memberId=service-beta&memberLabel=%E6%88%90%E5%91%98+Beta&tab=workflows"
     );
 
-    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Teams" })).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("service-beta");
       expect(window.location.search).toContain("member=member%3Amember-beta");
@@ -3729,7 +3729,7 @@ describe("StudioPage", () => {
       "/studio?draft=new&teamMode=create&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3"
     );
 
-    expect(await screen.findByRole("button", { name: "Back to Team" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to Teams" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回创建页" })).toBeNull();
     expect(await screen.findByTestId("studio-empty-member-state")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "发布团队入口" })).toBeNull();
@@ -4446,6 +4446,24 @@ describe("StudioPage", () => {
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("memberId")).toBe("workspace-demo");
     expect(searchParams.get("tab")).toBe("overview");
+  });
+
+  it("returns to the Teams list from the standalone Builder", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&step=build&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Back to Teams" }));
+
+    expect(window.location.pathname).toBe("/teams");
+  });
+
+  it("returns to Connectors from a connector catalog handoff", async () => {
+    renderStudioPage(
+      "/studio?step=build&tab=studio&returnTo=%2Fruntime%2Fprimitives"
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Back to Connectors" }));
+
+    expect(window.location.pathname).toBe("/runtime/primitives");
   });
 
   it("returns to the explicit Team handoff target after Studio settles its route", async () => {

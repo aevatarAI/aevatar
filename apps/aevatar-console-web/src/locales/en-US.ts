@@ -40,6 +40,18 @@ const enUSMessages = {
   'nav.items.settings': 'Settings',
   'nav.items.topology': 'Topology',
   'nav.items.workflowLibrary': 'Workflow Library',
+  'pages.primitives.index.connector.catalog.unavailable':
+    'Connector catalog is temporarily unavailable. Retry after runtime metadata syncs.',
+  'pages.primitives.index.loading.connector.catalog': 'Loading connector catalog...',
+  'pages.primitives.index.no.connector.capabilities':
+    'No connector capabilities are available yet. Continue in Builder to create or publish a member, then return here to inspect reusable contracts.',
+  'pages.primitives.index.no.filtered.connectors':
+    'No connectors match the current filters.',
+  'pages.primitives.index.open.builder': 'Open Builder',
+  'pages.primitives.index.retry.catalog': 'Retry catalog',
+  'pages.studio.index.back.to.connectors': 'Back to Connectors',
+  'pages.studio.index.back.to.teams': 'Back to Teams',
+  'pages.studio.index.back.to.workflow.library': 'Back to Workflow Library',
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.viewTeam': 'View team',
   'teams.home.alerts.authFailedTitle': 'Login verification failed',

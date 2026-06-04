@@ -5,32 +5,35 @@ import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import PrimitivesPage from "./index";
 
+const primitiveFixture = [
+  {
+    name: "human_input",
+    category: "interaction",
+    description: "Pause the workflow and request human input.",
+    aliases: ["humanApproval"],
+    parameters: [
+      {
+        name: "prompt",
+        type: "string",
+        required: true,
+        default: "",
+        enumValues: [],
+        description: "Prompt shown to the human operator.",
+      },
+    ],
+    exampleWorkflows: ["incident_triage"],
+  },
+];
+
 jest.mock("@/shared/api/runtimeQueryApi", () => ({
   runtimeQueryApi: {
-    listPrimitives: jest.fn(async () => [
-      {
-        name: "human_input",
-        category: "interaction",
-        description: "Pause the workflow and request human input.",
-        aliases: ["humanApproval"],
-        parameters: [
-          {
-            name: "prompt",
-            type: "string",
-            required: true,
-            default: "",
-            enumValues: [],
-            description: "Prompt shown to the human operator.",
-          },
-        ],
-        exampleWorkflows: ["incident_triage"],
-      },
-    ]),
+    listPrimitives: jest.fn(async () => primitiveFixture),
   },
 }));
 
 describe("PrimitivesPage", () => {
   beforeEach(() => {
+    jest.mocked(runtimeQueryApi.listPrimitives).mockResolvedValue(primitiveFixture);
     setLocale("zh-CN", false);
   });
 
@@ -93,5 +96,33 @@ describe("PrimitivesPage", () => {
     );
 
     expect(await screen.findByText("连接器契约")).toBeTruthy();
+  });
+
+  it("explains an empty connector catalog as missing capabilities rather than a filter miss", async () => {
+    jest.mocked(runtimeQueryApi.listPrimitives).mockResolvedValueOnce([]);
+
+    renderWithQueryClient(React.createElement(PrimitivesPage));
+
+    expect(await screen.findByText(/暂无可用连接器能力/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "打开构建器" }));
+
+    expect(window.location.pathname).toBe("/studio");
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("step")).toBe("build");
+    expect(searchParams.get("tab")).toBe("studio");
+    expect(searchParams.get("returnTo")).toBe("/runtime/primitives");
+    expect(screen.queryByText("当前筛选条件下没有匹配的连接器。")).toBeNull();
+  });
+
+  it("keeps filtered misses separate from an empty connector catalog", async () => {
+    renderWithQueryClient(React.createElement(PrimitivesPage));
+
+    fireEvent.change(await screen.findByPlaceholderText("搜索连接器、分类或别名"), {
+      target: { value: "missing-connector" },
+    });
+
+    expect(await screen.findByText("当前筛选条件下没有匹配的连接器。")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "重置筛选" }).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/暂无可用连接器能力/)).toBeNull();
   });
 });

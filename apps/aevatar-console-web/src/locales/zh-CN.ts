@@ -40,6 +40,18 @@ const zhCNMessages = {
   'nav.items.settings': '设置',
   'nav.items.topology': '拓扑',
   'nav.items.workflowLibrary': '工作流库',
+  'pages.primitives.index.connector.catalog.unavailable':
+    '连接器目录暂时不可用。请在运行时元数据同步后重试。',
+  'pages.primitives.index.loading.connector.catalog': '正在加载连接器目录...',
+  'pages.primitives.index.no.connector.capabilities':
+    '暂无可用连接器能力。你可以先进入构建器创建或发布成员，再回到这里查看可复用契约。',
+  'pages.primitives.index.no.filtered.connectors':
+    '当前筛选条件下没有匹配的连接器。',
+  'pages.primitives.index.open.builder': '打开构建器',
+  'pages.primitives.index.retry.catalog': '重试目录',
+  'pages.studio.index.back.to.connectors': '返回连接器',
+  'pages.studio.index.back.to.teams': '返回团队列表',
+  'pages.studio.index.back.to.workflow.library': '返回工作流库',
   'teams.home.actions.createTeam': '组建新团队',
   'teams.home.actions.viewTeam': '查看团队',
   'teams.home.alerts.authFailedTitle': '当前登录态校验失败',

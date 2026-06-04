@@ -4,7 +4,11 @@ type TeamDetailTab =
   | 'overview'
   | 'members';
 
-type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
+type TeamToStudioMode =
+  | 'create-member'
+  | 'edit-member'
+  | 'build-member'
+  | 'bind-member';
 
 type QueryValue = string | undefined;
 type TeamDetailRouteState = {
@@ -155,8 +159,13 @@ export function buildTeamStudioHref(options: {
     scopeId,
     teamId,
     memberId,
-    step: 'build',
-    tab: options.mode === 'edit-member' ? 'studio' : undefined,
+    step: options.mode === 'bind-member' ? 'bind' : 'build',
+    tab:
+      options.mode === 'edit-member'
+        ? 'studio'
+        : options.mode === 'bind-member'
+          ? 'bindings'
+          : undefined,
     returnTo,
   });
 }

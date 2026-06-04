@@ -193,6 +193,13 @@ const PrimitivesPage: React.FC = () => {
   });
 
   const primitiveRows = primitivesQuery.data ?? [];
+  const hasActiveConnectorFilter =
+    keyword.trim().length > 0 || selectedCategories.length > 0;
+  const resetConnectorFilters = () => {
+    setKeyword("");
+    setSelectedCategories([]);
+    setSelectedPrimitiveName("");
+  };
   const categoryOptions = useMemo(
     () =>
       Array.from(new Set(primitiveRows.map((item) => item.category)))
@@ -237,6 +244,21 @@ const PrimitivesPage: React.FC = () => {
     null;
 
   useEffect(() => {
+    setCurrentPage(1);
+  }, [keyword, selectedCategories]);
+
+  useEffect(() => {
+    const maxPage = Math.max(
+      1,
+      Math.ceil(filteredRows.length / primitiveCatalogPageSize),
+    );
+
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
+    }
+  }, [currentPage, filteredRows.length]);
+
+  useEffect(() => {
     history.replace(buildPrimitivesHref(selectedPrimitiveName));
   }, [selectedPrimitiveName]);
 
@@ -278,11 +300,7 @@ const PrimitivesPage: React.FC = () => {
                   value={selectedCategories}
                 />
                 <Button
-                  onClick={() => {
-                    setKeyword("");
-                    setSelectedCategories([]);
-                    setSelectedPrimitiveName("");
-                  }}
+                  onClick={resetConnectorFilters}
                 >
                   {t("pages.primitives.index.reset.filter", "Reset filter")}</Button>
               </div>
@@ -309,11 +327,46 @@ const PrimitivesPage: React.FC = () => {
             title={t("pages.primitives.index.available.connectors", "Available connectors")}
             titleHelp={t("pages.primitives.index.the.card.flow.catalog", "The card flow catalog helps you quickly browse capability categories, parameter contracts, and sample behavior definitions.")}
           >
-            {filteredRows.length === 0 ? (
+            {primitivesQuery.isLoading ? (
               <Empty
-                description={t("pages.primitives.index.there.are.no.matching", "There are no matching connectors under the current filter criteria.")}
+                description={t("pages.primitives.index.loading.connector.catalog", "Loading connector catalog...")}
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
               />
+            ) : primitivesQuery.isError ? (
+              <Empty
+                description={t("pages.primitives.index.connector.catalog.unavailable", "Connector catalog is temporarily unavailable. Retry after runtime metadata syncs.")}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              >
+                <Button onClick={() => void primitivesQuery.refetch()}>
+                  {t("pages.primitives.index.retry.catalog", "Retry catalog")}
+                </Button>
+              </Empty>
+            ) : filteredRows.length === 0 ? (
+              <Empty
+                description={
+                  primitiveRows.length === 0
+                    ? t("pages.primitives.index.no.connector.capabilities", "No connector capabilities are available yet. Continue in Builder to create or publish a member, then return here to inspect reusable contracts.")
+                    : t("pages.primitives.index.no.filtered.connectors", "No connectors match the current filters.")
+                }
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              >
+                {primitiveRows.length === 0 ? (
+                  <Button
+                    onClick={() =>
+                      history.push(
+                        "/studio?step=build&tab=studio&returnTo=%2Fruntime%2Fprimitives",
+                      )
+                    }
+                    type="primary"
+                  >
+                    {t("pages.primitives.index.open.builder", "Open Builder")}
+                  </Button>
+                ) : hasActiveConnectorFilter ? (
+                  <Button onClick={resetConnectorFilters}>
+                    {t("pages.primitives.index.reset.filter", "Reset filter")}
+                  </Button>
+                ) : null}
+              </Empty>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 <div style={cardListStyle}>

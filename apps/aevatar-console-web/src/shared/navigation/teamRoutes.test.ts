@@ -68,6 +68,19 @@ describe("teamRoutes", () => {
     );
   });
 
+  it("builds a Team-scoped Studio member bind handoff", () => {
+    expect(
+      buildTeamStudioHref({
+        memberId: " member-alpha ",
+        mode: "bind-member",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe(
+      "/studio?scopeId=scope-alpha&teamId=t-alpha&member=member%3Amember-alpha&step=bind&tab=bindings&returnTo=%2Fteams%2Fscope-alpha%2Ft-alpha%3FmemberId%3Dmember-alpha%26tab%3Dmembers",
+    );
+  });
+
   it("preserves draft team names when returning to the create page", () => {
     expect(
       buildTeamCreateHref({
