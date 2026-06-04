@@ -35,29 +35,61 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
 
     protected override async Task<string> ExecuteAsync(Parameters parameters, CancellationToken ct)
     {
+        if (!TryBuildRequest(parameters, out var request, out var error))
+            return LarkProxyResponseParser.Serialize(new { success = false, error });
+
+        return await CreateAppendAndShareAsync(request, ct);
+    }
+
+    private static bool TryBuildRequest(
+        Parameters parameters,
+        out ValidatedDocxCreateRequest request,
+        out string? error)
+    {
         var token = AgentToolRequestContext.NyxIdAccessToken;
+        request = default;
         if (string.IsNullOrWhiteSpace(token))
-            return LarkProxyResponseParser.Serialize(new { success = false, error = "No NyxID access token available. User must be authenticated." });
+        {
+            error = "No NyxID access token available. User must be authenticated.";
+            return false;
+        }
 
         var title = parameters.Title?.Trim();
         if (string.IsNullOrWhiteSpace(title))
-            return LarkProxyResponseParser.Serialize(new { success = false, error = "title is required." });
+        {
+            error = "title is required.";
+            return false;
+        }
+
         if (title.Length > 200)
-            return LarkProxyResponseParser.Serialize(new { success = false, error = "title exceeds the maximum of 200 characters." });
+        {
+            error = "title exceeds the maximum of 200 characters.";
+            return false;
+        }
 
         var markdownText = parameters.MarkdownText;
         if (string.IsNullOrWhiteSpace(markdownText))
-            return LarkProxyResponseParser.Serialize(new { success = false, error = "markdown_text is required." });
+        {
+            error = "markdown_text is required.";
+            return false;
+        }
 
-        if (!TryNormalizeVisibility(parameters.Visibility, out var visibility, out var visibilityError))
-            return LarkProxyResponseParser.Serialize(new { success = false, error = visibilityError });
+        if (!TryNormalizeVisibility(parameters.Visibility, out var visibility, out error))
+            return false;
 
-        if (!TryResolveReceiveTarget(parameters, out var receiveId, out var receiveIdType, out var targetError))
-            return LarkProxyResponseParser.Serialize(new { success = false, error = targetError });
+        if (!TryResolveReceiveTarget(parameters, out var receiveId, out var receiveIdType, out error))
+            return false;
 
+        request = new ValidatedDocxCreateRequest(token, title, markdownText, visibility, receiveId, receiveIdType);
+        error = null;
+        return true;
+    }
+
+    private async Task<string> CreateAppendAndShareAsync(ValidatedDocxCreateRequest request, CancellationToken ct)
+    {
         var createResponse = await _client.CreateDocxDocumentAsync(
-            token,
-            new LarkDocxCreateRequest(title),
+            request.Token,
+            new LarkDocxCreateRequest(request.Title),
             ct);
         if (LarkProxyResponseParser.TryParseError(createResponse, out var createError))
             return LarkProxyResponseParser.Serialize(new { success = false, error = createError });
@@ -74,8 +106,8 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
         }
 
         var appendResponse = await _client.AppendDocxTextBlocksAsync(
-            token,
-            new LarkDocxAppendBlocksRequest(createResult.DocumentId, markdownText),
+            request.Token,
+            new LarkDocxAppendBlocksRequest(createResult.DocumentId, request.MarkdownText),
             ct);
         if (LarkProxyResponseParser.TryParseError(appendResponse, out var appendError))
         {
@@ -89,12 +121,12 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
         }
 
         var permissionResponse = await _client.SetDrivePermissionAsync(
-            token,
+            request.Token,
             new LarkDrivePermissionRequest(
                 createResult.DocumentToken,
-                visibility,
-                receiveId,
-                receiveIdType),
+                request.Visibility,
+                request.ReceiveId,
+                request.ReceiveIdType),
             ct);
         if (LarkProxyResponseParser.TryParseError(permissionResponse, out var permissionError))
         {
@@ -127,7 +159,7 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
             document_token = createResult.DocumentToken,
             document_url = documentUrl,
             visibility_applied = true,
-            visibility = visibility == LarkDocxVisibility.Editable ? "editable" : "readable",
+            visibility = request.Visibility == LarkDocxVisibility.Editable ? "editable" : "readable",
         });
     }
 
@@ -186,6 +218,14 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
         error = null;
         return true;
     }
+
+    private readonly record struct ValidatedDocxCreateRequest(
+        string Token,
+        string Title,
+        string MarkdownText,
+        LarkDocxVisibility Visibility,
+        string? ReceiveId,
+        string? ReceiveIdType);
 
     public sealed class Parameters
     {

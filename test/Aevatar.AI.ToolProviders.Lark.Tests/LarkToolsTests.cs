@@ -111,6 +111,70 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenCreateReturnsProxyError()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"error":true,"status":503,"message":"docx unavailable"}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("nyx_proxy_error status=503");
+        result.Should().Contain("docx unavailable");
+        client.LastDocxCreateRequest.Should().Be(new LarkDocxCreateRequest("Daily report"));
+        client.LastDocxAppendRequest.Should().BeNull();
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenCreateOmitsDocumentToken()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"url":"https://example.feishu.cn/docx/missing-token"}}}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("docx_create_missing_token");
+        client.LastDocxCreateRequest.Should().Be(new LarkDocxCreateRequest("Daily report"));
+        client.LastDocxAppendRequest.Should().BeNull();
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenAppendReturnsProxyError()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":999,"msg":"append rejected"}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("\"document_token\":\"doccn_123\"");
+        result.Should().Contain("\"document_url\":\"https://example.feishu.cn/docx/doccn_123\"");
+        result.Should().Contain("lark_code=999");
+        result.Should().Contain("append rejected");
+        client.LastDocxAppendRequest.Should().Be(new LarkDocxAppendBlocksRequest("doccn_123", "full text"));
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task LarkDocxCreateTool_ShouldValidateInputs()
     {
         var tool = new LarkDocxCreateTool(new StubLarkNyxClient());
@@ -124,6 +188,12 @@ public class LarkToolsTests
         {
             (await tool.ExecuteAsync("""{"markdown_text":"body"}"""))
                 .Should().Contain("title is required");
+            (await tool.ExecuteAsync(JsonSerializer.Serialize(new
+            {
+                title = new string('t', 201),
+                markdown_text = "body",
+            })))
+                .Should().Contain("title exceeds the maximum of 200 characters");
             (await tool.ExecuteAsync("""{"title":"t","markdown_text":" "}"""))
                 .Should().Contain("markdown_text is required");
             (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body","visibility":"public"}"""))

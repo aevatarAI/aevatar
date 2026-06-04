@@ -1064,6 +1064,33 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ExecuteSkillAsync_OverLimitOutput_ShouldFallBackToChunks_WhenDocDecisionThrows()
+    {
+        var output = string.Join("\n\n", Enumerable.Repeat(
+            new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength - 1_000),
+            2));
+        var expectedChunks = SkillRunnerOutputChunker.Split(output);
+        var provider = new StubStreamingProviderFactory(
+            new StubStreamingTurn([output]),
+            new StubStreamingTurn(new InvalidOperationException("docx decision failed")));
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"message_id":"om_part_1"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_part_2"}}""");
+        var agent = CreateAgent("skill-runner-docx-exception-fallback", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+        AttachNyxIdApiClient(agent, handler);
+
+        var result = await InvokeExecuteSkillAsync(agent);
+
+        result.Should().Be(output);
+        provider.Requests.Should().HaveCount(2);
+        handler.Requests.Should().HaveCount(expectedChunks.Count);
+        ExtractLarkText(handler.Bodies[0]!).Should().Be(expectedChunks[0]);
+        ExtractLarkText(handler.Bodies[1]!).Should().Be(expectedChunks[1]);
+    }
+
+    [Fact]
     public async Task ExecuteSkillAsync_BelowLimitOutput_ShouldNotInvokeDocDecision()
     {
         var provider = new StubStreamingProviderFactory("short output");
@@ -1375,7 +1402,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private sealed record StubStreamingTurn(
         IReadOnlyList<string> Deltas,
-        IReadOnlyList<ToolCall>? ToolCalls = null);
+        IReadOnlyList<ToolCall>? ToolCalls = null,
+        Exception? Error = null)
+    {
+        public StubStreamingTurn(Exception error)
+            : this([], null, error)
+        {
+        }
+    }
 
     private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
     {
@@ -1418,6 +1452,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             var turn = _turns.Count > 0
                 ? _turns.Dequeue()
                 : new StubStreamingTurn([]);
+            if (turn.Error is not null)
+                throw turn.Error;
             foreach (var delta in turn.Deltas)
             {
                 ct.ThrowIfCancellationRequested();
