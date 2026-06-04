@@ -13,9 +13,6 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>LLM call module. Sends <see cref="WorkflowLlmExecutionIntent"/> to a role actor.</summary>
-// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
-//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
 // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
 //   Old pattern: Information log included raw value/prompt/input preview
 //   New principle: only stable id + length + status + redaction marker
@@ -278,9 +275,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         WorkflowLlmExecutionIntent intent,
         int timeoutMs)
     {
-        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
-        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
         foreach (var (key, value) in request.Parameters)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))

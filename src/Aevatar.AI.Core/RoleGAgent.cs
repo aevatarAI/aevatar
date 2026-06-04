@@ -19,6 +19,7 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
@@ -29,6 +30,7 @@ namespace Aevatar.AI.Core;
 /// <summary>
 /// Role-based AI GAgent. Receives ChatRequestEvent and streams LLM response.
 /// </summary>
+[GAgent("ai.role-agent")]
 public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePresenceRuntimeStateOwner
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";

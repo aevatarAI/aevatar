@@ -273,7 +273,7 @@ public class StreamingProxyCoverageTests
     {
         var actorStore = new StubGAgentActorStore();
         actorStore.Groups.Add(new GAgentActorGroup(
-            StreamingProxyDefaults.GAgentTypeName,
+            StreamingProxyDefaults.GAgentKind,
             new[] { "room-001" }));
 
         var result = await InvokeResultAsync(
@@ -308,7 +308,7 @@ public class StreamingProxyCoverageTests
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         actorStore.RemovedActors.Should().ContainSingle(x =>
             x.scopeId == "scope-a" &&
-            x.gagentType == StreamingProxyDefaults.GAgentTypeName && x.actorId == "room-1");
+            x.gagentType == StreamingProxyDefaults.GAgentKind && x.actorId == "room-1");
     }
 
     [Fact]

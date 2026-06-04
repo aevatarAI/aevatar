@@ -14,9 +14,14 @@ public sealed class ProjectionScopeReleaseService<TLease, TScopeAgent>
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         Func<TLease, ProjectionRuntimeScopeKey> scopeKeyAccessor,
-        IAgentTypeVerifier? agentTypeVerifier = null)
+        IAgentKindVerifier? agentKindVerifier = null,
+        IAgentKindRegistry? agentKindRegistry = null)
     {
-        _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(runtime, dispatchPort, agentTypeVerifier);
+        _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(
+            runtime,
+            dispatchPort,
+            agentKindVerifier,
+            agentKindRegistry);
         _scopeKeyAccessor = scopeKeyAccessor ?? throw new ArgumentNullException(nameof(scopeKeyAccessor));
     }
 

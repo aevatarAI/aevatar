@@ -3,6 +3,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -29,6 +30,7 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter107/cluster-1-channel-business-io-process-queue):
 //   Old pattern: process-local Channel/Task workers owned business IO via singleton executor.
 //   New principle: actor-owned operation state (operation_id/lease_epoch/step) + typed self-continuation events; provider IO is inline async, no in-process worker queue.
+[GAgent("nyxid.chat.agent-run")]
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;

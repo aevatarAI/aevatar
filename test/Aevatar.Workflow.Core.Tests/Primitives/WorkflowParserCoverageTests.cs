@@ -133,7 +133,7 @@ public sealed class WorkflowParserCoverageTests
             roles:
               - id: assistant
                 name: Assistant
-                agent_kind: " workflow.assistant-role "
+                agent_kind: " workflow.role-agent "
             steps:
               - id: step_1
                 type: llm_call
@@ -141,7 +141,7 @@ public sealed class WorkflowParserCoverageTests
             """);
 
         workflow.Roles.Should().ContainSingle();
-        workflow.Roles[0].AgentKind.Should().Be("workflow.assistant-role");
+        workflow.Roles[0].AgentKind.Should().Be("workflow.role-agent");
     }
 
     [Theory]

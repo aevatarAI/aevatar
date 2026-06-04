@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -40,7 +42,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
         try
         {
-            await InitializeAgentAsync(host, actorId);
+            await InitializeAgentByKindAsync(host, actorId);
 
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("always-fail-no-retry");
@@ -78,7 +80,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
         try
         {
-            await InitializeAgentAsync(host, actorId);
+            await InitializeAgentByKindAsync(host, actorId);
 
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("always-fail-non-occ-default");
@@ -116,7 +118,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
         try
         {
-            await InitializeAgentAsync(host, actorId);
+            await InitializeAgentByKindAsync(host, actorId);
 
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("always-fail-retry-exhausted");
@@ -161,7 +163,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
         try
         {
-            await InitializeAgentAsync(host, actorId);
+            await InitializeAgentByKindAsync(host, actorId);
 
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("fail-once-then-succeed");
@@ -197,7 +199,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
         try
         {
-            await InitializeAgentAsync(host, actorId);
+            await InitializeAgentByKindAsync(host, actorId);
 
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("occ-fail-once-then-succeed");
@@ -241,17 +243,22 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 if (loggerProvider != null)
                     logging.AddProvider(loggerProvider);
             })
+            .ConfigureServices(services =>
+            {
+                services.AddAevatarAgentKindRegistry(builder =>
+                    builder.Register<RetryAwareDirectDispatchAgent>());
+            })
             .Build();
 
         await host.StartAsync();
         return host;
     }
 
-    private static async Task InitializeAgentAsync(IHost host, string actorId)
+    private static async Task InitializeAgentByKindAsync(IHost host, string actorId)
     {
         var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
         var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-        var initialized = await grain.InitializeAgentAsync(typeof(RetryAwareDirectDispatchAgent).AssemblyQualifiedName!);
+        var initialized = await grain.InitializeAgentByKindAsync("tests.retry-aware-direct-dispatch");
         initialized.Should().BeTrue();
     }
 
@@ -367,6 +374,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
+    [GAgent("tests.retry-aware-direct-dispatch")]
     public sealed class RetryAwareDirectDispatchAgent : IAgent
     {
         private static readonly Lock SyncLock = new();

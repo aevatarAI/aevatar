@@ -7,6 +7,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -44,6 +45,7 @@ public static class ChannelRuntimeServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         // ─── Retired-actor cleanup contribution ───
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ChannelBotRegistrationGAgent).Assembly));
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, ChannelRuntimeRetiredActorSpec>());
 

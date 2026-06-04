@@ -123,7 +123,7 @@ public static class StreamingProxyEndpoints
         {
             var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
             var group = snapshot.Groups.FirstOrDefault(g =>
-                string.Equals(g.GAgentType, StreamingProxyDefaults.GAgentTypeName, StringComparison.Ordinal));
+                string.Equals(g.GAgentType, StreamingProxyDefaults.GAgentKind, StringComparison.Ordinal));
             var roomIds = group?.ActorIds ?? [];
             return Results.Ok(new
             {
@@ -175,7 +175,7 @@ public static class StreamingProxyEndpoints
             await registryCommandPort.UnregisterActorAsync(
                 new GAgentActorRegistration(
                     scopeId,
-                    StreamingProxyDefaults.GAgentTypeName,
+                    StreamingProxyDefaults.GAgentKind,
                     roomId),
                 ct);
         }
@@ -631,7 +631,7 @@ public static class StreamingProxyEndpoints
             new ScopeResourceTarget(
                 scopeId,
                 ScopeResourceKind.GAgentActor,
-                StreamingProxyDefaults.GAgentTypeName,
+                StreamingProxyDefaults.GAgentKind,
                 roomId,
                 operation),
             ct);

@@ -10,7 +10,8 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
 {
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IAgentTypeVerifier? _agentTypeVerifier;
+    private readonly IAgentKindVerifier? _agentKindVerifier;
+    private readonly string _scopeAgentKind;
     private readonly IStreamPubSubMaintenance? _streamPubSubMaintenance;
     private readonly IStreamProvider? _streams;
     private readonly ILogger<ProjectionScopeActorRuntime<TScopeAgent>> _logger;
@@ -18,14 +19,16 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
     public ProjectionScopeActorRuntime(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
-        IAgentTypeVerifier? agentTypeVerifier = null,
+        IAgentKindVerifier? agentKindVerifier = null,
+        IAgentKindRegistry? agentKindRegistry = null,
         IStreamPubSubMaintenance? streamPubSubMaintenance = null,
         ILogger<ProjectionScopeActorRuntime<TScopeAgent>>? logger = null,
         IStreamProvider? streams = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _agentTypeVerifier = agentTypeVerifier;
+        _agentKindVerifier = agentKindVerifier;
+        _scopeAgentKind = ResolveScopeAgentKind(agentKindRegistry);
         _streamPubSubMaintenance = streamPubSubMaintenance;
         _logger = logger ?? NullLogger<ProjectionScopeActorRuntime<TScopeAgent>>.Instance;
         _streams = streams;
@@ -36,26 +39,26 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         var actorId = ProjectionScopeActorId.Build(scopeKey);
         if (!await _runtime.ExistsAsync(actorId).ConfigureAwait(false))
         {
-            _ = await _runtime.CreateAsync<TScopeAgent>(actorId, ct).ConfigureAwait(false);
+            _ = await _runtime.CreateByKindAsync(_scopeAgentKind, actorId, ct).ConfigureAwait(false);
             return;
         }
 
-        if (_agentTypeVerifier == null)
+        if (_agentKindVerifier == null)
             return;
 
-        if (await _agentTypeVerifier.IsExpectedAsync(actorId, typeof(TScopeAgent), ct).ConfigureAwait(false))
+        if (await _agentKindVerifier.IsExpectedKindAsync(actorId, _scopeAgentKind, ct).ConfigureAwait(false))
             return;
 
-        // Stale runtime type at this scope key — most often after an actor type
+        // Stale runtime kind at this scope key — most often after an actor kind
         // migration where a retired-cleanup pass missed the new scope key.
         // Destroy the old actor (which also resets its event stream) and reset
         // the stream pub/sub rendezvous state so the recreated scope actor's
         // RegisterAsStreamProducer can succeed without an etag conflict, then
-        // recreate as the expected type.
+        // recreate as the expected kind.
         _logger.LogWarning(
-            "Projection scope actor {ActorId} has unexpected runtime type; destroying and recreating as {ExpectedType}.",
+            "Projection scope actor {ActorId} has unexpected runtime kind; destroying and recreating as {ExpectedKind}.",
             actorId,
-            typeof(TScopeAgent).FullName);
+            _scopeAgentKind);
 
         await _runtime.DestroyAsync(actorId, ct).ConfigureAwait(false);
 
@@ -85,7 +88,7 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
             }
         }
 
-        _ = await _runtime.CreateAsync<TScopeAgent>(actorId, ct).ConfigureAwait(false);
+        _ = await _runtime.CreateByKindAsync(_scopeAgentKind, actorId, ct).ConfigureAwait(false);
     }
 
     public async Task<bool> ExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
@@ -118,5 +121,19 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
                     scopeKey.RootActorId,
                     ProjectionScopeActorId.Build(scopeKey)),
                 ct);
+    }
+
+    private static string ResolveScopeAgentKind(IAgentKindRegistry? agentKindRegistry)
+    {
+        if (agentKindRegistry == null)
+            throw new InvalidOperationException("IAgentKindRegistry is required for projection scope actor runtime.");
+
+        if (!agentKindRegistry.TryGetKindForAgentType(typeof(TScopeAgent), out var kind))
+        {
+            throw new InvalidOperationException(
+                $"Projection scope agent type {typeof(TScopeAgent).FullName} is not registered with a primary [GAgent] kind.");
+        }
+
+        return kind;
     }
 }

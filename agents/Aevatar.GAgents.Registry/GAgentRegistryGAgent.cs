@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -12,6 +13,7 @@ namespace Aevatar.GAgents.Registry;
 ///
 /// Actor ID: <c>gagent-registry-{scopeId}</c> (per-scope).
 /// </summary>
+[GAgent("gagent.registry")]
 public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IProjectedActor
 {
     public static string ProjectionKind => "gagent-registry";

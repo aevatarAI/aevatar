@@ -33,7 +33,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
         registry.RegisteredActors.Should().ContainSingle();
         registry.RegisteredActors[0].Should().Be(new GAgentActorRegistration(
             "scope-a",
-            StreamingProxyDefaults.GAgentTypeName,
+            StreamingProxyDefaults.GAgentKind,
             result.RoomId!));
         runtime.LastCreatedActor.Should().NotBeNull();
         dispatchPort.Dispatches.Should().ContainSingle();

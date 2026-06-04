@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -12,6 +13,7 @@ namespace Aevatar.GAgents.UserConfig;
 ///
 /// Actor ID: <c>user-config-{scopeId}</c> (per-scope).
 /// </summary>
+[GAgent("user.config")]
 public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProjectedActor
 {
     public static string ProjectionKind => "user-config";

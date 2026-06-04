@@ -1,6 +1,7 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -21,6 +22,7 @@ namespace Aevatar.GAgents.ChatRouting;
 ///
 /// Actor ID convention: <c>chat-route-policy:{scopeId}</c> (per-scope).
 /// </summary>
+[GAgent("chat.routing.policy")]
 public sealed class ChatRoutePolicyGAgent : GAgentBase<ChatRoutePolicyState>, IProjectedActor
 {
     public static string ProjectionKind => "chat-route-policy";

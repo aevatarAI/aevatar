@@ -14,9 +14,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Integration.AI;
 
-[GAgent(WorkflowAssistantRoleAgentKind)]
-// The "legacy" alias is the canonical public workflow token; the primary kind remains the internal persisted kind.
-[LegacyAgentKind(WorkflowRoleConventions.DefaultAgentKind)]
+[GAgent(WorkflowRoleConventions.DefaultAgentKind)]
 public class WorkflowRoleGAgent(
     ILLMProviderFactory? llmProviderFactory = null,
     IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
@@ -36,8 +34,6 @@ public class WorkflowRoleGAgent(
         approvalHandler,
         remoteToolApprovalPort)
 {
-    public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
-
     [EventHandler]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
     {

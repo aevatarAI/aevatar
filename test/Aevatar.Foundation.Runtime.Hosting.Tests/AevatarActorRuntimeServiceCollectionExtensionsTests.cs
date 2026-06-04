@@ -31,8 +31,8 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
 
         provider.GetService<IActorRuntime>().Should().NotBeNull();
-        provider.GetService<IAgentTypeVerifier>().Should().NotBeNull();
-        provider.GetService<IActorTypeProbe>().Should().NotBeNull();
+        provider.GetService<IAgentKindVerifier>().Should().NotBeNull();
+        provider.GetService<IActorKindProbe>().Should().NotBeNull();
         provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be(AevatarActorRuntimeOptions.ProviderInMemory);
     }
 
@@ -50,7 +50,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntime));
         descriptor.Should().NotBeNull();
         descriptor!.ImplementationType.Should().Be(typeof(OrleansActorRuntime));
-        services.Should().Contain(x => x.ServiceType == typeof(IActorTypeProbe) && x.ImplementationType == typeof(OrleansActorTypeProbe));
+        services.Should().Contain(x => x.ServiceType == typeof(IActorKindProbe) && x.ImplementationType == typeof(OrleansActorKindProbe));
     }
 
     [Fact]

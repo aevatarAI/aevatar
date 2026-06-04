@@ -247,7 +247,7 @@ internal sealed class NyxIdChatConversationDeleteCommandTargetResolver
             new ScopeResourceTarget(
                 command.ScopeId,
                 ScopeResourceKind.GAgentActor,
-                NyxIdChatServiceDefaults.GAgentTypeName,
+                NyxIdChatServiceDefaults.GAgentKind,
                 command.ActorId,
                 ScopeResourceOperation.Delete),
             ct);

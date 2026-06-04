@@ -2,6 +2,7 @@ using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
@@ -22,6 +23,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddAevatarWorkflow(this IServiceCollection services)
     {
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(WorkflowGAgent).Assembly));
         services.AddWorkflowModulePack<WorkflowCoreModulePack>();
         services.TryAddSingleton<IEventModuleFactory<IWorkflowExecutionContext>, WorkflowModuleFactory>();
         services.TryAddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();

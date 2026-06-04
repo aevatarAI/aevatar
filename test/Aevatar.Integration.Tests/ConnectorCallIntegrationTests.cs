@@ -117,7 +117,7 @@ public class ConnectorCallIntegrationTests
             roles:
               - id: coordinator
                 name: Coordinator
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
                 system_prompt: ""
                 connectors:
                   - allowed_connector
@@ -149,7 +149,7 @@ public class ConnectorCallIntegrationTests
             roles:
               - id: coordinator
                 name: Coordinator
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
                 system_prompt: ""
                 connectors:
                   - only_this_one

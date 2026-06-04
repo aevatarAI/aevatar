@@ -19,7 +19,8 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         IActorDispatchPort dispatchPort,
         Func<ProjectionScopeStartRequest, TContext> contextFactory,
         Func<ProjectionRuntimeScopeKey, TContext, TLease> leaseFactory,
-        IAgentTypeVerifier? agentTypeVerifier = null,
+        IAgentKindVerifier? agentKindVerifier = null,
+        IAgentKindRegistry? agentKindRegistry = null,
         IStreamPubSubMaintenance? streamPubSubMaintenance = null,
         ILoggerFactory? loggerFactory = null,
         IStreamProvider? streams = null)
@@ -27,7 +28,8 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(
             runtime,
             dispatchPort,
-            agentTypeVerifier,
+            agentKindVerifier,
+            agentKindRegistry,
             streamPubSubMaintenance,
             loggerFactory?.CreateLogger<ProjectionScopeActorRuntime<TScopeAgent>>(),
             streams);

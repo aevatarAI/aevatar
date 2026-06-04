@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -9,6 +10,7 @@ public static class ChatHistoryServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ChatHistoryIndexGAgent).Assembly));
         services.TryAddSingleton<IChatHistoryIndexTopologyPort, DefaultChatHistoryIndexTopologyPort>();
         return services;
     }

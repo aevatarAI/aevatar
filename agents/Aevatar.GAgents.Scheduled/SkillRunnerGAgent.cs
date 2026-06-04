@@ -9,6 +9,7 @@ using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -23,6 +24,7 @@ namespace Aevatar.GAgents.Scheduled;
 // Refactor (iter1/cluster-001):
 //   Old pattern: SkillRunnerGAgent pushed execution summaries into the well-known catalog actor.
 //   New principle: Runner-owned committed events are the execution fact source for catalog projection.
+[GAgent("scheduled.skill-runner")]
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;

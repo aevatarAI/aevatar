@@ -28,6 +28,7 @@ using Aevatar.Hosting.ExecutionActivity;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -56,6 +57,7 @@ public static class ServiceCollectionExtensions
         if (!services.Any(x => x.ServiceType == typeof(WorkflowCapabilityServiceCollectionExtensions.WorkflowCapabilityRegistrationsMarker)))
             services.AddWorkflowCapability(configuration);
 
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(Aevatar.GAgentService.Core.GAgents.ServiceDefinitionGAgent).Assembly));
         services.AddOptions<GAgentServiceDemoOptions>()
             .Bind(configuration.GetSection("GAgentService:Demo"));
         services.AddGAgentServiceProjection();

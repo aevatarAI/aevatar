@@ -4,8 +4,7 @@ using Aevatar.GAgents.Channel.Runtime;
 namespace Aevatar.GAgents.Device;
 
 /// <summary>
-/// Retired-actor declaration for the device-registration surface previously
-/// hosted by the deleted <c>Aevatar.GAgents.ChannelRuntime</c> assembly.
+/// Retired-actor declaration for the device-registration surface.
 /// </summary>
 public sealed class DeviceRetiredActorSpec : RetiredActorSpec
 {
@@ -15,11 +14,11 @@ public sealed class DeviceRetiredActorSpec : RetiredActorSpec
     [
         new(
             DeviceRegistrationGAgent.WellKnownId,
-            ["Aevatar.GAgents.ChannelRuntime.DeviceRegistrationGAgent"],
+            ["channel-runtime.device-registration"],
             CleanupReadModels: true),
         new(
             $"projection.durable.scope:device-registration:{DeviceRegistrationGAgent.WellKnownId}",
-            ["Aevatar.GAgents.ChannelRuntime.DeviceRegistrationMaterializationContext"],
+            ["projection.materialization-scope.device-registration-materialization-context"],
             SourceStreamId: DeviceRegistrationGAgent.WellKnownId),
     ];
 

@@ -6,12 +6,14 @@ using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Materialization;
@@ -41,6 +43,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         _ = configuration;
 
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ScriptDefinitionGAgent).Assembly));
         services.AddCqrsCore();
         services.TryAddSingleton(new ScriptingInteractionTimeoutOptions());
         services.TryAddSingleton<ScriptSandboxPolicy>();

@@ -3,24 +3,24 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
 /// <summary>
-/// Runtime type probe backed by Orleans grain state.
+/// Runtime kind probe backed by Orleans grain state.
 /// </summary>
-public sealed class OrleansActorTypeProbe : IActorTypeProbe
+public sealed class OrleansActorKindProbe : IActorKindProbe
 {
     private readonly IGrainFactory _grainFactory;
 
-    public OrleansActorTypeProbe(IGrainFactory grainFactory)
+    public OrleansActorKindProbe(IGrainFactory grainFactory)
     {
         _grainFactory = grainFactory;
     }
 
-    public async Task<string?> GetRuntimeAgentTypeNameAsync(string actorId, CancellationToken ct = default)
+    public async Task<string?> GetRuntimeAgentKindAsync(string actorId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
 
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-        var typeName = await grain.GetAgentTypeNameAsync();
-        return string.IsNullOrWhiteSpace(typeName) ? null : typeName;
+        var kind = await grain.GetAgentKindAsync();
+        return string.IsNullOrWhiteSpace(kind) ? null : kind;
     }
 }

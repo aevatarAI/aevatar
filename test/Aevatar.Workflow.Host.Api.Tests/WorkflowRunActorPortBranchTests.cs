@@ -308,7 +308,7 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsDefaultAlias_ShouldReturnSuccess()
+    public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsDefaultPrimary_ShouldReturnSuccess()
     {
         var port = CreatePort(
             new RecordingActorRuntime(),
@@ -320,7 +320,7 @@ public sealed class WorkflowRunActorPortBranchTests
             roles:
               - id: assistant
                 name: Assistant
-                agent_kind: aevatar.role-agent
+                agent_kind: workflow.role-agent
             steps:
               - id: step1
                 type: llm_call
@@ -656,11 +656,9 @@ public sealed class WorkflowRunActorPortBranchTests
         new AgentKindRegistry(
         [
             new AgentRegistration(
-                Kind: "workflow.assistant-role",
+                Kind: "workflow.role-agent",
                 ImplementationType: typeof(StubAgent),
-                StateContractType: typeof(object),
-                LegacyKinds: [WorkflowRoleConventions.DefaultAgentKind],
-                LegacyClrTypeNames: []),
+                StateContractType: typeof(object)),
         ]);
 
     private static WorkflowGAgent CreateWorkflowDefinitionAgent()
@@ -878,11 +876,6 @@ public sealed class WorkflowRunActorPortBranchTests
             mappings.TryGetValue(actorId, out var binding);
             return Task.FromResult(binding);
         }
-    }
-
-    private sealed class FakeRoleAgentTypeResolver : IRoleAgentTypeResolver
-    {
-        public Type ResolveRoleAgentType() => typeof(StubAgent);
     }
 
     private sealed class FakeStepExecutorFactory : IEventModuleFactory<IWorkflowExecutionContext>

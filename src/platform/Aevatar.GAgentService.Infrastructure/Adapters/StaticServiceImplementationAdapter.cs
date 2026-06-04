@@ -38,7 +38,7 @@ public sealed class StaticServiceImplementationAdapter : IServiceImplementationA
                 StaticPlan = new StaticServiceDeploymentPlan
                 {
                     AgentKind = agentKind,
-                    ActorTypeName = spec.ActorTypeName,
+                    ActorTypeName = spec.ActorTypeName ?? string.Empty,
                     PreferredActorId = spec.PreferredActorId ?? string.Empty,
                 },
             },
@@ -58,22 +58,7 @@ public sealed class StaticServiceImplementationAdapter : IServiceImplementationA
         if (string.IsNullOrWhiteSpace(actorTypeName))
             throw new InvalidOperationException("static agent_kind is required.");
 
-        var legacyClrTypeName = NormalizeLegacyClrTypeName(actorTypeName);
-        if (_agentKindRegistry.TryResolveKindByClrTypeName(legacyClrTypeName, out var translatedKind))
-            return translatedKind;
-
         throw new InvalidOperationException(
-            $"Static legacy actor_type_name '{actorTypeName}' is not registered with IAgentKindRegistry.");
-    }
-
-    // Refactor (issue1044/static-service-agent-kind):
-    //   Old pattern: static service preparation resolved actor_type_name through CLR-name reflection.
-    //   New principle: static service activation persists agent_kind; actor_type_name only translates legacy boundary input.
-    private static string NormalizeLegacyClrTypeName(string actorTypeName)
-    {
-        var commaIndex = actorTypeName.IndexOf(',', StringComparison.Ordinal);
-        return commaIndex < 0
-            ? actorTypeName
-            : actorTypeName[..commaIndex].Trim();
+            $"Static actor_type_name '{actorTypeName}' is deprecated and cannot be used for identity. Provide static agent_kind.");
     }
 }

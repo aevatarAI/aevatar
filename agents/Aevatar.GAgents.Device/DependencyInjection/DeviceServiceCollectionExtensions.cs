@@ -8,6 +8,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,6 +41,9 @@ public static class DeviceServiceCollectionExtensions
             storeName: "DeviceRegistration");
 
         // ─── Retired-actor cleanup contribution ───
+        services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
+            typeof(DeviceRegistrationGAgent).Assembly,
+            typeof(Aevatar.GAgents.Household.HouseholdEntity).Assembly));
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, DeviceRetiredActorSpec>());
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();

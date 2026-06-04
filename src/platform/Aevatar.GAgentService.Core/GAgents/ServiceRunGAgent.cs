@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -7,6 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
+[GAgent("gagent.service.run")]
 public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
 {
     public ServiceRunGAgent()

@@ -6,8 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Aevatar.GAgents.Channel.Runtime;
 
 /// <summary>
-/// Retired-actor declaration for the channel-bot-registration surface previously
-/// hosted by the deleted <c>Aevatar.GAgents.ChannelRuntime</c> assembly.
+/// Retired-actor declaration for the channel-bot-registration surface.
 /// </summary>
 public sealed class ChannelRuntimeRetiredActorSpec : RetiredActorSpec
 {
@@ -17,11 +16,11 @@ public sealed class ChannelRuntimeRetiredActorSpec : RetiredActorSpec
     [
         new(
             ChannelBotRegistrationGAgent.WellKnownId,
-            ["Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationGAgent"],
+            ["channel-runtime.channel-bot-registration"],
             CleanupReadModels: true),
         new(
             $"projection.durable.scope:channel-bot-registration:{ChannelBotRegistrationGAgent.WellKnownId}",
-            ["Aevatar.GAgents.ChannelRuntime.ChannelBotRegistrationMaterializationContext"],
+            ["projection.materialization-scope.channel-bot-registration-materialization-context"],
             SourceStreamId: ChannelBotRegistrationGAgent.WellKnownId),
     ];
 

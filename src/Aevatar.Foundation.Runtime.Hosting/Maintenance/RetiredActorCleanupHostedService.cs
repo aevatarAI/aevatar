@@ -11,10 +11,10 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Foundation.Runtime.Hosting.Maintenance;
 
 /// <summary>
-/// Spec-driven startup cleanup for actors whose persisted runtime types have been
+/// Spec-driven startup cleanup for actors whose persisted runtime kinds have been
 /// retired. Each module contributes one or more <see cref="IRetiredActorSpec"/>
 /// instances via DI; this service iterates them, probes each declared target,
-/// destroys actors whose persisted type matches a retired token, removes upstream
+/// destroys actors whose persisted kind matches a retired token, removes upstream
 /// relays, deletes module-owned read models, and resets the event stream.
 ///
 /// Idempotent by design: a clean cluster sees no targets and does no destructive
@@ -33,11 +33,11 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
 {
     // Stable cleanupReason values for log/metric distinguishing of normal-match
     // vs orphaned-stream recovery paths. Ops dashboards group on these strings.
-    private const string CleanupReasonRetiredTypeMatch = "retired-type-match";
+    private const string CleanupReasonRetiredKindMatch = "retired-kind-match";
     private const string CleanupReasonOrphanedEventStream = "orphaned-event-stream";
 
     private readonly IEnumerable<IRetiredActorSpec> _specs;
-    private readonly IActorTypeProbe _typeProbe;
+    private readonly IActorKindProbe _kindProbe;
     private readonly IActorRuntime _actorRuntime;
     private readonly IStreamProvider _streamProvider;
     private readonly IEventStore _eventStore;
@@ -50,7 +50,7 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
 
     public RetiredActorCleanupHostedService(
         IEnumerable<IRetiredActorSpec> specs,
-        IActorTypeProbe typeProbe,
+        IActorKindProbe kindProbe,
         IActorRuntime actorRuntime,
         IStreamProvider streamProvider,
         IEventStore eventStore,
@@ -60,7 +60,7 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
         ILogger<RetiredActorCleanupHostedService> logger)
     {
         _specs = specs ?? throw new ArgumentNullException(nameof(specs));
-        _typeProbe = typeProbe ?? throw new ArgumentNullException(nameof(typeProbe));
+        _kindProbe = kindProbe ?? throw new ArgumentNullException(nameof(kindProbe));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _eventStore = eventStore ?? throw new ArgumentNullException(nameof(eventStore));
@@ -211,46 +211,43 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
         await CleanupStreamPubSubBestEffortAsync(spec, target.ActorId, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
-            "Retired actor cleaned. specId={SpecId} actorId={ActorId} runtimeType={RuntimeType} cleanupReason={CleanupReason}",
+            "Retired actor cleaned. specId={SpecId} actorId={ActorId} runtimeKind={RuntimeKind} cleanupReason={CleanupReason}",
             spec.SpecId,
             target.ActorId,
-            revalidation.RuntimeTypeName ?? string.Empty,
+            revalidation.RuntimeKind ?? string.Empty,
             revalidation.CleanupReason);
     }
 
-    // Refactor (issue1287-first):
-    //   Old pattern: stale marker state represented cleanup truth.
-    //   New principle: runtime type and durable stream presence are the only cleanup facts.
     private async Task<CleanupTargetRevalidation> RevalidateTargetForCleanupAsync(
         RetiredActorTarget target,
         CancellationToken ct)
     {
-        var runtimeTypeName = await _typeProbe
-            .GetRuntimeAgentTypeNameAsync(target.ActorId, ct)
+        var runtimeKind = await _kindProbe
+            .GetRuntimeAgentKindAsync(target.ActorId, ct)
             .ConfigureAwait(false);
-        if (target.MatchesRuntimeType(runtimeTypeName))
+        if (target.MatchesRuntimeKind(runtimeKind))
         {
             return new CleanupTargetRevalidation(
                 ShouldClean: true,
-                RuntimeTypeName: runtimeTypeName,
+                RuntimeKind: runtimeKind,
                 ShouldContinueReset: false,
-                CleanupReason: CleanupReasonRetiredTypeMatch);
+                CleanupReason: CleanupReasonRetiredKindMatch);
         }
 
-        if (!string.IsNullOrWhiteSpace(runtimeTypeName))
+        if (!string.IsNullOrWhiteSpace(runtimeKind))
         {
             return new CleanupTargetRevalidation(
                 ShouldClean: false,
-                RuntimeTypeName: runtimeTypeName,
+                RuntimeKind: runtimeKind,
                 ShouldContinueReset: false,
                 CleanupReason: string.Empty);
         }
 
-        var shouldContinueReset = target.ResetWhenRuntimeTypeUnavailable &&
+        var shouldContinueReset = target.ResetWhenRuntimeKindUnavailable &&
                                   await HasEventStreamAsync(target.ActorId, ct).ConfigureAwait(false);
         return new CleanupTargetRevalidation(
             ShouldClean: shouldContinueReset,
-            RuntimeTypeName: runtimeTypeName,
+            RuntimeKind: runtimeKind,
             ShouldContinueReset: shouldContinueReset,
             CleanupReason: shouldContinueReset ? CleanupReasonOrphanedEventStream : string.Empty);
     }
@@ -354,7 +351,7 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
 
     private sealed record CleanupTargetRevalidation(
         bool ShouldClean,
-        string? RuntimeTypeName,
+        string? RuntimeKind,
         bool ShouldContinueReset,
         string CleanupReason);
 }

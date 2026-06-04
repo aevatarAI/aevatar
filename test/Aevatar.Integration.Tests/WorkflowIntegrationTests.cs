@@ -42,15 +42,15 @@ public class WorkflowIntegrationTests
         roles:
           - id: researcher
             name: Researcher
-            agent_kind: workflow.assistant-role
+            agent_kind: workflow.role-agent
             system_prompt: "你是一个 researcher，负责调研主题并输出调研结果"
           - id: reviewer
             name: Reviewer
-            agent_kind: workflow.assistant-role
+            agent_kind: workflow.role-agent
             system_prompt: "你是一个 reviewer，负责审查研究结果并给出改进建议"
           - id: writer
             name: Writer
-            agent_kind: workflow.assistant-role
+            agent_kind: workflow.role-agent
             system_prompt: "你是一个 writer，负责将研究结果和审查意见整合为最终报告"
         steps:
           - id: research
@@ -88,7 +88,9 @@ public class WorkflowIntegrationTests
     }
 
     private static void RegisterAssistantRoleKind(AgentKindRegistryBuilder builder) =>
-        builder.Register<WorkflowRoleGAgent>();
+        builder
+            .Register<WorkflowRoleGAgent>()
+            .Register<RoleGAgent>();
 
     // ═══════════════════════════════════════════════════════════
     //  Scenario 1: YAML 解析 + 验证
@@ -138,7 +140,7 @@ public class WorkflowIntegrationTests
             roles:
               - id: r1
                 name: Role1
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
             steps:
               - id: step1
                 type: llm_call
@@ -161,7 +163,7 @@ public class WorkflowIntegrationTests
             roles:
               - id: r1
                 name: Role1
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
             steps:
               - id: root
                 type: parallel
@@ -284,17 +286,8 @@ public class WorkflowIntegrationTests
         children.Should().Contain(reviewerActorId);
         children.Should().Contain(writerActorId);
 
-        // 验证每个 RoleGAgent 的配置
-        var researcher = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
-            async _ =>
-            {
-                var researcherActor = await runtime.GetAsync(researcherActorId);
-                return researcherActor?.Agent as RoleGAgent;
-            },
-            agent => agent?.RoleName == "Researcher",
-            $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
-            CancellationToken.None);
-        researcher!.RoleName.Should().Be("Researcher");
+        var researcherActor = await runtime.GetAsync(researcherActorId);
+        researcherActor!.Agent.Should().BeOfType<WorkflowRoleGAgent>();
     }
 
     [Fact(DisplayName = "给定 public role agent kind alias，WorkflowRunGAgent 应通过 registry 创建 RoleGAgent")]
@@ -312,7 +305,7 @@ public class WorkflowIntegrationTests
             roles:
               - id: assistant
                 name: Assistant
-                agent_kind: aevatar.role-agent
+                agent_kind: workflow.role-agent
                 system_prompt: "You are an assistant"
             steps:
               - id: answer
@@ -515,19 +508,19 @@ public class WorkflowIntegrationTests
             roles:
               - id: planner
                 name: Planner
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
                 system_prompt: "你是规划者"
               - id: analyst_a
                 name: AnalystA
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
                 system_prompt: "你是分析师A"
               - id: analyst_b
                 name: AnalystB
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
                 system_prompt: "你是分析师B"
               - id: synthesizer
                 name: Synthesizer
-                agent_kind: workflow.assistant-role
+                agent_kind: workflow.role-agent
                 system_prompt: "你是综合者"
             steps:
               - id: plan

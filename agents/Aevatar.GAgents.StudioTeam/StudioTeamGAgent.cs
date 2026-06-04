@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StudioMember;
@@ -26,6 +27,7 @@ namespace Aevatar.GAgents.StudioTeam;
 /// and is a metadata signal only — it does <em>not</em> reject member
 /// reassignments at the actor layer (ADR-0017 §Q5 / Locked Rule 5).
 /// </summary>
+[GAgent("studio.team")]
 public sealed class StudioTeamGAgent : GAgentBase<StudioTeamState>, IProjectedActor
 {
     public static string ProjectionKind => "studio-team";

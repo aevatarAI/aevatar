@@ -1,5 +1,5 @@
-using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -95,8 +95,9 @@ public static class ServiceCollectionExtensions
         var options = new AevatarAIFeatureOptions();
         configure?.Invoke(options);
 
-        services.TryAddSingleton<IRoleAgentTypeResolver, WorkflowRoleGAgentTypeResolver>();
-        services.AddAevatarAgentKindRegistry(builder => builder.Register<WorkflowRoleGAgent>());
+        services.AddAevatarAgentKindRegistry(builder => builder
+            .ScanAssemblies(typeof(RoleGAgent).Assembly)
+            .Register<WorkflowRoleGAgent>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();

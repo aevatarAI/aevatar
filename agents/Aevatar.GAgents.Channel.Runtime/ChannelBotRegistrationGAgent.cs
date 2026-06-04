@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -15,6 +16,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// Actor ID convention: a single well-known instance "channel-bot-registration-store".
 /// CLAUDE.md: "long-lived actor for fact owners: definition/catalog/manager/index"
 /// </summary>
+[GAgent("channel.runtime.channel-bot-registration")]
 public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistrationStoreState>
 {
     // Refactor (iter27/cluster-003-channel-registration-scope-backfill):

@@ -167,7 +167,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddSingleton<NoOpActorRuntime>();
         services.AddSingleton<IActorRuntime>(sp => sp.GetRequiredService<NoOpActorRuntime>());
         services.AddSingleton<IActorDispatchPort>(sp => sp.GetRequiredService<NoOpActorRuntime>());
-        services.AddSingleton<IAgentTypeVerifier, AlwaysTrueTypeVerifier>();
+        services.AddSingleton<IAgentKindVerifier, AlwaysTrueKindVerifier>();
     }
 
     private sealed class NoOpActorRuntime : IActorRuntime, IActorDispatchPort
@@ -199,9 +199,9 @@ public class WorkflowExecutionProjectionRegistrationTests
 
     }
 
-    private sealed class AlwaysTrueTypeVerifier : IAgentTypeVerifier
+    private sealed class AlwaysTrueKindVerifier : IAgentKindVerifier
     {
-        public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
+        public Task<bool> IsExpectedKindAsync(string actorId, string expectedKind, CancellationToken ct = default) =>
             Task.FromResult(true);
     }
     private sealed class EnvironmentVariableScope : IDisposable

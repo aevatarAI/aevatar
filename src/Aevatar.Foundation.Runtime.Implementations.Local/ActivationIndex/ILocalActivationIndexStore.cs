@@ -4,9 +4,9 @@ namespace Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
 
 internal interface ILocalActivationIndexStore
 {
-    Task UpsertAsync(string actorId, string agentTypeName, CancellationToken ct = default);
+    Task UpsertAsync(string actorId, string agentKind, CancellationToken ct = default);
 
-    Task<string?> GetAgentTypeNameAsync(string actorId, CancellationToken ct = default);
+    Task<string?> GetAgentKindAsync(string actorId, CancellationToken ct = default);
 
     Task DeleteAsync(string actorId, CancellationToken ct = default);
 }
@@ -15,16 +15,16 @@ internal sealed class InMemoryLocalActivationIndexStore : ILocalActivationIndexS
 {
     private readonly ConcurrentDictionary<string, string> _index = new(StringComparer.Ordinal);
 
-    public Task UpsertAsync(string actorId, string agentTypeName, CancellationToken ct = default)
+    public Task UpsertAsync(string actorId, string agentKind, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(agentTypeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
         ct.ThrowIfCancellationRequested();
-        _index[actorId] = agentTypeName;
+        _index[actorId] = agentKind;
         return Task.CompletedTask;
     }
 
-    public Task<string?> GetAgentTypeNameAsync(string actorId, CancellationToken ct = default)
+    public Task<string?> GetAgentKindAsync(string actorId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
