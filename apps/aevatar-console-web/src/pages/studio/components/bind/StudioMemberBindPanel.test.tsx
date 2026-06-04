@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { setLocale } from '@umijs/max';
 import React from 'react';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
@@ -34,6 +35,7 @@ jest.mock('@/shared/studio/api', () => ({
 
 describe('StudioMemberBindPanel', () => {
   beforeEach(() => {
+    setLocale('en-US', false);
     jest.clearAllMocks();
     (scopeRuntimeApi.getServiceBindings as jest.Mock).mockResolvedValue({
       serviceKey: 'scope-1:default:workspace-demo',
@@ -284,6 +286,14 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.getByTestId('studio-bind-smoke-test-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-snippet-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-supporting-section')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+        'Bind is ready. Run a quick smoke test or continue to Invoke for the full transcript and Observe handoff.',
+      );
+    });
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'ready',
+    );
     expect(screen.getByText('Current member publication')).toBeTruthy();
     expect(screen.getByText('member:default')).toBeTruthy();
     expect(screen.queryByRole('combobox')).toBeNull();
@@ -422,6 +432,12 @@ describe('StudioMemberBindPanel', () => {
     });
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(await screen.findByText(/Smoke test passed in \d+ms/)).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'Smoke test passed. Continue to Invoke for a full run transcript, then use Observe for backend events.',
+    );
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'ready',
+    );
     expect(screen.getByText('Run run-1')).toBeTruthy();
     expect(
       screen.queryByText('The current Studio draft accepted the request.'),
@@ -520,6 +536,7 @@ describe('StudioMemberBindPanel', () => {
           scopeId: 'scope-1',
           scopeSource: 'nyxid',
         },
+        memberId: 'script-4',
         scopeId: 'scope-1',
         preferredServiceId: 'script-4',
         onContinueToInvoke: handleContinueToInvoke,
@@ -545,6 +562,12 @@ describe('StudioMemberBindPanel', () => {
     );
 
     expect(await screen.findByText('No endpoint data available')).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'The member is published, but Studio has no callable endpoint yet. Wait for the contract to refresh before continuing.',
+    );
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'waiting',
+    );
     const continueButton = screen.getByRole('button', {
       name: 'Continue to Invoke',
     });
@@ -601,6 +624,12 @@ describe('StudioMemberBindPanel', () => {
     );
 
     expect(await screen.findByText('Select a Team member before using Invoke.')).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'Bind can inspect this service, but Invoke stays blocked until Studio resolves a Team member target.',
+    );
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'blocked',
+    );
     expect(screen.queryByTestId('studio-bind-contract-card')).toBeNull();
     expect(screen.getByRole('button', { name: 'Send smoke test' })).toBeDisabled();
     const continueButton = screen.getByRole('button', { name: 'Continue to Invoke' });
@@ -706,6 +735,12 @@ describe('StudioMemberBindPanel', () => {
     expect(
       screen.getByText('No published contract exists for draft yet.'),
     ).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'This member still needs Bind. Publish the current revision before trying Invoke or Observe.',
+    );
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'blocked',
+    );
     expect(screen.getByText('Publish current member')).toBeTruthy();
 
     await act(async () => {
@@ -713,6 +748,419 @@ describe('StudioMemberBindPanel', () => {
     });
 
     expect(handleBindPendingCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains that a pending bind is not ready for Invoke until the contract materializes', async () => {
+    (studioApi.getMemberBinding as jest.Mock).mockResolvedValueOnce({
+      available: false,
+      scopeId: 'scope-1',
+      serviceId: '',
+      displayName: '',
+      serviceKey: '',
+      defaultServingRevisionId: '',
+      activeServingRevisionId: '',
+      deploymentId: '',
+      deploymentStatus: '',
+      primaryActorId: '',
+      updatedAt: '',
+      revisions: [],
+      currentBindingRun: {
+        bindingRunId: 'bind-member-1',
+        completedAtUtc: null,
+        createdAtUtc: '2026-06-02T03:30:00Z',
+        failure: null,
+        memberId: 'draft',
+        message: '',
+        scopeId: 'scope-1',
+        stateVersion: null,
+        status: 'platform_binding_pending',
+        targetServiceId: null,
+        updatedAtUtc: '2026-06-02T03:30:05Z',
+      },
+    });
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'draft',
+        scopeId: 'scope-1',
+        pendingBindingCandidate: {
+          kind: 'workflow',
+          displayName: 'draft',
+          description:
+            'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
+          actionLabel: 'Bind current revision',
+        },
+        onBindPendingCandidate: jest.fn(),
+        services: [],
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        /Platform publication is still running; Invoke is not ready/,
+      ),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+        'Bind accepted the publication request. Stay here until Studio observes the published contract, then continue to Invoke.',
+      );
+    });
+  });
+
+  it('explains a failed bind run and keeps the previous published contract actions available', async () => {
+    const handleContinueToInvoke = jest.fn();
+    (studioApi.getMemberBinding as jest.Mock).mockResolvedValueOnce({
+      available: true,
+      scopeId: 'scope-1',
+      serviceId: 'default',
+      displayName: 'workspace-demo',
+      serviceKey: 'scope-1:default:workspace-demo',
+      defaultServingRevisionId: 'rev-2',
+      activeServingRevisionId: 'rev-2',
+      deploymentId: 'dep-2',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-default',
+      updatedAt: '2026-03-26T08:00:00Z',
+      revisions: [],
+      lastBinding: {
+        boundAt: '2026-03-26T08:00:00Z',
+        implementationKind: 'workflow',
+        revisionId: 'rev-2',
+      },
+      currentBindingRun: {
+        bindingRunId: 'bind-member-failed',
+        completedAtUtc: '2026-06-02T03:32:00Z',
+        createdAtUtc: '2026-06-02T03:30:00Z',
+        failure: {
+          code: 'publish_failed',
+          message: 'Publication rejected by platform.',
+        },
+        memberId: 'default',
+        message: '',
+        scopeId: 'scope-1',
+        stateVersion: 5,
+        status: 'failed',
+        targetServiceId: 'default',
+        updatedAtUtc: '2026-06-02T03:32:00Z',
+      },
+    });
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'default',
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        onContinueToInvoke: handleContinueToInvoke,
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'Chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+                description: 'Chat with the previous workflow contract.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+        'Bind did not publish this member. Return to Build to adjust the member definition before retrying publication.',
+      );
+    });
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'failed',
+    );
+    expect(screen.getByRole('button', { name: 'Send smoke test' })).toBeEnabled();
+    const continueButton = screen.getByRole('button', { name: 'Continue to Invoke' });
+    expect(continueButton).toBeEnabled();
+
+    fireEvent.click(continueButton);
+
+    expect(handleContinueToInvoke).toHaveBeenCalledWith('default', 'chat');
+  });
+
+  it('waits for endpoint data after a succeeded bind run materializes without a callable contract', async () => {
+    const handleContinueToInvoke = jest.fn();
+    (studioApi.getMemberBinding as jest.Mock).mockResolvedValueOnce({
+      available: true,
+      scopeId: 'scope-1',
+      serviceId: 'default',
+      displayName: 'workspace-demo',
+      serviceKey: 'scope-1:default:workspace-demo',
+      defaultServingRevisionId: 'rev-2',
+      activeServingRevisionId: 'rev-2',
+      deploymentId: 'dep-2',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-default',
+      updatedAt: '2026-03-26T08:00:00Z',
+      revisions: [],
+      lastBinding: {
+        boundAt: '2026-03-26T08:00:00Z',
+        implementationKind: 'workflow',
+        revisionId: 'rev-2',
+      },
+      currentBindingRun: {
+        bindingRunId: 'bind-member-succeeded',
+        completedAtUtc: '2026-06-02T03:32:00Z',
+        createdAtUtc: '2026-06-02T03:30:00Z',
+        failure: null,
+        memberId: 'default',
+        message: '',
+        scopeId: 'scope-1',
+        stateVersion: 6,
+        status: 'succeeded',
+        targetServiceId: 'default',
+        updatedAtUtc: '2026-06-02T03:32:00Z',
+      },
+    });
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'default',
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        onContinueToInvoke: handleContinueToInvoke,
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+        'Bind completed, and Studio is refreshing the published contract. Continue to Invoke after endpoint data appears.',
+      );
+    });
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'waiting',
+    );
+    expect(screen.getByRole('button', { name: 'Send smoke test' })).toBeDisabled();
+    const continueButton = screen.getByRole('button', { name: 'Continue to Invoke' });
+    expect(continueButton).toBeDisabled();
+
+    fireEvent.click(continueButton);
+
+    expect(handleContinueToInvoke).not.toHaveBeenCalled();
+    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
+  });
+
+  it('blocks smoke test and Invoke while a newer bind run is still publishing over an old contract', async () => {
+    const handleContinueToInvoke = jest.fn();
+    (studioApi.getMemberBinding as jest.Mock).mockImplementationOnce(async () => ({
+      available: true,
+      scopeId: 'scope-1',
+      serviceId: 'default',
+      displayName: 'workspace-demo',
+      serviceKey: 'scope-1:default:workspace-demo',
+      defaultServingRevisionId: 'rev-2',
+      activeServingRevisionId: 'rev-2',
+      deploymentId: 'dep-2',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor-default',
+      updatedAt: '2026-03-26T08:00:00Z',
+      revisions: [],
+      lastBinding: {
+        boundAt: '2026-03-26T08:00:00Z',
+        implementationKind: 'workflow',
+        revisionId: 'rev-2',
+      },
+      currentBindingRun: {
+        bindingRunId: 'bind-member-2',
+        completedAtUtc: null,
+        createdAtUtc: '2026-06-02T03:30:00Z',
+        failure: null,
+        memberId: 'default',
+        message: '',
+        scopeId: 'scope-1',
+        stateVersion: 4,
+        status: 'platform_binding_pending',
+        targetServiceId: 'default',
+        updatedAtUtc: '2026-06-02T03:30:05Z',
+      },
+    }));
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'default',
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        onContinueToInvoke: handleContinueToInvoke,
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'Chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+                description: 'Chat with the previous workflow contract.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(studioApi.getMemberBinding).toHaveBeenCalledWith(
+        'scope-1',
+        'default',
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+        'Bind accepted the publication request. Stay here until Studio observes the published contract, then continue to Invoke.',
+      );
+    });
+
+    const smokeButton = screen.getByRole('button', { name: 'Send smoke test' });
+    const continueButton = screen.getByRole('button', { name: 'Continue to Invoke' });
+    expect(smokeButton).toBeDisabled();
+    expect(continueButton).toBeDisabled();
+
+    fireEvent.click(smokeButton);
+    fireEvent.click(continueButton);
+
+    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
+    expect(handleContinueToInvoke).not.toHaveBeenCalled();
+  });
+
+  it('explains that a smoke test failure is scoped to the contract check', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockRejectedValueOnce(
+      new Error('Backend rejected the smoke prompt.'),
+    );
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        memberId: 'default',
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'Chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+                description: 'Chat with the published workflow.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Send smoke test' }));
+    });
+
+    expect(await screen.findByText('Smoke test failed')).toBeTruthy();
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'Smoke test failed only this contract check. Retry here, or use Invoke when you need full events and typed payload debugging.',
+    );
+    expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
+      'failed',
+    );
+    expect(screen.getByRole('button', { name: 'Send smoke test' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Continue to Invoke' })).toBeEnabled();
   });
 
   it('clears the previous member bind notice when the bind candidate changes', async () => {

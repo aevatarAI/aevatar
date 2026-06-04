@@ -1,3 +1,4 @@
+import { t } from "@/shared/i18n/messages";
 function normalizeWhitespace(value: string | null | undefined): string {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -146,7 +147,7 @@ export async function readResponseErrorDetails(
     }
 
     return {
-      message: `${httpError}: ${htmlSummary}`,
+      message: t("shared.api.http.error.copy", "{value1}: {value2}", { value1: httpError, value2: htmlSummary }),
       status: response.status,
     };
   }

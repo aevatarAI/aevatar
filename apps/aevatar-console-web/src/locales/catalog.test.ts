@@ -1,9 +1,69 @@
 import enUSMessages from './en-US';
 import zhCNMessages from './zh-CN';
+import routes from '../../config/routes';
+
+type ConsoleRoute = {
+  name?: string;
+  routes?: ConsoleRoute[];
+};
+
+function collectRouteNames(routeItems: ConsoleRoute[]): string[] {
+  return routeItems.flatMap((route) => [
+    ...(route.name ? [route.name] : []),
+    ...(route.routes ? collectRouteNames(route.routes) : []),
+  ]);
+}
+
+function collectPlaceholders(value: string): string[] {
+  const names = new Set<string>();
+
+  for (const match of value.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    names.add(match[1]);
+  }
+
+  return [...names].sort();
+}
 
 describe('console locale catalogs', () => {
   it('keeps the English and Chinese message catalogs structurally aligned', () => {
     expect(Object.keys(zhCNMessages).sort()).toEqual(Object.keys(enUSMessages).sort());
+  });
+
+  it('keeps the English message catalog free of Chinese copy', () => {
+    const allowedChineseKeys = new Set(['common.language.zhCN']);
+    const keysWithChineseCopy = Object.entries(enUSMessages)
+      .filter(([key, value]) => !allowedChineseKeys.has(key) && /\p{Script=Han}/u.test(value))
+      .map(([key]) => key);
+
+    expect(keysWithChineseCopy).toEqual([]);
+  });
+
+  it('keeps ICU placeholder names aligned across locales', () => {
+    const enUSCatalog: Record<string, string> = enUSMessages;
+    const zhCNCatalog: Record<string, string> = zhCNMessages;
+    const placeholderMismatches = Object.keys(enUSCatalog)
+      .filter(
+        (key) =>
+          JSON.stringify(collectPlaceholders(enUSCatalog[key])) !==
+          JSON.stringify(collectPlaceholders(zhCNCatalog[key])),
+      );
+
+    expect(placeholderMismatches).toEqual([]);
+  });
+
+  it('keeps every named route backed by menu locale entries', () => {
+    const enUSCatalog: Record<string, string> = enUSMessages;
+    const zhCNCatalog: Record<string, string> = zhCNMessages;
+    const expectedMenuKeys = [...new Set(collectRouteNames(routes))].map(
+      (name) => `menu.${name}`,
+    );
+
+    expect(
+      expectedMenuKeys.filter((key) => enUSCatalog[key] === undefined),
+    ).toEqual([]);
+    expect(
+      expectedMenuKeys.filter((key) => zhCNCatalog[key] === undefined),
+    ).toEqual([]);
   });
 
   it('keeps team member action copy in message catalogs instead of components', () => {
@@ -133,6 +193,37 @@ describe('console locale catalogs', () => {
       '破坏性的',
       '全部的',
       '原型',
+      'dry-运行',
+      'Dry-运行',
+      'Draft-运行',
+      'workflow canvas',
+      'step detail',
+      'No parameters configured',
+      'Select role',
+      'PROMPT INSTRUCTION',
+      'Instruction added before',
+      'Run the current draft',
+      '建设模式',
+      '构建行动',
+      '草稿准备好了',
+      '画布·现场',
+      'Build surface',
+      'published contract',
+      'authoring 和 dry-run',
+      '折叠码头',
+      '扩展坞',
+      '调整底座',
+      '信号Payload',
+      '负载 Type URL',
+      '高级原始请求体',
+      '高级原始方法',
+      '高级原始路径',
+      '先进的 Payload 和运输',
+      '舞台能力姿势',
+      '准备推广',
+      '基本网址',
+      '默认标头',
+      '不可触摸',
     ];
 
     expect(

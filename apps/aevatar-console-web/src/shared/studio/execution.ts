@@ -244,7 +244,7 @@ export function buildExecutionTrace(
       latestStepId = stepId;
       logs.push({
         tone: 'started',
-        title: `${stepId} started`,
+        title: t("shared.studio.execution.started", "{value1} started", { value1: stepId }),
         meta: [
           String(customPayload?.stepType || '').trim(),
           String(customPayload?.targetRole || '').trim(),
@@ -345,9 +345,7 @@ export function buildExecutionTrace(
       latestStepId = stepId;
       logs.push({
         tone: customPayload?.success === false ? 'failed' : 'completed',
-        title: `${stepId} ${
-          customPayload?.success === false ? 'failed' : 'completed'
-        }`,
+        title: t("shared.studio.execution.copy", "{value1} {value2}", { value1: stepId, value2: customPayload?.success === false ? 'failed' : 'completed' }),
         meta: [
           stepState.stepType,
           stepState.branchKey ? `branch ${stepState.branchKey}` : null,

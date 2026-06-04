@@ -7,6 +7,7 @@ import {
   FactLine,
   SignalCard,
 } from "../components/TeamDetailPrimitives";
+import { t } from "@/shared/i18n/messages";
 
 type OverviewCompositionRow = {
   readonly key: string;
@@ -49,6 +50,7 @@ type TeamOverviewTabProps = {
   readonly latestVisibleUpdateLabel: string;
   readonly latestVisibleUpdateNote: string;
   readonly onClearEntryMember?: () => void;
+  readonly startupGuidance: string;
 };
 
 const surfaceStyle = (
@@ -90,6 +92,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   latestVisibleUpdateLabel,
   latestVisibleUpdateNote,
   onClearEntryMember,
+  startupGuidance,
 }) => {
   const intl = useIntl();
   const { token } = theme.useToken();
@@ -112,11 +115,16 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               <Typography.Text strong style={{ fontSize: 16 }}>
                 {intl.formatMessage({ id: "teams.detail.overview.status.title" })}
               </Typography.Text>
+              <Typography.Text type="secondary">
+                {t("pages.teams.tabs.teamoverviewtab.copy", "Startup status")}</Typography.Text>
               <DetailPill
                 style={currentHeaderStatusStyle}
                 text={currentHeaderStatusFriendly}
               />
             </Space>
+            <Typography.Text type="secondary">
+              {startupGuidance}
+            </Typography.Text>
           </div>
           <Space wrap size={[8, 8]}>
             <DetailPill

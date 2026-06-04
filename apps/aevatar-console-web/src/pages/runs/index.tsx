@@ -105,22 +105,25 @@ import {
 } from "./runEventPresentation";
 import {
   builtInPresets,
+  buildRunReadinessSummary,
   type ConsoleViewKey,
   defaultRunRouteName,
   formatElapsedDuration,
-  getRunStatusLabel,
   type HumanInputRecord,
   readInitialRunFormValues,
+  describeRunReturnTarget,
   type RecentRunTableRow,
   type ResumeFormValues,
   type RunFocusRecord,
   type RunFormValues,
   type RunStatusValue,
+  runStatusValueEnum,
   runsWorkbenchMonitorStyle,
   runsWorkbenchShellStyle,
   type RunSummaryRecord,
   type SelectedRouteRecord,
   type SignalFormValues,
+  getRunStatusLabel,
   trimOptional,
   type WaitingSignalRecord,
   workbenchOverviewGridStyle,
@@ -340,7 +343,7 @@ const runsChatComposerLabelStyle: React.CSSProperties = {
   color: "var(--ant-color-primary)",
   fontSize: 12,
   fontWeight: 700,
-  letterSpacing: 0,
+  letterSpacing: "0.08em",
   lineHeight: 1,
   textTransform: "uppercase",
 };
@@ -348,6 +351,36 @@ const runsChatComposerLabelStyle: React.CSSProperties = {
 const runsChatComposerHintStyle: React.CSSProperties = {
   color: "var(--ant-color-text-secondary)",
   fontSize: 12,
+};
+
+const runsChatComposerContextStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 6,
+  justifyContent: "flex-end",
+};
+
+const runsChatComposerContextTagStyle: React.CSSProperties = {
+  background: "rgba(255, 255, 255, 0.78)",
+  border: "1px solid rgba(148, 163, 184, 0.22)",
+  borderRadius: 999,
+  color: "var(--ant-color-text-secondary)",
+  fontSize: 12,
+  fontWeight: 600,
+  lineHeight: "18px",
+  maxWidth: 240,
+  overflow: "hidden",
+  padding: "3px 8px",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const runsChatComposerWarningStyle: React.CSSProperties = {
+  color: "var(--ant-color-warning-text)",
+  fontSize: 12,
+  lineHeight: "18px",
+  textAlign: "right",
 };
 
 const runsChatComposerSendButtonStyle: React.CSSProperties = {
@@ -681,6 +714,12 @@ const RunsPage: React.FC = () => {
   const handleEndpointChange = useCallback((value: string) => {
     const normalizedValue = value.trim();
     setActiveEndpointId((currentValue) =>
+      currentValue === normalizedValue ? currentValue : normalizedValue
+    );
+  }, []);
+  const handleScopeIdChange = useCallback((value: string) => {
+    const normalizedValue = value.trim();
+    setActiveScopeId((currentValue) =>
       currentValue === normalizedValue ? currentValue : normalizedValue
     );
   }, []);
@@ -1056,6 +1095,10 @@ const RunsPage: React.FC = () => {
       runId: session.runId || undefined,
     });
   }, [requestedReturnTo, resolveRunScopeId, session.runId]);
+  const returnTargetLabel = useMemo(
+    () => describeRunReturnTarget(teamAdvancedHref),
+    [teamAdvancedHref]
+  );
 
   const resolveRunServiceOverrideId = useCallback(() => {
     return (
@@ -1218,6 +1261,7 @@ const RunsPage: React.FC = () => {
   const actorId = session.context?.actorId;
   const commandId = session.context?.commandId ?? "";
   const canOpenMissionControl = Boolean(activeScopeId.trim() && session.runId);
+  const hasRunInspectorTarget = Boolean(actorId || session.runId);
   const handleOpenMissionControl = useCallback(() => {
     const runId = session.runId?.trim();
     const scopeId = activeScopeId.trim();
@@ -1324,10 +1368,10 @@ const RunsPage: React.FC = () => {
         return {
           routeName: scopeDraftPayload.bundleName,
           groupLabel: "Studio",
-          sourceLabel: t("pages.runs.index.draft.bundle", "Draft bundle"),
+          sourceLabel: "Draft bundle",
           llmStatus: "success",
           description:
-            t("pages.runs.index.executing.the.current.studio.draft", "Executing the current Studio draft bundle through the scope draft-run endpoint."),
+            t("pages.runs.index.executing.the.current.studio.draft.2", "Executing the current Studio draft bundle through the scope draft-run endpoint."),
         };
       }
 
@@ -1593,76 +1637,67 @@ const RunsPage: React.FC = () => {
           ? ("human_approval" as const)
           : ("human_input" as const),
         label: approval
-          ? t("pages.runs.index.awaiting.approval.on.step", "Awaiting approval on {step}", {
-              step: humanInputRecord.stepId || t("pages.runs.index.current.step", "current step"),
-            })
-          : t("pages.runs.index.awaiting.human.input.on.step", "Awaiting human input on {step}", {
-              step: humanInputRecord.stepId || t("pages.runs.index.current.step", "current step"),
-            }),
+          ? `Awaiting approval on ${humanInputRecord.stepId || "current step"}`
+          : `Awaiting human input on ${
+              humanInputRecord.stepId || "current step"
+            }`,
         alertType: "warning" as const,
-        title: approval
-          ? t("pages.runs.index.approval.required", "Approval required")
-          : t("pages.runs.index.human.input.required", "Human input required"),
+        title: approval ? "Approval required" : "Human input required",
         description:
-          humanInputRecord.prompt ||
-          t("pages.runs.index.operator.action.is.required", "Operator action is required to continue."),
+          humanInputRecord.prompt || "Operator action is required to continue.",
       };
     }
 
     if (waitingSignalRecord) {
       return {
         status: "wait_signal" as const,
-        label: t("pages.runs.index.waiting.for.signal.name", "Waiting for signal {signalName}", {
-          signalName: waitingSignalRecord.signalName || "unknown",
-        }),
+        label: t("pages.runs.index.waiting.for.signal", "Waiting for signal {value1}", { value1: waitingSignalRecord.signalName || "unknown" }),
         alertType: "warning" as const,
-        title: t("pages.runs.index.waiting.for.external.signal", "Waiting for external signal"),
+        title: t("pages.runs.index.waiting.for.external.signal.2", "Waiting for external signal"),
         description:
           waitingSignalRecord.prompt ||
-          t("pages.runs.index.the.run.is.paused.until.signal", "The run is paused until the expected signal arrives."),
+          "The run is paused until the expected signal arrives.",
       };
     }
 
     if (streaming) {
       return {
         status: "running" as const,
-        label: t("pages.runs.index.streaming.over.transport", "Streaming over {transport}", {
-          transport: activeTransport.toUpperCase(),
-        }),
+        label: t("pages.runs.index.streaming.over", "Streaming over {value1}", { value1: activeTransport.toUpperCase() }),
         alertType: "info" as const,
-        title: t("pages.runs.index.run.in.progress", "Run in progress"),
-        description: t("pages.runs.index.messages.and.events.are.still", "Messages and events are still arriving from the backend."),
+        title: t("pages.runs.index.run.in.progress.2", "Run in progress"),
+        description: t("pages.runs.index.messages.and.events.are.still.2", "Messages and events are still arriving from the backend."),
       };
     }
 
     if (session.status === "running") {
       return {
         status: "running" as const,
-        label: t("pages.runs.index.invocation.accepted", "Invocation accepted"),
+        label: t("pages.runs.index.invocation.accepted.2", "Invocation accepted"),
         alertType: "info" as const,
-        title: t("pages.runs.index.awaiting.observation", "Awaiting observation"),
+        title: t("pages.runs.index.awaiting.observation.2", "Awaiting observation"),
         description:
-          t("pages.runs.index.the.backend.accepted.the.command", "The backend accepted the command. This console will stay pending until observed events arrive."),
+          t("pages.runs.index.the.backend.accepted.the.command.2", "The backend accepted the command. This console will stay pending until observed events arrive."),
       };
     }
 
     if (session.status === "finished") {
       return {
         status: "finished" as const,
-        label: t("pages.runs.index.run.completed", "Run completed"),
+        label: t("pages.runs.index.run.completed.2", "Run completed"),
         alertType: "success" as const,
-        title: t("pages.runs.index.run.finished", "Run finished"),
-        description: t("pages.runs.index.the.backend.reported.completed.run", "The backend reported a completed run."),
+        title: t("pages.runs.index.run.finished.2", "Run finished"),
+        description: t("pages.runs.index.the.backend.reported.completed.run.2", "The backend reported a completed run."),
       };
     }
 
     return {
       status: "idle" as const,
-      label: t("pages.runs.index.ready.to.start.run", "Ready to start a run"),
+      label: t("pages.runs.index.ready.to.start.run.2", "Ready to start a run"),
       alertType: "info" as const,
-      title: t("pages.runs.index.idle", "Idle"),
+      title: "Idle",
       description:
-        t("pages.runs.index.compose.prompt.or.payload.and", "Compose a prompt or payload and start a scoped endpoint run."),
+        t("pages.runs.index.compose.prompt.or.payload.and.2", "Compose a prompt or payload and start a scoped endpoint run."),
     };
   }, [
     activeTransport,
@@ -1916,6 +1951,20 @@ const RunsPage: React.FC = () => {
         : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
   const isChatConsole = endpointKind === "chat";
+  const composerScopeId = resolveRunScopeId();
+  const composerRouteLabel =
+    routeName || (scopeDraftPayload ? scopeDraftPayload.bundleName : "Workspace default");
+  const composerEndpointLabel = endpointName || "chat";
+  const runReadiness = useMemo(
+    () =>
+      buildRunReadinessSummary({
+        endpointLabel: composerEndpointLabel,
+        routeLabel: composerRouteLabel,
+        scopeId: composerScopeId,
+      }),
+    [composerEndpointLabel, composerRouteLabel, composerScopeId]
+  );
+  const composerReady = runReadiness.ready;
 
   const handleSubmitResume = useCallback(
     async (values: ResumeFormValues) => {
@@ -1979,16 +2028,12 @@ const RunsPage: React.FC = () => {
     <RunsMessagesView
       emptyDescription={
         isChatConsole
-          ? t("pages.runs.index.no.conversation.yet", "No conversation yet. Send a prompt to start the run.")
-          : t("pages.runs.runsmessagesview.no.message.output.yet", "No message output yet.")
+          ? "No conversation yet. Send a prompt to start the run."
+          : "No message output yet."
       }
       messages={displayedMessages}
       topAccessory={isChatConsole ? chatActionRequiredCard : undefined}
-      title={
-        isChatConsole
-          ? t("pages.runs.index.conversation", "Conversation")
-          : t("pages.runs.runsmessagesview.message.stream", "Message stream")
-      }
+      title={isChatConsole ? "Conversation" : "Message stream"}
     />
   );
 
@@ -2006,7 +2051,7 @@ const RunsPage: React.FC = () => {
   const handleSubmitComposer = useCallback(async () => {
     const prompt = composerPrompt.trim();
     if (!prompt) {
-      messageApi.warning(t("pages.runs.index.prompt.is.required", "Prompt is required."));
+      messageApi.warning("Prompt is required.");
       return;
     }
 
@@ -2085,17 +2130,19 @@ const RunsPage: React.FC = () => {
       showSubmitActions={!isChatConsole}
       streaming={streaming}
       submitPathLabel={submitPathLabel}
-      transportOptions={[{ label: t("pages.runs.index.service.sse.stream", "Service SSE stream"), value: "sse" }]}
+      transportOptions={[{ label: t("pages.runs.index.service.sse.stream.2", "Service SSE stream"), value: "sse" }]}
       variant={isChatConsole ? "chat" : "default"}
       visiblePresets={visiblePresets}
       workflowCatalogLoading={workflowCatalogQuery.isLoading}
       routeOptions={routeOptions}
+      runReadiness={isChatConsole ? runReadiness : undefined}
       onAbortRun={abortRun}
       onCatalogSearchChange={setCatalogSearch}
       onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
       onEndpointChange={handleEndpointChange}
       onEndpointKindChange={handleEndpointKindChange}
       onSelectRouteName={handleRouteSelection}
+      onScopeIdChange={handleScopeIdChange}
       onSubmitRun={async (values) => {
         await sendRun(values.scopeId ?? "", values);
       }}
@@ -2137,24 +2184,24 @@ const RunsPage: React.FC = () => {
         <div style={runsWorkbenchHeaderBarStyle}>
           <div style={runsWorkbenchHeaderTitleStyle}>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              {t("pages.runs.index.run.console", "Run Console")}</Typography.Title>
+              {t("pages.runs.index.run.console.2", "Run Console")}</Typography.Title>
             <Popover
               content={
                 <Typography.Paragraph
                   style={{ margin: 0, maxWidth: 360 }}
                   type="secondary"
                 >
-                  {t("pages.runs.index.start.scoped.run.over", "Start a scoped run over")}{" "}
+                  {t("pages.runs.index.start.scoped.run.over.2", "Start a scoped run over")}{" "}
                   <Typography.Text code>
                     {submitPathLabel}
                   </Typography.Text>{" "}
-                  {t("pages.runs.index.and.stay.in.one.place", "and stay in one place for conversation, events, trace, and operator actions.")}</Typography.Paragraph>
+                  {t("pages.runs.index.and.stay.in.one.place.2", "and stay in one place for conversation, events, trace, and operator actions.")}</Typography.Paragraph>
               }
               placement="bottomLeft"
               trigger={["hover", "click"]}
             >
               <Button
-                aria-label={t("pages.runs.index.open.runtime.console.guide", "Open runtime console guide")}
+                aria-label={t("pages.runs.index.open.runtime.console.guide.2", "Open runtime console guide")}
                 icon={<InfoCircleOutlined />}
                 shape="circle"
                 type="text"
@@ -2172,37 +2219,40 @@ const RunsPage: React.FC = () => {
                 icon={<ArrowLeftOutlined />}
                 onClick={() => history.push(teamAdvancedHref)}
               >
-                {t("pages.runs.index.return.to.team.editor", "Return to team editor")}</Button>
+                {returnTargetLabel}
+              </Button>
             ) : null}
             <Button
               className={runsWorkbenchHeaderButtonClassName}
               icon={<AppstoreOutlined />}
               onClick={() => history.push(buildRuntimeWorkflowsHref())}
             >
-              {t("pages.runs.index.workflow.catalog", "Workflow catalog")}</Button>
-            <Button
-              className={runsWorkbenchHeaderButtonClassName}
-              disabled={!actorId && !session.runId}
-              icon={<DeploymentUnitOutlined />}
-              onClick={() =>
-                history.push(
-                  buildRuntimeExplorerHref({
-                    actorId: actorId ?? undefined,
-                    runId: session.runId || undefined,
-                    scopeId: activeScopeId || undefined,
-                    serviceOverrideId: activeServiceOverrideId || undefined,
-                  })
-                )
-              }
-            >
-              {t("pages.runs.index.actor.explorer", "Actor explorer")}</Button>
-            <Button
-              className={`${runsWorkbenchHeaderButtonClassName} ${runsWorkbenchHeaderButtonAccentClassName}`}
-              disabled={!canOpenMissionControl}
-              icon={<ControlOutlined />}
-              onClick={handleOpenMissionControl}
-            >
-              {t("pages.runs.index.mission.control", "Mission Control")}</Button>
+              {t("pages.runs.index.workflow.catalog.2", "Workflow catalog")}</Button>
+            {hasRunInspectorTarget ? (
+              <Button
+                className={runsWorkbenchHeaderButtonClassName}
+                icon={<DeploymentUnitOutlined />}
+                onClick={() =>
+                  history.push(
+                    buildRuntimeExplorerHref({
+                      actorId: actorId ?? undefined,
+                      runId: session.runId || undefined,
+                      scopeId: activeScopeId || undefined,
+                      serviceOverrideId: activeServiceOverrideId || undefined,
+                    })
+                  )
+                }
+              >
+                {t("pages.runs.index.actor.explorer.2", "Actor explorer")}</Button>
+            ) : null}
+            {canOpenMissionControl ? (
+              <Button
+                className={`${runsWorkbenchHeaderButtonClassName} ${runsWorkbenchHeaderButtonAccentClassName}`}
+                icon={<ControlOutlined />}
+                onClick={handleOpenMissionControl}
+              >
+                {t("pages.runs.index.mission.control.2", "Mission Control")}</Button>
+            ) : null}
           </div>
         </div>
         {isChatConsole ? (
@@ -2238,9 +2288,8 @@ const RunsPage: React.FC = () => {
                   hasPendingInteraction={hasPendingInteraction}
                   messageConsoleView={messageConsoleView}
                   messageCount={displayedMessages.length}
-                  messagesLabel={t("pages.runs.index.conversation", "Conversation")}
+                  messagesLabel="Conversation"
                   onConsoleViewChange={setConsoleView}
-                  preferMessagesFirst
                   timelineView={
                     <RunsTimelineView
                       groups={timelineGroups}
@@ -2251,7 +2300,7 @@ const RunsPage: React.FC = () => {
                       selectedItemKey={selectedTraceItemKey}
                     />
                   }
-                  title={t("pages.runs.index.conversation", "Conversation")}
+                  title="Conversation"
                 />
               </div>
               <div
@@ -2260,17 +2309,33 @@ const RunsPage: React.FC = () => {
               >
                 <style>{runsChatComposerCss}</style>
                 <div style={runsChatComposerHeaderStyle}>
-                  <div style={runsChatComposerLabelStyle}>{t("pages.runs.index.prompt", "Prompt")}</div>
-                  <Typography.Text style={runsChatComposerHintStyle}>
-                    {t("pages.runs.index.enter.to.send", "Enter to send")}</Typography.Text>
+                  <div style={runsChatComposerLabelStyle}>{t("pages.runs.index.prompt.2", "Prompt")}</div>
+                  <div style={runsChatComposerContextStyle}>
+                    <span style={runsChatComposerContextTagStyle}>
+                      Workspace: {composerScopeId || "required"}
+                    </span>
+                    <span style={runsChatComposerContextTagStyle}>
+                      Route: {composerRouteLabel}
+                    </span>
+                    <span style={runsChatComposerContextTagStyle}>
+                      Endpoint: {composerEndpointLabel}
+                    </span>
+                    <Typography.Text style={runsChatComposerHintStyle}>
+                      {t("pages.runs.index.enter.to.send.2", "Enter to send")}</Typography.Text>
+                  </div>
                 </div>
+                {!composerReady ? (
+                  <div style={runsChatComposerWarningStyle}>
+                    {runReadiness.blockingReason}
+                  </div>
+                ) : null}
                 <div className={runsChatComposerBodyClassName}>
                   <div style={runsChatComposerInputWrapStyle}>
                     <div
                       className={runsChatComposerInputShellClassName}
                     >
                       <Input.TextArea
-                        aria-label={t("pages.runs.index.prompt", "Prompt")}
+                        aria-label="Prompt"
                         autoSize={{ minRows: 2, maxRows: 6 }}
                         className={runsChatComposerInputClassName}
                         onChange={(event) =>
@@ -2283,10 +2348,12 @@ const RunsPage: React.FC = () => {
                             !event.nativeEvent.isComposing
                           ) {
                             event.preventDefault();
-                            void handleSubmitComposer();
+                            if (composerReady) {
+                              void handleSubmitComposer();
+                            }
                           }
                         }}
-                        placeholder={t("pages.runs.index.describe.the.task.to.run", "Describe the task to run.")}
+                        placeholder={t("pages.runs.index.describe.the.task.to.run.2", "Describe the task to run.")}
                         style={runsChatComposerTextareaStyle}
                         value={composerPrompt}
                       />
@@ -2297,13 +2364,14 @@ const RunsPage: React.FC = () => {
                     style={runsChatComposerActionsStyle}
                   >
                     <Button
+                      disabled={!composerReady}
                       icon={<SendOutlined />}
                       loading={streaming}
                       onClick={() => void handleSubmitComposer()}
                       style={runsChatComposerSendButtonStyle}
                       type="primary"
                     >
-                      {t("pages.runs.index.send", "Send")}</Button>
+                      {t("pages.runs.index.send.2", "Send")}</Button>
                   </div>
                 </div>
               </div>
@@ -2348,7 +2416,7 @@ const RunsPage: React.FC = () => {
                   hasPendingInteraction={hasPendingInteraction}
                   messageConsoleView={messageConsoleView}
                   messageCount={displayedMessages.length}
-                  messagesLabel={t("pages.runs.runstracepane.messages.label", "Messages")}
+                  messagesLabel="Messages"
                   onConsoleViewChange={setConsoleView}
                   timelineView={
                     <RunsTimelineView
@@ -2360,7 +2428,7 @@ const RunsPage: React.FC = () => {
                       selectedItemKey={selectedTraceItemKey}
                     />
                   }
-                  title={t("pages.runs.index.invocation.trace", "Invocation trace")}
+                  title={t("pages.runs.index.invocation.trace.2", "Invocation trace")}
                 />
               </div>
             </div>
@@ -2378,7 +2446,7 @@ const RunsPage: React.FC = () => {
             open
             size={560}
             styles={{ body: drawerBodyStyle }}
-            title={t("pages.runs.index.run.setup", "Run setup")}
+            title={t("pages.runs.index.run.setup.2", "Run setup")}
             onClose={() => setIsSetupDrawerOpen(false)}
           >
             <div style={drawerScrollStyle}>{launchRailContent}</div>
@@ -2393,8 +2461,8 @@ const RunsPage: React.FC = () => {
             styles={{ body: drawerBodyStyle }}
             title={
               hasPendingInteraction
-                ? t("pages.runs.index.details.action.pending", "Details · action pending")
-                : t("pages.runs.index.details", "Details")
+                ? "Details · action pending"
+                : "Details"
             }
             size={520}
             onClose={() => setIsInspectorDrawerOpen(false)}
