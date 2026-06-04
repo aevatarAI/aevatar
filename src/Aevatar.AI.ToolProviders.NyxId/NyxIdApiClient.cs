@@ -205,6 +205,39 @@ public sealed class NyxIdApiClient : IDisposable
         return await SendAsync(request, ct);
     }
 
+    public async Task<string> ProxyRequestBinaryAsync(
+        string token,
+        string slug,
+        string path,
+        string method,
+        byte[] body,
+        string contentType,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
+        var baseUrl = GetBaseUrl();
+        var normalizedPath = path.TrimStart('/');
+        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
+
+        var httpMethod = new HttpMethod(method.ToUpperInvariant());
+        using var request = new HttpRequestMessage(httpMethod, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var callerSpecifiedUserAgent = ApplyExtraHeaders(request, extraHeaders);
+        if (!callerSpecifiedUserAgent)
+            request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
+
+        if (httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head)
+            request.Content = new ByteArrayContent(body)
+            {
+                Headers = { ContentType = MediaTypeHeaderValue.Parse(contentType) },
+            };
+
+        return await SendAsync(request, ct);
+    }
+
     // ─── SSH ───
 
     /// <summary>
@@ -740,6 +773,24 @@ public sealed class NyxIdApiClient : IDisposable
 
     private string GetBaseUrl() =>
         _options.BaseUrl?.TrimEnd('/') ?? throw new InvalidOperationException("NyxID base URL is not configured.");
+
+    private static bool ApplyExtraHeaders(
+        HttpRequestMessage request,
+        Dictionary<string, string>? extraHeaders)
+    {
+        var callerSpecifiedUserAgent = false;
+        if (extraHeaders == null)
+            return false;
+
+        foreach (var (key, value) in extraHeaders)
+        {
+            request.Headers.TryAddWithoutValidation(key, value);
+            if (string.Equals(key, UserAgentHeaderName, StringComparison.OrdinalIgnoreCase))
+                callerSpecifiedUserAgent = true;
+        }
+
+        return callerSpecifiedUserAgent;
+    }
 
     internal async Task<string> GetAsync(string token, string path, CancellationToken ct)
     {

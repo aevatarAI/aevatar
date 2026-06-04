@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Skills;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -41,8 +42,13 @@ public static class ServiceCollectionExtensions
             return new OrnnSkillClient(
                 sp.GetRequiredService<OrnnOptions>(),
                 nyxIdApiClient,
+                sp.GetRequiredService<OrnnOptions>().PerCallTimeout,
                 sp.GetService<ILogger<OrnnSkillClient>>());
         });
+        services.TryAddSingleton<OrnnSkillPublishValidationPipeline>();
+        services.TryAddSingleton<OrnnSkillPackageBuilder>();
+        services.TryAddSingleton<OrnnSkillPackageFormatValidator>();
+        services.TryAddSingleton<OrnnPublishSkillTool>();
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
         services.TryAddSingleton<OrnnAgentToolSource>();
         services.TryAddAgentToolSourceAlias<OrnnAgentToolSource>(GetOrnnAgentToolSource);

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -176,6 +177,52 @@ public sealed class OrnnSkillClient
         {
             _logger.LogWarning(ex, "Ornn get skill failed for '{IdOrName}'", idOrName);
             return null;
+        }
+    }
+
+    public async Task<OrnnSkillPublishResponse> PublishSkillAsync(
+        string accessToken,
+        byte[] zipBytes,
+        CancellationToken ct = default)
+    {
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestBinaryAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: "/api/v1/skills",
+                method: "POST",
+                body: zipBytes,
+                contentType: "application/zip",
+                extraHeaders: null,
+                ct: linkedCts.Token);
+
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return new OrnnSkillPublishResponse(false, response, proxyError);
+
+            return new OrnnSkillPublishResponse(true, response);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn skill publish exceeded {TimeoutSeconds}s per-call budget",
+                (int)_perCallTimeout.TotalSeconds);
+            return new OrnnSkillPublishResponse(
+                false,
+                string.Empty,
+                $"Ornn skill publish exceeded {(int)_perCallTimeout.TotalSeconds}s budget.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn skill publish failed");
+            return new OrnnSkillPublishResponse(false, string.Empty, ex.Message);
         }
     }
 

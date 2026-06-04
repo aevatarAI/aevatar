@@ -14,4 +14,9 @@ public sealed class OrnnOptions
     /// <c>Aevatar:Ornn:NyxIdSlug</c> in configuration.
     /// </summary>
     public string NyxIdSlug { get; set; } = "ornn-api";
+
+    /// <summary>
+    /// Per-call timeout used for Ornn read, validation, and publish requests through NyxID.
+    /// </summary>
+    public TimeSpan PerCallTimeout { get; set; } = OrnnSkillClient.DefaultPerCallTimeout;
 }

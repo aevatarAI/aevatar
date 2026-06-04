@@ -527,7 +527,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         tools.Select(static tool => tool.Name)
             .Should()
-            .Equal("use_skill", "ornn_search_skills");
+            .Equal("use_skill", "ornn_search_skills", "ornn_publish_skill");
     }
 
     [Fact]
@@ -551,6 +551,7 @@ public sealed class MainnetResponsesEndpointsTests
             [
                 new StubAgentTool("use_skill", "Run a registered skill body"),
                 new StubAgentTool("ornn_search_skills", "Search Ornn skill catalog"),
+                new StubAgentTool("ornn_publish_skill", "Publish Ornn skill catalog package"),
             ]);
         await using var app = await CreateAppAsync(provider, sessions, responsesToolProvider: bridgeProvider);
         var client = app.GetTestClient();
@@ -575,7 +576,7 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools.Select(static tool => tool.Name)
             .Should()
-            .Contain(["use_skill", "ornn_search_skills"]);
+            .Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill"]);
     }
 
     [Fact]

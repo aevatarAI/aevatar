@@ -475,6 +475,7 @@ public sealed class MainnetMessagesEndpointsTests
             additiveTools: [
                 new MessagesStubAgentTool("use_skill", "would inject skill bridge"),
                 new MessagesStubAgentTool("ornn_search_skills", "would inject ornn bridge"),
+                new MessagesStubAgentTool("ornn_publish_skill", "would inject ornn publish bridge"),
             ]);
         await using var app = await CreateAppAsync(provider, responsesToolProvider: toolProvider);
         var client = app.GetTestClient();
@@ -502,7 +503,7 @@ public sealed class MainnetMessagesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         provider.LastRequest.Should().NotBeNull();
         var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
-        toolNames.Should().Contain(["use_skill", "ornn_search_skills", "WebSearch"]);
+        toolNames.Should().Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill", "WebSearch"]);
     }
 
     [Fact]

@@ -12,8 +12,10 @@ using Aevatar.AI.ToolProviders.ServiceInvoke;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.AI.ToolProviders.Binding;
+using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.AI.ToolProviders.Workflow.Ports;
+using Aevatar.Bootstrap.Extensions.AI.OrnnPublishing;
 using Aevatar.AI.Infrastructure.Local.Adapters;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
@@ -955,6 +957,8 @@ public static class ServiceCollectionExtensions
             if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
                 o.NyxIdSlug = options.OrnnNyxIdSlug;
         });
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, WorkflowOrnnSkillPublishAssetValidator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, ScriptOrnnSkillPublishAssetValidator>());
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)
