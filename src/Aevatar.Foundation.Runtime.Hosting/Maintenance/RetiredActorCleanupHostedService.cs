@@ -218,9 +218,6 @@ public sealed class RetiredActorCleanupHostedService : BackgroundService
             revalidation.CleanupReason);
     }
 
-    // Refactor (issue1287-first):
-    //   Old pattern: stale marker state represented cleanup truth.
-    //   New principle: runtime kind and durable stream presence are the only cleanup facts.
     private async Task<CleanupTargetRevalidation> RevalidateTargetForCleanupAsync(
         RetiredActorTarget target,
         CancellationToken ct)

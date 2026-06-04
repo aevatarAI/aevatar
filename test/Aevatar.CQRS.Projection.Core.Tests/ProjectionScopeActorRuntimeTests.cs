@@ -35,6 +35,7 @@ public sealed class ProjectionScopeActorRuntimeTests
 
         var actorId = ProjectionScopeActorId.Build(scopeKey);
         runtime.CreatedActorIds.Should().Equal(actorId);
+        runtime.CreatedByKind.Should().Equal(("test.projection-scope", actorId));
         runtime.DestroyedActorIds.Should().BeEmpty();
     }
 
@@ -106,6 +107,7 @@ public sealed class ProjectionScopeActorRuntimeTests
             "destroy:" + actorId,
             "pubsub-reset:" + actorId,
             "create:" + actorId);
+        runtime.CreatedByKind.Should().Equal(("test.projection-scope", actorId));
     }
 
     [Fact]
@@ -193,6 +195,7 @@ public sealed class ProjectionScopeActorRuntimeTests
 
         public List<string> CreatedActorIds { get; } = [];
         public List<string> DestroyedActorIds { get; } = [];
+        public List<(string agentKind, string actorId)> CreatedByKind { get; } = [];
 
         public void SeedExisting(string actorId) => _existing.Add(actorId);
 
@@ -209,8 +212,17 @@ public sealed class ProjectionScopeActorRuntimeTests
         public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
             CreateAsync<DummyAgent>(id, ct);
 
-        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default) =>
-            CreateAsync<DummyAgent>(id, ct);
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
+            ArgumentNullException.ThrowIfNull(id);
+            CreatedActorIds.Add(id);
+            CreatedByKind.Add((agentKind, id));
+            _operationLog.Add("create:" + id);
+            _existing.Add(id);
+            return Task.FromResult<IActor>(new StubActor(id));
+        }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {

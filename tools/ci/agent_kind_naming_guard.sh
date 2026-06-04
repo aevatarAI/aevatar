@@ -26,6 +26,86 @@ emit_violation() {
   violations=$((violations + 1))
 }
 
+trim_line() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "${value}"
+}
+
+has_local_gagent_attribute() {
+  local file="$1"
+  local class_line="$2"
+  local raw=""
+  local trimmed=""
+  local attribute_block=""
+
+  while IFS= read -r raw; do
+    trimmed="$(trim_line "${raw}")"
+
+    if [[ -z "${trimmed}" || "${trimmed}" == //* ]]; then
+      if [[ -n "${attribute_block}" ]]; then
+        attribute_block+=$'\n'"${raw}"
+      fi
+      continue
+    fi
+
+    if [[ "${trimmed}" == \[* ]]; then
+      attribute_block+=$'\n'"${raw}"
+      continue
+    fi
+
+    if [[ -n "${attribute_block}" &&
+          "${trimmed}" != *";"* &&
+          "${trimmed}" != *"{"* &&
+          "${trimmed}" != *"}"* &&
+          "${trimmed}" != using[[:space:]]* &&
+          "${trimmed}" != namespace[[:space:]]* &&
+          "${trimmed}" != class[[:space:]]* &&
+          "${trimmed}" != *[[:space:]]class[[:space:]]* ]]; then
+      attribute_block+=$'\n'"${raw}"
+      continue
+    fi
+
+    attribute_block=""
+  done < <(sed -n "1,$((class_line - 1))p" "${file}")
+
+  rg -q '\[GAgent\(' <<< "${attribute_block}"
+}
+
+run_class_local_self_test() {
+  local temp_dir=""
+  temp_dir="$(mktemp -d)"
+  local fixture="${temp_dir}/ClassLocalFixture.cs"
+  {
+    printf '%s\n' 'using Aevatar.Foundation.Abstractions;'
+    printf '%s\n' ''
+    printf '%s\n' '[GAgent("tests.decorated-fixture")]'
+    printf '%s\n' 'public sealed class DecoratedFixtureAgent : GAgentBase<object> { }'
+    printf '%s\n' ''
+    printf '%s\n' 'public sealed class UndecoratedFixtureAgent : GAgentBase<object> { }'
+  } > "${fixture}"
+
+  local decorated_line=""
+  local undecorated_line=""
+  decorated_line="$(rg -n 'DecoratedFixtureAgent' "${fixture}" | sed -E 's/:.*//')"
+  undecorated_line="$(rg -n 'UndecoratedFixtureAgent' "${fixture}" | sed -E 's/:.*//')"
+
+  if ! has_local_gagent_attribute "${fixture}" "${decorated_line}"; then
+    echo "agent_kind_naming_guard: self-test failed; decorated fixture was not recognized." >&2
+    rm -rf "${temp_dir}"
+    exit 1
+  fi
+
+  if has_local_gagent_attribute "${fixture}" "${undecorated_line}"; then
+    echo "agent_kind_naming_guard: self-test failed; previous class attribute leaked to an undecorated class." >&2
+    rm -rf "${temp_dir}"
+    exit 1
+  fi
+
+  rm -rf "${temp_dir}"
+}
+
 # Files that may declare kinds: any C# under production source roots.
 candidate_search_paths=("src" "agents")
 SEARCH_PATHS=()
@@ -39,6 +119,8 @@ if (( ${#SEARCH_PATHS[@]} == 0 )); then
   echo "agent_kind_naming_guard: no source roots found, skipping."
   exit 0
 fi
+
+run_class_local_self_test
 
 attribute_pattern='\[GAgent\("(?P<kind>[^"]+)"\)\]'
 
@@ -85,7 +167,7 @@ while IFS=: read -r file line content; do
     continue
   fi
 
-  if ! head -n "${line}" "${file}" | rg -q '\[GAgent\('; then
+  if ! has_local_gagent_attribute "${file}" "${line}"; then
     echo "::error file=${file},line=${line}::Concrete production agent class is missing a primary [GAgent(\"module.entity\")] kind."
     violations=$((violations + 1))
   fi
