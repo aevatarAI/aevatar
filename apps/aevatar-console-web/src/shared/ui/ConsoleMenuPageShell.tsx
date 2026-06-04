@@ -15,7 +15,7 @@ const rootStyle: React.CSSProperties = {
   boxSizing: 'border-box',
   display: 'flex',
   flexDirection: 'column',
-  gap: 20,
+  gap: 16,
   maxWidth: '100%',
   minHeight: 0,
   minWidth: 0,
@@ -42,14 +42,14 @@ const headerTextStyle: React.CSSProperties = {
 };
 
 const breadcrumbStyle: React.CSSProperties = {
-  color: '#8c8c8c',
-  fontSize: 14,
+  color: '#475467',
+  fontSize: 13,
   fontWeight: 600,
   lineHeight: '22px',
 };
 
 const titleStyle: React.CSSProperties = {
-  color: '#1d2129',
+  color: '#111827',
   fontSize: 24,
   fontWeight: 700,
   lineHeight: 1.25,
@@ -57,7 +57,7 @@ const titleStyle: React.CSSProperties = {
 };
 
 const descriptionStyle: React.CSSProperties = {
-  color: '#8c8c8c',
+  color: '#475467',
   fontSize: 14,
   lineHeight: 1.6,
   margin: 0,
@@ -65,10 +65,11 @@ const descriptionStyle: React.CSSProperties = {
 };
 
 const defaultSurfaceStyle: React.CSSProperties = {
-  background: '#fafcff',
-  borderRadius: 24,
+  background: '#ffffff',
+  border: '1px solid rgba(15, 23, 42, 0.08)',
+  borderRadius: 6,
   boxSizing: 'border-box',
-  boxShadow: '0 20px 48px rgba(15, 23, 42, 0.06)',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05)',
   display: 'flex',
   flex: 1,
   flexDirection: 'column',
