@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -3081,6 +3082,53 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         body.Should().NotBeNull();
         body!["code"].Should().Be("SCOPE_SERVICE_INVOKE_TARGET_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task InvokeEndpoint_ShouldReturnInvokeUnavailableBody_WhenReadinessRejectsInvocation()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.InvocationPort.ExceptionFactory = _ => new ServiceInvokeReadinessException(
+            "Endpoint 'chat' is not invoke-ready.",
+            new ServiceInvokeReadinessSnapshot(
+                "scope-a:default:default:orders",
+                "chat",
+                ServiceInvokeReadinessStatus.Unavailable,
+                ServiceInvokeUnavailableReason.RevisionNotPrepared,
+                "rev-2",
+                "dep-2",
+                "actor-2",
+                DateTimeOffset.Parse("2026-06-05T03:00:00+00:00"),
+                13,
+                "evt-13",
+                11,
+                12,
+                13));
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, JsonElement>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].GetString().Should().Be("SERVICE_INVOKE_UNAVAILABLE");
+        body["message"].GetString().Should().Be("Endpoint 'chat' is not invoke-ready.");
+        body["readinessStatus"].GetString().Should().Be(ServiceInvokeReadinessStatus.Unavailable.ToString());
+        body["reason"].GetString().Should().Be(ServiceInvokeUnavailableReason.RevisionNotPrepared.ToString());
+        body["serviceKey"].GetString().Should().Be("scope-a:default:default:orders");
+        body["revisionId"].GetString().Should().Be("rev-2");
+        body["endpointId"].GetString().Should().Be("chat");
+        body["deploymentId"].GetString().Should().Be("dep-2");
+        body["observedAt"].GetDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-06-05T03:00:00+00:00"));
+        body["aggregateStateVersion"].GetInt64().Should().Be(13);
+        body["sourceCatalogVersion"].GetInt64().Should().Be(11);
+        body["sourceServingVersion"].GetInt64().Should().Be(12);
+        body["sourceRevisionVersion"].GetInt64().Should().Be(13);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Identity.ServiceId.Should().Be("orders");
     }
 
     [Fact]

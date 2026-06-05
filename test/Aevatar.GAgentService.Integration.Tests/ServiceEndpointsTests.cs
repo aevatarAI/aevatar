@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
@@ -612,6 +613,54 @@ public sealed class ServiceEndpointsTests
         host.InvocationPort.LastRequest!.Payload.Value.Length.Should().Be(0);
         host.InvocationPort.LastRequest.CommandId.Should().Be("cmd-2");
         host.InvocationPort.LastRequest.CorrelationId.Should().Be("corr-2");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldReturnInvokeUnavailableBody_WhenReadinessRejectsInvocation()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.InvocationPort.ExceptionFactory = _ => new ServiceInvokeReadinessException(
+            "Endpoint 'chat' is not invoke-ready.",
+            new ServiceInvokeReadinessSnapshot(
+                "tenant:app:ns:orders",
+                "chat",
+                ServiceInvokeReadinessStatus.Unavailable,
+                ServiceInvokeUnavailableReason.PreparedArtifactMissing,
+                "rev-1",
+                "dep-1",
+                "actor-1",
+                DateTimeOffset.Parse("2026-06-05T02:00:00+00:00"),
+                8,
+                "evt-8",
+                3,
+                5,
+                7));
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/orders/invoke/chat", new ServiceEndpoints.InvokeServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            null,
+            null,
+            "type.googleapis.com/google.protobuf.Empty",
+            null));
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, JsonElement>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].GetString().Should().Be("SERVICE_INVOKE_UNAVAILABLE");
+        body["message"].GetString().Should().Be("Endpoint 'chat' is not invoke-ready.");
+        body["readinessStatus"].GetString().Should().Be(ServiceInvokeReadinessStatus.Unavailable.ToString());
+        body["reason"].GetString().Should().Be(ServiceInvokeUnavailableReason.PreparedArtifactMissing.ToString());
+        body["serviceKey"].GetString().Should().Be("tenant:app:ns:orders");
+        body["revisionId"].GetString().Should().Be("rev-1");
+        body["endpointId"].GetString().Should().Be("chat");
+        body["deploymentId"].GetString().Should().Be("dep-1");
+        body["observedAt"].GetDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-06-05T02:00:00+00:00"));
+        body["aggregateStateVersion"].GetInt64().Should().Be(8);
+        body["sourceCatalogVersion"].GetInt64().Should().Be(3);
+        body["sourceServingVersion"].GetInt64().Should().Be(5);
+        body["sourceRevisionVersion"].GetInt64().Should().Be(7);
     }
 
     [Fact]
@@ -1505,9 +1554,14 @@ public sealed class ServiceEndpointsTests
     {
         public ServiceInvocationRequest? LastRequest { get; private set; }
 
+        public Func<ServiceInvocationRequest, Exception?>? ExceptionFactory { get; set; }
+
         public Task<ServiceInvocationAcceptedReceipt> InvokeAsync(ServiceInvocationRequest request, CancellationToken ct = default)
         {
             LastRequest = request;
+            var exception = ExceptionFactory?.Invoke(request);
+            if (exception != null)
+                throw exception;
             return Task.FromResult(new ServiceInvocationAcceptedReceipt
             {
                 RequestId = "request-1",

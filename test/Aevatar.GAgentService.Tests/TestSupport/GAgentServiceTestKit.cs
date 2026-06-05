@@ -161,6 +161,20 @@ internal static class GAgentServiceTestKit
     }
 }
 
+internal sealed class RecordingActorDispatchPort : IActorDispatchPort
+{
+    public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
+
+    public Task<DispatchAdmission> DispatchAsync(
+        string actorId,
+        EventEnvelope envelope,
+        CancellationToken ct = default)
+    {
+        Calls.Add((actorId, envelope));
+        return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+}
+
 [GAgent(GAgentServiceTestKit.TestStaticServiceAgentKind)]
 internal sealed class TestStaticServiceAgent : IAgent
 {
