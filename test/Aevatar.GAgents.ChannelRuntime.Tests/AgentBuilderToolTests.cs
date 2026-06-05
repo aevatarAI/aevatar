@@ -276,6 +276,83 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_RunAgent_FromChannelInbound_AdmitsExternalTrigger()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                ScopeId = "scope-1",
+            }));
+
+        var captured = new List<AdmitSkillRunnerExternalTriggerCommand>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        skillRunnerPort.AdmitExternalTriggerAsync(
+                "skill-runner-1",
+                Arg.Do<AdmitSkillRunnerExternalTriggerCommand>(command => captured.Add(command.Clone())),
+                Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(new SkillRunnerExternalTriggerAdmissionReceipt(
+                "skill-runner-1",
+                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
+                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
+                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.AdmissionId,
+                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.SourceId,
+                call.ArgAt<AdmitSkillRunnerExternalTriggerCommand>(1).Identity.DeliveryId)));
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForChannel("nyx-user-1", "lark", "scope-1", "ou-user")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            ["channel.platform"] = "lark",
+            ["registration_scope_id"] = "scope-1",
+            ["channel.message_id"] = "activity-1",
+            ["channel.platform_message_id"] = "om_1",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "run_agent",
+                  "agent_id": "skill-runner-1"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            captured.Should().ContainSingle();
+            var identity = captured[0].Identity;
+            identity.Kind.Should().Be(ExternalTriggerSourceKind.ChannelInbound);
+            identity.SourceId.Should().Be("channel:lark:scope-1");
+            identity.DeliveryId.Should().Be("activity-1");
+            identity.PayloadSummary.Should().Be("channel run_agent");
+            identity.PayloadRef.Should().Be("om_1");
+
+            await skillRunnerPort.DidNotReceive().TriggerAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_AgentStatus_JoinsPerIdCatalogAndExecutionAtToolBoundary()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();

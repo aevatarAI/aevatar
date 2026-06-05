@@ -29,4 +29,13 @@ public interface ISkillRunnerCommandPort
 
     /// <summary>Dispatches an <see cref="EnableSkillRunnerCommand"/> to an existing SkillRunner.</summary>
     Task EnableAsync(string agentId, string reason, CancellationToken ct = default);
+
+    /// <summary>
+    /// Admits an external delivery command to an existing SkillRunner. The returned receipt
+    /// only confirms accepted-for-dispatch and never implies source validation or execution.
+    /// </summary>
+    Task<SkillRunnerExternalTriggerAdmissionReceipt> AdmitExternalTriggerAsync(
+        string agentId,
+        AdmitSkillRunnerExternalTriggerCommand command,
+        CancellationToken ct = default);
 }

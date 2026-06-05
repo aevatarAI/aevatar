@@ -23,6 +23,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
         "max_tool_rounds",
         "max_history_messages",
         "requires_nyxid_proxy_success",
+        "external_trigger_sources",
         "run_immediately",
     };
 
@@ -97,6 +98,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 MaxToolRounds: args.TryInt("max_tool_rounds", out var maxToolRounds) ? maxToolRounds : null,
                 MaxHistoryMessages: args.TryInt("max_history_messages", out var maxHistoryMessages) ? maxHistoryMessages : null,
                 RequiresNyxidProxySuccess: args.Bool("requires_nyxid_proxy_success") ?? false,
+                ExternalTriggerSources: args.ExternalTriggerSources("external_trigger_sources"),
                 RunImmediately: args.Bool("run_immediately") ?? false,
                 ConversationId: conversationId,
                 PrimaryOutboundSlug: primarySlug,
@@ -158,6 +160,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             command.MaxToolRounds = request.MaxToolRounds.Value;
         if (request.MaxHistoryMessages.HasValue)
             command.MaxHistoryMessages = request.MaxHistoryMessages.Value;
+        command.ExternalTriggerSources.AddRange(request.ExternalTriggerSources);
 
         return new ScheduledAgentCreateMapResult(
             Success: true,
@@ -255,6 +258,73 @@ internal sealed class ScheduledAgentCreateRequestMapper
 
             return element.ValueKind == JsonValueKind.String && double.TryParse(element.GetString(), out value);
         }
+
+        public IReadOnlyList<ExternalTriggerSource> ExternalTriggerSources(string name)
+        {
+            if (!Properties.TryGetValue(name, out var element) ||
+                element.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            var sources = new List<ExternalTriggerSource>();
+            foreach (var sourceElement in element.EnumerateArray())
+            {
+                if (sourceElement.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var sourceId = ReadString(sourceElement, "source_id")?.Trim();
+                if (string.IsNullOrWhiteSpace(sourceId))
+                    continue;
+
+                sources.Add(new ExternalTriggerSource
+                {
+                    SourceId = sourceId,
+                    Kind = ParseKind(ReadString(sourceElement, "kind")),
+                    Enabled = ReadBool(sourceElement, "enabled") ?? true,
+                    DisplayName = ReadString(sourceElement, "display_name")?.Trim() ?? string.Empty,
+                });
+            }
+
+            return sources;
+        }
+
+        private static ExternalTriggerSourceKind ParseKind(string? value) =>
+            value?.Trim().ToLowerInvariant() switch
+            {
+                "channel_inbound" or "channel-inbound" => ExternalTriggerSourceKind.ChannelInbound,
+                "webhook" => ExternalTriggerSourceKind.Webhook,
+                _ => ExternalTriggerSourceKind.Webhook,
+            };
+
+        private static string? ReadString(JsonElement element, string name)
+        {
+            if (!element.TryGetProperty(name, out var value))
+                return null;
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number => value.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => null,
+            };
+        }
+
+        private static bool? ReadBool(JsonElement element, string name)
+        {
+            if (!element.TryGetProperty(name, out var value))
+                return null;
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+                _ => null,
+            };
+        }
     }
 }
 
@@ -304,6 +374,7 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     int? MaxToolRounds,
     int? MaxHistoryMessages,
     bool RequiresNyxidProxySuccess,
+    IReadOnlyList<ExternalTriggerSource> ExternalTriggerSources,
     bool RunImmediately,
     string ConversationId,
     string PrimaryOutboundSlug,

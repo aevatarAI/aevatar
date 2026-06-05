@@ -37,6 +37,13 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
         properties.TryGetProperty("skill_content", out _).Should().BeFalse();
         properties.TryGetProperty("provider_base_url", out _).Should().BeFalse();
+        properties.TryGetProperty("external_trigger_sources", out var externalSources).Should().BeTrue();
+        externalSources.GetProperty("items").GetProperty("properties")
+            .GetProperty("kind")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(static x => x.GetString())
+            .Should().BeEquivalentTo("webhook", "channel_inbound");
         schema.RootElement.GetProperty("required").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEquivalentTo("skill_ref", "schedule_cron", "schedule_timezone");
     }
@@ -321,6 +328,19 @@ public sealed class ScheduledAgentCreatorToolTests
                   "max_tool_rounds": 6,
                   "max_history_messages": 12,
                   "requires_nyxid_proxy_success": true,
+                  "external_trigger_sources": [
+                    {
+                      "source_id": " webhook-main ",
+                      "kind": "webhook",
+                      "enabled": true,
+                      "display_name": " Main webhook "
+                    },
+                    {
+                      "source_id": "channel-lark",
+                      "kind": "channel_inbound",
+                      "enabled": false
+                    }
+                  ],
                   "run_immediately": true
                 }
                 """);
@@ -354,6 +374,14 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.MaxToolRounds.Should().Be(6);
             captured.MaxHistoryMessages.Should().Be(12);
             captured.RequiresNyxidProxySuccess.Should().BeTrue();
+            captured.ExternalTriggerSources.Should().HaveCount(2);
+            captured.ExternalTriggerSources[0].SourceId.Should().Be("webhook-main");
+            captured.ExternalTriggerSources[0].Kind.Should().Be(ExternalTriggerSourceKind.Webhook);
+            captured.ExternalTriggerSources[0].Enabled.Should().BeTrue();
+            captured.ExternalTriggerSources[0].DisplayName.Should().Be("Main webhook");
+            captured.ExternalTriggerSources[1].SourceId.Should().Be("channel-lark");
+            captured.ExternalTriggerSources[1].Kind.Should().Be(ExternalTriggerSourceKind.ChannelInbound);
+            captured.ExternalTriggerSources[1].Enabled.Should().BeFalse();
             captured.OutboundConfig.NyxApiKey.Should().Be("full-secret-key");
             captured.OutboundConfig.ApiKeyId.Should().Be("key-created");
             captured.OutboundConfig.NyxProviderSlug.Should().Be("api-lark-bot");

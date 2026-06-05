@@ -5,6 +5,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
@@ -235,7 +236,17 @@ public sealed class AgentBuilderTool : IAgentTool
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
 
         var revisionFeedback = NormalizeOptional(args.Str("revision_feedback"));
-        var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, ct);
+        var channelAdmission = TryBuildChannelExternalTriggerAdmission(entry);
+        var dispatch = channelAdmission is null
+            ? await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, ct)
+            : await TryDispatchLifecycleAsync(
+                entry,
+                "run_agent",
+                LifecycleAction.Run,
+                revisionFeedback,
+                skillRunnerPort,
+                ct,
+                channelAdmission);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -435,7 +446,8 @@ public sealed class AgentBuilderTool : IAgentTool
         LifecycleAction action,
         string? revisionFeedback,
         ISkillRunnerCommandPort skillRunnerPort,
-        CancellationToken ct)
+        CancellationToken ct,
+        AdmitSkillRunnerExternalTriggerCommand? externalAdmission = null)
     {
         if (!string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
         {
@@ -445,7 +457,10 @@ public sealed class AgentBuilderTool : IAgentTool
         switch (action)
         {
             case LifecycleAction.Run:
-                await skillRunnerPort.TriggerAsync(entry.AgentId, reason, ct);
+                if (externalAdmission is null)
+                    await skillRunnerPort.TriggerAsync(entry.AgentId, reason, ct);
+                else
+                    await skillRunnerPort.AdmitExternalTriggerAsync(entry.AgentId, externalAdmission, ct);
                 break;
             case LifecycleAction.Disable:
                 await skillRunnerPort.DisableAsync(entry.AgentId, reason, ct);
@@ -460,8 +475,50 @@ public sealed class AgentBuilderTool : IAgentTool
         return (true, null);
     }
 
+    private static AdmitSkillRunnerExternalTriggerCommand? TryBuildChannelExternalTriggerAdmission(
+        UserAgentCatalogReadModelEntry entry)
+    {
+        var platform = NormalizeOptional(AgentToolRequestContext.ChannelPlatform) ??
+                       NormalizeOptional(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.Platform));
+        var registrationScopeId = NormalizeOptional(AgentToolRequestContext.ChannelRegistrationScopeId) ??
+                                  NormalizeOptional(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.RegistrationScopeId)) ??
+                                  NormalizeOptional(entry.ScopeId);
+        var deliveryId = NormalizeOptional(AgentToolRequestContext.ChannelMessageId) ??
+                         NormalizeOptional(AgentToolRequestContext.ChannelPlatformMessageId) ??
+                         NormalizeOptional(AgentToolRequestContext.RequestId) ??
+                         NormalizeOptional(AgentToolRequestContext.CallId);
+
+        if (platform is null || registrationScopeId is null || deliveryId is null)
+            return null;
+
+        var sourceId = $"channel:{NormalizeToken(platform)}:{NormalizeToken(registrationScopeId)}";
+        var admissionId = $"channel:{NormalizeToken(deliveryId)}:{Guid.NewGuid():N}";
+        return new AdmitSkillRunnerExternalTriggerCommand
+        {
+            Identity = new SkillRunnerExternalTriggerIdentity
+            {
+                SourceId = sourceId,
+                DeliveryId = deliveryId,
+                AdmissionId = admissionId,
+                Kind = ExternalTriggerSourceKind.ChannelInbound,
+                ReceivedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                PayloadSummary = "channel run_agent",
+                PayloadRef = NormalizeOptional(AgentToolRequestContext.ChannelPlatformMessageId) ??
+                             NormalizeOptional(AgentToolRequestContext.ChannelMessageId) ??
+                             string.Empty,
+            },
+        };
+    }
+
     private static bool SupportsManagedLifecycle(string? agentType) =>
         string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal);
+
+    private static string NormalizeToken(string value)
+    {
+        var chars = value.Trim().ToLowerInvariant().Select(static c =>
+            char.IsLetterOrDigit(c) || c is '-' or '_' or ':' or '.' ? c : '-');
+        return string.Concat(chars);
+    }
 
     private static string? NormalizeOptional(string? value)
     {

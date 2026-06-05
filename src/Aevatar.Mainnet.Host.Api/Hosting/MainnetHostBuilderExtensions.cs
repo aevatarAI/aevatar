@@ -43,6 +43,7 @@ using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Hosting;
@@ -327,6 +328,7 @@ public static class MainnetHostBuilderExtensions
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
+        app.MapSkillRunnerExternalTriggerEndpoints();
         app.MapVoiceDemoBootstrapEndpoints();
         app.MapPolicyAwareVoiceEndpoint();
         app.MapStatusEndpoints();
