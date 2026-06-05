@@ -1390,6 +1390,39 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldPropagateScopedPreferredLlmRouteToAguiRequest()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync(
+            userConfigQueryPort: new StubUserConfigStore(
+                new UserConfig(DefaultModel: string.Empty, PreferredLlmRoute: "/preferred-route")));
+        host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
+            },
+            eventFormat = "agui",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.LlmControl.Should().NotBeNull();
+        host.InteractionService.LastRequest.LlmControl!.RoutePreference.Should().Be("/preferred-route");
+        host.InteractionService.LastRequest.LlmControl.ModelOverride.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldReturnBadRequest_WhenEventFormatIsInvalid()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -4759,7 +4792,9 @@ public sealed class ScopeServiceEndpointsTests
 
         public FakeServiceRunQueryPort ServiceRunQueryPort { get; }
 
-        public static async Task<ScopeServiceEndpointTestHost> StartAsync(bool authenticationEnabled = true)
+        public static async Task<ScopeServiceEndpointTestHost> StartAsync(
+            bool authenticationEnabled = true,
+            IUserConfigQueryPort? userConfigQueryPort = null)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -4832,6 +4867,8 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
             builder.Services.AddSingleton<IServiceRunRegistrationPort>(serviceRunRegistrationPort);
             builder.Services.AddSingleton<IServiceRunQueryPort>(serviceRunQueryPort);
+            if (userConfigQueryPort != null)
+                builder.Services.AddSingleton(userConfigQueryPort);
             builder.Services.AddSingleton<IOptions<ScopeWorkflowCapabilityOptions>>(
                 Options.Create(new ScopeWorkflowCapabilityOptions
                 {

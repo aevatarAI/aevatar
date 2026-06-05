@@ -2967,16 +2967,18 @@ const response = await fetch("{{invokePath}}", {
 
         var model = NormalizeOptional(control.ModelOverride);
         var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
+        var routePreference = NormalizeOptional(control.NyxIdRoutePreference);
         var maxToolRounds = control.MaxToolRoundsOverride is > 0
             ? control.MaxToolRoundsOverride
             : null;
-        if (model == null && userMemoryPrompt == null && maxToolRounds == null)
+        if (model == null && userMemoryPrompt == null && routePreference == null && maxToolRounds == null)
             return null;
 
         return new WorkflowLlmControl(
             model,
             maxToolRounds,
-            userMemoryPrompt);
+            userMemoryPrompt,
+            routePreference);
     }
 
     private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
