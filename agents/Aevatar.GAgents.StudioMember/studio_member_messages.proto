@@ -117,7 +117,8 @@ message StudioMemberGAgentEndpointBindingRequest {
 }
 
 message StudioMemberGAgentBindingRequest {
-  string actor_type_name = 1;
+  reserved "actor_type_name";
+  string agent_kind = 1;
   repeated StudioMemberGAgentEndpointBindingRequest endpoints = 2;
 }
 

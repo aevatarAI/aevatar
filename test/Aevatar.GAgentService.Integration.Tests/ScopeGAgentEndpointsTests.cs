@@ -90,6 +90,45 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
+    public async Task DraftRunHttp_ShouldRejectLegacyActorTypeNameEvenWithAgentKind()
+    {
+        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(new FakeGAgentDraftRunInteractionPort());
+        using var response = await host.Client.PostAsJsonAsync(
+            "/api/scopes/scope-a/gagent/draft-run",
+            new
+            {
+                agentKind = "aevatar.role",
+                actorTypeName = "Tests.RoleGAgent, Tests",
+                prompt = "hello",
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("LEGACY_ACTOR_TYPE_NAME_REJECTED");
+    }
+
+    [Fact]
+    public async Task DeleteActorHttp_ShouldRejectLegacyGAgentTypeQuery()
+    {
+        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(new FakeGAgentDraftRunInteractionPort());
+        using var response = await host.Client.DeleteAsync(
+            "/api/scopes/scope-a/gagent-actors/actor-1?agentKind=aevatar.role&gagentType=Tests.RoleGAgent");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("LEGACY_GAGENT_TYPE_REJECTED");
+    }
+
+    [Fact]
+    public async Task OldGAgentTypesRoute_ShouldReturnNotFoundOverHttp()
+    {
+        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(new FakeGAgentDraftRunInteractionPort());
+        using var response = await host.Client.GetAsync("/api/scopes/gagent-types");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
     public async Task HandleDraftRunAsync_ShouldRejectMismatchedAuthenticatedScope()
     {
         var interactionPort = new FakeGAgentDraftRunInteractionPort();
@@ -1614,6 +1653,10 @@ public sealed class ScopeGAgentEndpointsTests
             builder.Services.AddSingleton<IGAgentDraftRunInteractionPort>(interactionPort);
             var streamProvider = new InMemoryStreamProvider();
             builder.Services.AddSingleton<IStreamProvider>(streamProvider);
+            var actorStore = new RecordingGAgentActorStore();
+            builder.Services.AddSingleton<IGAgentActorRegistryCommandPort>(actorStore);
+            builder.Services.AddSingleton<IGAgentActorRegistryQueryPort>(actorStore);
+            builder.Services.AddSingleton<IScopeResourceAdmissionPort>(actorStore);
 
             var app = builder.Build();
             app.Use(async (http, next) =>

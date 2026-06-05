@@ -180,6 +180,32 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeGAgent_ShouldReturnAmbiguousAgentKind_WhenKindHasMultipleActors()
+    {
+        var harness = new Harness();
+        harness.ActorRegistry.Snapshot = new GAgentActorRegistrySnapshot(
+            "scope-1",
+            [new GAgentActorGroup("RoleGAgent", ["actor-1", "actor-2"])],
+            7,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(callId: "call-gagent-ambiguous");
+        var output = await tool.ExecuteAsync("""
+            {
+              "agent_kind": "RoleGAgent",
+              "payload": { "prompt": "hello" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("agent_kind_ambiguous");
+        output.Should().Contain("actor_id");
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task InvokeGAgent_ShouldRejectActorNameAlias()
     {
         var harness = new Harness();

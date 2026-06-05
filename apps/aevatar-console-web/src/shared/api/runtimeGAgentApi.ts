@@ -283,7 +283,7 @@ function decodeBindingResult(
             readOptionalString(
               gAgentRecord,
               ["actorTypeName", "ActorTypeName"],
-              `${label}.gAgent.actorTypeName`
+              `${label}.gAgent.diagnosticActorTypeName`
             ) || "",
           preferredActorId:
             readOptionalString(

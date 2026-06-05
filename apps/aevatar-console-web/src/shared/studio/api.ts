@@ -890,9 +890,9 @@ function decodeStudioScopeBindingResult(
       : targetKind === "script"
         ? readOptionalString(scriptRecord ?? {}, ["scriptId", "ScriptId"])
         : targetKind === "gagent"
-          ? readOptionalString(gAgentRecord ?? {}, [
-              "actorTypeName",
-              "ActorTypeName",
+        ? readOptionalString(gAgentRecord ?? {}, [
+              "diagnosticClrTypeName",
+              "DiagnosticClrTypeName",
             ])
           : undefined) ||
     displayName ||
@@ -950,10 +950,10 @@ function decodeStudioScopeBindingResult(
       : null,
     gAgent: gAgentRecord
       ? {
-          actorTypeName:
+          diagnosticClrTypeName:
             readOptionalString(gAgentRecord, [
-              "actorTypeName",
-              "ActorTypeName",
+              "diagnosticClrTypeName",
+              "DiagnosticClrTypeName",
             ]) || "",
         }
       : null,
@@ -1262,11 +1262,11 @@ function decodeStudioMemberImplementationRef(
         ["agentKind", "AgentKind"],
         "StudioMemberImplementationRef.agentKind"
       ) ?? null,
-    actorTypeName:
+    diagnosticActorTypeName:
       readNullableString(
         record,
         ["actorTypeName", "ActorTypeName"],
-        "StudioMemberImplementationRef.actorTypeName"
+        "StudioMemberImplementationRef.diagnosticActorTypeName"
       ) ?? null,
   };
 }

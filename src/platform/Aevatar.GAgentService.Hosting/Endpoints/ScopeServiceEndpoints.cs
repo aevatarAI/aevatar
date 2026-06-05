@@ -183,6 +183,15 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
+            if (request.GAgent?.HasLegacyActorTypeName == true)
+            {
+                return Results.BadRequest(new
+                {
+                    code = "LEGACY_ACTOR_TYPE_NAME_REJECTED",
+                    message = "gagent.actorTypeName is not accepted. Use gagent.agentKind.",
+                });
+            }
+
             var result = await commandPort.UpsertAsync(
                 new ScopeBindingUpsertRequest(
                     scopeId,
@@ -205,8 +214,7 @@ public static class ScopeServiceEndpoints
                                 endpoint.RequestTypeUrl,
                                 endpoint.ResponseTypeUrl,
                                 endpoint.Description))
-                            .ToArray(),
-                            request.GAgent.ActorTypeName),
+                            .ToArray()),
                     request.DisplayName,
                     request.RevisionId,
                     request.AppId,
@@ -3331,9 +3339,17 @@ const response = await fetch("{{invokePath}}", {
         string? ScriptRevision = null);
 
     public sealed record ScopeBindingGAgentHttpRequest(
-        string ActorTypeName,
-        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints,
-        string? AgentKind = null);
+        string AgentKind,
+        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints)
+    {
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtraFields { get; init; }
+
+        public bool HasLegacyActorTypeName =>
+            ExtraFields?.Keys.Any(key =>
+                string.Equals(key, "actorTypeName", StringComparison.Ordinal) ||
+                string.Equals(key, "ActorTypeName", StringComparison.Ordinal)) == true;
+    }
 
     public sealed record StreamScopeServiceHttpRequest(
         string? Prompt,

@@ -71,6 +71,14 @@ frontend_runtime_identity_paths=(
   "apps/aevatar-console-web/src/shared/studio/models.ts"
 )
 
+bind_identity_paths=(
+  "src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeServiceEndpoints.cs"
+  "src/platform/Aevatar.GAgentService.Abstractions/ScopeBindings/ScopeBindingModels.cs"
+  "src/platform/Aevatar.GAgentService.Application/Bindings/ScopeBindingCommandApplicationService.cs"
+  "src/Aevatar.Studio.Application/Studio/Services/StudioMemberService.cs"
+  "src/Aevatar.Studio.Projection/CommandServices/ScopeBindingStudioMemberPlatformBindingCommandService.cs"
+)
+
 report_filtered_matches \
   "Registry/admission production code must not use GAgentType/gAgentType/gagent_type identity names" \
   "GAgentType|gAgentType|gagent_type" \
@@ -90,8 +98,33 @@ report_matches \
 report_filtered_matches \
   "Frontend runtime identity code must not send legacy GAgent identity aliases" \
   "gAgentType|gagentType|gagent_type|actorTypeName" \
-  "diagnostic|Diagnostic|StudioMemberImplementationRef|actorTypeName\\?|readonly actorTypeName|string;|\"actorTypeName\"|gAgent.actorTypeName|actorTypeName:" \
+  "diagnostic[A-Za-z]*TypeName|Diagnostic[A-Za-z]*TypeName|staticActorTypeName|StaticActorTypeName|\\[\"actorTypeName\", \"ActorTypeName\"\\]|StudioMemberImplementationRef\\.diagnosticActorTypeName" \
   "${frontend_runtime_identity_paths[@]}"
+
+report_filtered_matches \
+  "GAgent bind request and command paths must not accept caller actorTypeName aliases" \
+  "ActorTypeName|actorTypeName|gAgentType|gagentType|gagent_type" \
+  "LEGACY_ACTOR_TYPE_NAME_REJECTED|HasLegacyActorTypeName|gagent\\.actorTypeName is not accepted|string\\.Equals\\(key, \"actorTypeName\"|string\\.Equals\\(key, \"ActorTypeName\"|ActorTypeName = diagnosticClrTypeName|StaticSpec\\.ActorTypeName|staticSpec\\.ActorTypeName|Implementation\\?\\.Static\\?\\.ActorTypeName|DiagnosticClrTypeName|DiagnosticActorTypeName|StaticActorTypeName|result\\.GAgent\\?\\.DiagnosticClrTypeName" \
+  "${bind_identity_paths[@]}"
+
+set +e
+studio_member_gagent_binding_alias="$(
+  awk '
+    /message StudioMemberGAgentBindingRequest/ { in_message = 1 }
+    in_message { print FILENAME ":" FNR ":" $0 }
+    in_message && /^}/ { in_message = 0 }
+  ' agents/Aevatar.GAgents.StudioMember/studio_member_messages.proto | rg "string .*actor_type_name|optional .*actor_type_name"
+)"
+studio_member_gagent_binding_alias_status=$?
+set -e
+if [[ ${studio_member_gagent_binding_alias_status} -eq 0 ]]; then
+  echo "Studio member GAgent binding request proto must not accept actor_type_name:"
+  echo "${studio_member_gagent_binding_alias}"
+  violations=$((violations + 1))
+elif [[ ${studio_member_gagent_binding_alias_status} -ne 1 ]]; then
+  echo "gagent_registry_kind_guard: scan failed for Studio member GAgent binding request proto" >&2
+  exit "${studio_member_gagent_binding_alias_status}"
+fi
 
 report_filtered_matches \
   "Aevatar invocation tool must not expose actor_name outside reserved proto names and negative tests" \
@@ -110,7 +143,7 @@ report_filtered_matches \
 report_filtered_matches \
   "Positive tests must not use the old gagent-types route" \
   "gagent-types|/gagent-types" \
-  "NotContain|Should\\(\\)\\.Be\\(StatusCodes\\.Status404NotFound\\)|returns 404|old route" \
+  "NotContain|Should\\(\\)\\.Be\\(StatusCodes\\.Status404NotFound\\)|Should\\(\\)\\.Be\\(HttpStatusCode\\.NotFound\\)|GetAsync\\(\"/api/scopes/gagent-types\"\\)|returns 404|old route" \
   "test" \
   "apps/aevatar-console-web/src"
 

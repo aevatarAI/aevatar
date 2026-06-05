@@ -341,7 +341,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.GAgent,
                 GAgent: new ScopeBindingGAgentSpec(
-                    bindingRequest.Gagent.ActorTypeName,
+                    bindingRequest.Gagent.AgentKind,
                     bindingRequest.Gagent.Endpoints.Select(ToScopeBindingEndpoint).ToArray()),
                 DisplayName: request.Admitted.DisplayName,
                 RevisionId: revisionId,
@@ -453,7 +453,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             {
                 Gagent = new StudioMemberGAgentRef
                 {
-                    ActorTypeName = result.GAgent?.ActorTypeName ?? string.Empty,
+                    ActorTypeName = result.GAgent?.DiagnosticClrTypeName ?? string.Empty,
                 },
             },
             _ => new StudioMemberImplementationRef(),

@@ -287,7 +287,7 @@ export interface StudioScopeBindingResult {
     readonly definitionActorId: string;
   } | null;
   readonly gAgent?: {
-    readonly actorTypeName: string;
+    readonly diagnosticClrTypeName: string;
   } | null;
 }
 
@@ -473,7 +473,7 @@ export interface StudioMemberImplementationRef {
   readonly scriptId?: string | null;
   readonly scriptRevision?: string | null;
   readonly agentKind?: string | null;
-  readonly actorTypeName?: string | null;
+  readonly diagnosticActorTypeName?: string | null;
 }
 
 export interface StudioMemberBindingContract {

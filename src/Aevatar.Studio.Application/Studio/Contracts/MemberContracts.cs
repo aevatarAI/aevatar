@@ -202,7 +202,7 @@ public sealed record StudioMemberGAgentEndpointSpec(
     string? Description = null);
 
 public sealed record StudioMemberGAgentBindingSpec(
-    string ActorTypeName,
+    string AgentKind,
     IReadOnlyList<StudioMemberGAgentEndpointSpec>? Endpoints = null);
 
 public sealed record StudioMemberBindingAcceptedResponse(

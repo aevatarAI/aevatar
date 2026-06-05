@@ -949,7 +949,7 @@ describe('studioApi host-session requests', () => {
     expect(result.targetKind).toBe('gagent');
     expect(result.targetName).toBe('orders-gagent');
     expect(result.gAgent).toEqual({
-      actorTypeName: '',
+      diagnosticClrTypeName: '',
     });
 
     const [input, init] = fetchMock.mock.calls[0] as [
@@ -1676,7 +1676,7 @@ describe('studioApi host-session requests', () => {
         scriptId: null,
         scriptRevision: null,
         agentKind: null,
-        actorTypeName: null,
+        diagnosticActorTypeName: null,
       },
       lastBinding: {
         publishedServiceId: 'member-joker',

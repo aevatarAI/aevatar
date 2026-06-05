@@ -194,7 +194,6 @@ public class BindingToolsTests
             captured.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
             captured.GAgent.Should().NotBeNull();
             captured.GAgent!.AgentKind.Should().Be("orders.assistant");
-            captured.GAgent.ActorTypeName.Should().BeNull();
             captured.DisplayName.Should().Be("Orders Assistant");
         }
         finally

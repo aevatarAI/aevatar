@@ -7,12 +7,14 @@ using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
@@ -504,8 +506,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         "type.googleapis.com/google.protobuf.StringValue",
                         string.Empty,
                         "Run the bound gagent."),
-                    ],
-                    typeof(TestStaticServiceAgent).AssemblyQualifiedName!),
+                    ]),
             DisplayName: "Orders GAgent"));
 
         commandPort.Calls.Should().HaveCount(6);
@@ -515,16 +516,16 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revisionCommand.Spec.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         revisionCommand.Spec.StaticSpec.Should().NotBeNull();
-        revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
+        revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).FullName);
         revisionCommand.Spec.StaticSpec.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
         revisionCommand.Spec.StaticSpec.PreferredActorId.Should().BeEmpty();
         result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         result.GAgent.Should().NotBeNull();
-        result.GAgent!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
+        result.GAgent!.DiagnosticClrTypeName.Should().Be(typeof(TestStaticServiceAgent).FullName);
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldRejectGAgentActorTypeName_WhenAgentKindIsMissing()
+    public async Task UpsertAsync_ShouldRejectGAgentBinding_WhenAgentKindIsMissing()
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
@@ -532,18 +533,15 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
         var actorPort = new FakeWorkflowRunActorPort();
         var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
-        var actorTypeName = typeof(TestStaticServiceAgent).AssemblyQualifiedName!;
-
         var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
                 " ",
-                [],
-                actorTypeName)));
+                [])));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage($"gagent actor_type_name '{actorTypeName}' is deprecated and cannot be used for identity. Provide gagent agentKind.");
+            .WithMessage("*AgentKind*");
         commandPort.Calls.Should().BeEmpty();
     }
 
@@ -562,8 +560,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
                 GAgentServiceTestKit.TestStaticServiceAgentKind,
-                [],
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!)));
+                [])));
 
         commandPort.Calls.Should().HaveCount(6);
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
@@ -1088,7 +1085,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     {
         const string revisionId = "rev-static-bind-1";
         var commandPort = new RecordingServiceCommandPort();
-        var existingHash = CreateStaticArtifactHash(revisionId, typeof(TestStaticServiceAgent).AssemblyQualifiedName!, [
+        var existingHash = CreateStaticArtifactHash(revisionId, typeof(TestStaticServiceAgent).FullName!, [
             new ServiceEndpointDescriptor
             {
                 EndpointId = "chat",
@@ -1149,8 +1146,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
                 GAgentServiceTestKit.TestStaticServiceAgentKind,
-                [],
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!),
+                []),
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true,
             ReplayRevisionId: revisionId));
@@ -1362,8 +1358,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         "type.googleapis.com/google.protobuf.StringValue",
                         string.Empty,
                         "Run the bound gagent."),
-                ],
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!),
+                ]),
             AppId: "tenant-app"));
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
@@ -1500,7 +1495,15 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             scopeScriptQueryPort,
             scriptDefinitionSnapshotPort,
             actorPort,
-            Options.Create(options));
+            Options.Create(options),
+            CreateStaticAgentKindRegistry());
+
+    private static IAgentKindRegistry CreateStaticAgentKindRegistry()
+    {
+        var builder = new AgentKindRegistryBuilder();
+        builder.Register<TestStaticServiceAgent>();
+        return new AgentKindRegistry(builder.Build());
+    }
 
     private static string GetProductionSourcePath(
         [System.Runtime.CompilerServices.CallerFilePath] string testFilePath = "")

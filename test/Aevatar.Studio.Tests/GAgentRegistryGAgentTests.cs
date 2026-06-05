@@ -72,6 +72,31 @@ public sealed class GAgentRegistryGAgentTests
     }
 
     [Fact]
+    public async Task Admission_ShouldNotCanonicalize_WhenProbeThrows()
+    {
+        var state = StateWith(("Legacy.Registry.Agent, Tests", ["actor-1"]));
+        var eventSourcing = new RecordingEventSourcing(state);
+        var probe = new RecordingActorKindProbe
+        {
+            Failure = new InvalidOperationException("probe unavailable"),
+        };
+        var agent = NewAgent(state, eventSourcing, probe);
+
+        var act = () => agent.HandleScopeResourceAdmissionRequested(new ScopeResourceAdmissionRequested
+        {
+            ScopeId = "scope-a",
+            AgentKind = CanonicalKind,
+            ActorId = "actor-1",
+            Operation = GAgentRegistryOperation.Use,
+        });
+
+        await act.Should().ThrowAsync<GAgentRegistryAdmissionNotFoundException>();
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        agent.State.Should().BeEquivalentTo(state);
+        probe.Calls.Should().ContainSingle().Which.Should().Be("actor-1");
+    }
+
+    [Fact]
     public async Task Register_ShouldRemoveSameActorFromLegacyGroups()
     {
         var state = StateWith(
@@ -154,11 +179,14 @@ public sealed class GAgentRegistryGAgentTests
     private sealed class RecordingActorKindProbe : IActorKindProbe
     {
         public string? RuntimeKind { get; init; }
+        public Exception? Failure { get; init; }
         public List<string> Calls { get; } = [];
 
         public Task<string?> GetRuntimeAgentKindAsync(string actorId, CancellationToken ct = default)
         {
             Calls.Add(actorId);
+            if (Failure is not null)
+                throw Failure;
             return Task.FromResult(RuntimeKind);
         }
     }
