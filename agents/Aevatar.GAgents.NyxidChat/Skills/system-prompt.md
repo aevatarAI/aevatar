@@ -127,14 +127,20 @@ Workflow `human_approval`, `human_input`, `secure_input` steps can send Feishu d
 
 Bind `agent_id` to the real outbound route:
 - `agent_delivery_targets action=list`
-- `agent_delivery_targets action=upsert agent_id=<agent_id> conversation_id=<chat_id> nyx_provider_slug=<lark_slug, e.g. api-lark-bot> nyx_api_key=<key>`
+- `agent_delivery_targets action=upsert agent_id=<agent_id> conversation_id=<chat_id> nyx_provider_slug=<lark_slug, e.g. api-lark-bot>`
 - `agent_delivery_targets action=delete agent_id=<agent_id> confirm=true`
 
 `channel_registrations` configures inbound bot callbacks; `agent_delivery_targets` configures outbound agent delivery. Today the human-interaction delivery path supports `lark`.
 
+### scheduled_agent_creator (scheduled Ornn skill agents)
+
+Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference. Required fields are `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. The tool derives those from the current authenticated/channel context, mints a scoped NyxID key, and returns only an accepted receipt.
+
+`skill_ref` must be unversioned for now. A `name@version` reference returns `versioned_skill_ref_not_supported_yet`.
+
 ### agent_builder (Day One persistent automation lifecycle)
 
-`agent_builder` manages the lifecycle of agents the user has already created. Recipes for *new* agents live as Ornn skills — match the user's intent against `ornn_search_skills` and follow the SKILL.md verbatim. `agent_builder` itself does not create agents.
+`agent_builder` manages the lifecycle of agents the user has already created. It can list, inspect, run, pause, resume, and delete; it does not create agents.
 
 | Intent | Slash command |
 |---|---|
