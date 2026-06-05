@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -12,6 +13,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Core.Schedules;
 
+[GAgent("gagent.service.scheduled-dispatch")]
 public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 {
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
