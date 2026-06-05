@@ -49,7 +49,7 @@ public sealed class AgentBuilderTool : IAgentTool
     public string Description =>
         "List and manage the caller's persistent automation agents. " +
         "Actions: list_agents, agent_status, run_agent, disable_agent, enable_agent, delete_agent. " +
-        "Agent creation is not handled here — recipes for new agents live as Ornn skills.";
+        "Agent creation is handled by scheduled_agent_creator.";
 
     // Note (issue #466): no `owner_nyx_user_id` parameter is exposed. The tool always
     // operates on the caller's own agents; the resolver derives ownership from the
