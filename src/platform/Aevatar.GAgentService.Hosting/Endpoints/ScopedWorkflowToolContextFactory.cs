@@ -9,7 +9,6 @@ namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 internal static class ScopedWorkflowToolContextFactory
 {
-    // refactor helper, no behavior change
     public static async Task<AgentToolExecutionContext?> BuildAsync(
         HttpContext? http,
         string? scopeId,
