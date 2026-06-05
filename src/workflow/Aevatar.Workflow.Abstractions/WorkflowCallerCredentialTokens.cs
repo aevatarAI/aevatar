@@ -1,6 +1,5 @@
 namespace Aevatar.Workflow.Abstractions;
 
-// refactor helper, no behavior change
 public enum WorkflowCallerCredentialTokenParseStatus
 {
     Missing = 0,
@@ -8,7 +7,6 @@ public enum WorkflowCallerCredentialTokenParseStatus
     Invalid = 2,
 }
 
-// refactor helper, no behavior change
 public readonly record struct WorkflowCallerCredentialTokenParseResult(
     WorkflowCallerCredentialTokenParseStatus Status,
     string? NormalizedBearerToken)
@@ -20,7 +18,6 @@ public readonly record struct WorkflowCallerCredentialTokenParseResult(
     public bool IsInvalid => Status == WorkflowCallerCredentialTokenParseStatus.Invalid;
 }
 
-// refactor helper, no behavior change
 public static class WorkflowCallerCredentialTokens
 {
     public static WorkflowCallerCredentialTokenParseResult ParseOptional(string? rawBearerToken)

@@ -439,6 +439,14 @@ public static class ScopeWorkflowEndpoints
         CancellationToken ct)
     {
         prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
+        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        if (!callerCredential.Succeeded)
+        {
+            var (statusCode, code, message) = MapRunStartError(callerCredential.Error);
+            await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+            return;
+        }
+
         await HandleAguiStreamAsync(
             http,
             new WorkflowChatRunRequest(
@@ -447,7 +455,7 @@ public static class ScopeWorkflowEndpoints
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
-                CallerCredential: WorkflowCallerCredentialExtractor.Extract(http),
+                CallerCredential: callerCredential.Credential,
                 LlmControl: ToWorkflowLlmControl(llmControl),
                 Headers: headers),
             chatRunService,
@@ -662,6 +670,7 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
             WorkflowChatRunStartError.WorkflowNameMismatch => (StatusCodes.Status400BadRequest, "WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => (StatusCodes.Status400BadRequest, "PROMPT_REQUIRED", "Prompt is required."),
+            WorkflowChatRunStartError.InvalidCallerCredential => (StatusCodes.Status400BadRequest, "INVALID_CALLER_CREDENTIAL", "Caller credential is invalid."),
             _ => (StatusCodes.Status400BadRequest, "RUN_START_FAILED", "Failed to resolve actor."),
         };
     }

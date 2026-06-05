@@ -124,13 +124,21 @@ public static class ScopeServiceEndpoints
                 return;
             }
 
+            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            if (!callerCredential.Succeeded)
+            {
+                var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
+                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                return;
+            }
+
             var chatRequest = new WorkflowChatRunRequest(
                 Prompt: request.Prompt?.Trim() ?? string.Empty,
                 Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
                 SessionId: request.SessionId,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
-                CallerCredential: WorkflowCallerCredentialExtractor.Extract(http),
+                CallerCredential: callerCredential.Credential,
                 LlmControl: ToWorkflowLlmControl(await BuildScopedLlmControlAsync(http, ct)),
                 Headers: scopedHeaders);
 
@@ -1499,6 +1507,14 @@ public static class ScopeServiceEndpoints
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var scopedHeaders = BuildScopedHeaders(request.Headers);
+            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            if (!callerCredential.Succeeded)
+            {
+                var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
+                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                return;
+            }
+
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -1506,7 +1522,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 normalizedPrompt,
                 scopedHeaders,
-                WorkflowCallerCredentialExtractor.Extract(http),
+                callerCredential.Credential,
                 request.RevisionId,
                 appId);
             var target = await resolutionService.ResolveAsync(invocationRequest, ct);

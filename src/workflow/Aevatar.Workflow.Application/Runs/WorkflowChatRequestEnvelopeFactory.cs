@@ -126,6 +126,4 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
 
-    private static string Normalize(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
