@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
@@ -29,6 +30,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         AppendMetadata(chatRequest.Metadata, command.Metadata);
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToProto(command.LlmControl);
+        if (command.ToolContext != null)
+            chatRequest.ToolContext = command.ToolContext.ToPayload();
         chatRequest.ConnectorHttpAuthorization = Normalize(command.ConnectorHttpAuthorization);
 
         var envelope = new EventEnvelope
@@ -91,7 +94,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         if (source == null || source.Count == 0)
             return;
 
-        foreach (var (key, value) in source)
+        foreach (var (key, value) in AgentToolExecutionContextMapper.StripOwnedControlKeys(source))
         {
             var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
             var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();

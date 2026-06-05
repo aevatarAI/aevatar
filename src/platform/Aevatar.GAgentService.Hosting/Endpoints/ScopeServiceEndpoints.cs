@@ -34,6 +34,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
@@ -113,6 +114,13 @@ public static class ScopeServiceEndpoints
                 throw new InvalidOperationException("workflowYamls is required.");
 
             var scopedHeaders = BuildScopedHeaders(request.Headers);
+            var trustedToolContext = await ScopedWorkflowToolContextFactory.BuildAsync(
+                http,
+                scopeId,
+                request.SessionId,
+                requestId: null,
+                scopedHeaders,
+                ct);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
             {
                 await WriteJsonErrorResponseAsync(
@@ -132,6 +140,7 @@ public static class ScopeServiceEndpoints
                 ScopeId: scopeId,
                 ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
                 LlmControl: ToWorkflowLlmControl(await BuildScopedLlmControlAsync(http, ct)),
+                ToolContext: trustedToolContext,
                 Headers: scopedHeaders);
 
             if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
@@ -158,7 +167,8 @@ public static class ScopeServiceEndpoints
                     LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                 },
                 chatRunService,
-                ct);
+                ct,
+                trustedToolContext: trustedToolContext);
         }
         catch (InvalidOperationException ex)
         {
@@ -1507,6 +1517,13 @@ public static class ScopeServiceEndpoints
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var scopedHeaders = BuildScopedHeaders(request.Headers);
+            var trustedToolContext = await ScopedWorkflowToolContextFactory.BuildAsync(
+                http,
+                scopeId,
+                request.SessionId,
+                requestId: null,
+                scopedHeaders,
+                ct);
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -1563,7 +1580,8 @@ public static class ScopeServiceEndpoints
                             commandId: receipt.CommandId,
                             correlationId: receipt.CorrelationId,
                             targetActorId: receipt.ActorId,
-                            token));
+                            token),
+                        trustedToolContext: trustedToolContext);
                     break;
 
                 case ServiceImplementationKind.Static:
@@ -3310,6 +3328,7 @@ const response = await fetch("{{invokePath}}", {
         string? RevisionId = null,
         string? PayloadJson = null);
 
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record ScopeDraftRunHttpRequest(
         string Prompt,
         IReadOnlyList<string>? WorkflowYamls,
@@ -3351,6 +3370,7 @@ const response = await fetch("{{invokePath}}", {
                 string.Equals(key, "ActorTypeName", StringComparison.Ordinal)) == true;
     }
 
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record StreamScopeServiceHttpRequest(
         string? Prompt,
         string? ActorId = null,

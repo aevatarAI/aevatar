@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 
@@ -32,7 +33,8 @@ internal static class ChatRunRequestNormalizer
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
-        string? trustedConnectorHttpAuthorization = null)
+        string? trustedConnectorHttpAuthorization = null,
+        AgentToolExecutionContext? trustedToolContext = null)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
@@ -63,6 +65,7 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
+                ToolContext: trustedToolContext,
                 ConnectorHttpAuthorization: NormalizeOptional(trustedConnectorHttpAuthorization),
                 Headers: normalizedContext.Headers));
     }
@@ -292,19 +295,19 @@ internal static class ChatRunRequestNormalizer
         var normalizedScopeId = NormalizeScopeId(explicitScopeId);
         if (defaultMetadata is { Count: > 0 })
         {
-            foreach (var (key, value) in defaultMetadata)
+            foreach (var (key, value) in AgentToolExecutionContextMapper.StripOwnedControlKeys(defaultMetadata))
                 AddNormalizedMetadataEntry(normalized, key, value);
         }
 
         if (metadata is { Count: > 0 })
         {
-            foreach (var (key, value) in metadata)
+            foreach (var (key, value) in StripOwnedControlKeys(metadata))
                 AddNormalizedMetadataEntry(normalized, key, value);
         }
 
         if (headers is { Count: > 0 })
         {
-            foreach (var (key, value) in headers)
+            foreach (var (key, value) in StripOwnedControlKeys(headers))
                 AddNormalizedMetadataEntry(normalizedHeaders, key, value);
         }
 
@@ -341,6 +344,11 @@ internal static class ChatRunRequestNormalizer
     private static bool IsScopeMetadataKey(string key) =>
         string.Equals(key, "scope_id", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyDictionary<string, string> StripOwnedControlKeys(IDictionary<string, string> metadata) =>
+        AgentToolExecutionContextMapper.StripOwnedControlKeys(
+            metadata as IReadOnlyDictionary<string, string> ??
+            metadata.ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal));
 
     private static string? NormalizeScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId) ? null : scopeId.Trim();

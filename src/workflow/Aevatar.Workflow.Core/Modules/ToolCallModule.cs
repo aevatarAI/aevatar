@@ -3,9 +3,11 @@
 // 在工作流步骤中调用 Agent 的注册工具
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Execution;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -76,6 +78,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         try
         {
+            using var toolContextScope = AgentToolContextScope.Push(
+                WorkflowToolExecutionContextAccess.GetForStep(ctx, request.StepId));
             var result = await tool.ExecuteAsync(argumentsJson, ct);
 
             await ctx.PublishAsync(new WorkflowToolCallCompletedEvent

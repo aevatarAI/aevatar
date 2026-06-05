@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
@@ -18,6 +19,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
@@ -316,6 +318,13 @@ public static class ScopeWorkflowEndpoints
         if (resolvedEventFormat == ScopeWorkflowStreamEventFormat.Workflow)
         {
             var scopedHeaders = BuildScopedHeaders(headers);
+            var trustedToolContext = await ScopedWorkflowToolContextFactory.BuildAsync(
+                http,
+                scopeId,
+                sessionId,
+                requestId: null,
+                scopedHeaders,
+                ct);
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
@@ -335,11 +344,19 @@ public static class ScopeWorkflowEndpoints
                     LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
                 },
                 chatRunService,
-                ct);
+                ct,
+                trustedToolContext: trustedToolContext);
             return;
         }
 
         var aguiHeaders = BuildScopedHeaders(headers);
+        var aguiToolContext = await ScopedWorkflowToolContextFactory.BuildAsync(
+            http,
+            scopeId,
+            sessionId,
+            requestId: null,
+            aguiHeaders,
+            ct);
         await HandleAguiStreamAsync(
             http,
             scopeId,
@@ -348,6 +365,7 @@ public static class ScopeWorkflowEndpoints
             sessionId,
             aguiHeaders,
             await BuildScopedLlmControlAsync(http, ct),
+            aguiToolContext,
             chatRunService,
             ct);
     }
@@ -435,6 +453,7 @@ public static class ScopeWorkflowEndpoints
         string? sessionId,
         IReadOnlyDictionary<string, string>? headers,
         LLMControlContext? llmControl,
+        AgentToolExecutionContext? trustedToolContext,
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct)
     {
@@ -449,6 +468,7 @@ public static class ScopeWorkflowEndpoints
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
                 ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
                 LlmControl: ToWorkflowLlmControl(llmControl),
+                ToolContext: trustedToolContext,
                 Headers: headers),
             chatRunService,
             ct);
@@ -708,12 +728,14 @@ public static class ScopeWorkflowEndpoints
         Dictionary<string, string>? InlineWorkflowYamls = null,
         string? RevisionId = null);
 
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record RunScopeWorkflowByIdStreamHttpRequest(
         string Prompt,
         string? SessionId = null,
         Dictionary<string, string>? Headers = null,
         string? EventFormat = null);
 
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record RunScopeWorkflowStreamHttpRequest(
         string ActorId,
         string Prompt,

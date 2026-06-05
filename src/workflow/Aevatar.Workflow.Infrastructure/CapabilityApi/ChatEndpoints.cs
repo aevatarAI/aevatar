@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
@@ -38,7 +39,8 @@ public static class WorkflowCapabilityEndpoints
         ChatInput input,
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
-        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null)
+        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
+        AgentToolExecutionContext? trustedToolContext = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var writer = new ChatSseResponseWriter(http.Response);
@@ -53,7 +55,8 @@ public static class WorkflowCapabilityEndpoints
             var normalizedRequest = ChatRunRequestNormalizer.Normalize(
                 input,
                 defaultMetadata,
-                trustedConnectorHttpAuthorization: connectorAuthorization);
+                trustedConnectorHttpAuthorization: connectorAuthorization,
+                trustedToolContext: trustedToolContext);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -116,12 +119,16 @@ public static class WorkflowCapabilityEndpoints
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? defaultMetadata = null)
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        AgentToolExecutionContext? trustedToolContext = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(
+            input,
+            defaultMetadata: defaultMetadata,
+            trustedToolContext: trustedToolContext);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);

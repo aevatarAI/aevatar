@@ -128,7 +128,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         var command = service.LastRequest;
         command.Should().NotBeNull();
         var metadata = command!.Metadata ?? throw new InvalidOperationException("Expected metadata capture.");
-        metadata["telegram.chat_id"].Should().Be("-100-request");
+        metadata.Should().NotContainKey("telegram.chat_id");
         metadata["telegram.openclaw_bot_username"].Should().Be("openclaw_bot");
     }
 

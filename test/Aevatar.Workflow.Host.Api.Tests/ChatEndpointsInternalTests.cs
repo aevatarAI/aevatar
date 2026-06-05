@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
@@ -173,6 +174,50 @@ public sealed class ChatEndpointsInternalTests
         service.LastCommand.InputParts.Should().ContainSingle();
         service.LastCommand.InputParts![0].Kind.Should()
             .Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image);
+    }
+
+    [Fact]
+    public void HandleCommandJsonBinding_ShouldRejectHttpBodyToolContext()
+    {
+        const string json = """
+        {
+          "prompt": "hello",
+          "toolContext": {
+            "credentials": {
+              "nyxIdAccessToken": "client-token"
+            }
+          }
+        }
+        """;
+
+        var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void HandleChatJsonBinding_ShouldRejectHttpBodyToolContext()
+    {
+        const string json = """
+        {
+          "prompt": "hello",
+          "toolContext": {
+            "caller": {
+              "scopeId": "client-scope"
+            }
+          }
+        }
+        """;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+                throw new InvalidOperationException("handler should not run after strict JSON rejection"),
+        };
+
+        var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
+        interactionService.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -1120,12 +1165,17 @@ public sealed class ChatEndpointsInternalTests
                 CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
+        public int CallCount { get; private set; }
+
         public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
-            CancellationToken ct = default) =>
-            ResultFactory(request, emitAsync, onAcceptedAsync, ct);
+            CancellationToken ct = default)
+        {
+            CallCount++;
+            return ResultFactory(request, emitAsync, onAcceptedAsync, ct);
+        }
     }
 
     private sealed class FakeCommandDispatchService
