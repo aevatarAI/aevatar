@@ -265,7 +265,7 @@ describe("runtimeGAgentApi", () => {
         expectedActorId: "orders-actor",
         gAgent: {
           agentKind: "Tests.OrdersGAgent",
-          diagnosticActorTypeName: "Tests.OrdersGAgent, Tests",
+          diagnosticClrTypeName: "Tests.OrdersGAgent, Tests",
           preferredActorId: "orders-actor",
         },
       }),
@@ -299,7 +299,7 @@ describe("runtimeGAgentApi", () => {
       expectedActorId: "orders-actor",
       gAgent: {
         agentKind: "Tests.OrdersGAgent",
-        diagnosticActorTypeName: "",
+        diagnosticActorTypeName: "Tests.OrdersGAgent, Tests",
         preferredActorId: "orders-actor",
       },
     });

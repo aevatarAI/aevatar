@@ -100,7 +100,7 @@ report_matches \
 report_filtered_matches \
   "Frontend runtime identity code must not send legacy GAgent identity aliases" \
   "gAgentType|gagentType|gagent_type|actorTypeName" \
-  "diagnostic[A-Za-z]*TypeName|Diagnostic[A-Za-z]*TypeName|staticActorTypeName|StaticActorTypeName|\\[\"actorTypeName\", \"ActorTypeName\"\\]|StudioMemberImplementationRef\\.diagnosticActorTypeName" \
+  "diagnostic[A-Za-z]*TypeName|Diagnostic[A-Za-z]*TypeName|staticActorTypeName|StaticActorTypeName|StudioMemberImplementationRef\\.diagnosticActorTypeName" \
   "${frontend_runtime_identity_paths[@]}"
 
 report_filtered_matches \
@@ -131,9 +131,19 @@ fi
 report_filtered_matches \
   "Aevatar invocation tool must not expose actor_name outside reserved proto names and negative tests" \
   "actor_name" \
-  "reserved \"actor_name\"|TryGetProperty\\(\"actor_name\".*BeFalse|\"actor_name\": \"RoleGAgent\"" \
+  "reserved \"actor_name\"|TryGetProperty\\(\"actor_name\".*BeFalse|\"actor_name\": \"RoleGAgent\"|\"actor_name\": \"LegacyRoleGAgent\"|DeletedGAgentActorNameAlias = \"actor_name\"|Contain\\(\"actor_name\"\\)" \
   "src/Aevatar.AI.ToolProviders.AevatarInvocation" \
   "test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests"
+
+if ! rg -n "InvokeGAgent_ShouldRejectActorNameAliasEvenWhenPairedWithValidSelector" \
+    test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/AevatarInvocationToolSourceTests.cs >/dev/null ||
+   ! rg -n '\[InlineData\("agent_kind", "RoleGAgent"\)\]' \
+    test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/AevatarInvocationToolSourceTests.cs >/dev/null ||
+   ! rg -n '\[InlineData\("actor_id", "actor-1"\)\]' \
+    test/Aevatar.AI.ToolProviders.AevatarInvocation.Tests/AevatarInvocationToolSourceTests.cs >/dev/null; then
+  echo "Aevatar invocation actor_name rejection must cover paired agent_kind and actor_id selectors."
+  violations=$((violations + 1))
+fi
 
 report_filtered_matches \
   "Binding tool must not accept gagent_type outside explicit rejection tests" \

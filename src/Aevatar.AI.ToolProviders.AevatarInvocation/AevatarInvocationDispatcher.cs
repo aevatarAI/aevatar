@@ -24,6 +24,7 @@ namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 public sealed class AevatarInvocationDispatcher
 {
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
+    private const string DeletedGAgentActorNameAlias = "actor_name";
     private static readonly string[] ProtectedCallerMetadataKeys =
     [
         LLMRequestMetadataKeys.ScopeId,
@@ -92,6 +93,13 @@ public sealed class AevatarInvocationDispatcher
         string argumentsJson,
         CancellationToken ct = default)
     {
+        var forbiddenAlias = ProtoToolArguments.RejectForbiddenRootField(
+            argumentsJson,
+            DeletedGAgentActorNameAlias,
+            "agent_kind or actor_id");
+        if (forbiddenAlias != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(forbiddenAlias), forbiddenAlias);
+
         var parsed = ProtoToolArguments.Parse<InvokeGAgentToolRequest>(argumentsJson);
         if (parsed.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(parsed.Error), parsed.Error);

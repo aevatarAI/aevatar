@@ -224,6 +224,31 @@ public sealed class AevatarInvocationToolSourceTests
         harness.ActorDispatch.Calls.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("agent_kind", "RoleGAgent")]
+    [InlineData("actor_id", "actor-1")]
+    public async Task InvokeGAgent_ShouldRejectActorNameAliasEvenWhenPairedWithValidSelector(
+        string selectorField,
+        string selectorValue)
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(callId: $"call-gagent-legacy-alias-{selectorField}");
+        var output = await tool.ExecuteAsync($$"""
+            {
+              "actor_name": "LegacyRoleGAgent",
+              "{{selectorField}}": "{{selectorValue}}",
+              "payload": { "prompt": "hello" }
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        output.Should().Contain("actor_name");
+        harness.ActorRegistry.LastScopeId.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task InvokeGAgentForChatRun_ShouldMapTypedControlFields()
     {
