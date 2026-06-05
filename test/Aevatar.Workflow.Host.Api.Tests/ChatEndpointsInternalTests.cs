@@ -208,16 +208,9 @@ public sealed class ChatEndpointsInternalTests
           }
         }
         """;
-        var interactionService = new FakeCommandInteractionService
-        {
-            ResultFactory = (_, _, _, _) =>
-                throw new InvalidOperationException("handler should not run after strict JSON rejection"),
-        };
-
         var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
 
         act.Should().Throw<JsonException>();
-        interactionService.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -1165,17 +1158,12 @@ public sealed class ChatEndpointsInternalTests
                 CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
-        public int CallCount { get; private set; }
-
         public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
-            CancellationToken ct = default)
-        {
-            CallCount++;
-            return ResultFactory(request, emitAsync, onAcceptedAsync, ct);
-        }
+            CancellationToken ct = default) =>
+            ResultFactory(request, emitAsync, onAcceptedAsync, ct);
     }
 
     private sealed class FakeCommandDispatchService

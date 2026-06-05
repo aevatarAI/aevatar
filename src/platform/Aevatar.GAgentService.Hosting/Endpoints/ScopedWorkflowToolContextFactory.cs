@@ -1,49 +1,27 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 internal static class ScopedWorkflowToolContextFactory
 {
-    public static async Task<AgentToolExecutionContext?> BuildAsync(
+    public static AgentToolExecutionContext? Build(
         HttpContext? http,
         string? scopeId,
         string? sessionId,
-        string? requestId,
         IReadOnlyDictionary<string, string>? headers,
-        CancellationToken cancellationToken = default)
+        LLMControlContext? llmControl)
     {
         if (http == null)
             return null;
 
         var normalizedScopeId = Normalize(scopeId);
         var bearerToken = ExtractBearerToken(http);
-        var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
-        var model = (string?)null;
-        var route = (string?)null;
-        if (userConfigStore != null)
-        {
-            try
-            {
-                var userConfig = await userConfigStore.GetAsync(cancellationToken);
-                model = Normalize(userConfig.DefaultModel);
-                route = Normalize(userConfig.PreferredLlmRoute);
-                (model, route) = await UserLlmRouteModelResolver
-                    .ResolveAsync(http, model, route, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch
-            {
-                model = null;
-                route = null;
-            }
-        }
+        var model = Normalize(llmControl?.ModelOverride);
+        var route = Normalize(llmControl?.NyxIdRoutePreference);
 
-        var effectiveRequestId = Normalize(requestId) ?? Normalize(sessionId);
+        var effectiveRequestId = Normalize(sessionId);
         return AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(effectiveRequestId, null),

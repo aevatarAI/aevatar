@@ -114,13 +114,13 @@ public static class ScopeServiceEndpoints
                 throw new InvalidOperationException("workflowYamls is required.");
 
             var scopedHeaders = BuildScopedHeaders(request.Headers);
-            var trustedToolContext = await ScopedWorkflowToolContextFactory.BuildAsync(
+            var scopedLlmControl = await BuildScopedLlmControlAsync(http, ct);
+            var trustedToolContext = ScopedWorkflowToolContextFactory.Build(
                 http,
                 scopeId,
                 request.SessionId,
-                requestId: null,
                 scopedHeaders,
-                ct);
+                scopedLlmControl);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
             {
                 await WriteJsonErrorResponseAsync(
@@ -139,7 +139,7 @@ public static class ScopeServiceEndpoints
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
                 ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
-                LlmControl: ToWorkflowLlmControl(await BuildScopedLlmControlAsync(http, ct)),
+                LlmControl: ToWorkflowLlmControl(scopedLlmControl),
                 ToolContext: trustedToolContext,
                 Headers: scopedHeaders);
 
@@ -164,7 +164,7 @@ public static class ScopeServiceEndpoints
                     SessionId = chatRequest.SessionId,
                     ScopeId = scopeId,
                     Headers = scopedHeaders,
-                    LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
+                    LlmControl = ToChatLlmControlInput(scopedLlmControl),
                 },
                 chatRunService,
                 ct,
@@ -1517,13 +1517,13 @@ public static class ScopeServiceEndpoints
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var scopedHeaders = BuildScopedHeaders(request.Headers);
-            var trustedToolContext = await ScopedWorkflowToolContextFactory.BuildAsync(
+            var scopedLlmControl = await BuildScopedLlmControlAsync(http, ct);
+            var trustedToolContext = ScopedWorkflowToolContextFactory.Build(
                 http,
                 scopeId,
                 request.SessionId,
-                requestId: null,
                 scopedHeaders,
-                ct);
+                scopedLlmControl);
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -1564,7 +1564,7 @@ public static class ScopeServiceEndpoints
                             ScopeId = scopeId,
                             Metadata = scopedHeaders,
                             Headers = scopedHeaders,
-                            LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
+                            LlmControl = ToChatLlmControlInput(scopedLlmControl),
                         },
                         chatRunService,
                         ct,
@@ -2969,11 +2969,8 @@ const response = await fetch("{{invokePath}}", {
         return scopedHeaders;
     }
 
-    private static async Task<ChatLlmControlInput?> BuildScopedLlmControlInputAsync(
-        HttpContext? http,
-        CancellationToken cancellationToken = default)
+    private static ChatLlmControlInput? ToChatLlmControlInput(LLMControlContext? control)
     {
-        var control = await BuildScopedLlmControlAsync(http, cancellationToken);
         if (control == null)
             return null;
 

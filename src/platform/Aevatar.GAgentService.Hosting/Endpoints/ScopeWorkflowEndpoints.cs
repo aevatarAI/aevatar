@@ -318,13 +318,13 @@ public static class ScopeWorkflowEndpoints
         if (resolvedEventFormat == ScopeWorkflowStreamEventFormat.Workflow)
         {
             var scopedHeaders = BuildScopedHeaders(headers);
-            var trustedToolContext = await ScopedWorkflowToolContextFactory.BuildAsync(
+            var scopedLlmControl = await BuildScopedLlmControlAsync(http, ct);
+            var trustedToolContext = ScopedWorkflowToolContextFactory.Build(
                 http,
                 scopeId,
                 sessionId,
-                requestId: null,
                 scopedHeaders,
-                ct);
+                scopedLlmControl);
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
@@ -341,7 +341,7 @@ public static class ScopeWorkflowEndpoints
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
                     Headers = scopedHeaders,
-                    LlmControl = await BuildScopedLlmControlInputAsync(http, ct),
+                    LlmControl = ToChatLlmControlInput(scopedLlmControl),
                 },
                 chatRunService,
                 ct,
@@ -350,13 +350,13 @@ public static class ScopeWorkflowEndpoints
         }
 
         var aguiHeaders = BuildScopedHeaders(headers);
-        var aguiToolContext = await ScopedWorkflowToolContextFactory.BuildAsync(
+        var aguiLlmControl = await BuildScopedLlmControlAsync(http, ct);
+        var aguiToolContext = ScopedWorkflowToolContextFactory.Build(
             http,
             scopeId,
             sessionId,
-            requestId: null,
             aguiHeaders,
-            ct);
+            aguiLlmControl);
         await HandleAguiStreamAsync(
             http,
             scopeId,
@@ -364,7 +364,7 @@ public static class ScopeWorkflowEndpoints
             prompt,
             sessionId,
             aguiHeaders,
-            await BuildScopedLlmControlAsync(http, ct),
+            aguiLlmControl,
             aguiToolContext,
             chatRunService,
             ct);
@@ -583,11 +583,8 @@ public static class ScopeWorkflowEndpoints
         return scopedHeaders;
     }
 
-    internal static async Task<ChatLlmControlInput?> BuildScopedLlmControlInputAsync(
-        HttpContext? http,
-        CancellationToken cancellationToken = default)
+    internal static ChatLlmControlInput? ToChatLlmControlInput(LLMControlContext? control)
     {
-        var control = await BuildScopedLlmControlAsync(http, cancellationToken);
         if (control == null)
             return null;
 
