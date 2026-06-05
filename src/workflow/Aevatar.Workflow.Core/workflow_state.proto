@@ -199,6 +199,55 @@ message WorkflowRuntimeCallbackLeaseState
   int32 slot_epoch = 5;
 }
 
+message WorkflowLeaseWaiterState
+{
+  string request_id = 1;
+  string requester_run_id = 2;
+  string requester_actor_id = 3;
+  string requester_step_id = 4;
+  int32 ttl_ms = 5;
+  int32 wait_timeout_ms = 6;
+  int64 enqueued_at_unix_ms = 7;
+  WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+  string timeout_callback_id = 9;
+}
+
+message WorkflowLeaseState
+{
+  string lease_key = 1;
+  string holder_run_id = 2;
+  string holder_actor_id = 3;
+  string holder_step_id = 4;
+  string holder_token = 5;
+  int64 generation = 6;
+  int64 expires_at_unix_ms = 7;
+  WorkflowRuntimeCallbackLeaseState expiration_lease = 8;
+  string expiration_callback_id = 9;
+  repeated WorkflowLeaseWaiterState waiters = 10;
+}
+
+message WorkflowLeaseStateUpsertedEvent
+{
+  WorkflowLeaseState state = 1;
+}
+
+message PendingWorkflowLeaseOperationState
+{
+  string request_id = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string lease_key = 4;
+  string lease_actor_id = 5;
+  string action = 6;
+  string input = 7;
+  string holder_token_variable = 8;
+}
+
+message WorkflowLeaseModuleState
+{
+  map<string, PendingWorkflowLeaseOperationState> pending = 1;
+}
+
 message RetryBackoffState
 {
   WorkflowRuntimeCallbackLeaseState lease = 1;

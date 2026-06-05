@@ -117,6 +117,21 @@ BindWorkflowDefinition(yaml)
 - timezone 为空时默认为 `UTC`，非空时必须能被 runtime `TimeZoneInfo` 解析。
 - `Headers` 是 command dispatch headers，不用于承载 schedule 核心语义。
 
+### Workflow Lease
+
+`WorkflowLeaseGAgent` 是 workflow 跨 run 单例 lease 的唯一事实源。一个 canonical `lease_key` 对应一个 deterministic lease actor；`WorkflowRunGAgent` 与 `LeaseModule` 只是 client，不保存可复用 credential，也不把进程内状态当成互斥事实。
+
+运行语义：
+
+- canonical key = trim 后 lower-invariant；actor id 由 `workflow.lease:` 加 key hash 生成，真实 key 保存在 actor state 和 typed event 中，调用方不得解析 actor id。
+- acquire 空闲或已过期时生成新的 `holder_token`，`generation += 1`，并基于 actor state 持久化 holder、expiry 和 callback intent。
+- renew/release 必须显式带 `holder_token + generation`；generation 不匹配、token 不匹配或 holder run 不匹配时返回 typed rejection，不修改 holder。
+- renew 只延长 `expires_at_unix_ms`，不提升 generation。
+- conflict policy v1 只支持 `fail` 或 FIFO `wait`；wait queue 上限固定为 32，不从 DSL 配置。
+- TTL expiry 与 wait timeout 都通过 durable self callback 事件化；callback 回到 lease actor 后再次按 token/generation/request_id 对账，陈旧 callback 被忽略。
+- release 或 TTL 清 holder 后由同一个 lease actor 授予 FIFO waiter；grant/reject 作为 continuation event 发送回请求方 run actor。
+- `.refactor-loop/host.env` 不是生产事实源，不保存 branch topology、machine path、ledger authority 或 workflow lease 常量。
+
 ### WorkflowModuleFactory
 
 按名称创建模块实例。DI 注册时每个模块有一个或多个名称：
@@ -182,6 +197,7 @@ roles:
 | | `while` | `WhileModule` | 循环执行（别名 `loop`） |
 | | `workflow_call` | `WorkflowCallModule` | 调用子工作流（别名 `sub_workflow`，支持 `lifecycle=singleton/transient/scope`） |
 | | `dynamic_workflow` | `DynamicWorkflowModule` | 从 LLM 输出提取 YAML，动态重配后继续执行 |
+| | `lease` | `LeaseModule` | 跨 run 显式 acquire/renew/release 单例 lease（别名 `mutex`） |
 | | `assign` | `AssignModule` | 变量赋值 |
 | | `checkpoint` | `CheckpointModule` | 检查点 |
 | **数据** | `transform` | `TransformModule` | 纯函数变换（count/take/join/split/distinct 等） |

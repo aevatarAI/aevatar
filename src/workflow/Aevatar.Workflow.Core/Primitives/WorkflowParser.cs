@@ -63,6 +63,14 @@ public sealed class WorkflowParser
         ("on_rejected", static step => step.OnRejected),
         ("on_inconclusive", static step => step.OnInconclusive),
         ("winner_policy", static step => step.WinnerPolicy),
+        ("action", static step => step.Action),
+        ("key", static step => step.Key),
+        ("on_conflict", static step => step.OnConflict),
+        ("ttl_ms", static step => step.TtlMs),
+        ("wait_timeout_ms", static step => step.WaitTimeoutMs),
+        ("holder_token", static step => step.HolderToken),
+        ("generation", static step => step.Generation),
+        ("holder_token_variable", static step => step.HolderTokenVariable),
     ];
 
     /// <summary>
@@ -462,6 +470,14 @@ public sealed class WorkflowParser
         public string? OnRejected { get; set; }
         public string? OnInconclusive { get; set; }
         public string? WinnerPolicy { get; set; }
+        public string? Action { get; set; }
+        public string? Key { get; set; }
+        public string? OnConflict { get; set; }
+        public object? TtlMs { get; set; }
+        public object? WaitTimeoutMs { get; set; }
+        public string? HolderToken { get; set; }
+        public object? Generation { get; set; }
+        public string? HolderTokenVariable { get; set; }
         public Dictionary<string, object?>? Parameters { get; set; }
         public string? Next { get; set; }
         public List<RawStep>? Children { get; set; }

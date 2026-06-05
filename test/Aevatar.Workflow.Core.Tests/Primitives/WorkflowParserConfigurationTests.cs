@@ -146,6 +146,35 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
+    public void Parse_WhenLeaseRootParametersProvided_ShouldLiftToParameters()
+    {
+        var yaml = """
+            name: lease_root_parameters
+            roles: []
+            steps:
+              - id: acquire
+                type: mutex
+                action: acquire
+                key: Shared/Resource
+                on_conflict: wait
+                ttl_ms: 60000
+                wait_timeout_ms: 120000
+                holder_token_variable: lease_token
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.Should().ContainSingle().Subject;
+
+        step.Type.Should().Be("lease");
+        step.Parameters["action"].Should().Be("acquire");
+        step.Parameters["key"].Should().Be("Shared/Resource");
+        step.Parameters["on_conflict"].Should().Be("wait");
+        step.Parameters["ttl_ms"].Should().Be("60000");
+        step.Parameters["wait_timeout_ms"].Should().Be("120000");
+        step.Parameters["holder_token_variable"].Should().Be("lease_token");
+    }
+
+    [Fact]
     public void Parse_WhenUsingErgonomicAliases_ShouldCanonicalizeAndApplyDefaults()
     {
         var yaml = """

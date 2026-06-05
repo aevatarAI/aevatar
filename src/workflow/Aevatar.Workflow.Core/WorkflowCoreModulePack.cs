@@ -36,6 +36,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<SecureInputModule>("secure_input", "secret_input"),
         WorkflowModuleRegistration.Create<WorkflowYamlValidateModule>("workflow_yaml_validate"),
         WorkflowModuleRegistration.Create<DynamicWorkflowModule>("dynamic_workflow"),
+        WorkflowModuleRegistration.Create<LeaseModule>("lease", "mutex"),
     ];
 
     private static readonly IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanderRegistrations =
