@@ -19,7 +19,7 @@ public sealed class LeaseModuleTests
     {
         var runtime = new RecordingActorRuntime();
         var ctx = new RecordingWorkflowContext(runtime);
-        var module = new LeaseModule();
+        var module = new LeaseModule(runtime);
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -55,7 +55,7 @@ public sealed class LeaseModuleTests
     {
         var runtime = new RecordingActorRuntime();
         var ctx = new RecordingWorkflowContext(runtime);
-        var module = new LeaseModule();
+        var module = new LeaseModule(runtime);
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -106,8 +106,9 @@ public sealed class LeaseModuleTests
     [Fact]
     public async Task HandleAsync_WhenReplyDoesNotMatchPending_ShouldIgnore()
     {
-        var ctx = new RecordingWorkflowContext(new RecordingActorRuntime());
-        var module = new LeaseModule();
+        var runtime = new RecordingActorRuntime();
+        var ctx = new RecordingWorkflowContext(runtime);
+        var module = new LeaseModule(runtime);
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -143,8 +144,9 @@ public sealed class LeaseModuleTests
     [InlineData("release", "generation")]
     public async Task HandleAsync_WhenRenewOrReleaseCredentialMissing_ShouldFailLocally(string action, string missing)
     {
-        var ctx = new RecordingWorkflowContext(new RecordingActorRuntime());
-        var module = new LeaseModule();
+        var runtime = new RecordingActorRuntime();
+        var ctx = new RecordingWorkflowContext(runtime);
+        var module = new LeaseModule(runtime);
         var request = new StepRequestEvent
         {
             StepId = $"{action}-1",
@@ -172,8 +174,9 @@ public sealed class LeaseModuleTests
     [Fact]
     public async Task HandleAsync_WhenGenerationMalformed_ShouldFailLocally()
     {
-        var ctx = new RecordingWorkflowContext(new RecordingActorRuntime());
-        var module = new LeaseModule();
+        var runtime = new RecordingActorRuntime();
+        var ctx = new RecordingWorkflowContext(runtime);
+        var module = new LeaseModule(runtime);
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -204,7 +207,7 @@ public sealed class LeaseModuleTests
     {
         var runtime = new RecordingActorRuntime();
         var ctx = new RecordingWorkflowContext(runtime);
-        var module = new LeaseModule();
+        var module = new LeaseModule(runtime);
 
         await module.HandleAsync(Envelope(new StepRequestEvent
         {
@@ -267,8 +270,9 @@ public sealed class LeaseModuleTests
     [Fact]
     public async Task HandleAsync_WhenRejectedMatchesPending_ShouldFailWithTypedReason()
     {
-        var ctx = new RecordingWorkflowContext(new RecordingActorRuntime());
-        var module = new LeaseModule();
+        var runtime = new RecordingActorRuntime();
+        var ctx = new RecordingWorkflowContext(runtime);
+        var module = new LeaseModule(runtime);
         await module.HandleAsync(Envelope(new StepRequestEvent
         {
             StepId = "acquire-1",

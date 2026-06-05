@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Primitives;
@@ -10,6 +11,12 @@ public sealed class LeaseModule : IEventModule<IWorkflowExecutionContext>
     private const string ActionAcquire = "acquire";
     private const string ActionRenew = "renew";
     private const string ActionRelease = "release";
+    private readonly IActorRuntime _actorRuntime;
+
+    public LeaseModule(IActorRuntime actorRuntime)
+    {
+        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+    }
 
     public string Name => "lease";
 
@@ -348,30 +355,23 @@ public sealed class LeaseModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    private static async Task<bool> TryEnsureLeaseActorAsync(
+    private async Task<bool> TryEnsureLeaseActorAsync(
         StepRequestEvent request,
         PendingWorkflowLeaseOperationState pending,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var runtime = ctx.Services.GetService(typeof(IActorRuntime)) as IActorRuntime;
-        if (runtime == null)
-        {
-            await PublishFailureAsync(request, ctx, "lease step requires IActorRuntime", ct);
-            return false;
-        }
-
-        if (await runtime.GetAsync(pending.LeaseActorId) != null)
+        if (await _actorRuntime.GetAsync(pending.LeaseActorId) != null)
             return true;
 
         try
         {
-            await runtime.CreateAsync(typeof(WorkflowLeaseGAgent), pending.LeaseActorId, ct);
+            await _actorRuntime.CreateAsync(typeof(WorkflowLeaseGAgent), pending.LeaseActorId, ct);
             return true;
         }
         catch (Exception ex)
         {
-            if (await runtime.GetAsync(pending.LeaseActorId) != null)
+            if (await _actorRuntime.GetAsync(pending.LeaseActorId) != null)
                 return true;
 
             await PublishFailureAsync(
