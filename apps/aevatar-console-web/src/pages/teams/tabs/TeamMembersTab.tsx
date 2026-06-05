@@ -1,5 +1,9 @@
-import { CheckCircleOutlined, EditOutlined, ToolOutlined } from "@ant-design/icons";
-import { Button, Space, Tooltip, Typography, theme } from "antd";
+import {
+  CheckCircleOutlined,
+  EditOutlined,
+  ToolOutlined,
+} from "@ant-design/icons";
+import { Button, Grid, Tooltip, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
 import {
@@ -8,11 +12,9 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import {
   DetailPill,
-  FactLine,
   CompactFactValue,
   factValueFontFamily,
 } from "../components/TeamDetailPrimitives";
-import { t } from "@/shared/i18n/messages";
 
 type TeamRosterMemberRow = {
   readonly canInvokeAsEntry: boolean;
@@ -88,7 +90,34 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
 }) => {
   const intl = useIntl();
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const isStackedRoster = !screens.xl;
   const isEntryActionBusy = entryActionBusyMemberId.trim().length > 0;
+  const mutedTextColor = token.colorTextSecondary;
+  const subtleTextColor = token.colorTextTertiary;
+  const rosterRowStyle = React.useMemo<React.CSSProperties>(
+    () => ({
+      alignItems: "center",
+      background: token.colorBgContainer,
+      border: `1px solid ${token.colorBorderSecondary}`,
+      borderRadius: 8,
+      display: "grid",
+      gap: isStackedRoster ? 14 : 18,
+      gridTemplateColumns: isStackedRoster
+        ? "minmax(0, 1fr)"
+        : "minmax(180px, 1.1fr) minmax(180px, 0.9fr) max-content",
+      padding: isStackedRoster ? "14px 16px" : "16px 18px",
+    }),
+    [isStackedRoster, token.colorBgContainer, token.colorBorderSecondary],
+  );
+  const compactRosterRowStyle = React.useMemo<React.CSSProperties>(
+    () => ({
+      ...rosterRowStyle,
+      background: token.colorFillQuaternary,
+      borderColor: token.colorBorder,
+    }),
+    [rosterRowStyle, token.colorBorder, token.colorFillQuaternary],
+  );
   const handleNavigate = React.useCallback(
     (href: string) => (event: React.MouseEvent<HTMLElement>) => {
       if (!href || !onNavigate) {
@@ -116,7 +145,10 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           </Typography.Text>
         }
       >
-        <Typography.Text type="secondary">
+        <Typography.Text
+          style={{ display: "block", fontSize: 15, marginBottom: 8 }}
+          type="secondary"
+        >
           {intl.formatMessage({ id: "teams.members.description" })}
         </Typography.Text>
         {rosterSyncing ? (
@@ -144,174 +176,209 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             })}
           />
         ) : rosterRows.length > 0 ? (
-          <div
-            style={{
-              border: "1px solid var(--ant-colorBorderSecondary)",
-              borderRadius: 18,
-              overflow: "hidden",
-            }}
-          >
-            <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 980 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {rosterRows.map((row) => {
+              const rowStyle = row.isEntryMember || row.isSelectedMember
+                ? compactRosterRowStyle
+                : rosterRowStyle;
+              const hasPublishedService =
+                row.serviceId.trim().length > 0 && row.serviceId !== "--";
+              return (
                 <div
+                  key={row.key}
                   style={{
-                    background: "var(--ant-colorBgContainerDisabled)",
-                    borderBottom: "1px solid var(--ant-colorBorderSecondary)",
-                    color: "var(--ant-colorTextSecondary)",
-                    display: "grid",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    gap: 16,
-                    gridTemplateColumns:
-                      "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
-                    padding: "12px 16px",
+                    ...rowStyle,
+                    boxShadow: row.isEntryMember
+                      ? `inset 4px 0 0 ${token.colorPrimary}`
+                      : row.isSelectedMember
+                        ? `inset 4px 0 0 ${token.colorInfo}`
+                        : undefined,
                   }}
                 >
-                  <span>{intl.formatMessage({ id: "teams.members.columns.member" })}</span>
-                  <span>{intl.formatMessage({ id: "teams.members.columns.role" })}</span>
-                  <span>
-                    {intl.formatMessage({ id: "teams.members.columns.implementation" })}
-                  </span>
-                  <span>{intl.formatMessage({ id: "teams.members.columns.service" })}</span>
-                  <span>{intl.formatMessage({ id: "teams.members.columns.actions" })}</span>
-                </div>
-                {rosterRows.map((row, index) => (
                   <div
-                    key={row.key}
                     style={{
-                      alignItems: "center",
-                      background: row.isEntryMember
-                        ? "linear-gradient(90deg, var(--ant-colorPrimaryBg) 0%, var(--ant-colorBgContainer) 34%)"
-                        : row.isSelectedMember
-                          ? "var(--ant-colorFillQuaternary)"
-                        : undefined,
-                      borderTop:
-                        index === 0 ? "none" : "1px solid var(--ant-colorBorderSecondary)",
-                      boxShadow: row.isEntryMember
-                        ? "inset 4px 0 0 var(--ant-colorPrimary)"
-                        : row.isSelectedMember
-                          ? "inset 4px 0 0 var(--ant-colorInfo)"
-                        : undefined,
-                      display: "grid",
-                      gap: 16,
-                      gridTemplateColumns:
-                        "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(260px, max-content)",
-                      padding: "14px 16px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      minWidth: 0,
                     }}
                   >
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                      <div
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 8,
+                        minWidth: 0,
+                      }}
+                    >
+                      <EllipsisText strong>{row.name}</EllipsisText>
+                      {row.isEntryMember ? (
+                        <DetailPill
+                          compact
+                          style={{
+                            background: token.colorSuccessBg,
+                            border: `1px solid ${token.colorSuccessBorder}`,
+                            color: token.colorSuccess,
+                          }}
+                          text={intl.formatMessage({ id: "teams.members.entry" })}
+                        />
+                      ) : null}
+                      {row.isSelectedMember ? (
+                        <DetailPill
+                          compact
+                          style={{
+                            background: token.colorInfoBg,
+                            border: `1px solid ${token.colorInfoBorder}`,
+                            color: token.colorInfo,
+                          }}
+                          text={intl.formatMessage({ id: "teams.members.selected" })}
+                        />
+                      ) : null}
+                    </div>
+                    <EllipsisText
+                      monospace
+                      style={{
+                        color: subtleTextColor,
+                        fontSize: 12,
+                      }}
+                    >
+                      {row.memberId}
+                    </EllipsisText>
+                    {row.description ? (
+                      <Typography.Text
                         style={{
-                          alignItems: "center",
-                          display: "flex",
-                          gap: 8,
-                          minWidth: 0,
+                          color: mutedTextColor,
+                          display: "-webkit-box",
+                          fontSize: 13,
+                          overflow: "hidden",
+                          overflowWrap: "anywhere",
+                          WebkitBoxOrient: "vertical",
+                          WebkitLineClamp: 2,
                         }}
                       >
-                        <EllipsisText strong>{row.name}</EllipsisText>
-                        {row.isEntryMember ? (
-                          <DetailPill
-                            compact
-                            style={{
-                              background: token.colorSuccessBg,
-                              border: `1px solid ${token.colorSuccessBorder}`,
-                              color: token.colorSuccess,
-                            }}
-                            text={intl.formatMessage({ id: "teams.members.entry" })}
-                          />
-                        ) : null}
-                        {row.isSelectedMember ? (
-                          <DetailPill
-                            compact
-                            style={{
-                              background: token.colorInfoBg,
-                              border: `1px solid ${token.colorInfoBorder}`,
-                              color: token.colorInfo,
-                            }}
-                            text={intl.formatMessage({ id: "teams.members.selected" })}
-                          />
-                        ) : null}
-                      </div>
-                      <EllipsisText
-                        monospace
-                        style={{
-                          fontSize: 12,
-                        }}
-                        type="secondary"
-                      >
-                        {row.memberId}
-                      </EllipsisText>
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <FactLine
-                        rows={1}
-                        text={
-                          row.description ||
-                          intl.formatMessage(
-                            { id: "teams.members.fallback.team" },
-                            { teamId: rosterTeamId || "--" },
-                          )
-                        }
-                      />
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                        {row.description}
+                      </Typography.Text>
+                    ) : null}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 8,
+                      }}
+                    >
                       <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
-                      <Typography.Text style={{ fontFamily: factValueFontFamily, fontSize: 12 }}>
-                        {row.implementationKind}
+                      <Typography.Text style={{ color: mutedTextColor, fontSize: 13 }}>
+                        {intl.formatMessage(
+                          { id: "teams.members.kind" },
+                          { kind: row.implementationKind },
+                        )}
                       </Typography.Text>
                     </div>
-                    <CompactFactValue
-                      color="var(--ant-color-text-secondary)"
-                      strong={false}
-                      value={row.serviceId}
-                    />
-                    <Space wrap size={8}>
-                      {row.isEntryMember ? (
-                        <Button
-                          icon={<CheckCircleOutlined />}
-                          disabled={
-                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
-                          }
-                          loading={entryActionBusyMemberId === row.memberId}
-                          onClick={onClearEntry}
-                          size="small"
-                        >
-                          {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
-                        </Button>
-                      ) : row.canInvokeAsEntry && onSetEntry ? (
-                        <Button
-                          disabled={
-                            isEntryActionBusy && entryActionBusyMemberId !== row.memberId
-                          }
-                          loading={entryActionBusyMemberId === row.memberId}
-                          onClick={() => onSetEntry(row.memberId)}
-                          size="small"
-                        >
-                          {intl.formatMessage({ id: "teams.members.actions.setEntry" })}
-                        </Button>
-                      ) : null}
+                    <div
+                      style={{
+                        alignItems: "center",
+                        color: mutedTextColor,
+                        display: "flex",
+                        fontSize: 13,
+                        gap: 6,
+                        minWidth: 0,
+                      }}
+                    >
+                      <Typography.Text style={{ color: mutedTextColor, fontSize: 13 }}>
+                        {intl.formatMessage({ id: "teams.members.service" })}
+                      </Typography.Text>
+                      {hasPublishedService ? (
+                        <CompactFactValue
+                          color={mutedTextColor}
+                          head={12}
+                          strong={false}
+                          tail={4}
+                          value={row.serviceId}
+                        />
+                      ) : (
+                        <Typography.Text style={{ color: mutedTextColor, fontSize: 13 }}>
+                          {intl.formatMessage({
+                            id: "teams.members.service.notPublished",
+                          })}
+                        </Typography.Text>
+                      )}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      alignItems: "center",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      justifyContent: isStackedRoster ? "flex-start" : "flex-end",
+                      justifySelf: isStackedRoster ? "stretch" : "end",
+                      minWidth: 0,
+                    }}
+                  >
+                    {row.isEntryMember ? (
                       <Button
+                        icon={<CheckCircleOutlined />}
+                        disabled={
+                          isEntryActionBusy && entryActionBusyMemberId !== row.memberId
+                        }
+                        loading={entryActionBusyMemberId === row.memberId}
+                        onClick={onClearEntry}
+                        size="small"
+                      >
+                        {intl.formatMessage({ id: "teams.members.actions.clearEntry" })}
+                      </Button>
+                    ) : row.canInvokeAsEntry && onSetEntry ? (
+                      <Button
+                        disabled={
+                          isEntryActionBusy && entryActionBusyMemberId !== row.memberId
+                        }
+                        loading={entryActionBusyMemberId === row.memberId}
+                        onClick={() => onSetEntry(row.memberId)}
+                        size="small"
+                      >
+                        {intl.formatMessage({ id: "teams.members.actions.setEntry" })}
+                      </Button>
+                    ) : null}
+                    <Button
+                      href={row.buildStudioHref}
+                      icon={<ToolOutlined />}
+                      onClick={handleNavigate(row.buildStudioHref)}
+                      size="small"
+                      type="primary"
+                    >
+                      {intl.formatMessage({ id: "teams.members.actions.build" })}
+                    </Button>
+                    <Tooltip
+                      title={intl.formatMessage({
+                        id: "teams.members.actions.editInStudio",
+                      })}
+                    >
+                      <Button
+                        aria-label={intl.formatMessage({
+                          id: "teams.members.actions.editInStudio",
+                        })}
                         href={row.editStudioHref}
                         icon={<EditOutlined />}
                         onClick={handleNavigate(row.editStudioHref)}
                         size="small"
-                      >
-                        {intl.formatMessage({ id: "teams.members.actions.editInStudio" })}
-                      </Button>
-                      <Button
-                        href={row.buildStudioHref}
-                        icon={<ToolOutlined />}
-                        onClick={handleNavigate(row.buildStudioHref)}
-                        size="small"
-                        type="primary"
-                      >
-                        {intl.formatMessage({ id: "teams.members.actions.build" })}
-                      </Button>
-                    </Space>
+                        style={{ width: 32 }}
+                      />
+                    </Tooltip>
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
+              );
+            })}
           </div>
         ) : rosterTeamId ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

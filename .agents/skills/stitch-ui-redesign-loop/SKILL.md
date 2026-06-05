@@ -1,9 +1,20 @@
 ---
 name: stitch-ui-redesign-loop
-description: "Use when continuing the Aevatar console UI style redesign loop: open Stitch in the Codex browser, request redesigned UI concepts, review and iterate at least three rounds, implement the approved React/Umi UI changes in apps/aevatar-console-web, and resume progress after heartbeat wakeups."
+description: "Runtime Verification Kit UI design mode for continuing the Aevatar console Stitch redesign loop. Use when the user explicitly asks to continue Stitch/UI redesign progress; otherwise treat browser checks, local/remote frontend runs, and visual verification as part of the global codex-refactor-loop merged product."
 ---
 
-# Stitch UI Redesign Loop
+# Stitch UI Redesign Mode
+
+This local skill is no longer a separate automation product. It is a Runtime Verification Kit mode under the global `codex-refactor-loop` merged product.
+
+Use it only for the Stitch-specific design exploration and resumable Aevatar console UI progress already recorded here. Do not let it own repository lifecycle, PR/comment/CI repair, blocked queue semantics, or environment-profile naming.
+
+Boundary rules:
+
+- `5174` remote-backend frontend verification is an environment profile, not a Stitch pipeline.
+- Browser screenshots, console checks, and local frontend startup are Runtime Verification Kit capabilities.
+- React/Umi implementation, test fixes, commits, pushes, and PR handling belong to Repo Execution Loop.
+- Product/domain rules discovered during UI work must be recorded as domain playbook/checklist context, not as a new pipeline.
 
 ## Overview
 

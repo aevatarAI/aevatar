@@ -1151,14 +1151,14 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(
       screen.getByText(
-        /设置入口决定团队测试从哪里开始，Build \/ 在 Studio 中编辑用于补齐成员实现和绑定/,
+        /选择团队测试的入口成员。没有发布服务的成员需要先完成构建 \/ 绑定。/,
       ),
     ).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
     expect(screen.getByText("入口成员")).toBeTruthy();
     expect(screen.getByRole("link", { name: "在 Studio 中编辑" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "构建" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "构建 / 绑定" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Test member" })).toBeNull();
     expect(screen.queryByRole("link", { name: "View runs" })).toBeNull();
     expect(screen.queryByText("参与者结构")).toBeNull();
@@ -1227,13 +1227,13 @@ describe("TeamDetailPage", () => {
       expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     });
     expect(screen.getByText("调用这支团队时会先路由到这个成员。")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "清除入口成员" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "清除入口" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
     expect(await screen.findByText("入口成员")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "设为入口成员" })).toBeNull();
-    expect(screen.getByText("alph...vice")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "设为入口" })).toBeNull();
+    expect(screen.getByText("alpha-service")).toBeTruthy();
   });
 
   it("sets a Team entry member from the members tab", async () => {
@@ -1263,7 +1263,7 @@ describe("TeamDetailPage", () => {
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
     expect(await screen.findByText("Team Beta Operator")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "设为入口成员" }));
+    fireEvent.click(screen.getByRole("button", { name: "设为入口" }));
 
     await waitFor(() => {
       expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
@@ -1284,7 +1284,7 @@ describe("TeamDetailPage", () => {
   it("clears the Team entry member from the overview", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "清除入口成员" }));
+    fireEvent.click(await screen.findByRole("button", { name: "清除入口" }));
 
     await waitFor(() => {
       expect(studioApi.clearTeamEntryMember).toHaveBeenCalledWith(
@@ -1566,7 +1566,7 @@ describe("TeamDetailPage", () => {
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "构建" }));
+    fireEvent.click(await screen.findByRole("link", { name: "构建 / 绑定" }));
 
     expect(window.location.pathname).toBe("/studio");
     const params = new URLSearchParams(window.location.search);
@@ -1658,7 +1658,7 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
-    expect(screen.getByText("alph...vice")).toBeTruthy();
+    expect(screen.getByText("alpha-service")).toBeTruthy();
 
     await waitFor(() => {
       expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");

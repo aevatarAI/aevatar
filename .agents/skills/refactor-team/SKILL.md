@@ -1,10 +1,20 @@
 ---
 name: refactor-team
-description: Orchestrate a fully automated multi-agent refactoring workflow to audit, fix, review, and PR architectural issues against AGENTS.md rules. Use when user wants to run automated code audit, refactoring, or architecture compliance checks.
-argument-hint: [max-issues-per-cycle]
+description: Compatibility entrypoint for Aevatar automated refactoring. Prefer the global codex-refactor-loop merged product for new unattended work; use this only when the user explicitly asks for the legacy refactor-team cycle or needs the old auditor/implementer/reviewer prompt files.
 ---
 
-# Automated Refactoring Team — Continuous Agent Subprocess Mode
+# Refactor Team — Compatibility Mode
+
+This local skill is no longer a separate automation product. New work should route through the global `codex-refactor-loop` skill, which owns the merged Consensus Work Orchestrator, Repo Execution Loop, and Runtime Verification Kit.
+
+Use this skill only as a compatibility adapter for the old one-cycle Aevatar audit flow:
+
+- Keep its prompt files as reusable legacy resources.
+- Do not create a parallel lifecycle, queue, status system, blocked queue, PR loop, or verification product here.
+- If a request includes PR conflicts, review comments, CI failures, browser verification, or long-running autonomous execution, hand the task to `codex-refactor-loop` instead.
+- If running this legacy cycle, apply the global product boundary: low-risk work may continue, medium-risk work needs narrowed verification, and high-risk work is recorded as blocked without stopping independent safe work.
+
+## Legacy One-Cycle Workflow
 
 You are the **Team Lead** orchestrating a continuous multi-agent refactoring workflow. Each agent is spawned, completes its task, and is destroyed. You directly control every step.
 
