@@ -854,7 +854,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task AddLarkAgentAuthoring_ShouldResolveToolSource_AndDiscoverRegisteredTools()
+    public async Task AddLarkAgentAuthoring_WhenCalledTwice_ShouldResolveSingleToolSource_AndDiscoverRegisteredTools()
     {
         var handler = new RoutingJsonHandler();
         var nyxClient = new NyxIdApiClient(
@@ -877,6 +877,7 @@ public sealed class AgentBuilderToolTests
         services.TryAddSingleton<ILogger<FeishuCardHumanInteractionPort>>(NullLogger<FeishuCardHumanInteractionPort>.Instance);
         services.AddSingleton(callerScopeResolver);
 
+        services.AddLarkAgentAuthoring();
         services.AddLarkAgentAuthoring();
 
         await using var provider = services.BuildServiceProvider();

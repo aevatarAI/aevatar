@@ -97,6 +97,30 @@ public sealed class ScheduledAgentCreatorToolTests
         });
     }
 
+    [Theory]
+    [InlineData("not-json", "invalid JSON literal")]
+    [InlineData("""["daily","0 9 * * *","UTC"]""", "arguments must be a JSON object")]
+    public async Task ExecuteAsync_WhenArgumentsMalformed_ShouldFailBeforeKeyCreation(
+        string argumentsJson,
+        string expectedErrorFragment)
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(argumentsJson);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Contain(expectedErrorFragment);
+            harness.Handler.Requests.Should().BeEmpty();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
     [Fact]
     public async Task ExecuteAsync_VersionedSkillRef_ShouldReturnTypedErrorBeforeSideEffects()
     {
@@ -158,6 +182,34 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().Be(expectedDetail);
             harness.Handler.Requests.Should().BeEmpty();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Theory]
+    [InlineData("""{"error":true,"message":"service lookup denied"}""", "service_resolution_failed")]
+    [InlineData("not-json", "service_resolution_invalid_json")]
+    public async Task ExecuteAsync_WhenUserServicesResponseInvalid_ShouldFailClosedWithoutKeyCreation(
+        string servicesResponseJson,
+        string expectedError)
+    {
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", servicesResponseJson);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
+            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
                 Arg.Any<InitializeSkillRunnerCommand>(),
