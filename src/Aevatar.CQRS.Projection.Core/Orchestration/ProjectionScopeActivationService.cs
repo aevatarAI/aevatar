@@ -54,7 +54,6 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
             request.SessionId);
 
         await _scopeRuntime.EnsureExistsAsync(scopeKey, ct).ConfigureAwait(false);
-        await _scopeRuntime.EnsureObservationRelayAsync(scopeKey, ct).ConfigureAwait(false);
         await _scopeRuntime.DispatchAsync(
             scopeKey,
             new EnsureProjectionScopeCommand
