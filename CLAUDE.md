@@ -157,3 +157,75 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - gstack：网页浏览与 QA 使用 gstack `/browse` 等 skill；不要直接调用底层 Chrome MCP 工具。
 - Skill routing：请求明确匹配仓库内 skill 时优先使用对应 skill；skill 已自包含的操作细则不复制回本文件。
 - Codex loop 细则由 `.claude/skills/codex-refactor-loop/` 与 `.claude/skills/codex-implement-loop/` 自维护；`CLAUDE.md` 只保留跨流程架构与工程边界。
+
+## 面向对象原则（强制）
+- 富模型而非贫血模型：数据与操作它的行为同住一个对象（Actor 即业务实体）；禁止“只有 getter/setter 的数据类 + 一堆 manager 在外面摆弄它”。
+- 封装状态：对象只暴露表达业务意图的方法，隐藏内部字段与集合；状态变更走方法/命令，禁止对外开放可变 setter 或直接返回内部集合引用。
+- Tell, Don't Ask：让对象自己做事，而非取出它的数据在外部判断再回写（避免 `if (o.State == X) o.Field = Y`，改成 `o.DoX()`）。
+- 单一职责（SRP）：一个类只有一个变化原因；actor 一个业务实体、service 一类无状态逻辑，不把多个职责塞进一个类。
+- 开闭（OCP）：对扩展开放、对修改封闭；新能力以新实现/插件挂载（单一主干 + 插件扩展），不改动已稳定的核心契约。
+- 里氏替换（LSP）：实现必须能无条件替换其抽象，不削弱接口契约、不抛契约外异常、不要求调用方按具体类型分支处理。
+- 接口隔离（ISP）：接口窄而内聚（如 `IXxxQueryPort` / `IActorDispatchPort` 各司其职）；不造全能接口，调用方不被迫依赖用不到的方法。
+- 依赖倒置（DIP）：上层依赖抽象、实现由外部注入；高层业务不直接 `new` 基础设施（与顶级“依赖反转”一致）。
+- 组合优于继承：优先以组合/委托复用行为；继承只用于真正稳定的 is-a 层级，避免深继承树与“为复用而继承”。
+- 多态替代类型分支：用多态/策略替代对类型的 `switch`/`if-else` 判断（与事件精确键路由、`actorId` 对调用方不透明一致）。
+- 迪米特法则（最少知识）：只与直接协作者对话，不链式穿透 `a.b.c.d`；需要的能力通过参数或端口传入。
+- 不可变优先：值对象、DTO、事件/命令载荷默认不可变（proto 消息即不可变契约）；可变状态收敛到其 actor 拥有者，不四处共享。
+
+## 设计模式约束（强制）
+- 模式服务于架构，不为用而用：能用主链路（Actor / command / event / projection pipeline）表达的，不引入并行模式机制；引入任何模式前先确认它没有制造“第二系统”。
+- 禁止用模式绕过架构边界：
+  - 不用通用 `Repository` 直读写 model 绕过读写分离——读走 readmodel / `IXxxQueryPort`，写走 `IActorDispatchPort`。
+  - 不用 `Singleton` / 静态注册表持有可变事实状态——单例只用于无状态服务，由 DI 容器管理生命周期（违反则见事实源唯一 / 中间层状态约束）。
+  - 不用进程内 `Observer` / `EventAggregator` 注册表分发业务事实——领域事件走 committed event + projection pipeline。
+  - 不引入第二套 `Mediator` / in-process bus 兜底跨 actor 调用——跨 actor 走 command/event + reply/timeout continuation（与禁 generic request-reply 一致）。
+  - 不用 `Service Locator` 隐藏依赖——依赖一律构造注入、显式可见。
+- 鼓励但限定边界的模式：
+  - `Adapter`：只在 Host / 边界层做外部协议 ↔ 内部 Protobuf 转换，不渗入领域/应用层。
+  - `Decorator` / 责任链：用于 pipeline / middleware 的横切关注点（日志、追踪、校验），不承载业务编排。
+  - `Strategy` / 多态：替代对类型的 `switch`/`if-else`（与面向对象原则一致）。
+  - `Factory`：仅用于运行时按类型/配置做多态创建；编译期已知依赖优先 DI 注入。
+  - `State` / 状态机：业务状态推进建模在 actor 事件处理内，保证顺序性与可重放。
+- 命名诚实：类型名体现业务职责而非堆砌模式名；不因用了某模式就强行 `XxxFactory`/`XxxStrategy` 命名（命名遵循业务语义优先）。
+
+## 编码规范（强制）
+- 不清楚含义、跨 namespace 的基础设施不要引入或注入；先弄懂语义再用。
+- 一个方法只做其名字表达的一件事；不让单个方法揽下整个流程，需要的中间结果由参数传入。
+- 非用户输入的参数不做防御式校验，让异常自然抛出；掩盖错误不如就地暴露。
+- 不要 `catch (Exception)` 吞掉一切，除非明确在做边界统一兜底；只捕获你能处理的具体异常类型。
+- 不用 static 全局可变属性，不在运行时给 static 赋值；`static` 仅用于真正不变的常量/纯函数，可变事实状态归 Actor/分布式状态（见中间层状态约束）。
+- 字段编码时已是 `readonly` 就不要去掉；需要可变性先质疑设计，而非删 `readonly`。
+- 引用成员名用 `nameof(T.MethodName)`，禁止裸字符串 `"MethodName"`。
+- 出现复制粘贴代码即抽取为方法或委托/扩展方法，不留重复。
+- 一个类依赖过多 service 时，把需要的值作为参数传入，而非堆注入一长串依赖。
+- 获取某个值若牵连一长串依赖，把“获取 + 其依赖”封装为 manager/service，不让调用方为拿一个值拖进整串依赖。
+- 实现类只关心入参与自身字段，不做参数搬运：需要某类型（如 protobuf `ByteString`）就直接以该类型入参，禁止传 `object[]` 再在方法内转换；转换在边界用扩展方法完成。
+- 想用 delegate 前先考虑能否用 interface 表达；`Attribute / Reflection / delegate / C# event` 的引入或改动需在评审中重点确认。
+- 保持 interface 最小：加方法前先试扩展方法（extension method）能否满足。
+- 改动任何 interface（新增/改签名/删除）前先开 issue/PR 说明动机与影响，至少 2 人评审通过；影响面大时先组织评审讨论再动手。
+- 领域事件只在拥有它的 Actor/模块内发布；跨模块交互走 command/event 协议，不直接 raise 别处的 event。
+- 新增代码遵循 `.editorconfig` 与周边风格；不得已破坏风格时就地标 `// TODO: review required`。
+
+## 命名约定（强制）
+- 局部变量：类型语义转 camelCase，必要时加限定词。`WorkflowDocument document`、`WorkflowDocument previousDocument`；反例 `WorkflowDocument received`（应 `receivedDocument`）。
+- 字段：`_camelCase` 且保留类型语义，`IScopeScriptQueryPort _scriptQueryPort`；反例 `_script`（丢 QueryPort 语义）。
+- 属性：PascalCase，`IEventPublisher EventPublisher { get; set; }`。
+- 事件：proto `*Event`，名字独立可读出“发生了什么”，如 `ChatRequestEvent`、`TextMessageStartEvent`；反例动名词残缺如 `Mining` / `MiningEvent`。
+- Service：无状态，以 `Service` 结尾（可变状态归 Actor）。
+- Manager：持注册表/生命周期/长期事实状态的对象，如 `ToolManager`、`ExternalLinkManager`。
+- Helper：纯静态工具方法聚合，复数 `Helpers`（随现状，如 `TracingContextHelpers`），不持状态。
+- 项目/程序集名 = 根命名空间（去 `.dll`）；文件夹 = 命名空间。例外：`.Core / .Types / .Abstractions` 后缀从命名空间剥离；`Helpers / Extensions / Exceptions` 聚合文件夹可不进命名空间。
+- 分层引用方向 `Domain ← Application ← Infrastructure ← Host`；同 `Aevatar.<Domain>` 内 Infrastructure 仅被其 Application/Host 引用，禁止反向依赖、下层引用上层（细化顶级“严格分层”与“依赖反转”）。
+
+## 新模块构建（指引）
+- 接口不清楚时，先写 Actor 的 event/command handler；写的过程会浮现你要从接口拿什么，再据此定义接口。
+- 实现接口，并按需定义 manager 或 infrastructure 层接口。
+- infrastructure 实现若无第三方依赖，放同一项目即可，不额外加依赖。
+- infrastructure 实现若需第三方依赖（如 gRPC / MongoDB / MySQL），放到单独项目，把第三方依赖隔离在该项目内。
+
+## 性能审查清单（review 自检）
+- 有无明显可做的性能优化？
+- 能否用库函数 / 内建函数替换手写实现？
+- 有无可移除的日志 / 调试代码？
+- 改动是否引入性能回退？
+- 改动是否不必要地增加存储开销（EventStore / readmodel / projection store）？
