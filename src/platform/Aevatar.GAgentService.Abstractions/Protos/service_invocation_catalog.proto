@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+import "service_endpoint.proto";
+import "service_revision.proto";
+import "service_serving.proto";
+
+enum ServiceInvokeReadinessStatus {
+  SERVICE_INVOKE_READINESS_STATUS_UNSPECIFIED = 0;
+  SERVICE_INVOKE_READINESS_STATUS_READY = 1;
+  SERVICE_INVOKE_READINESS_STATUS_UNAVAILABLE = 2;
+}
+
+enum ServiceInvokeUnavailableReason {
+  SERVICE_INVOKE_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  SERVICE_INVOKE_UNAVAILABLE_REASON_SERVING_TARGET_MISSING = 1;
+  SERVICE_INVOKE_UNAVAILABLE_REASON_PREPARED_ARTIFACT_MISSING = 2;
+  SERVICE_INVOKE_UNAVAILABLE_REASON_REVISION_NOT_PREPARED = 3;
+}
+
+message ServiceInvocationCatalogEntryState {
+  string endpoint_id = 1;
+  ServiceInvokeReadinessStatus readiness_status = 2;
+  ServiceInvokeUnavailableReason unavailable_reason = 3;
+  string selected_revision_id = 4;
+  string selected_deployment_id = 5;
+  string selected_actor_id = 6;
+}
+
+message ServiceInvocationCatalogState {
+  ServiceIdentity identity = 1;
+  repeated ServiceEndpointDescriptor service_endpoints = 2;
+  repeated ServiceServingTargetSpec serving_targets = 3;
+  map<string, ServiceRevisionRecordState> revisions = 4;
+  repeated ServiceInvocationCatalogEntryState entries = 5;
+  int64 source_catalog_version = 6;
+  int64 source_serving_version = 7;
+  int64 source_revision_version = 8;
+  google.protobuf.Timestamp observed_at = 9;
+  int64 last_applied_event_version = 10;
+  string last_event_id = 11;
+}
+
+message ObserveServiceInvocationCatalogCommand {
+  ServiceIdentity identity = 1;
+  repeated ServiceEndpointDescriptor service_endpoints = 2;
+  int64 source_catalog_version = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+message ObserveServiceInvocationServingCommand {
+  ServiceIdentity identity = 1;
+  repeated ServiceServingTargetSpec serving_targets = 2;
+  int64 source_serving_version = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+message ObserveServiceInvocationRevisionsCommand {
+  ServiceIdentity identity = 1;
+  map<string, ServiceRevisionRecordState> revisions = 2;
+  int64 source_revision_version = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+message ServiceInvocationCatalogObservedEvent {
+  ServiceIdentity identity = 1;
+  repeated ServiceEndpointDescriptor service_endpoints = 2;
+  repeated ServiceServingTargetSpec serving_targets = 3;
+  map<string, ServiceRevisionRecordState> revisions = 4;
+  repeated ServiceInvocationCatalogEntryState entries = 5;
+  int64 source_catalog_version = 6;
+  int64 source_serving_version = 7;
+  int64 source_revision_version = 8;
+  google.protobuf.Timestamp observed_at = 9;
+}

@@ -42,25 +42,9 @@ public sealed class ServiceInvocationApplicationServiceTests
                     ["service-policy"],
                     DateTimeOffset.UtcNow),
             },
-            new RecordingTrafficViewQueryReader
+            new RecordingInvocationCatalogQueryReader
             {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    1,
-                    string.Empty,
-                    [
-                        new ServiceTrafficEndpointSnapshot(
-                            "chat",
-                            [
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-1",
-                                    "r1",
-                                    "actor-1",
-                                    100,
-                                    ServiceServingState.Active.ToString()),
-                            ]),
-                    ],
-                    DateTimeOffset.UtcNow),
+                GetResult = CreateInvocationCatalogSnapshot(identity, Ready(identity, "chat", "r1", "dep-1", "actor-1")),
             },
             revisionCatalog);
         var authorizer = new RecordingAuthorizer();
@@ -116,31 +100,9 @@ public sealed class ServiceInvocationApplicationServiceTests
                     [],
                     DateTimeOffset.UtcNow),
             },
-            new RecordingTrafficViewQueryReader
+            new RecordingInvocationCatalogQueryReader
             {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    1,
-                    string.Empty,
-                    [
-                        new ServiceTrafficEndpointSnapshot(
-                            "chat",
-                            [
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-1",
-                                    "r1",
-                                    "actor-1",
-                                    50,
-                                    ServiceServingState.Active.ToString()),
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-2",
-                                    "r1",
-                                    "actor-2",
-                                    50,
-                                    ServiceServingState.Active.ToString()),
-                            ]),
-                    ],
-                    DateTimeOffset.UtcNow),
+                GetResult = CreateInvocationCatalogSnapshot(identity, Ready(identity, "chat", "r1", "dep-1", "actor-1")),
             },
             revisionCatalog);
         var authorizer = new RecordingAuthorizer();
@@ -171,7 +133,7 @@ public sealed class ServiceInvocationApplicationServiceTests
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
         var resolutionService = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader { GetResult = null },
-            new RecordingTrafficViewQueryReader { GetResult = null },
+            new RecordingInvocationCatalogQueryReader { GetResult = null },
             revisionCatalog);
         var service = new ServiceInvocationApplicationService(
             resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
@@ -188,7 +150,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     }
 
     [Fact]
-    public async Task InvokeAsync_ShouldThrow_WhenNoTrafficView()
+    public async Task InvokeAsync_ShouldThrow_WhenNoInvocationCatalogReadModel()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
@@ -211,7 +173,7 @@ public sealed class ServiceInvocationApplicationServiceTests
                     [],
                     DateTimeOffset.UtcNow),
             },
-            new RecordingTrafficViewQueryReader { GetResult = null },
+            new RecordingInvocationCatalogQueryReader { GetResult = null },
             revisionCatalog);
         var service = new ServiceInvocationApplicationService(
             resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
@@ -224,11 +186,11 @@ public sealed class ServiceInvocationApplicationServiceTests
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*has no serving traffic view*");
+            .WithMessage("*has no invocation catalog readmodel*");
     }
 
     [Fact]
-    public async Task InvokeAsync_ShouldThrow_WhenEndpointNotInTrafficView()
+    public async Task InvokeAsync_ShouldThrow_WhenEndpointNotInInvocationCatalog()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
@@ -251,25 +213,9 @@ public sealed class ServiceInvocationApplicationServiceTests
                     [],
                     DateTimeOffset.UtcNow),
             },
-            new RecordingTrafficViewQueryReader
+            new RecordingInvocationCatalogQueryReader
             {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    1,
-                    string.Empty,
-                    [
-                        new ServiceTrafficEndpointSnapshot(
-                            "other-endpoint",
-                            [
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-1",
-                                    "r1",
-                                    "actor-1",
-                                    100,
-                                    ServiceServingState.Active.ToString()),
-                            ]),
-                    ],
-                    DateTimeOffset.UtcNow),
+                GetResult = CreateInvocationCatalogSnapshot(identity, Ready(identity, "other-endpoint", "r1", "dep-1", "actor-1")),
             },
             revisionCatalog);
         var service = new ServiceInvocationApplicationService(
@@ -282,12 +228,12 @@ public sealed class ServiceInvocationApplicationServiceTests
             Payload = Any.Pack(new StringValue { Value = "payload" }),
         });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*has no serving target*");
+        await act.Should().ThrowAsync<ServiceInvokeReadinessException>()
+            .WithMessage("*has no invocation readiness*");
     }
 
     [Fact]
-    public async Task InvokeAsync_ShouldThrow_WhenNoActiveTargetsOnEndpoint()
+    public async Task InvokeAsync_ShouldThrow_WhenEndpointIsUnavailable()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
@@ -310,31 +256,14 @@ public sealed class ServiceInvocationApplicationServiceTests
                     [],
                     DateTimeOffset.UtcNow),
             },
-            new RecordingTrafficViewQueryReader
+            new RecordingInvocationCatalogQueryReader
             {
-                GetResult = new ServiceTrafficViewSnapshot(
-                    ServiceKeys.Build(identity),
-                    1,
-                    string.Empty,
-                    [
-                        new ServiceTrafficEndpointSnapshot(
-                            "chat",
-                            [
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-1",
-                                    "r1",
-                                    "actor-1",
-                                    0,
-                                    ServiceServingState.Active.ToString()),
-                                new ServiceTrafficTargetSnapshot(
-                                    "dep-2",
-                                    "r1",
-                                    "actor-2",
-                                    100,
-                                    ServiceServingState.Draining.ToString()),
-                            ]),
-                    ],
-                    DateTimeOffset.UtcNow),
+                GetResult = CreateInvocationCatalogSnapshot(
+                    identity,
+                    Unavailable(
+                        identity,
+                        "chat",
+                        ServiceInvokeUnavailableReason.ServingTargetMissing)),
             },
             revisionCatalog);
         var service = new ServiceInvocationApplicationService(
@@ -347,9 +276,73 @@ public sealed class ServiceInvocationApplicationServiceTests
             Payload = Any.Pack(new StringValue { Value = "payload" }),
         });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*No active serving targets*");
+        var ex = await act.Should().ThrowAsync<ServiceInvokeReadinessException>();
+        ex.Which.Snapshot.UnavailableReason.Should().Be(ServiceInvokeUnavailableReason.ServingTargetMissing);
     }
+
+    private static ServiceInvocationCatalogSnapshot CreateInvocationCatalogSnapshot(
+        ServiceIdentity identity,
+        params ServiceInvokeReadinessSnapshot[] entries) =>
+        new(
+            ServiceKeys.Build(identity),
+            entries,
+            DateTimeOffset.Parse("2026-06-05T00:00:00+00:00"),
+            7,
+            $"{ServiceKeys.Build(identity)}:invocation-catalog:7",
+            1,
+            2,
+            3);
+
+    private static ServiceInvokeReadinessSnapshot Ready(
+        ServiceIdentity identity,
+        string endpointId,
+        string revisionId,
+        string deploymentId,
+        string actorId) =>
+        Snapshot(
+            identity,
+            endpointId,
+            ServiceInvokeReadinessStatus.Ready,
+            ServiceInvokeUnavailableReason.Unspecified,
+            revisionId,
+            deploymentId,
+            actorId);
+
+    private static ServiceInvokeReadinessSnapshot Unavailable(
+        ServiceIdentity identity,
+        string endpointId,
+        ServiceInvokeUnavailableReason reason) =>
+        Snapshot(
+            identity,
+            endpointId,
+            ServiceInvokeReadinessStatus.Unavailable,
+            reason,
+            string.Empty,
+            string.Empty,
+            string.Empty);
+
+    private static ServiceInvokeReadinessSnapshot Snapshot(
+        ServiceIdentity identity,
+        string endpointId,
+        ServiceInvokeReadinessStatus status,
+        ServiceInvokeUnavailableReason reason,
+        string revisionId,
+        string deploymentId,
+        string actorId) =>
+        new(
+            ServiceKeys.Build(identity),
+            endpointId,
+            status,
+            reason,
+            revisionId,
+            deploymentId,
+            actorId,
+            DateTimeOffset.Parse("2026-06-05T00:00:00+00:00"),
+            7,
+            $"{ServiceKeys.Build(identity)}:invocation-catalog:7",
+            1,
+            2,
+            3);
 
     private sealed class RecordingCatalogQueryReader : IServiceCatalogQueryReader
     {
@@ -370,11 +363,11 @@ public sealed class ServiceInvocationApplicationServiceTests
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
     }
 
-    private sealed class RecordingTrafficViewQueryReader : IServiceTrafficViewQueryReader
+    private sealed class RecordingInvocationCatalogQueryReader : IServiceInvocationCatalogQueryReader
     {
-        public ServiceTrafficViewSnapshot? GetResult { get; init; }
+        public ServiceInvocationCatalogSnapshot? GetResult { get; init; }
 
-        public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+        public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
     }
 

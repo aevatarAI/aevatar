@@ -202,6 +202,27 @@ public sealed partial class ServiceTrafficEndpointReadModel
     }
 }
 
+public sealed partial class ServiceInvocationCatalogReadModel : IProjectionReadModel<ServiceInvocationCatalogReadModel>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => ObservedAt;
+        set => ObservedAt = value;
+    }
+
+    public DateTimeOffset ObservedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ObservedAtUtcValue);
+        set => ObservedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public IList<ServiceInvocationReadinessEntryReadModel> Entries
+    {
+        get => EntryEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(EntryEntries, value);
+    }
+}
+
 public sealed partial class ServiceRunCurrentStateReadModel : IProjectionReadModel<ServiceRunCurrentStateReadModel>
 {
     public DateTimeOffset CreatedAt

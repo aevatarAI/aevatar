@@ -373,7 +373,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
 
         var resolutionService = new ServiceInvocationResolutionService(
             new CatalogQueryReader(identity),
-            new TrafficViewQueryReader(identity),
+            new InvocationCatalogQueryReader(identity),
             revisionCatalog);
 
         return new StaticGAgentStreamInvocationApplicationService(
@@ -469,26 +469,33 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
     }
 
-    private sealed class TrafficViewQueryReader(ServiceIdentity identity) : IServiceTrafficViewQueryReader
+    private sealed class InvocationCatalogQueryReader(ServiceIdentity identity) : IServiceInvocationCatalogQueryReader
     {
-        public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity requestedIdentity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceTrafficViewSnapshot?>(new ServiceTrafficViewSnapshot(
+        public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity requestedIdentity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceInvocationCatalogSnapshot?>(new ServiceInvocationCatalogSnapshot(
                 ServiceKeys.Build(identity),
-                1,
-                string.Empty,
                 [
-                    new ServiceTrafficEndpointSnapshot(
+                    new ServiceInvokeReadinessSnapshot(
+                        ServiceKeys.Build(identity),
                         "chat",
-                        [
-                            new ServiceTrafficTargetSnapshot(
-                                "dep-1",
-                                "r1",
-                                "primary-actor-1",
-                                100,
-                                ServiceServingState.Active.ToString()),
-                        ]),
+                        ServiceInvokeReadinessStatus.Ready,
+                        ServiceInvokeUnavailableReason.Unspecified,
+                        "r1",
+                        "dep-1",
+                        "primary-actor-1",
+                        DateTimeOffset.Parse("2026-06-05T00:00:00+00:00"),
+                        1,
+                        $"{ServiceKeys.Build(identity)}:invocation-catalog:1",
+                        1,
+                        1,
+                        1),
                 ],
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.Parse("2026-06-05T00:00:00+00:00"),
+                1,
+                $"{ServiceKeys.Build(identity)}:invocation-catalog:1",
+                1,
+                1,
+                1));
     }
 
     private sealed class NoOpInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer

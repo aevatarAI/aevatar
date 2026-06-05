@@ -18,7 +18,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             eventStore,
             actorId,
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
         await agent.ActivateAsync();
 
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
@@ -34,7 +34,7 @@ public sealed class ServiceDefinitionGAgentTests
         var replayed = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             eventStore,
             actorId,
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
         await replayed.ActivateAsync();
 
         replayed.State.Spec.Identity.ServiceId.Should().Be("svc");
@@ -49,7 +49,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
@@ -71,10 +71,11 @@ public sealed class ServiceDefinitionGAgentTests
     public async Task HandleUpdateAndSetDefaultServingRevisionAsync_ShouldMutateExistingDefinition()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            () => new ServiceDefinitionGAgent(dispatchPort));
 
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
@@ -100,6 +101,17 @@ public sealed class ServiceDefinitionGAgentTests
         agent.State.Spec.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat");
         agent.State.DefaultServingRevisionId.Should().Be("r2");
         agent.State.LastAppliedEventVersion.Should().Be(3);
+        dispatchPort.Calls.Should().HaveCount(3);
+        dispatchPort.Calls.Should().OnlyContain(x =>
+            x.ActorId == ServiceActorIds.InvocationCatalog(identity));
+        var updateObservation = dispatchPort.Calls[1].Envelope.Payload.Unpack<ObserveServiceInvocationCatalogCommand>();
+        updateObservation.SourceCatalogVersion.Should().Be(2);
+        updateObservation.Identity.Should().BeEquivalentTo(identity);
+        updateObservation.ServiceEndpoints.Should().ContainSingle(x => x.EndpointId == "chat");
+        updateObservation.ServiceEndpoints[0].Kind.Should().Be(ServiceEndpointKind.Chat);
+        updateObservation.ServiceEndpoints[0].RequestTypeUrl.Should().Be("type.googleapis.com/test.chat");
+        var defaultObservation = dispatchPort.Calls[2].Envelope.Payload.Unpack<ObserveServiceInvocationCatalogCommand>();
+        defaultObservation.SourceCatalogVersion.Should().Be(3);
     }
 
     [Fact]
@@ -109,7 +121,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         var act = () => agent.HandleUpdateAsync(new UpdateServiceDefinitionCommand
         {
@@ -128,7 +140,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
@@ -150,7 +162,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
@@ -172,7 +184,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             "service-definition:missing-identity",
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         var act = () => agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
@@ -197,7 +209,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         var act = () => agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {

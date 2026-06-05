@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -312,16 +313,123 @@ public sealed class ScopeServiceEndpointsTests
                 ],
                 [],
                 DateTimeOffset.UtcNow),
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:billing",
+                "scope-a",
+                "default",
+                "default",
+                "billing",
+                "Billing",
+                "rev-2",
+                "rev-2",
+                "dep-2",
+                "billing-actor",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "charge",
+                        "Charge",
+                        "command",
+                        Any.Pack(new StringValue()).TypeUrl,
+                        string.Empty,
+                        "Charge command"),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:search",
+                "scope-a",
+                "default",
+                "default",
+                "search",
+                "Search",
+                "rev-3",
+                "rev-3",
+                "dep-3",
+                "search-actor",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "query",
+                        "Query",
+                        "command",
+                        Any.Pack(new StringValue()).TypeUrl,
+                        string.Empty,
+                        "Query command"),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:audit",
+                "scope-a",
+                "default",
+                "default",
+                "audit",
+                "Audit",
+                "rev-4",
+                "rev-4",
+                "dep-4",
+                "audit-actor",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "archive",
+                        "Archive",
+                        "command",
+                        Any.Pack(new StringValue()).TypeUrl,
+                        string.Empty,
+                        "Archive command"),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
         ];
+        host.InvocationCatalogReader.CatalogsByServiceKey["scope-a:default:default:orders"] = BuildScopeInvocationCatalog(
+            "scope-a:default:default:orders",
+            "run",
+            ServiceInvokeReadinessStatus.Ready,
+            ServiceInvokeUnavailableReason.Unspecified,
+            "rev-1",
+            "dep-1",
+            "orders-actor",
+            31);
+        host.InvocationCatalogReader.CatalogsByServiceKey["scope-a:default:default:billing"] = BuildScopeInvocationCatalog(
+            "scope-a:default:default:billing",
+            "charge",
+            ServiceInvokeReadinessStatus.Unavailable,
+            ServiceInvokeUnavailableReason.RevisionNotPrepared,
+            "rev-2",
+            "dep-2",
+            "billing-actor",
+            32);
+        host.InvocationCatalogReader.CatalogsByServiceKey["scope-a:default:default:audit"] = new ServiceInvocationCatalogSnapshot(
+            "scope-a:default:default:audit",
+            [],
+            DateTimeOffset.Parse("2026-03-14T00:06:00+00:00"),
+            33,
+            "evt-33",
+            30,
+            31,
+            32);
 
         var response = await host.Client.GetAsync("/api/scopes/scope-a/services?take=25");
-        var body = await response.Content.ReadFromJsonAsync<IReadOnlyList<ServiceCatalogSnapshot>>();
+        var body = await response.Content.ReadFromJsonAsync<IReadOnlyList<ScopeServiceEndpoints.ScopeServiceHttpResponse>>();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body.Should().NotBeNull();
-        body!.Should().ContainSingle();
-        body[0].ServiceId.Should().Be("orders");
-        body[0].Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        body!.Should().HaveCount(4);
+        body.Single(x => x.ServiceId == "orders").Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        body.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
+        body.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
+        body.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();
+        body.Single(x => x.ServiceId == "billing").InvokeReady.Should().BeFalse();
+        body.Single(x => x.ServiceId == "billing").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable.ToString());
+        body.Single(x => x.ServiceId == "billing").InvokeUnavailableReason.Should().Be(ServiceInvokeUnavailableReason.RevisionNotPrepared.ToString());
+        body.Single(x => x.ServiceId == "search").InvokeReady.Should().BeFalse();
+        body.Single(x => x.ServiceId == "search").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified.ToString());
+        body.Single(x => x.ServiceId == "search").InvokeUnavailableReason.Should().BeNull();
+        body.Single(x => x.ServiceId == "audit").InvokeReady.Should().BeFalse();
+        body.Single(x => x.ServiceId == "audit").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified.ToString());
+        body.Single(x => x.ServiceId == "audit").InvokeUnavailableReason.Should().BeNull();
         host.LifecycleQueryPort.LastListTenantId.Should().Be("scope-a");
         host.LifecycleQueryPort.LastListAppId.Should().Be("default");
         host.LifecycleQueryPort.LastListNamespace.Should().Be("default");
@@ -3084,6 +3192,53 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task InvokeEndpoint_ShouldReturnInvokeUnavailableBody_WhenReadinessRejectsInvocation()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.InvocationPort.ExceptionFactory = _ => new ServiceInvokeReadinessException(
+            "Endpoint 'chat' is not invoke-ready.",
+            new ServiceInvokeReadinessSnapshot(
+                "scope-a:default:default:orders",
+                "chat",
+                ServiceInvokeReadinessStatus.Unavailable,
+                ServiceInvokeUnavailableReason.RevisionNotPrepared,
+                "rev-2",
+                "dep-2",
+                "actor-2",
+                DateTimeOffset.Parse("2026-06-05T03:00:00+00:00"),
+                13,
+                "evt-13",
+                11,
+                12,
+                13));
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, JsonElement>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].GetString().Should().Be("SERVICE_INVOKE_UNAVAILABLE");
+        body["message"].GetString().Should().Be("Endpoint 'chat' is not invoke-ready.");
+        body["readinessStatus"].GetString().Should().Be(ServiceInvokeReadinessStatus.Unavailable.ToString());
+        body["reason"].GetString().Should().Be(ServiceInvokeUnavailableReason.RevisionNotPrepared.ToString());
+        body["serviceKey"].GetString().Should().Be("scope-a:default:default:orders");
+        body["revisionId"].GetString().Should().Be("rev-2");
+        body["endpointId"].GetString().Should().Be("chat");
+        body["deploymentId"].GetString().Should().Be("dep-2");
+        body["observedAt"].GetDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-06-05T03:00:00+00:00"));
+        body["aggregateStateVersion"].GetInt64().Should().Be(13);
+        body["sourceCatalogVersion"].GetInt64().Should().Be(11);
+        body["sourceServingVersion"].GetInt64().Should().Be(12);
+        body["sourceRevisionVersion"].GetInt64().Should().Be(13);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Identity.ServiceId.Should().Be("orders");
+    }
+
+    [Fact]
     public async Task InvokeEndpoint_ShouldPackPayloadJson_AsTypedAny_UsingExplicitRevision()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -4739,6 +4894,40 @@ public sealed class ScopeServiceEndpointsTests
             ],
             DateTimeOffset.UtcNow);
 
+    private static ServiceInvocationCatalogSnapshot BuildScopeInvocationCatalog(
+        string serviceKey,
+        string endpointId,
+        ServiceInvokeReadinessStatus status,
+        ServiceInvokeUnavailableReason reason,
+        string revisionId,
+        string deploymentId,
+        string actorId,
+        long stateVersion) =>
+        new(
+            serviceKey,
+            [
+                new ServiceInvokeReadinessSnapshot(
+                    serviceKey,
+                    endpointId,
+                    status,
+                    reason,
+                    revisionId,
+                    deploymentId,
+                    actorId,
+                    DateTimeOffset.Parse("2026-03-14T00:05:00+00:00"),
+                    stateVersion,
+                    $"evt-{stateVersion}",
+                    stateVersion - 2,
+                    stateVersion - 1,
+                    stateVersion),
+            ],
+            DateTimeOffset.Parse("2026-03-14T00:05:00+00:00"),
+            stateVersion,
+            $"evt-{stateVersion}",
+            stateVersion - 2,
+            stateVersion - 1,
+            stateVersion);
+
     private static HttpRequestMessage CreateAuthenticatedJsonRequest(
         HttpMethod method,
         string requestUri,
@@ -4848,6 +5037,7 @@ public sealed class ScopeServiceEndpointsTests
             RecordingServiceServingQueryPort servingQueryPort,
             FakeServiceCatalogQueryReader serviceCatalogReader,
             FakeServiceTrafficViewQueryReader trafficViewReader,
+            FakeServiceInvocationCatalogQueryReader invocationCatalogReader,
             FakeServiceRevisionCatalogQueryReader revisionCatalog,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
@@ -4871,6 +5061,7 @@ public sealed class ScopeServiceEndpointsTests
             ServingQueryPort = servingQueryPort;
             ServiceCatalogReader = serviceCatalogReader;
             TrafficViewReader = trafficViewReader;
+            InvocationCatalogReader = invocationCatalogReader;
             RevisionCatalog = revisionCatalog;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
@@ -4911,6 +5102,8 @@ public sealed class ScopeServiceEndpointsTests
         public FakeServiceCatalogQueryReader ServiceCatalogReader { get; }
 
         public FakeServiceTrafficViewQueryReader TrafficViewReader { get; }
+
+        public FakeServiceInvocationCatalogQueryReader InvocationCatalogReader { get; }
 
         public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
@@ -4954,6 +5147,7 @@ public sealed class ScopeServiceEndpointsTests
             var servingQueryPort = new RecordingServiceServingQueryPort();
             var serviceCatalogReader = new FakeServiceCatalogQueryReader();
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
+            var invocationCatalogReader = new FakeServiceInvocationCatalogQueryReader(serviceCatalogReader, trafficViewReader);
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
@@ -4992,9 +5186,11 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
+            builder.Services.AddSingleton<IServiceInvocationCatalogQueryReader>(invocationCatalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
             builder.Services.AddSingleton<ITeamEntryMemberResolver>(teamEntryMemberResolver);
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
+            builder.Services.AddSingleton<ServiceInvokeReadinessErrorMapper>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
             builder.Services.AddSingleton<IWorkflowChatRunInteractionPort>(interactionService);
             builder.Services.AddSingleton<IGAgentDraftRunInteractionPort>(gagentDraftRunInteractionService);
@@ -5112,6 +5308,7 @@ public sealed class ScopeServiceEndpointsTests
                 servingQueryPort,
                 serviceCatalogReader,
                 trafficViewReader,
+                invocationCatalogReader,
                 revisionCatalog,
                 teamEntryMemberResolver,
                 interactionService,
@@ -5649,6 +5846,58 @@ public sealed class ScopeServiceEndpointsTests
 
         public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(View);
+    }
+
+    private sealed class FakeServiceInvocationCatalogQueryReader(
+        FakeServiceCatalogQueryReader catalogReader,
+        FakeServiceTrafficViewQueryReader trafficViewReader) : IServiceInvocationCatalogQueryReader
+    {
+        public Dictionary<string, ServiceInvocationCatalogSnapshot?> CatalogsByServiceKey { get; } = new(StringComparer.Ordinal);
+
+        public ServiceInvocationCatalogSnapshot? Catalog { get; set; }
+
+        public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            if (Catalog != null)
+                return Task.FromResult<ServiceInvocationCatalogSnapshot?>(Catalog);
+
+            var serviceKey = ServiceKeys.Build(identity);
+            if (CatalogsByServiceKey.TryGetValue(serviceKey, out var configuredCatalog))
+                return Task.FromResult(configuredCatalog);
+
+            var service = catalogReader.Service;
+            var trafficEndpoint = trafficViewReader.View?.Endpoints.FirstOrDefault();
+            var target = trafficEndpoint?.Targets.FirstOrDefault(x =>
+                string.Equals(x.ServingState, ServiceServingState.Active.ToString(), StringComparison.Ordinal) &&
+                x.AllocationWeight > 0);
+            if (service == null && target == null)
+                return Task.FromResult<ServiceInvocationCatalogSnapshot?>(null);
+
+            return Task.FromResult<ServiceInvocationCatalogSnapshot?>(new ServiceInvocationCatalogSnapshot(
+                serviceKey,
+                [
+                    new ServiceInvokeReadinessSnapshot(
+                        serviceKey,
+                        trafficEndpoint?.EndpointId ?? service?.Endpoints.FirstOrDefault()?.EndpointId ?? "chat",
+                        ServiceInvokeReadinessStatus.Ready,
+                        ServiceInvokeUnavailableReason.Unspecified,
+                        target?.RevisionId ?? service?.ActiveServingRevisionId ?? "rev-active",
+                        target?.DeploymentId ?? service?.DeploymentId ?? "dep-1",
+                        target?.PrimaryActorId ?? service?.PrimaryActorId ?? "actor-1",
+                        DateTimeOffset.UtcNow,
+                        1,
+                        $"{serviceKey}:invocation-catalog:1",
+                        1,
+                        1,
+                        1),
+                ],
+                DateTimeOffset.UtcNow,
+                1,
+                $"{serviceKey}:invocation-catalog:1",
+                1,
+                1,
+                1));
+        }
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader

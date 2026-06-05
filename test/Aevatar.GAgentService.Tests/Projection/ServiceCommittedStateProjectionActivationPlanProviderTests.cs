@@ -52,6 +52,22 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
     }
 
     [Fact]
+    public void GetPlans_ShouldMapInvocationCatalogEventsToInvocationCatalogScope()
+    {
+        var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
+
+        var plan = provider.GetPlans(BuildContext(
+                typeof(ServiceInvocationCatalogGAgent),
+                new ServiceInvocationCatalogObservedEvent { Identity = Identity() }))
+            .Should().ContainSingle().Subject;
+
+        plan.LeaseType.Should().Be(typeof(ServiceProjectionRuntimeLease<ServiceInvocationCatalogProjectionContext>));
+        plan.StartRequest.RootActorId.Should().Be("service-actor");
+        plan.StartRequest.ProjectionKind.Should().Be("service-invocation-catalog");
+        plan.StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+    }
+
+    [Fact]
     public void GetPlans_ShouldMapCurrentStateActorsToTheirCurrentStateScopes()
     {
         var provider = new ServiceCommittedStateProjectionActivationPlanProvider();

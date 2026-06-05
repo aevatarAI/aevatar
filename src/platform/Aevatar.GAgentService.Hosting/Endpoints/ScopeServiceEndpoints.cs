@@ -246,6 +246,7 @@ public static class ScopeServiceEndpoints
         string? appId,
         int? take,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -268,7 +269,7 @@ public static class ScopeServiceEndpoints
             take.GetValueOrDefault(200),
             ct);
 
-        return Results.Ok(services);
+        return Results.Ok(await JoinScopeInvokeReadinessAsync(services, invocationCatalogQueryReader, ct));
     }
 
     private static async Task<IResult> HandleGetBindingAsync(
@@ -594,6 +595,7 @@ public static class ScopeServiceEndpoints
         string scopeId,
         StreamScopeServiceHttpRequest request,
         [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
@@ -614,6 +616,7 @@ public static class ScopeServiceEndpoints
             request,
             appId: null,
             resolutionService,
+            readinessErrorMapper,
             admissionAuthorizer,
             serviceRunRegistrationPort,
             chatRunService,
@@ -631,6 +634,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
         HandleInvokeAsync(
@@ -643,6 +647,7 @@ public static class ScopeServiceEndpoints
             invocationPort,
             catalogReader,
             revisionCatalogReader,
+            readinessErrorMapper,
             options,
             ct);
 
@@ -654,6 +659,7 @@ public static class ScopeServiceEndpoints
         StreamScopeServiceHttpRequest request,
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
@@ -681,6 +687,7 @@ public static class ScopeServiceEndpoints
                 request,
                 null,
                 resolutionService,
+                readinessErrorMapper,
                 admissionAuthorizer,
                 serviceRunRegistrationPort,
                 chatRunService,
@@ -710,6 +717,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -735,6 +743,7 @@ public static class ScopeServiceEndpoints
                 invocationPort,
                 catalogReader,
                 revisionCatalogReader,
+                readinessErrorMapper,
                 options,
                 ct);
         }
@@ -752,6 +761,7 @@ public static class ScopeServiceEndpoints
         StreamScopeServiceHttpRequest request,
         [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
         [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
@@ -774,6 +784,7 @@ public static class ScopeServiceEndpoints
                 request,
                 null,
                 resolutionService,
+                readinessErrorMapper,
                 admissionAuthorizer,
                 serviceRunRegistrationPort,
                 chatRunService,
@@ -812,6 +823,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -832,6 +844,7 @@ public static class ScopeServiceEndpoints
                 invocationPort,
                 catalogReader,
                 revisionCatalogReader,
+                readinessErrorMapper,
                 options,
                 ct);
         }
@@ -1500,6 +1513,7 @@ public static class ScopeServiceEndpoints
         StreamScopeServiceHttpRequest request,
         string? appId,
         [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
@@ -1614,6 +1628,14 @@ public static class ScopeServiceEndpoints
                     throw new InvalidOperationException(
                         $"Service implementation '{target.Artifact.ImplementationKind}' does not support SSE stream invocation.");
             }
+        }
+        catch (ServiceInvokeReadinessException ex)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                StatusCodes.Status400BadRequest,
+                readinessErrorMapper.Map(ex),
+                ct);
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -1891,6 +1913,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        [FromServices] ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
         await HandleInvokeAsyncCore(
@@ -1904,6 +1927,7 @@ public static class ScopeServiceEndpoints
             invocationPort,
             catalogReader,
             revisionCatalogReader,
+            readinessErrorMapper,
             options,
             ct);
 
@@ -1918,6 +1942,7 @@ public static class ScopeServiceEndpoints
         IServiceInvocationPort invocationPort,
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
+        ServiceInvokeReadinessErrorMapper readinessErrorMapper,
         IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -1962,7 +1987,9 @@ public static class ScopeServiceEndpoints
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException)
         {
-            return CreateScopeInvokeFailureResult(ex);
+            return ex is ServiceInvokeReadinessException readinessException
+                ? Results.BadRequest(readinessErrorMapper.Map(readinessException))
+                : CreateScopeInvokeFailureResult(ex);
         }
     }
 
@@ -2384,6 +2411,56 @@ public static class ScopeServiceEndpoints
             revisionSnapshots,
             revisions?.StateVersion ?? 0,
             revisions?.LastEventId ?? string.Empty);
+    }
+
+    private static async Task<IReadOnlyList<ScopeServiceHttpResponse>> JoinScopeInvokeReadinessAsync(
+        IReadOnlyList<ServiceCatalogSnapshot> services,
+        IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
+        CancellationToken ct)
+    {
+        var responses = new List<ScopeServiceHttpResponse>(services.Count);
+        foreach (var service in services)
+        {
+            var catalog = await invocationCatalogQueryReader.GetAsync(new ServiceIdentity
+            {
+                TenantId = service.TenantId,
+                AppId = service.AppId,
+                Namespace = service.Namespace,
+                ServiceId = service.ServiceId,
+            }, ct);
+            var entries = catalog?.Entries ?? [];
+            var ready = entries.Count > 0 &&
+                        entries.All(x => x.ReadinessStatus == ServiceInvokeReadinessStatus.Ready);
+            var status = entries.Count == 0
+                ? ServiceInvokeReadinessStatus.Unspecified
+                : ready
+                    ? ServiceInvokeReadinessStatus.Ready
+                    : ServiceInvokeReadinessStatus.Unavailable;
+            var reason = status == ServiceInvokeReadinessStatus.Unavailable
+                ? entries.FirstOrDefault(x => x.UnavailableReason != ServiceInvokeUnavailableReason.Unspecified)?.UnavailableReason.ToString()
+                : null;
+
+            responses.Add(new ScopeServiceHttpResponse(
+                service.ServiceKey,
+                service.TenantId,
+                service.AppId,
+                service.Namespace,
+                service.ServiceId,
+                service.DisplayName,
+                service.DefaultServingRevisionId,
+                service.ActiveServingRevisionId,
+                service.DeploymentId,
+                service.PrimaryActorId,
+                service.DeploymentStatus,
+                service.Endpoints,
+                service.PolicyIds,
+                service.UpdatedAt,
+                ready,
+                status.ToString(),
+                reason));
+        }
+
+        return responses;
     }
 
     private static MemberPublishedServiceHttpResponse BuildMemberPublishedServiceResponse(
@@ -3313,6 +3390,17 @@ const response = await fetch("{{invokePath}}", {
         await http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
     }
 
+    private static async Task WriteJsonErrorResponseAsync(
+        HttpContext http,
+        int statusCode,
+        object body,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        http.Response.ContentType = "application/json";
+        await http.Response.WriteAsJsonAsync(body, cancellationToken: ct);
+    }
+
     public sealed record InvokeScopeServiceHttpRequest(
         string? CommandId,
         string? CorrelationId,
@@ -3485,6 +3573,25 @@ const response = await fetch("{{invokePath}}", {
         string ServiceId,
         string DisplayName,
         string RevisionId);
+
+    public sealed record ScopeServiceHttpResponse(
+        string ServiceKey,
+        string TenantId,
+        string AppId,
+        string Namespace,
+        string ServiceId,
+        string DisplayName,
+        string DefaultServingRevisionId,
+        string ActiveServingRevisionId,
+        string DeploymentId,
+        string PrimaryActorId,
+        string DeploymentStatus,
+        IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
+        IReadOnlyList<string> PolicyIds,
+        DateTimeOffset UpdatedAt,
+        bool InvokeReady,
+        string InvokeReadinessStatus,
+        string? InvokeUnavailableReason);
 
     public sealed record ScopeServiceRevisionCatalogHttpResponse(
         string ScopeId,
