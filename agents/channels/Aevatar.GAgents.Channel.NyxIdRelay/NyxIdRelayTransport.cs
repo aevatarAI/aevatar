@@ -54,8 +54,16 @@ public sealed class NyxIdRelayTransport
             }
         }
 
+        var platform = NormalizePlatform(payload.Platform);
+        var larkFacts = ResolveLarkRelayConversationFacts(platform, payload, isCardAction);
+
         var conversationType = payload.Conversation?.Type ?? payload.Conversation?.ConversationType;
-        if (!NyxIdRelayConversationTypeMap.TryMap(conversationType, out var scope))
+        ConversationScope scope;
+        if (larkFacts.Scope is { } resolvedLarkScope)
+        {
+            scope = resolvedLarkScope;
+        }
+        else if (!NyxIdRelayConversationTypeMap.TryMap(conversationType, out scope))
         {
             if (!isCardAction)
             {
@@ -73,14 +81,27 @@ public sealed class NyxIdRelayTransport
             scope = ConversationScope.Unspecified;
         }
 
-        var platform = NormalizePlatform(payload.Platform);
         var conversationIdentity = ResolveConversationIdentity(platform, payload);
+        if (IsLark(platform) && !isCardAction && IsGroupLike(scope))
+        {
+            conversationIdentity = NormalizeOptional(larkFacts.GroupConversationIdentity)
+                ?? NormalizeOptional(payload.Conversation?.PlatformId)
+                ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(conversationIdentity))
+            {
+                return NyxIdRelayParseResult.IgnoredPayload(
+                    payload,
+                    "missing_lark_group_chat_identity",
+                    "Lark group relay payload is missing raw event.message.chat_id and conversation.platform_id.");
+            }
+        }
+
         var senderId = payload.Sender?.PlatformId?.Trim();
         var canonicalKey = BuildCanonicalKey(platform, scope, conversationIdentity, senderId);
         var partition = conversationIdentity;
         var timestamp = ParseTimestamp(payload.Timestamp);
         var botId = payload.Agent?.ApiKeyId?.Trim();
-        var platformMessageId = ResolvePlatformMessageId(payload, platform);
+        var platformMessageId = ResolvePlatformMessageId(payload, platform, larkFacts);
         var correlationId = string.IsNullOrWhiteSpace(payload.CorrelationId)
             ? payload.MessageId.Trim()
             : payload.CorrelationId.Trim();
@@ -125,13 +146,15 @@ public sealed class NyxIdRelayTransport
                 NyxMessageId = payload.MessageId.Trim(),
                 NyxAgentApiKeyId = payload.Agent?.ApiKeyId?.Trim() ?? string.Empty,
                 NyxPlatform = platform,
-                NyxConversationId = payload.Conversation?.Id?.Trim() ?? conversationIdentity,
+                NyxConversationId = NormalizeOptional(payload.Conversation?.Id) ?? conversationIdentity,
                 NyxPlatformMessageId = platformMessageId,
-                NyxLarkUnionId = ExtractLarkUnionId(platform, payload, isCardAction),
-                NyxLarkChatId = ExtractLarkChatId(platform, payload, isCardAction),
-                NyxLarkOperatorUserId = ExtractLarkOperatorId(platform, payload, "user_id"),
-                NyxLarkOperatorOpenId = ExtractLarkOperatorId(platform, payload, "open_id"),
-                NyxLarkOperatorUnionId = ExtractLarkOperatorId(platform, payload, "union_id"),
+                NyxLarkUnionId = NormalizeOptional(larkFacts.SenderUnionId)
+                    ?? NormalizeOptional(larkFacts.OperatorUnionId)
+                    ?? string.Empty,
+                NyxLarkChatId = NormalizeOptional(larkFacts.ChatId) ?? string.Empty,
+                NyxLarkOperatorUserId = NormalizeOptional(larkFacts.OperatorUserId) ?? string.Empty,
+                NyxLarkOperatorOpenId = NormalizeOptional(larkFacts.OperatorOpenId) ?? string.Empty,
+                NyxLarkOperatorUnionId = NormalizeOptional(larkFacts.OperatorUnionId) ?? string.Empty,
             },
         };
 
@@ -140,6 +163,16 @@ public sealed class NyxIdRelayTransport
     }
 
     private const string CardActionContentType = "card_action";
+
+    private readonly record struct LarkRelayConversationFacts(
+        ConversationScope? Scope,
+        string? GroupConversationIdentity,
+        string? ChatId,
+        string? PlatformMessageId,
+        string? SenderUnionId,
+        string? OperatorUserId,
+        string? OperatorOpenId,
+        string? OperatorUnionId);
 
     private static string NormalizeContentType(NyxIdRelayContentPayload? content)
     {
@@ -378,58 +411,90 @@ public sealed class NyxIdRelayTransport
     private static string NormalizePlatform(string? platform) =>
         string.IsNullOrWhiteSpace(platform) ? "unknown" : platform.Trim().ToLowerInvariant();
 
-    private static string ResolvePlatformMessageId(NyxIdRelayCallbackPayload payload, string platform)
+    private static string ResolvePlatformMessageId(
+        NyxIdRelayCallbackPayload payload,
+        string platform,
+        LarkRelayConversationFacts larkFacts)
     {
         var directPlatformId = payload.PlatformMessageId?.Trim();
         if (!string.IsNullOrWhiteSpace(directPlatformId))
             return directPlatformId;
 
-        if (payload.RawPlatformData is not { } rawPlatformData)
-            return string.Empty;
-
         return platform switch
         {
-            "lark" or "feishu" => ResolveLarkPlatformMessageId(rawPlatformData),
+            "lark" or "feishu" => NormalizeOptional(larkFacts.PlatformMessageId) ?? string.Empty,
             _ => string.Empty,
         };
     }
 
-    private static string ResolveLarkPlatformMessageId(JsonElement rawPlatformData)
+    private static LarkRelayConversationFacts ResolveLarkRelayConversationFacts(
+        string platform,
+        NyxIdRelayCallbackPayload payload,
+        bool isCardAction)
     {
-        if (TryReadJsonString(rawPlatformData, out var replyTarget, "event", "context", "open_message_id"))
-            return replyTarget;
+        if (!IsLark(platform) || payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
+            return default;
 
-        if (TryReadJsonString(rawPlatformData, out var messageId, "event", "message", "message_id"))
-            return messageId;
+        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
+            return default;
 
-        return string.Empty;
-    }
-
-    private static bool TryReadJsonString(
-        JsonElement element,
-        out string value,
-        params string[] path)
-    {
-        value = string.Empty;
-        var current = element;
-        foreach (var segment in path)
+        if (isCardAction)
         {
-            if (current.ValueKind != JsonValueKind.Object ||
-                !current.TryGetProperty(segment, out current))
+            var cardChatId = string.Empty;
+            var cardPlatformMessageId = string.Empty;
+            if (evt.TryGetProperty("context", out var ctx) && ctx.ValueKind == JsonValueKind.Object)
             {
-                return false;
+                cardChatId = ReadStringProperty(ctx, "open_chat_id");
+                cardPlatformMessageId = ReadStringProperty(ctx, "open_message_id");
             }
+
+            var operatorUserId = string.Empty;
+            var operatorOpenId = string.Empty;
+            var operatorUnionId = string.Empty;
+            if (evt.TryGetProperty("operator", out var op) && op.ValueKind == JsonValueKind.Object)
+            {
+                operatorUserId = ReadStringProperty(op, "user_id");
+                operatorOpenId = ReadStringProperty(op, "open_id");
+                operatorUnionId = ReadStringProperty(op, "union_id");
+            }
+
+            return new LarkRelayConversationFacts(
+                Scope: null,
+                GroupConversationIdentity: null,
+                ChatId: cardChatId,
+                PlatformMessageId: cardPlatformMessageId,
+                SenderUnionId: null,
+                OperatorUserId: operatorUserId,
+                OperatorOpenId: operatorOpenId,
+                OperatorUnionId: operatorUnionId);
         }
 
-        if (current.ValueKind != JsonValueKind.String)
-            return false;
+        var chatId = string.Empty;
+        var platformMessageId = string.Empty;
+        ConversationScope? scope = null;
+        if (evt.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object)
+        {
+            chatId = ReadStringProperty(message, "chat_id");
+            platformMessageId = ReadStringProperty(message, "message_id");
+            scope = MapLarkChatType(ReadStringProperty(message, "chat_type"));
+        }
 
-        var parsed = current.GetString()?.Trim();
-        if (string.IsNullOrWhiteSpace(parsed))
-            return false;
+        var senderUnionId = string.Empty;
+        if (evt.TryGetProperty("sender", out var sender) && sender.ValueKind == JsonValueKind.Object &&
+            sender.TryGetProperty("sender_id", out var senderId) && senderId.ValueKind == JsonValueKind.Object)
+        {
+            senderUnionId = ReadStringProperty(senderId, "union_id");
+        }
 
-        value = parsed;
-        return true;
+        return new LarkRelayConversationFacts(
+            Scope: scope,
+            GroupConversationIdentity: chatId,
+            ChatId: chatId,
+            PlatformMessageId: platformMessageId,
+            SenderUnionId: senderUnionId,
+            OperatorUserId: null,
+            OperatorOpenId: null,
+            OperatorUnionId: null);
     }
 
     private static string ResolveConversationIdentity(string platform, NyxIdRelayCallbackPayload payload)
@@ -449,88 +514,33 @@ public sealed class NyxIdRelayTransport
         return $"{platform}-conversation";
     }
 
-    /// <summary>
-    /// Extracts the Lark <c>union_id</c> (<c>on_*</c>) of the inbound sender from the relay's
-    /// <c>raw_platform_data</c>. <c>union_id</c> is tenant-stable and cross-app safe — outbound
-    /// senders running under a different Lark app than the relay-side ingress app must use this
-    /// to avoid <c>open_id cross app</c> rejections from Lark. Returns empty when the platform
-    /// is not Lark or the original event did not surface a <c>union_id</c> at the well-known
-    /// path. The empty case is normal for non-Lark traffic and for misconfigured Lark apps that
-    /// have not enabled <c>union_id</c> emission.
-    /// </summary>
-    private static string ExtractLarkUnionId(string platform, NyxIdRelayCallbackPayload payload, bool isCardAction)
-    {
-        if (!IsLark(platform) || payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        // Lark `im.message.receive_v1` puts sender ids under `event.sender.sender_id`. Card
-        // submissions (`card.action.trigger`) put the operator's union_id directly under
-        // `event.operator`, since there is no `sender_id` envelope on that event shape.
-        if (isCardAction)
-        {
-            if (evt.TryGetProperty("operator", out var op) && op.ValueKind == JsonValueKind.Object)
-                return ReadStringProperty(op, "union_id");
-            return string.Empty;
-        }
-
-        if (!evt.TryGetProperty("sender", out var sender) || sender.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-        if (!sender.TryGetProperty("sender_id", out var senderId) || senderId.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        return ReadStringProperty(senderId, "union_id");
-    }
-
-    /// <summary>
-    /// Extracts the Lark <c>chat_id</c> (<c>oc_*</c>) of the inbound conversation from the
-    /// relay's <c>raw_platform_data</c>. Cross-app safe within the tenant for groups/threads/
-    /// channels — any app added to the chat can address it via <c>receive_id_type=chat_id</c>.
-    /// For p2p DMs the chat_id is bot-specific (each Lark app has its own DM thread with the
-    /// user) and not cross-app safe; downstream senders must prefer <see cref="ExtractLarkUnionId"/>
-    /// for p2p targets. Returns empty when the platform is not Lark or the event did not carry
-    /// a <c>chat_id</c> at the well-known path.
-    /// </summary>
-    private static string ExtractLarkChatId(string platform, NyxIdRelayCallbackPayload payload, bool isCardAction)
-    {
-        if (!IsLark(platform) || payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        if (isCardAction)
-        {
-            if (evt.TryGetProperty("context", out var ctx) && ctx.ValueKind == JsonValueKind.Object)
-                return ReadStringProperty(ctx, "open_chat_id");
-            return string.Empty;
-        }
-
-        if (!evt.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        return ReadStringProperty(message, "chat_id");
-    }
-
-    private static string ExtractLarkOperatorId(string platform, NyxIdRelayCallbackPayload payload, string propertyName)
-    {
-        if (!IsLark(platform) || payload.RawPlatformData is not { } raw || raw.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        if (!raw.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        if (!evt.TryGetProperty("operator", out var op) || op.ValueKind != JsonValueKind.Object)
-            return string.Empty;
-
-        return ReadStringProperty(op, propertyName);
-    }
-
     private static bool IsLark(string platform) =>
         string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsGroupLike(ConversationScope scope) =>
+        scope is ConversationScope.Group
+              or ConversationScope.Channel
+              or ConversationScope.Thread;
+
+    private static ConversationScope? MapLarkChatType(string? chatType)
+    {
+        var normalized = NormalizeOptional(chatType)?.ToLowerInvariant();
+        return normalized switch
+        {
+            "p2p" or "private" or "dm" => ConversationScope.DirectMessage,
+            "group" => ConversationScope.Group,
+            "topic" or "thread" => ConversationScope.Thread,
+            "channel" => ConversationScope.Channel,
+            _ => null,
+        };
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
 
     private static string ReadStringProperty(JsonElement element, string propertyName)
     {

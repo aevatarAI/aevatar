@@ -62,7 +62,7 @@ public sealed class NyxIdRelayTransportTests
               "platform": "lark",
               "reply_token": "  relay-access-token-xyz  ",
               "agent": { "api_key_id": "api-key-1" },
-              "conversation": { "id": "conv-1", "type": "group" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_corr_1", "type": "group" },
               "sender": { "platform_id": "user-1" },
               "content": { "type": "text", "text": "hi" }
             }
@@ -76,65 +76,105 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
-    public void Parse_ShouldFallbackToConversationPlatformId_WhenConversationIdMissing()
+    public void Parse_ShouldFallbackToConversationPlatformId_ForLarkGroupIdentity_WhenRawChatIdMissing()
     {
         var body = """
             {
               "message_id": "msg-1",
               "platform": "lark",
               "agent": { "api_key_id": "api-key-1" },
-              "conversation": { "platform_id": "oc_platform_123", "type": "group" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_platform_1", "type": "private" },
               "sender": { "platform_id": "user-1" },
-              "content": { "type": "text", "text": "hi" }
+              "content": { "type": "text", "text": "hi" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_group_1",
+                    "chat_type": "group"
+                  }
+                }
+              }
             }
             """;
 
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
         parsed.Success.Should().BeTrue();
-        parsed.Activity!.Conversation.CanonicalKey.Should().Be("lark:group:oc_platform_123");
-        parsed.Activity.TransportExtras.NyxConversationId.Should().Be("oc_platform_123");
+        parsed.Activity!.Conversation.Scope.Should().Be(ConversationScope.Group);
+        parsed.Activity.Conversation.CanonicalKey.Should().Be("lark:group:oc_platform_1");
+        parsed.Activity.Conversation.Partition.Should().Be("oc_platform_1");
+        parsed.Activity.TransportExtras.NyxConversationId.Should().Be("route-uuid");
     }
 
     [Fact]
-    public void Parse_ShouldFallbackToSenderId_WhenConversationIdentityAbsentAndScopeIsGroup()
+    public void Parse_ShouldUseLarkRawChatId_AsGroupCanonicalIdentity_WhenRouteConversationIsDefaultOrPrivate()
     {
         var body = """
             {
               "message_id": "msg-1",
               "platform": "lark",
               "agent": { "api_key_id": "api-key-1" },
-              "conversation": { "type": "group" },
+              "conversation": { "id": "route-default-uuid", "type": "private" },
               "sender": { "platform_id": "user-42" },
-              "content": { "type": "text", "text": "hi" }
+              "content": { "type": "text", "text": "hi" },
+              "raw_platform_data": {
+                "event": {
+                  "sender": {
+                    "sender_id": {
+                      "union_id": "on_user_42"
+                    }
+                  },
+                  "message": {
+                    "message_id": "om_group_1",
+                    "chat_id": "oc_group_1",
+                    "chat_type": "group"
+                  }
+                }
+              }
             }
             """;
 
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
         parsed.Success.Should().BeTrue();
-        parsed.Activity!.Conversation.CanonicalKey.Should().Be("lark:group:user-42");
+        parsed.Activity!.Conversation.Scope.Should().Be(ConversationScope.Group);
+        parsed.Activity.Conversation.CanonicalKey.Should().Be("lark:group:oc_group_1");
+        parsed.Activity.Conversation.Partition.Should().Be("oc_group_1");
+        parsed.Activity.TransportExtras.NyxConversationId.Should().Be("route-default-uuid");
+        parsed.Activity.TransportExtras.NyxPlatformMessageId.Should().Be("om_group_1");
+        parsed.Activity.TransportExtras.NyxLarkChatId.Should().Be("oc_group_1");
+        parsed.Activity.TransportExtras.NyxLarkUnionId.Should().Be("on_user_42");
+        parsed.Activity.Conversation.CanonicalKey.Should().NotContain("route-default-uuid");
+        parsed.Activity.Conversation.CanonicalKey.Should().NotContain("user-42");
     }
 
     [Fact]
-    public void Parse_ShouldProduceNonEmptyCanonicalKey_WhenAllConversationIdentitiesMissing()
+    public void Parse_ShouldRejectLarkGroup_WhenPlatformChatIdentityMissing()
     {
         var body = """
             {
               "message_id": "msg-1",
               "platform": "lark",
               "agent": { "api_key_id": "api-key-1" },
-              "conversation": { "type": "group" },
+              "conversation": { "id": "route-uuid", "type": "private" },
               "sender": {},
-              "content": { "type": "text", "text": "hi" }
+              "content": { "type": "text", "text": "hi" },
+              "raw_platform_data": {
+                "event": {
+                  "message": {
+                    "message_id": "om_group_missing",
+                    "chat_type": "group"
+                  }
+                }
+              }
             }
             """;
 
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
-        parsed.Success.Should().BeTrue();
-        parsed.Activity!.Conversation.CanonicalKey.Should().NotBeNullOrWhiteSpace();
-        parsed.Activity.Conversation.CanonicalKey.Should().StartWith("lark:group:");
+        parsed.Success.Should().BeFalse();
+        parsed.Ignored.Should().BeTrue();
+        parsed.ErrorCode.Should().Be("missing_lark_group_chat_identity");
     }
 
     [Fact]
@@ -145,7 +185,7 @@ public sealed class NyxIdRelayTransportTests
               "message_id": "msg-1",
               "platform": "lark",
               "agent": { "api_key_id": "api-key-1" },
-              "conversation": { "id": "conv-1", "type": "group" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_123", "type": "group" },
               "sender": { "platform_id": "user-1" },
               "content": { "type": "text", "text": "   " }
             }
@@ -180,6 +220,46 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldKeepDirectMessageCanonicalIdentity_WhenLarkChatTypeIsP2P()
+    {
+        var body = """
+            {
+              "message_id": "msg-dm-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-dm-uuid", "platform_id": "oc_dm_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": { "type": "text", "text": "hello" },
+              "raw_platform_data": {
+                "event": {
+                  "sender": {
+                    "sender_id": {
+                      "union_id": "on_user_1"
+                    }
+                  },
+                  "message": {
+                    "message_id": "om_dm_1",
+                    "chat_id": "oc_dm_chat_1",
+                    "chat_type": "p2p"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Conversation.Scope.Should().Be(ConversationScope.DirectMessage);
+        parsed.Activity.Conversation.CanonicalKey.Should().Be("lark:dm:ou_user_1");
+        parsed.Activity.Conversation.Partition.Should().Be("route-dm-uuid");
+        parsed.Activity.TransportExtras.NyxConversationId.Should().Be("route-dm-uuid");
+        parsed.Activity.TransportExtras.NyxPlatformMessageId.Should().Be("om_dm_1");
+        parsed.Activity.TransportExtras.NyxLarkChatId.Should().Be("oc_dm_chat_1");
+        parsed.Activity.TransportExtras.NyxLarkUnionId.Should().Be("on_user_1");
+    }
+
+    [Fact]
     public void Parse_ShouldExposeLarkPlatformMessageId_FromRawPlatformData()
     {
         var body = """
@@ -203,6 +283,8 @@ public sealed class NyxIdRelayTransportTests
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
         parsed.Success.Should().BeTrue();
+        parsed.Activity!.Conversation.Scope.Should().Be(ConversationScope.Group);
+        parsed.Activity.Conversation.CanonicalKey.Should().Be("lark:group:oc_123");
         parsed.Activity!.TransportExtras.NyxPlatformMessageId.Should().Be("om_123");
     }
 
@@ -451,6 +533,45 @@ public sealed class NyxIdRelayTransportTests
         cardAction.WorkflowResume.RunId.Should().Be("run-1");
         cardAction.WorkflowResume.StepId.Should().Be("step-1");
         cardAction.Arguments.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Parse_ShouldNotLetCardActionMessageChatTypeOverrideConversationScope()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-chat-type",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-card-1", "platform_id": "oc_card_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"actor_id\":\"actor-1\",\"run_id\":\"run-1\",\"step_id\":\"step-1\"}}"
+              },
+              "raw_platform_data": {
+                "event": {
+                  "context": {
+                    "open_chat_id": "oc_card_chat_1",
+                    "open_message_id": "om_card_1"
+                  },
+                  "message": {
+                    "chat_id": "oc_wrong_group_1",
+                    "chat_type": "group"
+                  }
+                }
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        parsed.Activity!.Type.Should().Be(ActivityType.CardAction);
+        parsed.Activity.Conversation.Scope.Should().Be(ConversationScope.DirectMessage);
+        parsed.Activity.Conversation.CanonicalKey.Should().Be("lark:dm:ou_1");
+        parsed.Activity.TransportExtras.NyxLarkChatId.Should().Be("oc_card_chat_1");
+        parsed.Activity.TransportExtras.NyxPlatformMessageId.Should().Be("om_card_1");
     }
 
     [Fact]

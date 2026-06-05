@@ -445,6 +445,8 @@ Canonical key 规则：
 | Discord Guild Channel | Channel | `discord:{guild}:{channel}` |
 | Discord Thread | Thread | `discord:{guild}:{channel}:thread:{thread_id}` |
 
+Production note: for Lark relay callbacks, `conversation.id` is the NyxID route record id; group actor identity must use platform `chat_id` from raw `event.message.chat_id` or callback `conversation.platform_id`.
+
 `ConversationGAgent` 以 `CanonicalKey` 作为 Orleans grain primary key 持久化。
 
 **为什么不用 sender 做 key（legacy 基线）**：历史上的 `ChannelUserGAgent` 以 sender id 为 key，对 Lark 1-1 能跑。一旦迁到 group / Slack thread / Discord guild，多条会话的 state 会串到同一个 actor。这是**正确性 bug**，不是优化空间。issue `#308` 已把这条 sender-keyed runtime 路径整体删除；这里保留它只是为了说明为什么后续若重建多会话 actor，仍必须坚持 canonical conversation key。
