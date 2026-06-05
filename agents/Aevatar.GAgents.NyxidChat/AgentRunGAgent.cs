@@ -521,6 +521,22 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
         var hasReplyText = !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+        var emptyReplyDiagnostics = hasReplyText ? string.Empty : BuildEmptyReplyDiagnostics(stepState);
+        if (!hasReplyText)
+        {
+            // The empty-reply terminal path is otherwise silent: unlike the executor's
+            // exception path (DispatchStepFailureAsync), a step that *completes* with no
+            // assistant text fails the run with a generic echo while the signals that
+            // explain why the content was empty (finish reason, reasoning-only output,
+            // token-budget exhaustion) are discarded. Surface them so the failure is
+            // diagnosable from logs and the persisted terminal event.
+            _logger.LogWarning(
+                "Agent run completed with empty reply (terminal failure): runId={RunId} correlation={CorrelationId} {Diagnostics}",
+                NormalizeOptional(stepState.RunId) ?? "(none)",
+                NormalizeOptional(stepState.CorrelationId) ?? "(none)",
+                emptyReplyDiagnostics);
+        }
+
         await ProduceAndDispatchAsync(
             request,
             stepState.RunId,
@@ -530,8 +546,34 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.OutboundIntent?.Clone(),
             hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
             hasReplyText ? string.Empty : "empty_reply",
-            hasReplyText ? string.Empty : "Reply generator returned an empty response.",
+            hasReplyText ? string.Empty : $"Reply generator returned an empty response ({emptyReplyDiagnostics}).",
             stepState.AppendedHistory.ToArray());
+    }
+
+    // Diagnostic context for the otherwise-silent empty-reply terminal path. Reads only
+    // signals already captured on the step state (finish reason, streamed-text flag,
+    // reasoning presence, tool-round position, token usage) — no message content, so it
+    // is safe to log and persist. reasoningOnly=true is the smoking gun for a reasoning
+    // model that spent its output budget on reasoning tokens and emitted no answer text.
+    private static string BuildEmptyReplyDiagnostics(AgentRunReplyStepState stepState)
+    {
+        var hasReasoning = stepState.Messages.Any(message =>
+            string.Equals(message.Role, "assistant", StringComparison.Ordinal) &&
+            !string.IsNullOrEmpty(message.ReasoningContent));
+        var usage = stepState.AggregatedUsage;
+        return string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            "finishReason={0} hasStreamedText={1} hasReasoning={2} reasoningOnly={3} round={4}/{5} finalNoToolsStep={6} promptTokens={7} completionTokens={8} totalTokens={9}",
+            NormalizeOptional(stepState.LastFinishReason) ?? "(none)",
+            stepState.HasStreamedTextContent,
+            hasReasoning,
+            hasReasoning && !stepState.HasStreamedTextContent,
+            stepState.Round,
+            stepState.MaxToolRounds,
+            stepState.FinalNoToolsStep,
+            usage?.PromptTokens ?? 0,
+            usage?.CompletionTokens ?? 0,
+            usage?.TotalTokens ?? 0);
     }
 
     private static bool ShouldCompleteAfterLlmStep(AgentRunReplyStepState stepState, bool isCompletedLlmStep)

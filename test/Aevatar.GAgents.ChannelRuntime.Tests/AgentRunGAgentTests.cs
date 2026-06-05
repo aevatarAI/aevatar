@@ -1660,6 +1660,11 @@ public sealed class AgentRunGAgentTests
         ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
         ready.ErrorCode.Should().Be("empty_reply");
         ready.Outbound.Text.Should().NotBeNullOrWhiteSpace();
+        // The empty-reply failure must carry diagnostic context (finish reason,
+        // reasoning-only flag, token usage) so the otherwise-opaque
+        // "couldn't generate a response" outcome is diagnosable from the terminal event.
+        ready.ErrorSummary.Should().Contain("finishReason=");
+        ready.ErrorSummary.Should().Contain("reasoningOnly=");
     }
 
     [Fact]
