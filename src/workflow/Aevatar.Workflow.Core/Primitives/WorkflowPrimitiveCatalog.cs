@@ -35,7 +35,6 @@ public static class WorkflowPrimitiveCatalog
             ["http_delete"] = "connector_call",
             ["secure_connector"] = "secure_connector_call",
             ["secret_input"] = "secure_input",
-            // Keep runtime module matching stable: VoteConsensusModule currently handles "vote".
             ["vote_consensus"] = "vote",
         };
 

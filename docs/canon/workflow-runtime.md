@@ -175,8 +175,8 @@ roles:
 | **执行** | `llm_call` | `LLMCallModule` | 向目标 RoleGAgent 发 `ChatRequestEvent`，等回复转 `StepCompletedEvent` |
 | | `tool_call` | `ToolCallModule` | 调用已注册的 Agent 工具（MCP/Skills） |
 | | `connector_call` | `ConnectorCallModule` | 按名称调用配置好的 HTTP/CLI/MCP/host_callback connector |
-| **并行** | `parallel` | `ParallelFanOutModule` | 拆 N 个子步骤并行发给不同 role，收齐后合并，可选触发投票 |
-| **共识** | `vote` | `VoteConsensusModule` | 对多个候选结果做共识选择 |
+| **并行** | `parallel` | `ParallelFanOutModule` | 拆 N 个子步骤并行发给不同 role，收齐后合并，可选触发 typed vote agreement |
+| **共识** | `vote` | `VoteAgreementModule` | 基于 typed candidate/rule/decision 做结构化 agreement 判定（`vote_consensus` 为别名） |
 | **迭代** | `foreach` | `ForEachModule` | 按分隔符拆分输入，逐项执行子步骤 |
 | **流程** | `conditional` | `ConditionalModule` | 条件分支 |
 | | `while` | `WhileModule` | 循环执行（别名 `loop`） |
@@ -205,7 +205,7 @@ roles:
 |------|------|
 | `SequentialOrchestration` | 线性 `steps`（由 `WorkflowLoopModule` 推进） |
 | `ConcurrentOrchestration` | `type: parallel`（`ParallelFanOutModule`） |
-| `VoteOrchestration` | `parallel + vote`（`VoteConsensusModule`） |
+| `VoteOrchestration` | `parallel + vote`（`VoteAgreementModule` typed agreement rule） |
 | `HandoffOrchestration` | `type: conditional` / `type: switch` + 分支推进 |
 
 最小迁移示例（并行 + 投票）：
@@ -217,6 +217,8 @@ steps:
     parameters:
       workers: "agent_a,agent_b,agent_c"
       vote_step_type: "vote"
+      vote_param_rule_mode: "quorum"
+      vote_param_quorum_count: "2"
 ```
 
 ---
@@ -475,9 +477,10 @@ steps:
     parameters:
       workers: "analyst_a,analyst_b,analyst_c"
       vote_step_type: "vote"
+      vote_param_rule_mode: "majority"
 ```
 
-三个分析师并行工作，结果经投票选出最佳。
+三个分析师并行工作，结果作为 typed candidates 扇入 `vote`；`vote` 根据配置的 agreement rule 产出 `agreed` / `rejected` / `inconclusive` 分支与结构化 decision。
 
 ### 示例 4：LLM + Connector 调外部 API
 

@@ -65,6 +65,7 @@ request metadata 与 tool context 中的 control/security 字段不直接改写 
 - `LLMCallModule` / `EvaluateModule` / `ReflectModule`
   - 外部调用 correlation 与 watchdog 状态保存在 run actor
 - `ParallelFanOutModule` / `ForEachModule` / `MapReduceModule` / `RaceModule`
+- `VoteAgreementModule` (`vote`, `vote_consensus` alias)
   - 聚合中间态保存在 run actor
 
 ## 目录要点

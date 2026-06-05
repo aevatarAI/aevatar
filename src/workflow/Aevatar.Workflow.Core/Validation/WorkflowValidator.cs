@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Agreement;
 
 namespace Aevatar.Workflow.Core.Validation;
 
@@ -218,6 +219,72 @@ public static class WorkflowValidator
             errors.Add(
                 $"步骤 '{step.Id}' 使用了保留原语 'dynamic_workflow'。请改为 workflow_call 或其他业务原语。");
         }
+
+        if (stepType == "vote")
+        {
+            ValidateVoteAgreementStep(step, errors);
+            return;
+        }
+
+        if (stepType == "parallel")
+        {
+            ValidateParallelVoteAgreement(step, errors);
+        }
+    }
+
+    private static void ValidateVoteAgreementStep(StepDefinition step, List<string> errors)
+    {
+        if (!VoteAgreementRuleConfigurationParser.TryParse(step.Parameters, out var rule, out var error))
+        {
+            errors.Add($"步骤 '{step.Id}'（vote）{error}");
+            return;
+        }
+
+        ValidateConfiguredDecisionBranches(step, rule, errors);
+    }
+
+    private static void ValidateParallelVoteAgreement(StepDefinition step, List<string> errors)
+    {
+        if (!TryGetParameter(step.Parameters, "vote_step_type", out var voteStepType) ||
+            string.IsNullOrWhiteSpace(voteStepType) ||
+            !string.Equals(WorkflowPrimitiveCatalog.ToCanonicalType(voteStepType), "vote", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var voteParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in step.Parameters)
+        {
+            var voteParameterKey = VoteAgreementRuleConfigurationParser.StripVoteParameterPrefix(key);
+            if (voteParameterKey != null)
+                voteParameters[voteParameterKey] = value;
+        }
+
+        if (!VoteAgreementRuleConfigurationParser.TryParse(voteParameters, out _, out var error))
+            errors.Add($"步骤 '{step.Id}'（parallel.vote）{error}");
+    }
+
+    private static void ValidateConfiguredDecisionBranches(
+        StepDefinition step,
+        VoteAgreementRule rule,
+        List<string> errors)
+    {
+        ValidateDecisionBranch(step, rule.OnAgreed, "on_agreed", errors);
+        ValidateDecisionBranch(step, rule.OnRejected, "on_rejected", errors);
+        ValidateDecisionBranch(step, rule.OnInconclusive, "on_inconclusive", errors);
+    }
+
+    private static void ValidateDecisionBranch(
+        StepDefinition step,
+        string branchKey,
+        string parameterName,
+        List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(branchKey))
+            return;
+
+        if (step.Branches == null || !step.Branches.ContainsKey(branchKey))
+            errors.Add($"步骤 '{step.Id}'（vote）参数 '{parameterName}' 指向未定义分支 '{branchKey}'");
     }
     private static void ValidateRawActorLifecycleParameters(StepDefinition step, List<string> errors)
     {

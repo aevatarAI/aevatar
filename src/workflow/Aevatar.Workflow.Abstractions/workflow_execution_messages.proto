@@ -106,9 +106,95 @@ message WorkflowExecutionStateUpsertedEvent
 message WorkflowExecutionStateClearedEvent  { string scope_key = 1; }
 message WorkflowStoppedEvent { string workflow_name = 1; string run_id = 2; string reason = 3; }
 message WorkflowCompletedEvent { string workflow_name = 1; bool success = 2; string output = 3; string error = 4; string run_id = 5; }
+
+enum AgreementRuleMode {
+  AGREEMENT_RULE_MODE_UNSPECIFIED = 0;
+  AGREEMENT_RULE_MODE_ALL = 1;
+  AGREEMENT_RULE_MODE_MAJORITY = 2;
+  AGREEMENT_RULE_MODE_QUORUM = 3;
+  AGREEMENT_RULE_MODE_LABEL_COUNT_CONSTRAINTS = 4;
+  AGREEMENT_RULE_MODE_PREDICATE = 5;
+}
+
+enum AgreementVoteLabel {
+  AGREEMENT_VOTE_LABEL_UNSPECIFIED = 0;
+  AGREEMENT_VOTE_LABEL_APPROVE = 1;
+  AGREEMENT_VOTE_LABEL_REJECT = 2;
+  AGREEMENT_VOTE_LABEL_ABSTAIN = 3;
+}
+
+enum AgreementCandidateLabelSource {
+  AGREEMENT_CANDIDATE_LABEL_SOURCE_UNSPECIFIED = 0;
+  AGREEMENT_CANDIDATE_LABEL_SOURCE_SUCCESS = 1;
+  AGREEMENT_CANDIDATE_LABEL_SOURCE_BRANCH_KEY = 2;
+  AGREEMENT_CANDIDATE_LABEL_SOURCE_ANNOTATION = 3;
+}
+
+enum AgreementDecisionKind {
+  AGREEMENT_DECISION_KIND_UNSPECIFIED = 0;
+  AGREEMENT_DECISION_KIND_AGREED = 1;
+  AGREEMENT_DECISION_KIND_REJECTED = 2;
+  AGREEMENT_DECISION_KIND_INCONCLUSIVE = 3;
+}
+
+enum AgreementWinnerPolicy {
+  AGREEMENT_WINNER_POLICY_UNSPECIFIED = 0;
+  AGREEMENT_WINNER_POLICY_FIRST_APPROVED = 1;
+  AGREEMENT_WINNER_POLICY_FIRST_SUCCESS = 2;
+  AGREEMENT_WINNER_POLICY_FIRST = 3;
+}
+
+message AgreementCountConstraint {
+  AgreementVoteLabel label = 1;
+  optional int32 min_count = 2;
+  optional int32 max_count = 3;
+}
+
+message VoteAgreementCandidate {
+  string candidate_id = 1;
+  bool success = 2;
+  string output = 3;
+  string error = 4;
+  string worker_id = 5;
+  string branch_key = 6;
+  map<string, string> annotations = 7;
+  string next_step_id = 8;
+  string assigned_variable = 9;
+  string assigned_value = 10;
+}
+
+message VoteAgreementCandidateSet {
+  repeated VoteAgreementCandidate candidates = 1;
+}
+
+message VoteAgreementRule {
+  AgreementRuleMode mode = 1;
+  AgreementCandidateLabelSource label_source = 2;
+  string label_field = 3;
+  optional int32 quorum_count = 4;
+  optional double quorum_ratio = 5;
+  repeated AgreementCountConstraint count_constraints = 6;
+  string predicate_id = 7;
+  AgreementWinnerPolicy winner_policy = 8;
+  string on_agreed = 9;
+  string on_rejected = 10;
+  string on_inconclusive = 11;
+}
+
+message VoteAgreementDecision {
+  AgreementDecisionKind kind = 1;
+  string branch_key = 2;
+  string winner_candidate_id = 3;
+  string output = 4;
+  string reason = 5;
+  map<string, int32> label_counts = 6;
+}
+
 message WorkflowStepParameters
 {
   map<string, string> parameters = 1;
+  VoteAgreementCandidateSet vote_agreement_candidates = 2;
+  VoteAgreementRule vote_agreement_rule = 3;
 }
 message StepRequestEvent
 {
@@ -143,6 +229,7 @@ message StepCompletedEvent {
   string assigned_value = 11;
   string execution_id = 12;
   WorkflowUsageMetrics usage = 13;
+  VoteAgreementDecision vote_agreement_decision = 14;
 }
 message SubWorkflowInvokeRequestedEvent
 {
