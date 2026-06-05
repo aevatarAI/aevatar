@@ -36,7 +36,7 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IP
         }
 
         if (context.ActorType == typeof(ScriptDefinitionGAgent) &&
-            context.Published.StateEvent.EventData.Is(ScriptDefinitionUpsertedEvent.Descriptor))
+            IsDefinitionAuthorityMutation(context.Published.StateEvent.EventData))
         {
             yield return DurableAuthorityPlan(context.ActorId);
             yield break;
@@ -98,6 +98,23 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProvider : IP
                 Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
         };
+
+    private static bool IsDefinitionAuthorityMutation(Google.Protobuf.WellKnownTypes.Any eventData)
+    {
+        if (eventData.Is(ScriptDefinitionUpsertedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptReadModelSchemaDeclaredEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptReadModelSchemaValidatedEvent.Descriptor))
+            return true;
+
+        if (eventData.Is(ScriptReadModelSchemaActivationFailedEvent.Descriptor))
+            return true;
+
+        return false;
+    }
 
     private static bool IsCatalogAuthorityMutation(Google.Protobuf.WellKnownTypes.Any eventData)
     {

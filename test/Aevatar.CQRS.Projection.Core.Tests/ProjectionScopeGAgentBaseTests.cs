@@ -94,22 +94,40 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
-    public async Task HandleObservedEnvelopeAsync_ShouldSkipCommittedObservation_WhenWatermarkAlreadyAdvanced()
+    public async Task HandleObservedEnvelopeAsync_ShouldProcessCommittedObservation_WhenVersionIsUnspecified()
     {
         var processed = 0;
         var agent = BuildActivatedAgent(
-            scopeId: "projection-scope-duplicate",
+            scopeId: "projection-scope-version-zero",
+            onProcess: _ =>
+            {
+                processed++;
+                return ProjectionScopeDispatchResult.Success(0, "event-type");
+            });
+        var envelope = BuildForwardedCommittedObservationEnvelope("projection-scope-version-zero", version: 0);
+
+        await agent.HandleObservedEnvelopeAsync(envelope);
+
+        processed.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_ShouldProcessCommittedObservation_WhenScopeWatermarkAdvancedByOtherPublisher()
+    {
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-mixed-publishers",
             onProcess: _ =>
             {
                 processed++;
                 return ProjectionScopeDispatchResult.Success(2, "event-type");
             });
-        agent.State.LastObservedVersion = 2;
-        var envelope = BuildForwardedCommittedObservationEnvelope("projection-scope-duplicate", version: 2);
+        agent.State.LastObservedVersion = 26;
+        var envelope = BuildForwardedCommittedObservationEnvelope("projection-scope-mixed-publishers", version: 2);
 
         await agent.HandleObservedEnvelopeAsync(envelope);
 
-        processed.Should().Be(0);
+        processed.Should().Be(1);
     }
 
     [Fact]
