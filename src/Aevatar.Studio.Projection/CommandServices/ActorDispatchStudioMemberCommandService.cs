@@ -243,7 +243,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             case MemberImplementationKindNames.GAgent:
                 message.Gagent = new StudioMemberGAgentRef
                 {
-                    ActorTypeName = implementation.ActorTypeName ?? string.Empty,
+                    ActorTypeName = implementation.DiagnosticActorTypeName ?? string.Empty,
                 };
                 break;
             default:

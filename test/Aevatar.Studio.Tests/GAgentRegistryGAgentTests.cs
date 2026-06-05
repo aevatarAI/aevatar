@@ -14,11 +14,12 @@ public sealed class GAgentRegistryGAgentTests
 {
     private const string CanonicalKind = "tests.registry-agent";
     private const string OtherKind = "tests.other-agent";
+    private const string LegacyKey = "Legacy.Registry.Agent, Tests";
 
     [Fact]
     public async Task Admission_ShouldCanonicalizeSingleLegacyGroup_WhenProbeConfirmsRequestedKind()
     {
-        var state = StateWith(("Legacy.Registry.Agent, Tests", ["actor-1"]));
+        var state = StateWith((LegacyKey, ["actor-1"]));
         var eventSourcing = new RecordingEventSourcing(state);
         var probe = new RecordingActorKindProbe { RuntimeKind = CanonicalKind };
         var agent = NewAgent(state, eventSourcing, probe);
@@ -33,7 +34,7 @@ public sealed class GAgentRegistryGAgentTests
 
         var canonicalized = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
             .Should().BeOfType<ActorRegistrationKeyCanonicalizedEvent>().Subject;
-        canonicalized.PreviousRegistryKey.Should().Be("Legacy.Registry.Agent, Tests");
+        canonicalized.PreviousRegistryKey.Should().Be(LegacyKey);
         canonicalized.AgentKind.Should().Be(CanonicalKind);
         canonicalized.ActorId.Should().Be("actor-1");
         agent.State.Groups.Should().ContainSingle()
@@ -74,7 +75,7 @@ public sealed class GAgentRegistryGAgentTests
     [Fact]
     public async Task Admission_ShouldNotCanonicalize_WhenProbeThrows()
     {
-        var state = StateWith(("Legacy.Registry.Agent, Tests", ["actor-1"]));
+        var state = StateWith((LegacyKey, ["actor-1"]));
         var eventSourcing = new RecordingEventSourcing(state);
         var probe = new RecordingActorKindProbe
         {
@@ -100,7 +101,7 @@ public sealed class GAgentRegistryGAgentTests
     public async Task Register_ShouldRemoveSameActorFromLegacyGroups()
     {
         var state = StateWith(
-            ("Legacy.Registry.Agent, Tests", ["actor-1", "actor-2"]),
+            (LegacyKey, ["actor-1", "actor-2"]),
             (OtherKind, ["actor-1"]));
         var eventSourcing = new RecordingEventSourcing(state);
         var agent = NewAgent(state, eventSourcing);
@@ -112,11 +113,45 @@ public sealed class GAgentRegistryGAgentTests
         });
 
         eventSourcing.RaisedEvents.Should().ContainSingle()
-            .Which.Should().BeOfType<ActorRegisteredEvent>()
-            .Which.AgentKind.Should().Be(CanonicalKind);
+            .Which.Should().BeEquivalentTo(new ActorRegisteredEvent
+            {
+                AgentKind = CanonicalKind,
+                ActorId = "actor-1",
+                RemovedLegacyKeys = { LegacyKey },
+            });
         agent.State.Groups.Single(g => g.AgentKind == CanonicalKind).ActorIds.Should().ContainSingle("actor-1");
-        agent.State.Groups.Single(g => g.AgentKind == "Legacy.Registry.Agent, Tests").ActorIds.Should().ContainSingle("actor-2");
+        agent.State.Groups.Single(g => g.AgentKind == LegacyKey).ActorIds.Should().ContainSingle("actor-2");
         agent.State.Groups.Single(g => g.AgentKind == OtherKind).ActorIds.Should().ContainSingle("actor-1");
+    }
+
+    [Fact]
+    public void Replay_ShouldBeDeterministic_WhenRegistryShapeChanges()
+    {
+        var initial = StateWith(
+            (LegacyKey, ["actor-1", "actor-2"]),
+            (OtherKind, ["actor-1"]));
+        var stream = new IMessage[]
+        {
+            new ActorRegisteredEvent
+            {
+                AgentKind = CanonicalKind,
+                ActorId = "actor-1",
+                RemovedLegacyKeys = { LegacyKey },
+            },
+        };
+
+        var withoutRegistry = Replay(initial, stream, new ServiceCollection().BuildServiceProvider());
+        var legacyKeyNowRegistered = Replay(
+            initial,
+            stream,
+            new ServiceCollection()
+                .AddSingleton<IAgentKindRegistry>(BuildRegistry(includeLegacyKey: true))
+                .BuildServiceProvider());
+
+        withoutRegistry.Should().BeEquivalentTo(legacyKeyNowRegistered);
+        withoutRegistry.Groups.Single(g => g.AgentKind == CanonicalKind).ActorIds.Should().ContainSingle("actor-1");
+        withoutRegistry.Groups.Single(g => g.AgentKind == LegacyKey).ActorIds.Should().ContainSingle("actor-2");
+        withoutRegistry.Groups.Single(g => g.AgentKind == OtherKind).ActorIds.Should().ContainSingle("actor-1");
     }
 
     public static TheoryData<GAgentRegistryState, string?, bool> UnmappableLegacyRows() =>
@@ -124,9 +159,9 @@ public sealed class GAgentRegistryGAgentTests
         {
             { StateWith((OtherKind, ["actor-1"])), CanonicalKind, true },
             { StateWith(("Legacy.One, Tests", ["actor-1"]), ("Legacy.Two, Tests", ["actor-1"])), CanonicalKind, true },
-            { StateWith(("Legacy.Registry.Agent, Tests", ["actor-1"])), null, true },
-            { StateWith(("Legacy.Registry.Agent, Tests", ["actor-1"])), OtherKind, true },
-            { StateWith(("Legacy.Registry.Agent, Tests", ["actor-1"])), CanonicalKind, false },
+            { StateWith((LegacyKey, ["actor-1"])), null, true },
+            { StateWith((LegacyKey, ["actor-1"])), OtherKind, true },
+            { StateWith((LegacyKey, ["actor-1"])), CanonicalKind, false },
         };
 
     private static GAgentRegistryGAgent NewAgent(
@@ -154,12 +189,32 @@ public sealed class GAgentRegistryGAgentTests
         return agent;
     }
 
-    private static IAgentKindRegistry BuildRegistry() =>
-        new AgentKindRegistry(
-            [
-                new AgentRegistration(CanonicalKind, typeof(TestRegistryAgent), typeof(object)),
-                new AgentRegistration(OtherKind, typeof(OtherRegistryAgent), typeof(object)),
-            ]);
+    private static IAgentKindRegistry BuildRegistry(bool includeLegacyKey = false)
+    {
+        var registrations = new List<AgentRegistration>
+        {
+            new(CanonicalKind, typeof(TestRegistryAgent), typeof(object)),
+            new(OtherKind, typeof(OtherRegistryAgent), typeof(object)),
+        };
+
+        if (includeLegacyKey)
+            registrations.Add(new AgentRegistration(LegacyKey, typeof(LegacyKeyRegistryAgent), typeof(object)));
+
+        return new AgentKindRegistry(registrations);
+    }
+
+    private static GAgentRegistryState Replay(
+        GAgentRegistryState initial,
+        IEnumerable<IMessage> stream,
+        IServiceProvider services)
+    {
+        var applier = new GAgentRegistryStateApplier(services);
+        var state = initial.Clone();
+        foreach (var evt in stream)
+            state = applier.Apply(state, evt);
+
+        return state;
+    }
 
     private static GAgentRegistryState StateWith(params (string AgentKind, string[] ActorIds)[] groups)
     {
@@ -224,7 +279,17 @@ public sealed class GAgentRegistryGAgentTests
                 .GetMethod("TransitionState", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("TransitionState method not found.");
 
-        private readonly GAgentRegistryGAgent _agent = NewAgentWithoutEventSourcing();
+        private readonly GAgentRegistryGAgent _agent;
+
+        public GAgentRegistryStateApplier()
+            : this(NewDefaultServiceProvider())
+        {
+        }
+
+        public GAgentRegistryStateApplier(IServiceProvider services)
+        {
+            _agent = NewAgentWithoutEventSourcing(services);
+        }
 
         public GAgentRegistryState Apply(GAgentRegistryState current, IMessage evt)
         {
@@ -234,13 +299,13 @@ public sealed class GAgentRegistryGAgentTests
         }
     }
 
-    private static GAgentRegistryGAgent NewAgentWithoutEventSourcing()
-    {
-        var services = new ServiceCollection()
+    private static IServiceProvider NewDefaultServiceProvider() =>
+        new ServiceCollection()
             .AddSingleton<IAgentKindRegistry>(BuildRegistry())
             .BuildServiceProvider();
-        return new GAgentRegistryGAgent { Services = services };
-    }
+
+    private static GAgentRegistryGAgent NewAgentWithoutEventSourcing(IServiceProvider services) =>
+        new() { Services = services };
 
     private static class GAgentRegistryStateSetter
     {
@@ -269,6 +334,18 @@ public sealed class GAgentRegistryGAgentTests
     private sealed class OtherRegistryAgent : IAgent
     {
         public string Id { get; } = "other-registry-agent";
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [GAgent(LegacyKey)]
+    private sealed class LegacyKeyRegistryAgent : IAgent
+    {
+        public string Id { get; } = "legacy-key-registry-agent";
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);

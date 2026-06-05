@@ -20,6 +20,7 @@ message ActorRegisteredEvent {
   reserved "gagent_type";
   string agent_kind = 1;
   string actor_id = 2;
+  repeated string removed_legacy_keys = 3;
 }
 
 message ActorUnregisteredEvent {

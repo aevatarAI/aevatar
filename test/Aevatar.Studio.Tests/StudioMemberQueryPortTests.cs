@@ -233,7 +233,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
 
         var detail = await port.GetAsync(ScopeId, "m-1");
 
-        detail!.ImplementationRef!.ActorTypeName.Should().Be("MyActor");
+        detail!.ImplementationRef!.DiagnosticActorTypeName.Should().Be("MyActor");
         detail.ImplementationRef.ImplementationKind.Should().Be(MemberImplementationKindNames.GAgent);
     }
 

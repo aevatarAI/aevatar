@@ -1265,7 +1265,7 @@ function decodeStudioMemberImplementationRef(
     diagnosticActorTypeName:
       readNullableString(
         record,
-        ["actorTypeName", "ActorTypeName"],
+        ["diagnosticActorTypeName", "DiagnosticActorTypeName"],
         "StudioMemberImplementationRef.diagnosticActorTypeName"
       ) ?? null,
   };

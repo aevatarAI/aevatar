@@ -124,7 +124,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ScriptRevision: "v2"),
             MemberImplementationKindNames.GAgent => new StudioMemberImplementationRefResponse(
                 ImplementationKind: kind,
-                ActorTypeName: "MyActor"),
+                DiagnosticActorTypeName: "MyActor"),
             _ => throw new InvalidOperationException("unreachable"),
         };
 

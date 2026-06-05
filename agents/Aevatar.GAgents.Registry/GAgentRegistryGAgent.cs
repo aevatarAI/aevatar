@@ -32,10 +32,15 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
 
         var group = State.Groups.FirstOrDefault(g =>
             string.Equals(g.AgentKind, evt.AgentKind, StringComparison.Ordinal));
-        if (group is not null && group.ActorIds.Contains(evt.ActorId))
+        var removedLegacyKeys = FindLegacyGroupsContainingActor(evt.AgentKind, evt.ActorId);
+        if (group is not null && group.ActorIds.Contains(evt.ActorId) && removedLegacyKeys.Count == 0)
             return;
 
-        await PersistDomainEventAsync(evt);
+        var committed = evt.Clone();
+        committed.RemovedLegacyKeys.Clear();
+        committed.RemovedLegacyKeys.AddRange(removedLegacyKeys);
+
+        await PersistDomainEventAsync(committed);
     }
 
     [EventHandler(EndpointName = "authorizeScopeResource")]
@@ -174,7 +179,7 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
             .OrCurrent();
     }
 
-    private GAgentRegistryState ApplyRegistered(
+    private static GAgentRegistryState ApplyRegistered(
         GAgentRegistryState state, ActorRegisteredEvent evt)
     {
         var next = state.Clone();
@@ -190,7 +195,9 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
         if (!group.ActorIds.Contains(evt.ActorId))
             group.ActorIds.Add(evt.ActorId);
 
-        RemoveActorFromNonCanonicalGroups(next, evt.AgentKind, evt.ActorId);
+        foreach (var removedLegacyKey in evt.RemovedLegacyKeys.Distinct(StringComparer.Ordinal))
+            RemoveActorFromGroup(next, removedLegacyKey, evt.ActorId);
+
         return next;
     }
 
@@ -233,25 +240,6 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
         return next;
     }
 
-    private void RemoveActorFromNonCanonicalGroups(
-        GAgentRegistryState state,
-        string agentKind,
-        string actorId)
-    {
-        foreach (var group in state.Groups.ToList())
-        {
-            if (string.Equals(group.AgentKind, agentKind, StringComparison.Ordinal))
-                continue;
-
-            if (IsRegisteredAgentKind(group.AgentKind))
-                continue;
-
-            group.ActorIds.Remove(actorId);
-            if (group.ActorIds.Count == 0)
-                state.Groups.Remove(group);
-        }
-    }
-
     private static void RemoveActorFromGroup(
         GAgentRegistryState state,
         string registryKey,
@@ -275,6 +263,28 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>, IPro
 
         var registry = Services.GetService<IAgentKindRegistry>();
         return registry?.TryResolve(normalized, out _) == true;
+    }
+
+    private IReadOnlyList<string> FindLegacyGroupsContainingActor(
+        string agentKind,
+        string actorId)
+    {
+        var legacyKeys = new List<string>();
+        foreach (var group in State.Groups)
+        {
+            if (string.Equals(group.AgentKind, agentKind, StringComparison.Ordinal))
+                continue;
+
+            if (!group.ActorIds.Contains(actorId))
+                continue;
+
+            if (IsRegisteredAgentKind(group.AgentKind))
+                continue;
+
+            legacyKeys.Add(group.AgentKind);
+        }
+
+        return legacyKeys;
     }
 }
 
