@@ -40,10 +40,12 @@ enum ExternalTriggerSourceKind {
 }
 
 enum SkillRunnerExternalTriggerDeliveryStatus {
+  reserved 3;
+  reserved "SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_RUNNING";
+
   SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_UNSPECIFIED = 0;
   SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_ADMITTED = 1;
   SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_DISPATCH_REQUESTED = 2;
-  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_RUNNING = 3;
   SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_COMPLETED = 4;
   SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_FAILED = 5;
   SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_REJECTED = 6;
@@ -285,16 +287,6 @@ message SkillRunnerExternalTriggerDuplicateIgnoredEvent {
   SkillRunnerExternalTriggerIdentity identity = 1;
   google.protobuf.Timestamp ignored_at = 2;
   string reason = 3;
-}
-
-message SetExternalTriggerSourceEnabledCommand {
-  string source_id = 1;
-  bool enabled = 2;
-}
-
-message ExternalTriggerSourceEnabledEvent {
-  string source_id = 1;
-  bool enabled = 2;
 }
 
 message DisableSkillRunnerCommand {

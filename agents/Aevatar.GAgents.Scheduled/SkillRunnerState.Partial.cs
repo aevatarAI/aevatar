@@ -50,8 +50,7 @@ public sealed partial class SkillRunnerState : ISchedulable
             .Where(static record => record.Identity is not null)
             .Where(static record => record.Status is
                 SkillRunnerExternalTriggerDeliveryStatus.Admitted or
-                SkillRunnerExternalTriggerDeliveryStatus.DispatchRequested or
-                SkillRunnerExternalTriggerDeliveryStatus.Running)
+                SkillRunnerExternalTriggerDeliveryStatus.DispatchRequested)
             .ToArray();
 
     internal void UpsertExternalTriggerDelivery(
@@ -84,15 +83,6 @@ public sealed partial class SkillRunnerState : ISchedulable
             RecentExternalTriggerDeliveries[existingIndex] = next;
         else
             RecentExternalTriggerDeliveries.Add(next);
-    }
-
-    internal void SetExternalTriggerSourceEnabled(string sourceId, bool enabled)
-    {
-        var source = FindExternalTriggerSource(sourceId);
-        if (source is not null)
-        {
-            source.Enabled = enabled;
-        }
     }
 
     internal void TrimExternalTriggerDeliveries(DateTimeOffset now)

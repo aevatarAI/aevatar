@@ -378,6 +378,42 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData(" ", "delivery-malformed-source")]
+    [InlineData("webhook-main", " ")]
+    public async Task HandleAdmitExternalTriggerAsync_MalformedIdentity_ShouldCommitRejectedWithoutDispatch(
+        string sourceId,
+        string deliveryId)
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+
+        await _agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand
+        {
+            Identity = new SkillRunnerExternalTriggerIdentity
+            {
+                SourceId = sourceId,
+                DeliveryId = deliveryId,
+                AdmissionId = "admission-malformed",
+                Kind = ExternalTriggerSourceKind.Webhook,
+            },
+        });
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var rejected = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExternalTriggerRejectedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExternalTriggerRejectedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        rejected.Reason.Should().Be(SkillRunnerDefaults.ExternalTriggerRejectedReasonMalformedDelivery);
+        rejected.Identity.SourceId.Should().Be(sourceId.Trim());
+        rejected.Identity.DeliveryId.Should().Be(deliveryId.Trim());
+        persisted.Select(x => x.EventData)
+            .Should()
+            .NotContain(x => x.Is(SkillRunnerExternalTriggerDispatchRequestedEvent.Descriptor));
+    }
+
+    [Theory]
     [InlineData("missing-source", SkillRunnerDefaults.ExternalTriggerRejectedReasonUnknownSource)]
     [InlineData("disabled-source", SkillRunnerDefaults.ExternalTriggerRejectedReasonDisabledSource)]
     public async Task HandleAdmitExternalTriggerAsync_UnknownOrDisabledSource_ShouldCommitRejectedWithoutDispatch(
@@ -539,6 +575,92 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .ToArray();
         dispatches.Should().HaveCount(2);
         dispatches[^1].DispatchAttempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_RecoverableExternalDelivery_WhenAttemptsExhausted_ShouldCommitTerminalRejectedWithoutRedispatch()
+    {
+        var store = new InMemoryEventStore();
+        using var provider = BuildServiceProvider(store);
+        var first = CreateAgent("skill-runner-external-exhausted", provider);
+        await first.ActivateAsync();
+        await first.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+        var identity = CreateExternalIdentity("delivery-exhausted");
+        await first.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand
+        {
+            Identity = identity,
+        });
+
+        for (var attempt = 2; attempt <= SkillRunnerDefaults.ExternalTriggerMaxDispatchAttempts; attempt++)
+        {
+            var recovered = CreateAgent("skill-runner-external-exhausted", provider);
+            await recovered.ActivateAsync();
+        }
+
+        var exhausted = CreateAgent("skill-runner-external-exhausted", provider);
+        await exhausted.ActivateAsync();
+
+        var persisted = await store.GetEventsAsync("skill-runner-external-exhausted");
+        persisted
+            .Select(x => x.EventData)
+            .Count(x => x.Is(SkillRunnerExternalTriggerDispatchRequestedEvent.Descriptor))
+            .Should()
+            .Be(SkillRunnerDefaults.ExternalTriggerMaxDispatchAttempts);
+        var rejected = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExternalTriggerRejectedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExternalTriggerRejectedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        rejected.Reason.Should().Be(SkillRunnerDefaults.ExternalTriggerRejectedReasonDispatchAttemptsExhausted);
+        rejected.Identity.DeliveryId.Should().Be("delivery-exhausted");
+        var record = exhausted.State.FindExternalTriggerDelivery(identity);
+        record.Should().NotBeNull();
+        record!.Status.Should().Be(SkillRunnerExternalTriggerDeliveryStatus.Rejected);
+        record.Reason.Should().Be(SkillRunnerDefaults.ExternalTriggerRejectedReasonDispatchAttemptsExhausted);
+    }
+
+    [Fact]
+    public void TrimExternalTriggerDeliveries_ShouldTrimTerminalByCountAndAgeWhilePreservingNonTerminal()
+    {
+        var state = new SkillRunnerState();
+        var now = new DateTimeOffset(2026, 6, 6, 8, 0, 0, TimeSpan.Zero);
+        Func<DateTimeOffset, Google.Protobuf.WellKnownTypes.Timestamp> timestamp =
+            Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset;
+
+        for (var i = 0; i <= SkillRunnerDefaults.ExternalTriggerTerminalDeliveryRetention; i++)
+        {
+            state.UpsertExternalTriggerDelivery(
+                CreateExternalIdentity($"recent-terminal-{i:0000}"),
+                SkillRunnerExternalTriggerDeliveryStatus.Completed,
+                timestamp(now - TimeSpan.FromMinutes(i)));
+        }
+
+        var oldTerminal = CreateExternalIdentity("old-terminal");
+        state.UpsertExternalTriggerDelivery(
+            oldTerminal,
+            SkillRunnerExternalTriggerDeliveryStatus.Completed,
+            timestamp(now - SkillRunnerDefaults.ExternalTriggerTerminalDeliveryRetentionAge - TimeSpan.FromDays(1)));
+        var oldNonTerminal = CreateExternalIdentity("old-nonterminal");
+        state.UpsertExternalTriggerDelivery(
+            oldNonTerminal,
+            SkillRunnerExternalTriggerDeliveryStatus.DispatchRequested,
+            timestamp(now - SkillRunnerDefaults.ExternalTriggerTerminalDeliveryRetentionAge - TimeSpan.FromDays(1)),
+            dispatchAttempt: 1);
+
+        state.TrimExternalTriggerDeliveries(now);
+
+        state.RecentExternalTriggerDeliveries
+            .Count(record => record.Status == SkillRunnerExternalTriggerDeliveryStatus.Completed)
+            .Should()
+            .Be(SkillRunnerDefaults.ExternalTriggerTerminalDeliveryRetention);
+        state.FindExternalTriggerDelivery(oldTerminal).Should().BeNull();
+        state.FindExternalTriggerDelivery(CreateExternalIdentity("recent-terminal-1000")).Should().BeNull();
+        state.FindExternalTriggerDelivery(CreateExternalIdentity("recent-terminal-0000")).Should().NotBeNull();
+        var nonTerminal = state.FindExternalTriggerDelivery(oldNonTerminal);
+        nonTerminal.Should().NotBeNull();
+        nonTerminal!.Status.Should().Be(SkillRunnerExternalTriggerDeliveryStatus.DispatchRequested);
     }
 
     [Fact]

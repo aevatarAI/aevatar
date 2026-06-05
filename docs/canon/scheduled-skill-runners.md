@@ -33,7 +33,7 @@ delivery ledger 保存在 runner state 的 `recent_external_trigger_deliveries`�
 
 ## Wake And Recovery
 
-accepted delivery 先提交 `SkillRunnerExternalTriggerAdmittedEvent`，再通过 self-message 请求执行，随后提交 `SkillRunnerExternalTriggerDispatchRequestedEvent`。runner activation 会扫描未 terminal 的 admitted / dispatch-requested / running delivery，并按 bounded dispatch attempts 恢复 self-dispatch；超过上限后提交 terminal rejected event，避免无限恢复循环。
+accepted delivery 先提交 `SkillRunnerExternalTriggerAdmittedEvent`，再通过 self-message 请求执行，随后提交 `SkillRunnerExternalTriggerDispatchRequestedEvent`。runner activation 会扫描未 terminal 的 admitted / dispatch-requested delivery，并按 bounded dispatch attempts 恢复 self-dispatch；超过上限后提交 terminal rejected event，避免无限恢复循环。
 
 ## Boundary With Creation And Ornn Execution
 

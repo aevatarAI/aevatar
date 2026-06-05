@@ -255,7 +255,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerExternalTriggerDispatchRequestedEvent>(ApplyExternalTriggerDispatchRequested)
             .On<SkillRunnerExternalTriggerRejectedEvent>(ApplyExternalTriggerRejected)
             .On<SkillRunnerExternalTriggerDuplicateIgnoredEvent>(ApplyExternalTriggerDuplicateIgnored)
-            .On<ExternalTriggerSourceEnabledEvent>(ApplyExternalTriggerSourceEnabled)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
             .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
@@ -469,20 +468,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
             await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
         }
-    }
-
-    [EventHandler]
-    public async Task HandleSetExternalTriggerSourceEnabledAsync(SetExternalTriggerSourceEnabledCommand command)
-    {
-        var sourceId = command.SourceId?.Trim();
-        if (string.IsNullOrWhiteSpace(sourceId) || State.FindExternalTriggerSource(sourceId) is null)
-            return;
-
-        await PersistDomainEventAsync(new ExternalTriggerSourceEnabledEvent
-        {
-            SourceId = sourceId,
-            Enabled = command.Enabled,
-        });
     }
 
     private async Task ScheduleRetryAsync(TriggerSkillRunnerExecutionCommand command, int retryAttempt, CancellationToken ct)
@@ -1753,15 +1738,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             }
         }
 
-        return next;
-    }
-
-    private static SkillRunnerState ApplyExternalTriggerSourceEnabled(
-        SkillRunnerState current,
-        ExternalTriggerSourceEnabledEvent evt)
-    {
-        var next = current.Clone();
-        next.SetExternalTriggerSourceEnabled(evt.SourceId, evt.Enabled);
         return next;
     }
 
