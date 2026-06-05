@@ -14,7 +14,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<CheckpointModule>("checkpoint"),
         WorkflowModuleRegistration.Create<AssignModule>("assign"),
         WorkflowModuleRegistration.Create<ParallelFanOutModule>("parallel_fanout", "parallel", "fan_out"),
-        WorkflowModuleRegistration.Create<VoteConsensusModule>("vote_consensus", "vote"),
+        WorkflowModuleRegistration.Create<VoteAgreementModule>("vote", "vote_consensus"),
         WorkflowModuleRegistration.Create<ForEachModule>("foreach", "for_each"),
         WorkflowModuleRegistration.Create<RaceModule>("race", "select"),
         WorkflowModuleRegistration.Create<MapReduceModule>("map_reduce", "mapreduce"),

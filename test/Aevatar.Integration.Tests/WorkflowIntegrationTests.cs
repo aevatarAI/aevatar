@@ -583,7 +583,7 @@ public class WorkflowIntegrationTests
 
         // ─── 并行 / 共识 ───
         factory.TryCreate("parallel_fanout", out m).Should().BeTrue(); m!.Name.Should().Be("parallel_fanout");
-        factory.TryCreate("vote_consensus", out m).Should().BeTrue(); m!.Name.Should().Be("vote_consensus");
+        factory.TryCreate("vote_consensus", out m).Should().BeTrue(); m!.Name.Should().Be("vote");
 
         // ─── 执行 ───
         factory.TryCreate("llm_call", out m).Should().BeTrue(); m!.Name.Should().Be("llm_call");

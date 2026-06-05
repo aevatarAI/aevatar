@@ -546,9 +546,9 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task VoteConsensusModule_ShouldHandleEmptyAndPickLongestCandidate()
+    public async Task VoteAgreementModule_ShouldHandleEmptyAndUseStructuredAgreement()
     {
-        var module = new VoteConsensusModule();
+        var module = new VoteAgreementModule();
         var ctx = CreateContext();
 
         await module.HandleAsync(
@@ -564,7 +564,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         var emptyResult = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         emptyResult.StepId.Should().Be("vote-empty");
         emptyResult.Success.Should().BeFalse();
-        emptyResult.Error.Should().Contain("没有候选结果");
+        emptyResult.Error.Should().Contain("at least one candidate");
 
         ctx.Published.Clear();
 
@@ -580,7 +580,9 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var winner = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         winner.Success.Should().BeTrue();
-        winner.Output.Should().Be("very very long candidate");
+        winner.Output.Should().Be("short");
+        winner.VoteAgreementDecision.Kind.Should().Be(AgreementDecisionKind.Agreed);
+        winner.BranchKey.Should().Be("agreed");
     }
 
     [Fact]

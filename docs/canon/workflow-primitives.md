@@ -346,6 +346,7 @@ steps:
 
 - 作用：并行扇出到多个 worker，收敛合并，可选接投票步骤。
 - 常用参数：`workers`、`parallel_count`、`vote_step_type`、`vote_param_{key}`、`min_concurrent_workers`、`max_concurrent_workers`。
+- `vote_step_type=vote` 时，`vote_param_{key}` 会在扇入时解析为 typed agreement rule；worker 完成态会作为 `VoteAgreementCandidateSet` 传给 vote step，不再把拼接文本当作权威候选结构。
 - 并发口径：`max_concurrent_workers` 默认安全值为 `20`，显式参数可提升到 `200`；若设置 `min_concurrent_workers`，运行时会保留队列并持续补位到该 floor，适合长尾 worker 任务。
 
 ```yaml
@@ -356,7 +357,10 @@ steps:
       workers: "agent_a,agent_b,agent_c"
       min_concurrent_workers: "2"
       max_concurrent_workers: "8"
-      vote_step_type: "vote_consensus"
+      vote_step_type: "vote"
+      vote_param_rule_mode: "quorum"
+      vote_param_quorum_count: "2"
+      vote_param_on_agreed: "accepted"
 ```
 
 ### `race`（别名：`select`）
@@ -434,15 +438,52 @@ steps:
       original_input: "{{user_request}}"
 ```
 
-### `vote_consensus`（别名：`vote`）
+### `vote`（别名：`vote_consensus`）
 
-- 作用：对候选结果做共识选择，常和 `parallel` 组合使用。
-- 常用参数：无。
+- 作用：对多个候选结果做结构化 agreement 判定，常和 `parallel` 组合使用。
+- `vote` 是 canonical spelling；`vote_consensus` 仅是兼容别名。不会注册 `structured_agreement` 或 `agreement` 公共原语。
+- 常用参数：
+  - `rule_mode`：`all`、`majority`、`quorum`、`label_count_constraints`、`predicate`。
+  - `label_source`：`success`、`branch_key`、`annotation`；`annotation` 需要 `label_field`。
+  - `quorum_count` / `quorum_ratio`：`quorum` 模式的通过阈值。
+  - `min_approve_count`、`max_reject_count` 等：`label_count_constraints` 的计数约束。
+  - `predicate_id`：仅支持本地确定性 predicate，如 `non_empty_output`、`exact_label:approve`。
+  - `winner_policy`：`first_approved`（默认）、`first_success`、`first`。
+  - `on_agreed`、`on_rejected`、`on_inconclusive`：覆盖输出的 `BranchKey`，配置后必须存在同名 branch。
 
 ```yaml
 steps:
   - id: consensus
-    type: vote_consensus
+    type: vote
+    parameters:
+      rule_mode: "majority"
+      on_agreed: "accepted"
+      on_rejected: "retry"
+    branches:
+      accepted: done
+      retry: revise
+  - id: revise
+    type: assign
+    parameters:
+      target: result
+      value: "retry"
+  - id: done
+    type: assign
+    parameters:
+      target: result
+      value: "$input"
+```
+
+```yaml
+steps:
+  - id: consensus
+    type: vote
+    parameters:
+      rule_mode: "label_count_constraints"
+      label_source: "annotation"
+      label_field: "vote"
+      min_approve_count: "2"
+      max_reject_count: "0"
 ```
 
 ## 6. Integration 原语

@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Agreement;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
@@ -87,15 +88,38 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
             var voteParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (key, value) in evt.Parameters)
             {
-                if (key.StartsWith("vote_param_", StringComparison.OrdinalIgnoreCase))
-                    voteParams[key["vote_param_".Length..]] = value;
+                var voteParameterKey = VoteAgreementRuleConfigurationParser.StripVoteParameterPrefix(key);
+                if (voteParameterKey != null)
+                    voteParams[voteParameterKey] = value;
+            }
+            var voteRule = new VoteAgreementRule();
+            if (!string.IsNullOrWhiteSpace(voteStepType) &&
+                string.Equals(
+                    WorkflowPrimitiveCatalog.ToCanonicalType(voteStepType),
+                    "vote",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (!VoteAgreementRuleConfigurationParser.TryParse(voteParams, out voteRule, out var voteRuleError))
+                {
+                    state.Parents.Remove(evt.StepId);
+                    await SaveStateAsync(state, ctx, ct);
+                    await ctx.PublishAsync(new StepCompletedEvent
+                    {
+                        StepId = evt.StepId,
+                        RunId = runId,
+                        Success = false,
+                        Error = voteRuleError,
+                    }, TopologyAudience.Self, ct);
+                    return;
+                }
             }
             var parentState = new ParallelParentState
             {
                 Expected = count,
                 VoteConfig = new VoteConfigState
                 {
-                    StepType = voteStepType,
+                    StepType = WorkflowPrimitiveCatalog.ToCanonicalType(voteStepType),
+                    VoteRule = voteRule,
                 },
             };
             foreach (var (key, value) in voteParams)
@@ -222,9 +246,14 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                         StepType = parentState.VoteConfig.StepType,
                         RunId = eventRunId,
                         Input = merged,
+                        StepParameters = new WorkflowStepParameters(),
                     };
                     foreach (var (key, value) in parentState.VoteConfig.Parameters)
                         voteReq.Parameters[key] = value;
+                    voteReq.StepParameters.VoteAgreementCandidates = BuildVoteAgreementCandidateSet(results);
+                    var voteRule = parentState.VoteConfig.VoteRule;
+                    if (voteRule is { Mode: not AgreementRuleMode.Unspecified })
+                        voteReq.StepParameters.VoteAgreementRule = voteRule.Clone();
 
                     ctx.Logger.LogInformation(
                         "ParallelFanOut: step={StepId} dispatch vote step={VoteStepId} type={VoteType}",
@@ -272,4 +301,34 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
+    private static VoteAgreementCandidateSet BuildVoteAgreementCandidateSet(
+        IEnumerable<ParallelItemResult> results)
+    {
+        var set = new VoteAgreementCandidateSet();
+        var index = 0;
+        foreach (var result in results)
+        {
+            var candidate = new VoteAgreementCandidate
+            {
+                CandidateId = string.IsNullOrWhiteSpace(result.WorkerId)
+                    ? $"candidate-{index}"
+                    : result.WorkerId,
+                Success = result.Success,
+                Output = result.Output,
+                Error = result.Error,
+                WorkerId = result.WorkerId,
+                BranchKey = result.BranchKey,
+                NextStepId = result.NextStepId,
+                AssignedVariable = result.AssignedVariable,
+                AssignedValue = result.AssignedValue,
+            };
+            foreach (var (key, value) in result.Annotations)
+                candidate.Annotations[key] = value;
+
+            set.Candidates.Add(candidate);
+            index++;
+        }
+
+        return set;
+    }
 }

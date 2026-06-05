@@ -5,6 +5,7 @@
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using Aevatar.Workflow.Core.Agreement;
 using System.Collections;
 using System.Globalization;
 using System.Text.Json;
@@ -45,6 +46,23 @@ public sealed class WorkflowParser
         ("query", static step => step.Query),
         ("top_k", static step => step.TopK),
         ("facts", static step => step.Facts),
+        ("rule_mode", static step => step.RuleMode),
+        ("quorum_count", static step => step.QuorumCount),
+        ("quorum_ratio", static step => step.QuorumRatio),
+        ("min_approve_count", static step => step.MinApproveCount),
+        ("max_approve_count", static step => step.MaxApproveCount),
+        ("min_reject_count", static step => step.MinRejectCount),
+        ("max_reject_count", static step => step.MaxRejectCount),
+        ("min_abstain_count", static step => step.MinAbstainCount),
+        ("max_abstain_count", static step => step.MaxAbstainCount),
+        ("count_constraints", static step => step.CountConstraints),
+        ("label_source", static step => step.LabelSource),
+        ("label_field", static step => step.LabelField),
+        ("predicate_id", static step => step.PredicateId),
+        ("on_agreed", static step => step.OnAgreed),
+        ("on_rejected", static step => step.OnRejected),
+        ("on_inconclusive", static step => step.OnInconclusive),
+        ("winner_policy", static step => step.WinnerPolicy),
     ];
 
     /// <summary>
@@ -194,7 +212,19 @@ public sealed class WorkflowParser
     {
         // Common LLM output pattern: puts primitive params at step root instead of parameters.
         foreach (var (key, getter) in RootParameterMappings)
+        {
+            if (VoteAgreementRuleConfigurationParser.IsRuleParameterKey(key))
+            {
+                if (canonicalType == "parallel")
+                    AddIfMissing(parameters, $"vote_param_{key}", getter(s));
+                else if (canonicalType == "vote")
+                    AddIfMissing(parameters, key, getter(s));
+
+                continue;
+            }
+
             AddIfMissing(parameters, key, getter(s));
+        }
 
         // Root timeout_ms may be either primitive parameter or step timeout.
         // Keep step timeout via StepDefinition.TimeoutMs, and also mirror to parameters
@@ -415,6 +445,23 @@ public sealed class WorkflowParser
         public string? Query { get; set; }
         public object? TopK { get; set; }
         public object? Facts { get; set; }
+        public string? RuleMode { get; set; }
+        public object? QuorumCount { get; set; }
+        public object? QuorumRatio { get; set; }
+        public object? MinApproveCount { get; set; }
+        public object? MaxApproveCount { get; set; }
+        public object? MinRejectCount { get; set; }
+        public object? MaxRejectCount { get; set; }
+        public object? MinAbstainCount { get; set; }
+        public object? MaxAbstainCount { get; set; }
+        public object? CountConstraints { get; set; }
+        public string? LabelSource { get; set; }
+        public string? LabelField { get; set; }
+        public string? PredicateId { get; set; }
+        public string? OnAgreed { get; set; }
+        public string? OnRejected { get; set; }
+        public string? OnInconclusive { get; set; }
+        public string? WinnerPolicy { get; set; }
         public Dictionary<string, object?>? Parameters { get; set; }
         public string? Next { get; set; }
         public List<RawStep>? Children { get; set; }
