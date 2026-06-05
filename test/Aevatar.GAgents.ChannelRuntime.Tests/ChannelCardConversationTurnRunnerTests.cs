@@ -137,6 +137,32 @@ public sealed class ChannelCardConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunCardCreateAsync_ShouldSendToChatId_WhenGroupActivityPlatformMessageIdIsNotLarkMessageId()
+    {
+        var cardKit = new RecordingCardKitClient();
+        var lark = new RecordingLarkNyxClient();
+        var runner = new ChannelCardConversationTurnRunner(
+            cardKit,
+            lark,
+            NullLogger<ChannelCardConversationTurnRunner>.Instance);
+
+        var result = await runner.RunCardCreateAsync(
+            BuildChunk(
+                "corr-card-group-route-id-1",
+                BuildSanitizedActivity(platformMessageId: "route-uuid")),
+            "streaming_main",
+            RuntimeContext("runtime-card-token-group-route-id"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        lark.ReplyCalls.Should().BeEmpty();
+        lark.SendCalls.Should().ContainSingle();
+        lark.SendCalls[0].Request.TargetType.Should().Be("chat_id");
+        lark.SendCalls[0].Request.TargetId.Should().Be("oc_group_chat_1");
+        lark.SendCalls[0].Request.MessageType.Should().Be("interactive");
+    }
+
+    [Fact]
     public async Task RunCardCreateAsync_ShouldSendToUnionId_ForDirectMessageActivity()
     {
         var cardKit = new RecordingCardKitClient();

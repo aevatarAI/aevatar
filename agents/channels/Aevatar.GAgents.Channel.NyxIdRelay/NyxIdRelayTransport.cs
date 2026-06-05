@@ -164,7 +164,6 @@ public sealed class NyxIdRelayTransport
 
     private const string CardActionContentType = "card_action";
 
-    // refactor helper, no behavior change
     private readonly record struct LarkRelayConversationFacts(
         ConversationScope? Scope,
         string? GroupConversationIdentity,
