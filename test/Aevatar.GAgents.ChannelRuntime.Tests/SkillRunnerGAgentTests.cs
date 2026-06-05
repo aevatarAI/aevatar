@@ -21,6 +21,7 @@ using Aevatar.GAgents.Scheduled;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -471,6 +472,72 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .Be(1);
     }
 
+    [Theory]
+    [InlineData(SkillRunnerExternalTriggerDeliveryStatus.Completed)]
+    [InlineData(SkillRunnerExternalTriggerDeliveryStatus.Failed)]
+    [InlineData(SkillRunnerExternalTriggerDeliveryStatus.Rejected)]
+    public async Task HandleTriggerAsync_TerminalExternalDelivery_ShouldCommitDuplicateIgnoredWithoutExecutingAgain(
+        SkillRunnerExternalTriggerDeliveryStatus terminalStatus)
+    {
+        var actorId = $"skill-runner-external-terminal-{terminalStatus.ToString().ToLowerInvariant()}";
+        var provider = terminalStatus == SkillRunnerExternalTriggerDeliveryStatus.Failed
+            ? new StubStreamingProviderFactory(
+                new StubStreamingTurn(new InvalidOperationException("terminal failure")),
+                new StubStreamingTurn(["should-not-run"]))
+            : new StubStreamingProviderFactory("terminal output", "should-not-run");
+        var agent = CreateAgent(actorId, providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+        var identity = CreateExternalIdentity($"delivery-terminal-{terminalStatus.ToString().ToLowerInvariant()}");
+        await agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand { Identity = identity });
+
+        if (terminalStatus == SkillRunnerExternalTriggerDeliveryStatus.Rejected)
+        {
+            await agent.HandleDisableAsync(new DisableSkillRunnerCommand { Reason = "operator" });
+        }
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = SkillRunnerDefaults.ExternalTriggerReason,
+            RetryAttempt = terminalStatus == SkillRunnerExternalTriggerDeliveryStatus.Failed
+                ? SkillRunnerDefaults.MaxRetryAttempts
+                : 0,
+            ExternalTriggerIdentity = identity.Clone(),
+        });
+        var executionRequestsBeforeDuplicate = provider.Requests.Count;
+        var persistedBeforeDuplicate = await _store.GetEventsAsync(actorId);
+        persistedBeforeDuplicate
+            .Select(x => x.EventData)
+            .Count(IsExternalExecutionTerminalEvent)
+            .Should()
+            .Be(1);
+        agent.State.FindExternalTriggerDelivery(identity)!.Status.Should().Be(terminalStatus);
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = SkillRunnerDefaults.ExternalTriggerReason,
+            ExternalTriggerIdentity = identity.Clone(),
+        });
+
+        var persisted = await _store.GetEventsAsync(actorId);
+        provider.Requests.Should().HaveCount(executionRequestsBeforeDuplicate);
+        persisted
+            .Select(x => x.EventData)
+            .Count(IsExternalExecutionTerminalEvent)
+            .Should()
+            .Be(1);
+        var duplicate = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExternalTriggerDuplicateIgnoredEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExternalTriggerDuplicateIgnoredEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        duplicate.Identity.DeliveryId.Should().Be(identity.DeliveryId);
+        duplicate.Reason.Should().Be(SkillRunnerDefaults.ExternalTriggerDuplicateReasonAlreadyAdmitted);
+        agent.State.FindExternalTriggerDelivery(identity)!.Status.Should().Be(terminalStatus);
+    }
+
     [Fact]
     public async Task HandleTriggerAsync_ExternalCompleted_ShouldPreserveIdentityAndMarkTerminal()
     {
@@ -549,6 +616,34 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var retry = scheduler.Timeouts[0].TriggerEnvelope.Payload.Unpack<TriggerSkillRunnerExecutionCommand>();
         retry.RetryAttempt.Should().Be(1);
         retry.ExternalTriggerIdentity.DeliveryId.Should().Be("delivery-retry");
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_ExternalFailureAtExhaustedRetry_ShouldPreserveIdentityAndMarkFailed()
+    {
+        var provider = new StubStreamingProviderFactory(new StubStreamingTurn(
+            new InvalidOperationException("terminal external failure")));
+        var agent = CreateAgent("skill-runner-external-failed", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+        var identity = CreateExternalIdentity("delivery-failed");
+        await agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand { Identity = identity });
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = SkillRunnerDefaults.ExternalTriggerReason,
+            RetryAttempt = SkillRunnerDefaults.MaxRetryAttempts,
+            ExternalTriggerIdentity = identity.Clone(),
+        });
+
+        var failed = await ReadSingleFailedEventAsync(_store, "skill-runner-external-failed");
+        failed.Error.Should().Be("terminal external failure");
+        failed.ExternalTriggerIdentity.Should().NotBeNull();
+        failed.ExternalTriggerIdentity.DeliveryId.Should().Be("delivery-failed");
+        var record = agent.State.FindExternalTriggerDelivery(identity);
+        record.Should().NotBeNull();
+        record!.Status.Should().Be(SkillRunnerExternalTriggerDeliveryStatus.Failed);
+        record.Reason.Should().Be("terminal external failure");
     }
 
     [Fact]
@@ -2021,6 +2116,16 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var property = instance.GetType().GetProperty(propertyName);
         property.Should().NotBeNull();
         return (T?)property!.GetValue(instance);
+    }
+
+    private static bool IsExternalExecutionTerminalEvent(Any evt)
+    {
+        if (evt.Is(SkillRunnerExecutionCompletedEvent.Descriptor))
+            return evt.Unpack<SkillRunnerExecutionCompletedEvent>().ExternalTriggerIdentity is not null;
+        if (evt.Is(SkillRunnerExecutionFailedEvent.Descriptor))
+            return evt.Unpack<SkillRunnerExecutionFailedEvent>().ExternalTriggerIdentity is not null;
+        return evt.Is(SkillRunnerExecutionRejectedEvent.Descriptor) &&
+               evt.Unpack<SkillRunnerExecutionRejectedEvent>().ExternalTriggerIdentity is not null;
     }
 
     private sealed record SkillRunnerExecutionResultSnapshot(
