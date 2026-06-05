@@ -7,6 +7,7 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.Core.Tools;
 
 namespace Aevatar.AI.Core.Middleware;
 
@@ -122,12 +123,27 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                 context.Result = !string.IsNullOrWhiteSpace(result.Reason)
                     ? $"Tool '{context.ToolName}' execution denied: {result.Reason}"
                     : $"Tool '{context.ToolName}' execution denied by approval handler.";
+                context.Receipt = AgentToolReceiptFactory.CreateDenied(
+                    context.Tool,
+                    context.ToolCallId,
+                    context.ToolName,
+                    context.Result,
+                    request.RequestId,
+                    result.Reason ?? "Tool approval denied.");
                 return;
 
             case ToolApprovalDecision.Timeout:
                 context.Terminate = true;
                 context.Result = $"Tool '{context.ToolName}' approval timed out. " +
                                  "The tool was not executed. Please try again or approve when prompted.";
+                context.Receipt = AgentToolReceiptFactory.CreateApprovalError(
+                    context.Tool,
+                    context.ToolCallId,
+                    context.ToolName,
+                    context.Result,
+                    request.RequestId,
+                    "approval_timeout",
+                    "Tool approval timed out.");
                 return;
 
             case ToolApprovalDecision.Yield:
@@ -143,6 +159,12 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                     request.IsReadOnly,
                     request.IsDestructive);
                 context.Result = BuildApprovalPendingResult(request);
+                context.Receipt = AgentToolReceiptFactory.CreateApprovalRequired(
+                    context.Tool,
+                    context.ToolCallId,
+                    context.ToolName,
+                    context.Result,
+                    request.RequestId);
                 return;
         }
     }

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using FluentAssertions;
@@ -166,6 +167,14 @@ public class ToolApprovalMiddlewareTests
         nextExecuted.Should().BeFalse();
         ctx.Terminate.Should().BeTrue();
         ctx.Result.Should().Contain("Tool 'danger' execution denied: blocked");
+        ctx.Receipt.Should().NotBeNull();
+        ctx.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Denied);
+        ctx.Receipt.ToolName.Should().Be("danger");
+        ctx.Receipt.CallId.Should().Be("tc-6");
+        ctx.Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.AlwaysRequire);
+        ctx.Receipt.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        ctx.Receipt.ErrorCode.Should().Be("approval_denied");
+        ctx.Receipt.ErrorMessage.Should().Be("blocked");
     }
 
     [Fact]
@@ -184,6 +193,11 @@ public class ToolApprovalMiddlewareTests
 
         ctx.Terminate.Should().BeTrue();
         ctx.Result.Should().Contain("approval timed out");
+        ctx.Receipt.Should().NotBeNull();
+        ctx.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        ctx.Receipt.ErrorCode.Should().Be("approval_timeout");
+        ctx.Receipt.ErrorMessage.Should().Be("Tool approval timed out.");
+        ctx.Receipt.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -209,8 +223,17 @@ public class ToolApprovalMiddlewareTests
         ctx.Terminate.Should().BeTrue();
         ctx.Result.Should().Contain("\"approval_required\":true");
         ctx.Result.Should().Contain("\"request_id\":\"");
+        ctx.Receipt.Should().NotBeNull();
+        ctx.Receipt!.Status.Should().Be(AgentToolReceiptStatus.ApprovalRequired);
+        ctx.Receipt.ToolName.Should().Be("danger");
+        ctx.Receipt.CallId.Should().Be("tc-8");
+        ctx.Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.AlwaysRequire);
+        ctx.Receipt.IsDestructive.Should().BeTrue();
+        ctx.Receipt.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        ctx.Receipt.ResultJson.Should().Be(ctx.Result);
         ctx.PendingApproval.Should().NotBeNull();
         ctx.PendingApproval!.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        ctx.Receipt.ApprovalRequestId.Should().Be(ctx.PendingApproval.ApprovalRequestId);
         ctx.PendingApproval.ToolCallId.Should().Be("tc-8");
         ctx.PendingApproval.ToolName.Should().Be("danger");
         ctx.PendingApproval.ArgumentsJson.Should().Be("{}");

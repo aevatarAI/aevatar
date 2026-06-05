@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 
@@ -31,6 +32,30 @@ public sealed class OrnnPublishSkillTool : IAgentTool
         "The tool never accepts credentials, service routing fields, raw file maps, metadata bags, public visibility, or skip-validation flags.";
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+
+    public string SideEffectKind => "ornn.publish.skill";
+
+    public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson)
+    {
+        var published = ExtractPublishedSkill(resultJson);
+        if (!published.HasAny)
+            return null;
+
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+            IsDestructive = false,
+            SideEffectKind = SideEffectKind,
+            SubjectKind = "ornn.skill",
+            SubjectId = published.Guid ?? string.Empty,
+            SubjectVersion = published.Version ?? string.Empty,
+            SubjectHash = published.SkillHash ?? string.Empty,
+            ResultJson = resultJson ?? string.Empty,
+        };
+    }
 
     public string ParametersSchema => """
         {
@@ -136,11 +161,15 @@ public sealed class OrnnPublishSkillTool : IAgentTool
         if (!publish.Succeeded)
             return BuildResult("error", publish.Error ?? "Ornn publish failed.");
 
+        var published = ExtractPublishedSkill(publish.RawResponse);
         return JsonSerializer.Serialize(new
         {
             result_type = "ornn_publish_skill",
             status = "success",
             skill_name = request.Name,
+            guid = published.Guid,
+            version = published.Version ?? request.Version,
+            skillHash = published.SkillHash,
             package_bytes = package.ZipBytes.Length,
             response = publish.RawResponse,
         });
@@ -163,4 +192,78 @@ public sealed class OrnnPublishSkillTool : IAgentTool
             status,
             error,
         });
+
+    private static PublishedSkillSubject ExtractPublishedSkill(string? rawResponse)
+    {
+        if (string.IsNullOrWhiteSpace(rawResponse))
+            return new PublishedSkillSubject(null, null, null);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawResponse);
+            return ExtractPublishedSkill(doc.RootElement);
+        }
+        catch (JsonException)
+        {
+            return new PublishedSkillSubject(null, null, null);
+        }
+    }
+
+    private static PublishedSkillSubject ExtractPublishedSkill(JsonElement root)
+    {
+        var subject = ExtractPublishedSkillFromObject(root);
+        if (subject.HasAny)
+            return subject;
+
+        if (root.ValueKind != JsonValueKind.Object)
+            return subject;
+
+        foreach (var propertyName in new[] { "data", "result", "skill" })
+        {
+            if (!root.TryGetProperty(propertyName, out var nested) || nested.ValueKind != JsonValueKind.Object)
+                continue;
+
+            subject = ExtractPublishedSkillFromObject(nested);
+            if (subject.HasAny)
+                return subject;
+        }
+
+        return subject;
+    }
+
+    private static PublishedSkillSubject ExtractPublishedSkillFromObject(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return new PublishedSkillSubject(null, null, null);
+
+        return new PublishedSkillSubject(
+            TryGetString(element, "guid", "id", "skill_id", "skillId"),
+            TryGetString(element, "version", "subject_version", "subjectVersion"),
+            TryGetString(element, "skillHash", "skill_hash", "hash", "subject_hash"));
+    }
+
+    private static string? TryGetString(JsonElement element, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!element.TryGetProperty(key, out var value))
+                continue;
+
+            if (value.ValueKind == JsonValueKind.String)
+                return value.GetString();
+
+            if (value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+                return value.ToString();
+        }
+
+        return null;
+    }
+
+    private sealed record PublishedSkillSubject(string? Guid, string? Version, string? SkillHash)
+    {
+        public bool HasAny =>
+            !string.IsNullOrWhiteSpace(Guid) ||
+            !string.IsNullOrWhiteSpace(Version) ||
+            !string.IsNullOrWhiteSpace(SkillHash);
+    }
 }

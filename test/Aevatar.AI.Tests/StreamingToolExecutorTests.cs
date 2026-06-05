@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -611,6 +612,128 @@ public class StreamingToolExecutorTests
         results[0].Result.Should().Contain("not found");
     }
 
+    [Fact]
+    public async Task ReceiptWorthyFormula_ShouldIgnoreNonReadOnlyAlone_AndEmitForApprovalDestructiveOrSideEffect()
+    {
+        var tools = new ToolManager();
+        tools.Register(new ConcurrencyTrackingTool("plain-write", isReadOnly: false, _ => """{"ok":true}"""));
+        tools.Register(new ConcurrencyTrackingTool("approval", isReadOnly: true, _ => """{"ok":true}""")
+        {
+            ApprovalMode = ToolApprovalMode.AlwaysRequire,
+        });
+        tools.Register(new ConcurrencyTrackingTool("destructive", isReadOnly: true, _ => """{"ok":true}""")
+        {
+            IsDestructive = true,
+        });
+        tools.Register(new ConcurrencyTrackingTool("side-effect", isReadOnly: true, _ => """{"id":"side-1"}""")
+        {
+            SideEffectKind = "Example.Publish",
+        });
+
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall { Id = "tc-write", Name = "plain-write", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-approval", Name = "approval", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-destructive", Name = "destructive", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-side", Name = "side-effect", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().HaveCount(4);
+        results[0].Receipt.Should().BeNull("non-read-only alone is not a receipt-worthy side effect");
+        var approvalReceipt = results[1].Receipt;
+        approvalReceipt.Should().NotBeNull();
+        approvalReceipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        approvalReceipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.AlwaysRequire);
+        var destructiveReceipt = results[2].Receipt;
+        destructiveReceipt.Should().NotBeNull();
+        destructiveReceipt!.IsDestructive.Should().BeTrue();
+        var sideEffectReceipt = results[3].Receipt;
+        sideEffectReceipt.Should().NotBeNull();
+        sideEffectReceipt!.SideEffectKind.Should().Be("example.publish");
+    }
+
+    [Fact]
+    public async Task ReceiptWorthyReadOnlySearchTool_ShouldNotEmitReceipt()
+    {
+        var tools = new ToolManager();
+        tools.Register(new ConcurrencyTrackingTool("ornn_search_skills", isReadOnly: true, _ => """{"status":"success"}""")
+        {
+            SideEffectKind = "",
+        });
+
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall { Id = "tc-search", Name = "ornn_search_skills", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle();
+        results[0].IsError.Should().BeFalse();
+        results[0].Receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReceiptWorthyOrnnPublishResult_ShouldUseToolSuppliedSubjectReceipt()
+    {
+        var tools = new ToolManager();
+        tools.Register(new OrnnPublishSubjectReceiptTool(
+            """{"id":"skill-2","version":"1.0","hash":"hash-2"}"""));
+
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall
+        {
+            Id = "tc-publish",
+            Name = "ornn_publish_skill",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle();
+        var receipt = results[0].Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("ornn.publish.skill");
+        receipt.SubjectKind.Should().Be("ornn.skill");
+        receipt.SubjectId.Should().Be("skill-2");
+        receipt.SubjectVersion.Should().Be("1.0");
+        receipt.SubjectHash.Should().Be("hash-2");
+    }
+
+    [Fact]
+    public async Task ToolExecutionError_ShouldEmitErrorReceiptForReceiptWorthyTool()
+    {
+        var tools = new ToolManager();
+        tools.Register(new ConcurrencyTrackingTool("publish", isReadOnly: true, _ => Task.FromException<string>(new InvalidOperationException("boom")))
+        {
+            SideEffectKind = "ornn.publish.skill",
+        });
+
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall { Id = "tc-publish", Name = "publish", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle();
+        results[0].IsError.Should().BeTrue();
+        var receipt = results[0].Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("tool_execution_error");
+        receipt.ErrorMessage.Should().Contain("boom");
+    }
+
     // ─── Test helpers ───
 
     private sealed class ConcurrencyTrackingTool : IAgentTool
@@ -633,8 +756,42 @@ public class StreamingToolExecutorTests
         public string Description => "test";
         public string ParametersSchema => "{}";
         public bool IsReadOnly { get; }
+        public ToolApprovalMode ApprovalMode { get; init; } = ToolApprovalMode.NeverRequire;
+        public bool IsDestructive { get; init; }
+        public string SideEffectKind { get; init; } = "";
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) => _execute(ct);
+    }
+
+    private sealed class OrnnPublishSubjectReceiptTool(string resultJson) : IAgentTool
+    {
+        public string Name => "ornn_publish_skill";
+        public string Description => "publish fixture";
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+        public string SideEffectKind => "ornn.publish.skill";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult(resultJson);
+
+        public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string successResultJson)
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(successResultJson);
+            var root = document.RootElement;
+            return new AgentToolReceipt
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Success,
+                ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+                SideEffectKind = SideEffectKind,
+                SubjectKind = "ornn.skill",
+                SubjectId = root.GetProperty("id").GetString() ?? string.Empty,
+                SubjectVersion = root.GetProperty("version").GetString() ?? string.Empty,
+                SubjectHash = root.GetProperty("hash").GetString() ?? string.Empty,
+                ResultJson = successResultJson,
+            };
+        }
     }
 
     private sealed class DelegateAgentTool(string name, Func<string, string> execute) : IAgentTool

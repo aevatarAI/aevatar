@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Abstractions.Middleware;
@@ -40,6 +41,9 @@ public sealed class ToolCallContext
 
     /// <summary>Tool execution result. Set after execution, or by middleware to override.</summary>
     public string? Result { get; set; }
+
+    /// <summary>Typed receipt for receipt-worthy tool execution or approval yield.</summary>
+    public AgentToolReceipt? Receipt { get; set; }
 
     /// <summary>Typed business keys for a tool approval yield.</summary>
     public ToolApprovalPendingContext? PendingApproval { get; set; }

@@ -8,7 +8,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Text;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -382,58 +381,38 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         SessionReplayRecord replayRecord,
         ChatRequestEvent request)
     {
-        return DetectPendingApprovalFromHistory(request);
+        var receipt = replayRecord.ToolReceipts
+            .LastOrDefault(static candidate =>
+                candidate.Status == AgentToolReceiptStatus.ApprovalRequired &&
+                !string.IsNullOrWhiteSpace(candidate.ApprovalRequestId));
+        if (receipt is null)
+            return null;
+
+        return new PendingToolApprovalState
+        {
+            RequestId = receipt.ApprovalRequestId,
+            SessionId = request.SessionId ?? string.Empty,
+            ToolName = receipt.ToolName ?? string.Empty,
+            ToolCallId = receipt.CallId ?? string.Empty,
+            ArgumentsJson = ResolveToolArguments(replayRecord.ToolCalls, receipt.CallId),
+            IsDestructive = receipt.IsDestructive,
+            ToolContext = ResolveToolContext(
+                request,
+                receipt.ApprovalRequestId,
+                receipt.CallId ?? string.Empty).ToPayload(),
+        };
     }
 
-    private PendingToolApprovalState? DetectPendingApprovalFromHistory(ChatRequestEvent request)
+    private static string ResolveToolArguments(IReadOnlyList<ToolCall> toolCalls, string? callId)
     {
-        // Scan recent history messages for approval_required marker
-        for (var i = History.Messages.Count - 1; i >= 0; i--)
-        {
-            var msg = History.Messages[i];
-            if (msg.Role != "tool" || string.IsNullOrWhiteSpace(msg.Content))
-                continue;
+        if (string.IsNullOrWhiteSpace(callId))
+            return "{}";
 
-            if (!msg.Content.Contains(Middleware.ToolApprovalMiddleware.ApprovalRequiredKey))
-                continue;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(msg.Content);
-                if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                    continue;
-                if (!doc.RootElement.TryGetProperty("approval_required", out var ar) || !ar.GetBoolean())
-                    continue;
-
-                var requestId = doc.RootElement.TryGetProperty("request_id", out var rid)
-                    ? rid.GetString() ?? Guid.NewGuid().ToString("N")
-                    : Guid.NewGuid().ToString("N");
-                var toolName = doc.RootElement.TryGetProperty("tool_name", out var tn)
-                    ? tn.GetString() ?? "" : "";
-                var toolCallId = doc.RootElement.TryGetProperty("tool_call_id", out var tcid)
-                    ? tcid.GetString() ?? "" : "";
-                var args = doc.RootElement.TryGetProperty("arguments", out var a)
-                    ? a.GetString() ?? "{}" : "{}";
-
-                var pending = new PendingToolApprovalState
-                {
-                    RequestId = requestId,
-                    SessionId = request.SessionId ?? "",
-                    ToolName = toolName,
-                    ToolCallId = toolCallId,
-                    ArgumentsJson = args,
-                    IsDestructive = true,
-                    ToolContext = ResolveToolContext(request, requestId, toolCallId).ToPayload(),
-                };
-                return pending;
-            }
-            catch (JsonException)
-            {
-                // Not valid JSON, skip
-            }
-        }
-
-        return null;
+        var toolCall = toolCalls.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, callId, StringComparison.Ordinal));
+        return string.IsNullOrWhiteSpace(toolCall?.ArgumentsJson)
+            ? "{}"
+            : toolCall.ArgumentsJson;
     }
 
     // Stored lease from the last scheduled timeout, kept in-memory for cancellation.
@@ -842,6 +821,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
         var contentParts = new List<ContentPart>();
+        var toolReceipts = new List<AgentToolReceipt>();
         TokenUsage? usage = null;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
@@ -890,6 +870,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             if (chunk.DeltaToolCall != null)
                 toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+            if (chunk.ToolReceipt != null)
+                toolReceipts.Add(chunk.ToolReceipt.Clone());
         }
 
         var appendedHistoryMessages = History.Messages
@@ -914,14 +897,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 continue;
             }
 
-            var (success, error) = ClassifyToolResult(toolResult.Content);
-            await PublishAsync(new ToolResultEvent
+            var receipt = toolReceipts
+                .LastOrDefault(candidate => string.Equals(candidate.CallId, toolResult.ToolCallId, StringComparison.Ordinal));
+            var toolResultEvent = new ToolResultEvent
             {
                 CallId = toolResult.ToolCallId,
                 ResultJson = toolResult.Content ?? string.Empty,
-                Success = success,
-                Error = error ?? string.Empty,
-            }, TopologyAudience.Parent);
+                Success = receipt?.Status is null or AgentToolReceiptStatus.Success or AgentToolReceiptStatus.ApprovalRequired,
+                Error = receipt?.ErrorMessage ?? string.Empty,
+            };
+            if (receipt is not null)
+                toolResultEvent.Receipt = receipt.Clone();
+
+            await PublishAsync(toolResultEvent, TopologyAudience.Parent);
         }
 
         var response = fullContent.ToString();
@@ -948,6 +936,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             fullReasoning.ToString(),
             toolCalls.BuildToolCalls(),
             contentParts,
+            toolReceipts,
             Usage: usage,
             Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0);
@@ -962,7 +951,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             replayRecord.ContentParts,
             replayRecord.ContentEmitted,
             replayRecord.Usage,
-            replayRecord.Model);
+            replayRecord.Model,
+            replayRecord.ToolReceipts);
 
     protected Task PersistRoleChatSessionCompletionAsync(
         ChatRequestEvent request,
@@ -972,7 +962,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IReadOnlyList<ContentPart> contentParts,
         bool contentEmitted,
         TokenUsage? usage = null,
-        string? model = null)
+        string? model = null,
+        IReadOnlyList<AgentToolReceipt>? toolReceipts = null)
     {
         if (string.IsNullOrWhiteSpace(request.SessionId))
             return Task.CompletedTask;
@@ -990,6 +981,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             ContentEmitted = contentEmitted,
             ToolCalls = { ToToolCallEvents(toolCalls) },
             OutputParts = { ContentPartProtoMapper.ToProtoList(contentParts) },
+            ToolReceipts = { (toolReceipts ?? []).Select(receipt => receipt.Clone()) },
             Usage = ToTokenUsagePayload(usage),
             Model = model ?? string.Empty,
         });
@@ -1099,6 +1091,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ToolName = toolCall.ToolName,
                 ArgumentsJson = toolCall.ArgumentsJson,
             }, TopologyAudience.Parent);
+        }
+
+        foreach (var receipt in trackedSession.ToolReceipts)
+        {
+            var toolResultEvent = new ToolResultEvent
+            {
+                CallId = receipt.CallId ?? string.Empty,
+                ResultJson = receipt.ResultJson ?? string.Empty,
+                Success = receipt.Status is AgentToolReceiptStatus.Success or AgentToolReceiptStatus.ApprovalRequired,
+                Error = receipt.ErrorMessage ?? string.Empty,
+                Receipt = receipt.Clone(),
+            };
+            await PublishAsync(toolResultEvent, TopologyAudience.Parent);
         }
 
         foreach (var contentPart in trackedSession.OutputParts)
@@ -1291,6 +1296,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.ToolCalls.Add(evt.ToolCalls);
         session.OutputParts.Clear();
         session.OutputParts.Add(evt.OutputParts);
+        session.ToolReceipts.Clear();
+        session.ToolReceipts.Add(evt.ToolReceipts.Select(receipt => receipt.Clone()));
         session.Usage = evt.Usage?.Clone();
         session.Model = evt.Model ?? string.Empty;
         next.Sessions[evt.SessionId] = session;
@@ -1308,36 +1315,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ToolName = toolCall.Name,
                 ArgumentsJson = toolCall.ArgumentsJson,
             };
-        }
-    }
-
-    private static (bool Success, string? Error) ClassifyToolResult(string? resultJson)
-    {
-        if (string.IsNullOrWhiteSpace(resultJson))
-            return (true, null);
-
-        try
-        {
-            using var doc = JsonDocument.Parse(resultJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
-                !doc.RootElement.TryGetProperty("error", out var errorElement))
-            {
-                return (true, null);
-            }
-
-            var error = errorElement.ValueKind switch
-            {
-                JsonValueKind.String => errorElement.GetString(),
-                JsonValueKind.Null or JsonValueKind.Undefined => null,
-                _ => errorElement.ToString(),
-            };
-            return string.IsNullOrWhiteSpace(error)
-                ? (true, null)
-                : (false, error.Trim());
-        }
-        catch (JsonException)
-        {
-            return (true, null);
         }
     }
 
@@ -1444,12 +1421,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         string ReasoningContent,
         IReadOnlyList<ToolCall> ToolCalls,
         IReadOnlyList<ContentPart> ContentParts,
+        IReadOnlyList<AgentToolReceipt> ToolReceipts,
         TokenUsage? Usage,
         string? Model,
         bool ContentEmitted)
     {
         public static SessionReplayRecord FromFailure(string content) =>
-            new(content, string.Empty, [], [], Usage: null, Model: null, ContentEmitted: false);
+            new(content, string.Empty, [], [], [], Usage: null, Model: null, ContentEmitted: false);
     }
 
     private static TokenUsagePayload? ToTokenUsagePayload(TokenUsage? usage) =>

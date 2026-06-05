@@ -12,6 +12,8 @@ public sealed class OrnnSearchSkillsToolTests
     {
         var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }"""));
 
+        tool.IsReadOnly.Should().BeTrue();
+        tool.SideEffectKind.Should().BeEmpty();
         tool.Description.Should().Contain("asks which Ornn skills they have");
         tool.Description.Should().Contain("empty or omitted query");
 

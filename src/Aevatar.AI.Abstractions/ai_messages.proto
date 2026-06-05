@@ -159,7 +159,46 @@ message MediaContentEvent { string session_id = 1; string agent_id = 2; ChatCont
 message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
 message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }
-message ToolResultEvent { string call_id = 1; string result_json = 2; bool success = 3; string error = 4; }
+
+enum AgentToolReceiptStatus {
+  AGENT_TOOL_RECEIPT_STATUS_UNSPECIFIED = 0;
+  AGENT_TOOL_RECEIPT_STATUS_SUCCESS = 1;
+  AGENT_TOOL_RECEIPT_STATUS_APPROVAL_REQUIRED = 2;
+  AGENT_TOOL_RECEIPT_STATUS_DENIED = 3;
+  AGENT_TOOL_RECEIPT_STATUS_ERROR = 4;
+}
+
+enum AgentToolReceiptApprovalMode {
+  AGENT_TOOL_RECEIPT_APPROVAL_MODE_UNSPECIFIED = 0;
+  AGENT_TOOL_RECEIPT_APPROVAL_MODE_NEVER_REQUIRE = 1;
+  AGENT_TOOL_RECEIPT_APPROVAL_MODE_ALWAYS_REQUIRE = 2;
+  AGENT_TOOL_RECEIPT_APPROVAL_MODE_AUTO = 3;
+}
+
+message AgentToolReceipt {
+  string call_id = 1;
+  string tool_name = 2;
+  AgentToolReceiptStatus status = 3;
+  AgentToolReceiptApprovalMode approval_mode = 4;
+  bool is_destructive = 5;
+  string side_effect_kind = 6;
+  string subject_kind = 7;
+  string subject_id = 8;
+  string subject_version = 9;
+  string subject_hash = 10;
+  string approval_request_id = 11;
+  string error_code = 12;
+  string error_message = 13;
+  string result_json = 14;
+}
+
+message ToolResultEvent {
+  string call_id = 1;
+  string result_json = 2;
+  bool success = 3;
+  string error = 4;
+  AgentToolReceipt receipt = 5;
+}
 message TokenUsagePayload {
   int32 prompt_tokens = 1;
   int32 completion_tokens = 2;
@@ -186,6 +225,7 @@ message RoleChatSessionCompletedEvent {
   string role_id = 8;
   TokenUsagePayload usage = 9;
   string model = 10;
+  repeated AgentToolReceipt tool_receipts = 11;
 }
 
 message InitializeRoleAgentEvent {
@@ -260,6 +300,7 @@ message RoleChatSessionState {
   repeated ChatContentPart output_parts = 9;
   TokenUsagePayload usage = 10;
   string model = 11;
+  repeated AgentToolReceipt tool_receipts = 12;
 }
 
 message RoleGAgentState {

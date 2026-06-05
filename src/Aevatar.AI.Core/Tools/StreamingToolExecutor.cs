@@ -8,6 +8,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using System.Diagnostics;
@@ -16,7 +17,12 @@ using System.Runtime.CompilerServices;
 namespace Aevatar.AI.Core.Tools;
 
 /// <summary>Tool execution result with call-id for message pairing.</summary>
-public readonly record struct ToolExecutionResult(string CallId, string ToolName, string Result, bool IsError);
+public readonly record struct ToolExecutionResult(
+    string CallId,
+    string ToolName,
+    string Result,
+    bool IsError,
+    AgentToolReceipt? Receipt = null);
 
 /// <summary>
 /// Streaming tool executor that starts executing tools as soon as they appear,
@@ -332,14 +338,31 @@ public sealed class StreamingToolExecutor
                     ArgumentsJson = toolCallContext.ArgumentsJson,
                 };
 
-                var result = await _tools.ExecuteToolCallAsync(resolvedCall, ct);
-                toolCallContext.Result = result.Content;
+                var (result, error) = await _tools.ExecuteToolCallRawAsync(resolvedCall, ct);
+                toolCallContext.Result = result;
+                if (error is not null)
+                {
+                    toolCallContext.Receipt = AgentToolReceiptFactory.CreateError(
+                        effectiveTool,
+                        toolCallContext.ToolCallId,
+                        toolCallContext.ToolName,
+                        result,
+                        "tool_execution_error",
+                        error.Message);
+                }
             });
 
             var toolResult = toolCallContext.Result
                 ?? (toolCallContext.Terminate
                     ? "Tool call terminated by middleware"
                     : $"Tool '{toolCallContext.ToolName}' returned no result");
+            var receipt = toolCallContext.Receipt ??
+                          AgentToolReceiptFactory.CreateSuccess(
+                              effectiveTool,
+                              toolCallContext.ToolCallId,
+                              toolCallContext.ToolName,
+                              toolResult);
+            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied;
 
             toolCtx.ToolResult = toolResult;
             toolCtx.Duration = Stopwatch.GetElapsedTime(toolStartedAt);
@@ -352,7 +375,12 @@ public sealed class StreamingToolExecutor
                     SchedulerFault: false);
 
             return new ToolExecutionCompletion(
-                new ToolExecutionResult(call.Id, call.Name, toolResult, IsError: false),
+                new ToolExecutionResult(
+                    call.Id,
+                    call.Name,
+                    toolResult,
+                    IsError: isErrorReceipt,
+                    Receipt: receipt),
                 SchedulerFault: false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

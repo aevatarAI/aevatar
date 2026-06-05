@@ -28,5 +28,8 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
             .Should().BeFalse();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(NyxIdRelayAuthValidator));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IAgentToolReceiptRenderer) &&
+            descriptor.ImplementationType == typeof(AgentToolReceiptRenderer));
     }
 }

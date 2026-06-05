@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
 /// <summary>Agent 可调用工具接口。LLM 通过 tool_call 触发执行。</summary>
@@ -20,6 +22,12 @@ public interface IAgentTool
 
     /// <summary>工具是否有破坏性（删除、覆写等不可逆操作）。Auto 模式下破坏性工具要求审批。</summary>
     bool IsDestructive => false;
+
+    /// <summary>Stable side-effect kind for receipt-worthy tool calls; empty means no declared side effect.</summary>
+    string SideEffectKind => "";
+
+    /// <summary>Optional provider-owned typed success receipt; return null to use the generic receipt.</summary>
+    AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson) => null;
 
     /// <summary>
     /// Runtime approval check: given the actual call arguments, does this specific
