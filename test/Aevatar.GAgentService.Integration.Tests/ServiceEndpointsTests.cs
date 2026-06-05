@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -1188,6 +1189,7 @@ public sealed class ServiceEndpointsTests
             RecordingServiceQueryPort queryPort,
             RecordingServiceInvocationPort invocationPort,
             FakeServiceCatalogQueryReader catalogReader,
+            FakeServiceInvocationCatalogQueryReader invocationCatalogReader,
             FakeServiceRevisionCatalogQueryReader revisionCatalog)
         {
             _app = app;
@@ -1196,6 +1198,7 @@ public sealed class ServiceEndpointsTests
             QueryPort = queryPort;
             InvocationPort = invocationPort;
             CatalogReader = catalogReader;
+            InvocationCatalogReader = invocationCatalogReader;
             RevisionCatalog = revisionCatalog;
         }
 
@@ -1208,6 +1211,8 @@ public sealed class ServiceEndpointsTests
         public RecordingServiceInvocationPort InvocationPort { get; }
 
         public FakeServiceCatalogQueryReader CatalogReader { get; }
+
+        public FakeServiceInvocationCatalogQueryReader InvocationCatalogReader { get; }
 
         public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
@@ -1223,6 +1228,7 @@ public sealed class ServiceEndpointsTests
             var queryPort = new RecordingServiceQueryPort();
             var invocationPort = new RecordingServiceInvocationPort();
             var catalogReader = new FakeServiceCatalogQueryReader();
+            var invocationCatalogReader = new FakeServiceInvocationCatalogQueryReader(catalogReader);
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             builder.Services.AddHttpContextAccessor();
             builder.Services.AddSingleton<IServiceCommandPort>(commandPort);
@@ -1230,7 +1236,9 @@ public sealed class ServiceEndpointsTests
             builder.Services.AddSingleton<IServiceServingQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
+            builder.Services.AddSingleton<IServiceInvocationCatalogQueryReader>(invocationCatalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
+            builder.Services.AddSingleton<ServiceInvokeReadinessErrorMapper>();
             builder.Services.AddSingleton<IServiceIdentityContextResolver, DefaultServiceIdentityContextResolver>();
 
             var app = builder.Build();
@@ -1263,7 +1271,7 @@ public sealed class ServiceEndpointsTests
                 BaseAddress = new Uri(address),
             };
 
-            return new EndpointTestHost(app, client, commandPort, queryPort, invocationPort, catalogReader, revisionCatalog);
+            return new EndpointTestHost(app, client, commandPort, queryPort, invocationPort, catalogReader, invocationCatalogReader, revisionCatalog);
         }
 
         public async ValueTask DisposeAsync()
@@ -1526,6 +1534,58 @@ public sealed class ServiceEndpointsTests
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(Service == null ? [] : [Service]);
+    }
+
+    private sealed class FakeServiceInvocationCatalogQueryReader(FakeServiceCatalogQueryReader catalogReader) : IServiceInvocationCatalogQueryReader
+    {
+        public ServiceInvocationCatalogSnapshot? Catalog { get; set; }
+
+        public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            if (Catalog != null)
+                return Task.FromResult<ServiceInvocationCatalogSnapshot?>(Catalog);
+
+            var service = catalogReader.Service;
+            if (service == null)
+                return Task.FromResult<ServiceInvocationCatalogSnapshot?>(null);
+
+            var endpointId = service.Endpoints.FirstOrDefault()?.EndpointId;
+            if (string.IsNullOrWhiteSpace(endpointId))
+                endpointId = "chat";
+            var revisionId = string.IsNullOrWhiteSpace(service.ActiveServingRevisionId)
+                ? "rev-active"
+                : service.ActiveServingRevisionId;
+            var deploymentId = string.IsNullOrWhiteSpace(service.DeploymentId)
+                ? "dep-1"
+                : service.DeploymentId;
+            var actorId = string.IsNullOrWhiteSpace(service.PrimaryActorId)
+                ? "actor-1"
+                : service.PrimaryActorId;
+            return Task.FromResult<ServiceInvocationCatalogSnapshot?>(new ServiceInvocationCatalogSnapshot(
+                ServiceKeys.Build(identity),
+                [
+                    new ServiceInvokeReadinessSnapshot(
+                        ServiceKeys.Build(identity),
+                        endpointId,
+                        ServiceInvokeReadinessStatus.Ready,
+                        ServiceInvokeUnavailableReason.Unspecified,
+                        revisionId,
+                        deploymentId,
+                        actorId,
+                        DateTimeOffset.UtcNow,
+                        1,
+                        $"{ServiceKeys.Build(identity)}:invocation-catalog:1",
+                        1,
+                        1,
+                        1),
+                ],
+                DateTimeOffset.UtcNow,
+                1,
+                $"{ServiceKeys.Build(identity)}:invocation-catalog:1",
+                1,
+                1,
+                1));
+        }
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader

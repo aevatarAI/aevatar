@@ -18,7 +18,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             eventStore,
             actorId,
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
         await agent.ActivateAsync();
 
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
@@ -34,7 +34,7 @@ public sealed class ServiceDefinitionGAgentTests
         var replayed = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             eventStore,
             actorId,
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
         await replayed.ActivateAsync();
 
         replayed.State.Spec.Identity.ServiceId.Should().Be("svc");
@@ -49,7 +49,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
@@ -74,7 +74,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
@@ -109,7 +109,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         var act = () => agent.HandleUpdateAsync(new UpdateServiceDefinitionCommand
         {
@@ -128,7 +128,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
@@ -150,7 +150,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
         await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
@@ -172,7 +172,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             "service-definition:missing-identity",
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         var act = () => agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {
@@ -197,7 +197,7 @@ public sealed class ServiceDefinitionGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
             new InMemoryEventStore(),
             ServiceActorIds.Definition(identity),
-            static () => new ServiceDefinitionGAgent());
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
 
         var act = () => agent.HandleCreateAsync(new CreateServiceDefinitionCommand
         {

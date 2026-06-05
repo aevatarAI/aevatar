@@ -1132,7 +1132,9 @@ public sealed class ServiceServingRolloutGAgentTests
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceServingSetManagerGAgent, ServiceServingSetState>(
             eventStore,
             actorId,
-            () => new ServiceServingSetManagerGAgent(targetResolver ?? new PassthroughServingTargetResolver()));
+            () => new ServiceServingSetManagerGAgent(
+                GAgentServiceTestKit.NoOpDispatchPort,
+                targetResolver ?? new PassthroughServingTargetResolver()));
     }
 
     private static ServiceRolloutPlanSpec CreateRolloutPlan(string rolloutId, params ServiceRolloutStageSpec[] stages)

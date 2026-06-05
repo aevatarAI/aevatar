@@ -251,6 +251,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
             new InMemoryEventStore(),
             ServiceActorIds.RevisionCatalog(identity),
             () => new ServiceRevisionCatalogGAgent(
+                GAgentServiceTestKit.NoOpDispatchPort,
                 [],
                 new PreparedServiceRevisionArtifactAssembler()));
 
@@ -327,6 +328,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
             eventStore,
             actorId,
             () => new ServiceRevisionCatalogGAgent(
+                GAgentServiceTestKit.NoOpDispatchPort,
                 [adapter],
                 new PreparedServiceRevisionArtifactAssembler()));
     }

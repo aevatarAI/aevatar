@@ -4848,6 +4848,7 @@ public sealed class ScopeServiceEndpointsTests
             RecordingServiceServingQueryPort servingQueryPort,
             FakeServiceCatalogQueryReader serviceCatalogReader,
             FakeServiceTrafficViewQueryReader trafficViewReader,
+            FakeServiceInvocationCatalogQueryReader invocationCatalogReader,
             FakeServiceRevisionCatalogQueryReader revisionCatalog,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
@@ -4871,6 +4872,7 @@ public sealed class ScopeServiceEndpointsTests
             ServingQueryPort = servingQueryPort;
             ServiceCatalogReader = serviceCatalogReader;
             TrafficViewReader = trafficViewReader;
+            InvocationCatalogReader = invocationCatalogReader;
             RevisionCatalog = revisionCatalog;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
@@ -4911,6 +4913,8 @@ public sealed class ScopeServiceEndpointsTests
         public FakeServiceCatalogQueryReader ServiceCatalogReader { get; }
 
         public FakeServiceTrafficViewQueryReader TrafficViewReader { get; }
+
+        public FakeServiceInvocationCatalogQueryReader InvocationCatalogReader { get; }
 
         public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
@@ -4954,6 +4958,7 @@ public sealed class ScopeServiceEndpointsTests
             var servingQueryPort = new RecordingServiceServingQueryPort();
             var serviceCatalogReader = new FakeServiceCatalogQueryReader();
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
+            var invocationCatalogReader = new FakeServiceInvocationCatalogQueryReader(serviceCatalogReader, trafficViewReader);
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
@@ -4992,9 +4997,11 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
+            builder.Services.AddSingleton<IServiceInvocationCatalogQueryReader>(invocationCatalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
             builder.Services.AddSingleton<ITeamEntryMemberResolver>(teamEntryMemberResolver);
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
+            builder.Services.AddSingleton<ServiceInvokeReadinessErrorMapper>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
             builder.Services.AddSingleton<IWorkflowChatRunInteractionPort>(interactionService);
             builder.Services.AddSingleton<IGAgentDraftRunInteractionPort>(gagentDraftRunInteractionService);
@@ -5112,6 +5119,7 @@ public sealed class ScopeServiceEndpointsTests
                 servingQueryPort,
                 serviceCatalogReader,
                 trafficViewReader,
+                invocationCatalogReader,
                 revisionCatalog,
                 teamEntryMemberResolver,
                 interactionService,
@@ -5649,6 +5657,53 @@ public sealed class ScopeServiceEndpointsTests
 
         public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(View);
+    }
+
+    private sealed class FakeServiceInvocationCatalogQueryReader(
+        FakeServiceCatalogQueryReader catalogReader,
+        FakeServiceTrafficViewQueryReader trafficViewReader) : IServiceInvocationCatalogQueryReader
+    {
+        public ServiceInvocationCatalogSnapshot? Catalog { get; set; }
+
+        public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            if (Catalog != null)
+                return Task.FromResult<ServiceInvocationCatalogSnapshot?>(Catalog);
+
+            var service = catalogReader.Service;
+            var trafficEndpoint = trafficViewReader.View?.Endpoints.FirstOrDefault();
+            var target = trafficEndpoint?.Targets.FirstOrDefault(x =>
+                string.Equals(x.ServingState, ServiceServingState.Active.ToString(), StringComparison.Ordinal) &&
+                x.AllocationWeight > 0);
+            if (service == null && target == null)
+                return Task.FromResult<ServiceInvocationCatalogSnapshot?>(null);
+
+            var serviceKey = ServiceKeys.Build(identity);
+            return Task.FromResult<ServiceInvocationCatalogSnapshot?>(new ServiceInvocationCatalogSnapshot(
+                serviceKey,
+                [
+                    new ServiceInvokeReadinessSnapshot(
+                        serviceKey,
+                        trafficEndpoint?.EndpointId ?? service?.Endpoints.FirstOrDefault()?.EndpointId ?? "chat",
+                        ServiceInvokeReadinessStatus.Ready,
+                        ServiceInvokeUnavailableReason.Unspecified,
+                        target?.RevisionId ?? service?.ActiveServingRevisionId ?? "rev-active",
+                        target?.DeploymentId ?? service?.DeploymentId ?? "dep-1",
+                        target?.PrimaryActorId ?? service?.PrimaryActorId ?? "actor-1",
+                        DateTimeOffset.UtcNow,
+                        1,
+                        $"{serviceKey}:invocation-catalog:1",
+                        1,
+                        1,
+                        1),
+                ],
+                DateTimeOffset.UtcNow,
+                1,
+                $"{serviceKey}:invocation-catalog:1",
+                1,
+                1,
+                1));
+        }
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader

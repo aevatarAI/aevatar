@@ -309,6 +309,8 @@ public sealed class ServiceCommandApplicationServiceTests
 
         public List<ServiceIdentity> RolloutRequests { get; } = [];
 
+        public List<ServiceIdentity> InvocationCatalogRequests { get; } = [];
+
         public Task<string> EnsureDefinitionTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             DefinitionRequests.Add(identity.Clone());
@@ -337,6 +339,12 @@ public sealed class ServiceCommandApplicationServiceTests
         {
             RolloutRequests.Add(identity.Clone());
             return Task.FromResult(ServiceActorIds.Rollout(identity));
+        }
+
+        public Task<string> EnsureInvocationCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            InvocationCatalogRequests.Add(identity.Clone());
+            return Task.FromResult(ServiceActorIds.InvocationCatalog(identity));
         }
     }
 
