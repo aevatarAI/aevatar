@@ -138,15 +138,6 @@ internal sealed class WorkflowExecutionContextAdapter :
         CancellationToken ct = default) =>
         _inner.ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, options, ct);
 
-    public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
-        string callbackId,
-        TimeSpan dueTime,
-        TimeSpan period,
-        IMessage evt,
-        EventEnvelopePublishOptions? options = null,
-        CancellationToken ct = default) =>
-        _inner.ScheduleSelfDurableTimerAsync(callbackId, dueTime, period, evt, options, ct);
-
     public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
         _inner.CancelDurableCallbackAsync(lease, ct);
 }

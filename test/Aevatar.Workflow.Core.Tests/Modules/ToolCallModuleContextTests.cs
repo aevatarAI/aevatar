@@ -420,15 +420,6 @@ public sealed class ToolCallModuleContextTests
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 1, RuntimeCallbackBackend.InMemory));
         }
 
-        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
-            string callbackId,
-            TimeSpan dueTime,
-            TimeSpan period,
-            IMessage evt,
-            EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default) =>
-            ScheduleSelfDurableTimeoutAsync(callbackId, dueTime + period, evt, options, ct);
-
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

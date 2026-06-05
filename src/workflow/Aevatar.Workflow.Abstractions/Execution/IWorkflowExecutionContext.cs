@@ -47,14 +47,6 @@ public interface IWorkflowExecutionContext
         EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default);
 
-    Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
-        string callbackId,
-        TimeSpan dueTime,
-        TimeSpan period,
-        IMessage evt,
-        EventEnvelopePublishOptions? options = null,
-        CancellationToken ct = default);
-
     Task CancelDurableCallbackAsync(
         RuntimeCallbackLease lease,
         CancellationToken ct = default);

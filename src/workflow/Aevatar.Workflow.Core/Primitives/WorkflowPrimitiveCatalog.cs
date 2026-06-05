@@ -37,6 +37,7 @@ public static class WorkflowPrimitiveCatalog
             ["secret_input"] = "secure_input",
             ["vote_consensus"] = "vote",
             ["mutex"] = "lease",
+            ["schedule_workflow"] = "self_reschedule",
         };
 
     private static readonly string[] IdentityPrimitives =

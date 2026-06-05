@@ -164,13 +164,8 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
-            _ = callbackId;
-            _ = dueTime;
             _ = period;
-            _ = evt;
-            _ = options;
-            _ = ct;
-            throw new NotSupportedException("This test context does not support scheduling.");
+            return ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, options, ct);
         }
 
         public Task CancelDurableCallbackAsync(

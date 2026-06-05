@@ -107,6 +107,28 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task EnsureAsync_ShouldNormalizePrepareEnsureActorAndDispatchWithoutQuerying()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var preparation = new ScheduledDispatchTargetPreparationService();
+        var service = new ScheduledDispatchApplicationService(actorPort, queryPort, preparation);
+
+        var receipt = await service.EnsureAsync(CreateEnvelopeConfiguration(" schedule-1 "));
+
+        receipt.ScheduleId.Should().Be("schedule-1");
+        receipt.ScheduleActorId.Should().Be("actor:schedule-1");
+        receipt.AckStage.Should().Be("accepted");
+        actorPort.EnsuredScheduleIds.Should().ContainSingle().Which.Should().Be("schedule-1");
+        actorPort.Ensured.Should().ContainSingle();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        queryPort.ListRequests.Should().BeEmpty();
+        queryPort.FilteredListRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task UpdateAsync_WhenScheduleMissing_ShouldThrowNotFoundWithoutEnsuringActor()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
@@ -494,6 +516,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public HashSet<string> MissingScheduleIds { get; } = new(StringComparer.Ordinal);
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Created { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Updated { get; } = [];
+        public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Ensured { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNow { get; } = [];
@@ -530,6 +553,17 @@ public sealed class ScheduledDispatchApplicationServiceTests
         {
             ct.ThrowIfCancellationRequested();
             Updated.Add((actorId, configuration, dispatch));
+            return Task.FromResult(CreateAdmission(actorId));
+        }
+
+        public Task<DispatchAdmission> DispatchEnsureAsync(
+            string actorId,
+            ScheduledDispatchConfiguration configuration,
+            PreparedScheduledDispatchTarget dispatch,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Ensured.Add((actorId, configuration, dispatch));
             return Task.FromResult(CreateAdmission(actorId));
         }
 

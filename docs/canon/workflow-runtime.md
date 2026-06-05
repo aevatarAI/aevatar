@@ -103,6 +103,8 @@ BindWorkflowDefinition(yaml)
 运行边界：
 
 - `ScheduledDispatchGAgent` 是每个 schedule 的唯一写侧事实源，持有 cron、timezone、enabled、typed target descriptor、dispatch headers、next fire lease 与 recent fire records。
+- workflow 内部的 `self_reschedule` / `schedule_workflow` step 只向 `ScheduledDispatchGAgent` 发送幂等 ensure 命令；跨 run schedule fact 不归 workflow run actor 持有。
+- workflow schedule ensure 同步结果只表示 `accepted` command receipt（schedule id、schedule actor id、command id、correlation id）；readmodel freshness 通过 projection/readmodel 观察，不能由 step completion 暗示强一致。
 - 定时唤醒走 `ScheduleSelfDurableTimeoutAsync`，在 Orleans runtime 下由 durable callback/reminder 机制承载；回调只向 schedule actor 发 fire command，不在中间层保存 schedule 状态。
 - schedule actor 只负责计算下一次 fire、生成幂等 key 并投递 prepared target envelope；workflow、GAgent service invocation 与 scripting 目标准备由 application/infrastructure adapter 承载，不进入 schedule actor core。
 - workflow schedule 的 `WorkflowName`、`Prompt`、`ScopeId` 仅存在 typed workflow target descriptor 中；service invocation 与 envelope target 使用各自 typed target descriptor；dispatch `Headers` 只保留传输扩展。
