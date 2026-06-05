@@ -1,5 +1,10 @@
 using System.Reflection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.EventSourcing;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
@@ -16,10 +21,12 @@ public sealed class ProjectionActivationPlanDispatcher
         ?? throw new MissingMethodException(nameof(ProjectionActivationPlanDispatcher), nameof(DispatchCoreAsync));
 
     private readonly IServiceProvider _services;
+    private readonly IActorDispatchPort? _dispatchPort;
 
     public ProjectionActivationPlanDispatcher(IServiceProvider services)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
+        _dispatchPort = services.GetService<IActorDispatchPort>();
     }
 
     public Task DispatchAsync(ProjectionActivationPlan plan, CancellationToken ct = default)
@@ -31,6 +38,41 @@ public sealed class ProjectionActivationPlanDispatcher
         return (Task)DispatchCoreMethod
             .MakeGenericMethod(plan.LeaseType)
             .Invoke(this, [plan.StartRequest, ct])!;
+    }
+
+    public async Task DispatchAsync(
+        ProjectionActivationPlan plan,
+        CommittedStatePublicationContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(context);
+
+        await DispatchAsync(plan, ct).ConfigureAwait(false);
+        if (_dispatchPort is null)
+            return;
+
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            plan.StartRequest.RootActorId,
+            plan.StartRequest.ProjectionKind,
+            plan.StartRequest.Mode,
+            plan.StartRequest.SessionId);
+        var targetScopeActorId = ProjectionScopeActorId.Build(scopeKey);
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(context.Published.Clone()),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(context.ActorId, context.Audience),
+        };
+        envelope.EnsureRuntime().SourceActorId = context.ActorId;
+        var forwardedEnvelope = StreamForwardingRules.BuildForwardedEnvelope(
+            envelope,
+            context.ActorId,
+            targetScopeActorId,
+            StreamForwardingMode.HandleThenForward);
+
+        await _dispatchPort.DispatchAsync(targetScopeActorId, forwardedEnvelope, ct).ConfigureAwait(false);
     }
 
     // Refactor (iter18/cluster-006):

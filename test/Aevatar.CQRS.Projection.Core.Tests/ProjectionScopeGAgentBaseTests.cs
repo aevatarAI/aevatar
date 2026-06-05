@@ -8,6 +8,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
@@ -93,6 +94,25 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleObservedEnvelopeAsync_ShouldSkipCommittedObservation_WhenWatermarkAlreadyAdvanced()
+    {
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-duplicate",
+            onProcess: _ =>
+            {
+                processed++;
+                return ProjectionScopeDispatchResult.Success(2, "event-type");
+            });
+        agent.State.LastObservedVersion = 2;
+        var envelope = BuildForwardedCommittedObservationEnvelope("projection-scope-duplicate", version: 2);
+
+        await agent.HandleObservedEnvelopeAsync(envelope);
+
+        processed.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldSwallow_DeterministicProjectionFailure()
     {
         var agent = BuildActivatedAgent(
@@ -141,6 +161,31 @@ public sealed class ProjectionScopeGAgentBaseTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Route = EnvelopeRouteSemantics.CreateObserverPublication("publisher-actor"),
+        };
+
+        return StreamForwardingRules.BuildForwardedEnvelope(
+            original,
+            sourceStreamId: "publisher-actor",
+            targetStreamId: targetStreamId,
+            StreamForwardingMode.HandleThenForward);
+    }
+
+    private static EventEnvelope BuildForwardedCommittedObservationEnvelope(string targetStreamId, long version)
+    {
+        var original = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("publisher-actor"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-duplicate",
+                    Version = version,
+                    EventData = Any.Pack(new StringValue { Value = "payload" }),
+                },
+                StateRoot = Any.Pack(new StringValue { Value = "state" }),
+            }),
         };
 
         return StreamForwardingRules.BuildForwardedEnvelope(

@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -178,6 +179,12 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         EventEnvelope envelope,
         CancellationToken ct)
     {
+        if (CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out _, out _, out var observedVersion) &&
+            observedVersion <= State.LastObservedVersion)
+        {
+            return ProjectionScopeDispatchResult.Skip(envelope.Payload?.TypeUrl ?? string.Empty);
+        }
+
         var context = ResolveScopeContext();
         var result = await ProcessObservationCoreAsync(context, envelope, ct);
         if (!result.Handled)
