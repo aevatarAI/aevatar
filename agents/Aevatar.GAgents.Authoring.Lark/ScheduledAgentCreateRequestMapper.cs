@@ -121,7 +121,11 @@ internal sealed class ScheduledAgentCreateRequestMapper
         {
             SkillName = request.Reference.Name,
             TemplateName = request.DisplayName ?? request.Reference.Name,
-            SkillContent = BuildOrnnReferenceBootstrap(request.Reference.Name),
+            SkillRef = new SkillRunnerSkillReference
+            {
+                Name = request.Reference.Name,
+                Source = SkillRunnerSkillSource.Ornn,
+            },
             ExecutionPrompt = request.ExecutionPrompt ??
                               "Execute the configured Ornn skill and return plain text only.",
             ScheduleCron = request.ScheduleCron,
@@ -161,9 +165,6 @@ internal sealed class ScheduledAgentCreateRequestMapper
             RunImmediately: request.RunImmediately,
             ErrorJson: null);
     }
-
-    internal static string BuildOrnnReferenceBootstrap(string skillName) =>
-        $"Scheduled Ornn skill reference bootstrap.\nskill_ref: {skillName}\nThis is not inline skill content. Resolve the referenced Ornn skill through the standard scheduled-skill execution path; issue 1789 will replace this compatibility bootstrap with typed SkillReference execution.";
 
     private static string? Normalize(string? value)
     {

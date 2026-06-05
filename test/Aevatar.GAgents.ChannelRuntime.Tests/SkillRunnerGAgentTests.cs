@@ -6,6 +6,8 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -15,6 +17,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -96,6 +99,76 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.State.HasMaxTokens.Should().BeTrue();
         _agent.State.MaxTokens.Should().Be(0);
         _agent.EffectiveConfig.MaxTokens.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithSkillRefOnly_ShouldPersistTypedReferenceAndNoInlineContent()
+    {
+        var command = CreateInitializeCommand();
+        command.SkillContent = string.Empty;
+        command.SkillRef = new SkillRunnerSkillReference
+        {
+            Name = "daily-report",
+            Source = SkillRunnerSkillSource.Ornn,
+        };
+
+        await _agent.HandleInitializeAsync(command);
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
+        initialized.SkillRef.Should().NotBeNull();
+        initialized.SkillRef.Name.Should().Be("daily-report");
+        initialized.SkillRef.Source.Should().Be(SkillRunnerSkillSource.Ornn);
+        initialized.SkillContent.Should().BeEmpty();
+        _agent.State.SkillRef.Name.Should().Be("daily-report");
+        _agent.State.SkillContent.Should().BeEmpty();
+        _agent.EffectiveConfig.SystemPrompt.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithLegacyInlineOnly_ShouldStillInitialize()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        _agent.State.SkillRef.Should().BeNull();
+        _agent.State.SkillContent.Should().Be("You are a summary report runner.");
+        _agent.EffectiveConfig.SystemPrompt.Should().Be("You are a summary report runner.");
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithSkillRefAndInlineContentWithoutFallback_ShouldReject()
+    {
+        var command = CreateInitializeCommand();
+        command.SkillRef = new SkillRunnerSkillReference
+        {
+            Name = "daily-report",
+            Source = SkillRunnerSkillSource.Ornn,
+        };
+
+        await _agent.HandleInitializeAsync(command);
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        persisted.Should().BeEmpty();
+        _agent.State.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithSkillRefAndInlineFallback_ShouldPersistBoth()
+    {
+        var command = CreateInitializeCommand();
+        command.SkillRef = new SkillRunnerSkillReference
+        {
+            Name = "daily-report",
+            Source = SkillRunnerSkillSource.Ornn,
+            AllowInlineFallback = true,
+        };
+
+        await _agent.HandleInitializeAsync(command);
+
+        _agent.State.SkillRef.Name.Should().Be("daily-report");
+        _agent.State.SkillRef.AllowInlineFallback.Should().BeTrue();
+        _agent.State.SkillContent.Should().Be("You are a summary report runner.");
+        _agent.EffectiveConfig.SystemPrompt.Should().BeEmpty();
     }
 
     [Fact]
@@ -982,6 +1055,370 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ExecuteSkillAsync_RemotePromptSkill_ShouldFetchAndUseInstructionsAsSystemPromptWithoutPersisting()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(
+            RemotePromptSkill("daily-report", "Remote system prompt."));
+        var provider = new StubStreamingProviderFactory("remote output");
+        var agent = CreateAgent(
+            "skill-runner-remote-prompt",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateSkillRefCommand("daily-report"));
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_remote"}}"""));
+
+        var result = await InvokeExecuteSkillResultAsync(agent);
+
+        result.Output.Should().Be("remote output");
+        result.ExecutionKind.Should().Be(SkillRunnerExecutionKind.Prompt);
+        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("nyx-api-key", "daily-report"));
+        provider.Requests.Should().ContainSingle();
+        provider.Requests[0].Messages[0].Content.Should().Be("Remote system prompt.");
+        agent.State.SkillContent.Should().BeEmpty();
+        agent.EffectiveConfig.SystemPrompt.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_RemotePromptSkill_ShouldFetchEachTriggerAndNotCacheInstructions()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(
+            RemotePromptSkill("daily-report", "Remote prompt v1."),
+            RemotePromptSkill("daily-report", "Remote prompt v2."));
+        var provider = new StubStreamingProviderFactory(
+            new StubStreamingTurn(["first"]),
+            new StubStreamingTurn(["second"]));
+        var agent = CreateAgent(
+            "skill-runner-remote-no-cache",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateSkillRefCommand("daily-report"));
+        AttachNyxIdApiClient(agent, new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"message_id":"om_1"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_2"}}"""));
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand { Reason = "manual" });
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand { Reason = "manual" });
+
+        fetcher.Requests.Should().HaveCount(2);
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[0].Messages[0].Content.Should().Be("Remote prompt v1.");
+        provider.Requests[1].Messages[0].Content.Should().Be("Remote prompt v2.");
+        agent.State.SkillContent.Should().BeEmpty();
+        var completed = (await _store.GetEventsAsync("skill-runner-remote-no-cache"))
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExecutionCompletedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExecutionCompletedEvent>())
+            .ToArray();
+        completed.Should().HaveCount(2);
+        completed.Should().OnlyContain(x =>
+            x.ExecutionKind == SkillRunnerExecutionKind.Prompt &&
+            x.SkillName == "daily-report" &&
+            string.IsNullOrEmpty(x.SkillVersion));
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_RemoteWorkflowSkill_ShouldDispatchWorkflowAndSkipLlm()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(new SkillDefinition
+        {
+            Name = "workflow-skill",
+            Description = "workflow",
+            Instructions = "Do not use LLM.",
+            Source = SkillSource.Remote,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "daily_flow",
+                    WorkflowYamls =
+                    [
+                        "name: daily_flow\nsteps: []\n",
+                    ],
+                },
+            ],
+        });
+        var provider = new StubStreamingProviderFactory("should-not-run");
+        var workflowDispatch = new RecordingWorkflowDispatchService(
+            CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("workflow-run-1", "daily_flow", "cmd-1", "corr-1")));
+        var agent = CreateAgent(
+            "skill-runner-remote-workflow",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher,
+            workflowDispatchService: workflowDispatch);
+        await agent.ActivateAsync();
+        var command = CreateSkillRefCommand("workflow-skill");
+        command.SkillRef.WorkflowId = "daily_flow";
+        await agent.HandleInitializeAsync(command);
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_workflow"}}"""));
+
+        var result = await InvokeExecuteSkillResultAsync(agent);
+
+        provider.Requests.Should().BeEmpty("workflow-bearing remote skills dispatch workflow directly");
+        workflowDispatch.Commands.Should().ContainSingle();
+        var dispatched = workflowDispatch.Commands[0];
+        dispatched.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
+        dispatched.Source.InlineBundle!.YamlDocuments.Should().ContainSingle()
+            .Which.Yaml.Should().Contain("name: daily_flow");
+        dispatched.Prompt.Should().Contain("Run the report.");
+        dispatched.ScopeId.Should().Be("scope-1");
+        dispatched.CallerCredential!.BearerToken.Should().Be("nyx-api-key");
+        result.ExecutionKind.Should().Be(SkillRunnerExecutionKind.Workflow);
+        result.WorkflowReceipt.Should().NotBeNull();
+        result.WorkflowReceipt!.CommandId.Should().Be("cmd-1");
+        result.Output.Should().Contain("Workflow start accepted");
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_VersionedSkillRef_ShouldFailBeforeFetch()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(RemotePromptSkill("daily-report", "unused"));
+        var agent = CreateAgent("skill-runner-versioned", remoteSkillFetcher: fetcher);
+        await agent.ActivateAsync();
+        var command = CreateSkillRefCommand("daily-report");
+        command.SkillRef.Version = "1.2";
+        await agent.HandleInitializeAsync(command);
+
+        var act = () => InvokeExecuteSkillResultAsync(agent);
+
+        var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+        assertion.WithMessage("*Versioned scheduled skill references are not supported yet*");
+        fetcher.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_MultipleWorkflowsWithoutWorkflowId_ShouldFailClosed()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(new SkillDefinition
+        {
+            Name = "workflow-skill",
+            Description = "workflow",
+            Instructions = "body",
+            Source = SkillSource.Remote,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "one",
+                    WorkflowYamls = ["name: one\nsteps: []\n"],
+                },
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "two",
+                    WorkflowYamls = ["name: two\nsteps: []\n"],
+                },
+            ],
+        });
+        var workflowDispatch = new RecordingWorkflowDispatchService(
+            CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor", "one", "cmd", "corr")));
+        var agent = CreateAgent(
+            "skill-runner-multi-workflow",
+            remoteSkillFetcher: fetcher,
+            workflowDispatchService: workflowDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateSkillRefCommand("workflow-skill"));
+
+        var act = () => InvokeExecuteSkillResultAsync(agent);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*has multiple workflows*workflow_id is required*");
+        workflowDispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_UnknownWorkflowId_ShouldFailClosed()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(new SkillDefinition
+        {
+            Name = "workflow-skill",
+            Description = "workflow",
+            Instructions = "body",
+            Source = SkillSource.Remote,
+            Workflows =
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "known",
+                    WorkflowYamls = ["name: known\nsteps: []\n"],
+                },
+            ],
+        });
+        var agent = CreateAgent("skill-runner-unknown-workflow", remoteSkillFetcher: fetcher);
+        await agent.ActivateAsync();
+        var command = CreateSkillRefCommand("workflow-skill");
+        command.SkillRef.WorkflowId = "missing";
+        await agent.HandleInitializeAsync(command);
+
+        var act = () => InvokeExecuteSkillResultAsync(agent);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Workflow 'missing' was not found*");
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_InlineFallback_ShouldOnlyRunWhenExplicitlyAllowed()
+    {
+        var provider = new StubStreamingProviderFactory("fallback output");
+        var agent = CreateAgent("skill-runner-inline-fallback", providerFactory: provider);
+        await agent.ActivateAsync();
+        var command = CreateInitializeCommand();
+        command.SkillRef = new SkillRunnerSkillReference
+        {
+            Name = "remote-down",
+            Source = SkillRunnerSkillSource.Ornn,
+            AllowInlineFallback = true,
+        };
+        await agent.HandleInitializeAsync(command);
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_fallback"}}"""));
+
+        var result = await InvokeExecuteSkillResultAsync(agent);
+
+        result.Output.Should().Be("fallback output");
+        provider.Requests.Should().ContainSingle();
+        provider.Requests[0].Messages[0].Content.Should().Be("You are a summary report runner.");
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_RemoteSkillWithoutFetcher_ShouldPersistFetcherUnavailableFailure()
+    {
+        var provider = new StubStreamingProviderFactory("should-not-run");
+        var agent = CreateAgent("skill-runner-missing-fetcher", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateSkillRefCommand("daily-report"));
+
+        var failed = await TriggerExhaustedAndReadFailureAsync(
+            _store,
+            "skill-runner-missing-fetcher",
+            agent);
+
+        failed.ErrorCode.Should().Be(SkillRunnerExecutionErrorCode.SkillFetcherUnavailable);
+        failed.SkillName.Should().Be("daily-report");
+        failed.SkillVersion.Should().BeEmpty();
+        failed.WorkflowId.Should().BeEmpty();
+        provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_RemoteSkillNotFound_ShouldPersistSkillNotFoundFailure()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher((SkillDefinition?)null);
+        var provider = new StubStreamingProviderFactory("should-not-run");
+        var agent = CreateAgent(
+            "skill-runner-skill-not-found",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateSkillRefCommand("daily-report"));
+
+        var failed = await TriggerExhaustedAndReadFailureAsync(
+            _store,
+            "skill-runner-skill-not-found",
+            agent);
+
+        failed.ErrorCode.Should().Be(SkillRunnerExecutionErrorCode.SkillNotFound);
+        failed.SkillName.Should().Be("daily-report");
+        failed.SkillVersion.Should().BeEmpty();
+        failed.WorkflowId.Should().BeEmpty();
+        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("nyx-api-key", "daily-report"));
+        provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WorkflowSkillWithoutDispatchService_ShouldPersistDispatchUnavailableFailure()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(RemoteWorkflowSkill("workflow-skill", "daily_flow"));
+        var provider = new StubStreamingProviderFactory("should-not-run");
+        var agent = CreateAgent(
+            "skill-runner-workflow-dispatch-missing",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher);
+        await agent.ActivateAsync();
+        var command = CreateSkillRefCommand("workflow-skill");
+        command.SkillRef.WorkflowId = "daily_flow";
+        await agent.HandleInitializeAsync(command);
+
+        var failed = await TriggerExhaustedAndReadFailureAsync(
+            _store,
+            "skill-runner-workflow-dispatch-missing",
+            agent);
+
+        failed.ErrorCode.Should().Be(SkillRunnerExecutionErrorCode.WorkflowDispatchUnavailable);
+        failed.ExecutionKind.Should().Be(SkillRunnerExecutionKind.Workflow);
+        failed.SkillName.Should().Be("workflow-skill");
+        failed.WorkflowId.Should().Be("daily_flow");
+        provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WorkflowDispatchRejected_ShouldPersistDispatchRejectedFailure()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(RemoteWorkflowSkill("workflow-skill", "daily_flow"));
+        var provider = new StubStreamingProviderFactory("should-not-run");
+        var workflowDispatch = new RecordingWorkflowDispatchService(
+            CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Failure(
+                WorkflowChatRunStartError.WorkflowNotFound));
+        var agent = CreateAgent(
+            "skill-runner-workflow-dispatch-rejected",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher,
+            workflowDispatchService: workflowDispatch);
+        await agent.ActivateAsync();
+        var command = CreateSkillRefCommand("workflow-skill");
+        command.SkillRef.WorkflowId = "daily_flow";
+        await agent.HandleInitializeAsync(command);
+
+        var failed = await TriggerExhaustedAndReadFailureAsync(
+            _store,
+            "skill-runner-workflow-dispatch-rejected",
+            agent);
+
+        failed.ErrorCode.Should().Be(SkillRunnerExecutionErrorCode.WorkflowDispatchRejected);
+        failed.ExecutionKind.Should().Be(SkillRunnerExecutionKind.Workflow);
+        failed.SkillName.Should().Be("workflow-skill");
+        failed.WorkflowId.Should().Be("daily_flow");
+        failed.Error.Should().Contain(nameof(WorkflowChatRunStartError.WorkflowNotFound));
+        workflowDispatch.Commands.Should().ContainSingle();
+        provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WorkflowDispatchAccepted_ShouldPersistWorkflowReceiptFields()
+    {
+        var fetcher = new SequencedRemoteSkillFetcher(RemoteWorkflowSkill("workflow-skill", "daily_flow"));
+        var provider = new StubStreamingProviderFactory("should-not-run");
+        var workflowDispatch = new RecordingWorkflowDispatchService(
+            CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("workflow-run-1", "daily_flow", "cmd-1", "corr-1")));
+        var agent = CreateAgent(
+            "skill-runner-workflow-trigger-success",
+            providerFactory: provider,
+            remoteSkillFetcher: fetcher,
+            workflowDispatchService: workflowDispatch);
+        await agent.ActivateAsync();
+        var command = CreateSkillRefCommand("workflow-skill");
+        command.SkillRef.WorkflowId = "daily_flow";
+        await agent.HandleInitializeAsync(command);
+        AttachNyxIdApiClient(agent, new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_workflow"}}"""));
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand { Reason = "manual" });
+
+        var completed = await ReadSingleCompletedEventAsync(_store, "skill-runner-workflow-trigger-success");
+        completed.ExecutionKind.Should().Be(SkillRunnerExecutionKind.Workflow);
+        completed.SkillName.Should().Be("workflow-skill");
+        completed.WorkflowId.Should().Be("daily_flow");
+        completed.WorkflowActorId.Should().Be("workflow-run-1");
+        completed.WorkflowName.Should().Be("daily_flow");
+        completed.WorkflowCommandId.Should().Be("cmd-1");
+        completed.WorkflowCorrelationId.Should().Be("corr-1");
+        completed.Output.Should().Contain("Workflow start accepted");
+        workflowDispatch.Commands.Should().ContainSingle();
+        provider.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteSkillAsync_OverLimitOutput_ShouldUseDocxDecisionReply_WhenLinkReturned()
     {
         var output = new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength + 100);
@@ -1158,15 +1595,97 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private static async Task<string> InvokeExecuteSkillAsync(SkillRunnerGAgent agent)
     {
+        var result = await InvokeExecuteSkillResultObjectAsync(agent);
+        return ReadRequiredProperty<string>(result, "Output");
+    }
+
+    private static async Task<SkillRunnerExecutionResultSnapshot> InvokeExecuteSkillResultAsync(
+        SkillRunnerGAgent agent)
+    {
+        var result = await InvokeExecuteSkillResultObjectAsync(agent);
+        return new SkillRunnerExecutionResultSnapshot(
+            ReadRequiredProperty<string>(result, "Output"),
+            ReadRequiredProperty<SkillRunnerExecutionKind>(result, "ExecutionKind"),
+            ReadRequiredProperty<string>(result, "SkillName"),
+            ReadRequiredProperty<string>(result, "SkillVersion"),
+            ReadRequiredProperty<string>(result, "WorkflowId"),
+            ReadProperty<WorkflowChatRunAcceptedReceipt>(result, "WorkflowReceipt"));
+    }
+
+    private static async Task<SkillRunnerExecutionFailedEvent> TriggerExhaustedAndReadFailureAsync(
+        InMemoryEventStore store,
+        string actorId,
+        SkillRunnerGAgent agent)
+    {
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = "manual",
+            RetryAttempt = SkillRunnerDefaults.MaxRetryAttempts,
+        });
+        return await ReadSingleFailedEventAsync(store, actorId);
+    }
+
+    private static async Task<SkillRunnerExecutionFailedEvent> ReadSingleFailedEventAsync(
+        InMemoryEventStore store,
+        string actorId)
+    {
+        var persisted = await store.GetEventsAsync(actorId);
+        return persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExecutionFailedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExecutionFailedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+    }
+
+    private static async Task<SkillRunnerExecutionCompletedEvent> ReadSingleCompletedEventAsync(
+        InMemoryEventStore store,
+        string actorId)
+    {
+        var persisted = await store.GetEventsAsync(actorId);
+        return persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExecutionCompletedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExecutionCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+    }
+
+    private static async Task<object> InvokeExecuteSkillResultObjectAsync(SkillRunnerGAgent agent)
+    {
         var method = typeof(SkillRunnerGAgent).GetMethod(
             "ExecuteSkillAsync",
             BindingFlags.Instance | BindingFlags.NonPublic);
         method.Should().NotBeNull();
-        var task = (Task<string>)method!.Invoke(
+        var task = (Task)method!.Invoke(
             agent,
             [new DateTimeOffset(2026, 5, 19, 9, 0, 0, TimeSpan.Zero), "test", CancellationToken.None])!;
-        return await task;
+        await task;
+        var resultProperty = task.GetType().GetProperty("Result");
+        resultProperty.Should().NotBeNull();
+        return resultProperty!.GetValue(task)!;
     }
+
+    private static T ReadRequiredProperty<T>(object instance, string propertyName) =>
+        ReadProperty<T>(instance, propertyName)
+        ?? throw new InvalidOperationException($"Property {propertyName} was null.");
+
+    private static T? ReadProperty<T>(object instance, string propertyName)
+    {
+        var property = instance.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull();
+        return (T?)property!.GetValue(instance);
+    }
+
+    private sealed record SkillRunnerExecutionResultSnapshot(
+        string Output,
+        SkillRunnerExecutionKind ExecutionKind,
+        string SkillName,
+        string SkillVersion,
+        string WorkflowId,
+        WorkflowChatRunAcceptedReceipt? WorkflowReceipt);
 
     private static object CreateStreamingRunState(
         SkillRunnerStreamingReplySink sink,
@@ -1342,13 +1861,17 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         ServiceProvider? serviceProvider = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         ILLMProviderFactory? providerFactory = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        IRemoteSkillFetcher? remoteSkillFetcher = null,
+        ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService = null)
     {
         var resolvedServices = serviceProvider ?? _serviceProvider;
         var agent = new SkillRunnerGAgent(
             llmProviderFactory: providerFactory,
             ownerLlmConfigSource: ownerLlmConfigSource,
-            toolSources: toolSources)
+            toolSources: toolSources,
+            remoteSkillFetcher: remoteSkillFetcher,
+            workflowDispatchService: workflowDispatchService)
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
@@ -1391,6 +1914,44 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         },
     };
 
+    private static InitializeSkillRunnerCommand CreateSkillRefCommand(string name)
+    {
+        var command = CreateInitializeCommand();
+        command.SkillContent = string.Empty;
+        command.SkillName = name;
+        command.TemplateName = name;
+        command.SkillRef = new SkillRunnerSkillReference
+        {
+            Name = name,
+            Source = SkillRunnerSkillSource.Ornn,
+        };
+        return command;
+    }
+
+    private static SkillDefinition RemotePromptSkill(string name, string instructions) => new()
+    {
+        Name = name,
+        Description = "remote prompt skill",
+        Instructions = instructions,
+        Source = SkillSource.Remote,
+    };
+
+    private static SkillDefinition RemoteWorkflowSkill(string name, string workflowId) => new()
+    {
+        Name = name,
+        Description = "remote workflow skill",
+        Instructions = "workflow instructions",
+        Source = SkillSource.Remote,
+        Workflows =
+        [
+            new SkillWorkflowDescriptor
+            {
+                WorkflowId = workflowId,
+                WorkflowYamls = [$"name: {workflowId}\nsteps: []\n"],
+            },
+        ],
+    };
+
     private static void AssignActorId(GAgentBase agent, string actorId)
     {
         var setIdMethod = typeof(GAgentBase).GetMethod(
@@ -1425,6 +1986,37 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(result);
+    }
+
+    private sealed class SequencedRemoteSkillFetcher(params SkillDefinition?[] skills) : IRemoteSkillFetcher
+    {
+        private readonly Queue<SkillDefinition?> _skills = new(skills);
+
+        public List<(string AccessToken, string NameOrId)> Requests { get; } = [];
+
+        public Task<SkillDefinition?> FetchSkillAsync(
+            string accessToken,
+            string nameOrId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((accessToken, nameOrId));
+            return Task.FromResult(_skills.Count == 0 ? null : _skills.Dequeue());
+        }
+    }
+
+    private sealed class RecordingWorkflowDispatchService(
+        CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> result)
+        : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+    {
+        public List<WorkflowChatRunRequest> Commands { get; } = [];
+
+        public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct = default)
+        {
+            Commands.Add(command);
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class StubStreamingProviderFactory : ILLMProviderFactory, ILLMProvider

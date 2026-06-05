@@ -30,7 +30,10 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
 
         if (skill.Files != null && skill.Files.Count > 0)
         {
-            if (skill.Files.TryGetValue("SKILL.md", out var skillMd))
+            var skillMd = skill.Files
+                .FirstOrDefault(f => f.Key.Equals("SKILL.md", StringComparison.OrdinalIgnoreCase))
+                .Value;
+            if (skillMd is not null)
                 instructions = skillMd;
 
             var others = skill.Files
