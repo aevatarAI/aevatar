@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
@@ -173,6 +174,43 @@ public sealed class ChatEndpointsInternalTests
         service.LastCommand.InputParts.Should().ContainSingle();
         service.LastCommand.InputParts![0].Kind.Should()
             .Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image);
+    }
+
+    [Fact]
+    public void HandleCommandJsonBinding_ShouldRejectHttpBodyToolContext()
+    {
+        const string json = """
+        {
+          "prompt": "hello",
+          "toolContext": {
+            "credentials": {
+              "nyxIdAccessToken": "client-token"
+            }
+          }
+        }
+        """;
+
+        var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void HandleChatJsonBinding_ShouldRejectHttpBodyToolContext()
+    {
+        const string json = """
+        {
+          "prompt": "hello",
+          "toolContext": {
+            "caller": {
+              "scopeId": "client-scope"
+            }
+          }
+        }
+        """;
+        var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
     }
 
     [Fact]
