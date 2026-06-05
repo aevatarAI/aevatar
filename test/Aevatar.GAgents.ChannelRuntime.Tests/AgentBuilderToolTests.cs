@@ -19,6 +19,31 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentBuilderToolTests
 {
     [Fact]
+    public void ParametersSchema_Remains_ManagementOnly()
+    {
+        var tool = new AgentBuilderTool(
+            Substitute.For<IUserAgentCatalogQueryPort>(),
+            Substitute.For<ISkillRunnerExecutionQueryPort>(),
+            Substitute.For<INyxIdApiClientFactory>(),
+            Substitute.For<ISkillRunnerCommandPort>(),
+            Substitute.For<IUserAgentCatalogCommandPort>(),
+            Substitute.For<ICallerScopeResolver>());
+
+        using var document = JsonDocument.Parse(tool.ParametersSchema);
+        var actions = document.RootElement
+            .GetProperty("properties")
+            .GetProperty("action")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToArray();
+
+        actions.Should().NotContain("create_agent");
+        tool.Description.Should().Contain("scheduled_agent_creator");
+        tool.Description.Should().NotContain("Agent creation is not handled here");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_DeleteAgent_DisablesActor_RevokesApiKey_AndTombstonesRegistry()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -700,6 +725,10 @@ public sealed class AgentBuilderToolTests
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        var scheduledAgentMapper = new ScheduledAgentCreateRequestMapper();
+        var scheduledAgentApiKeyIssuer = new ScheduledAgentApiKeyIssuer(
+            nyxClientFactory,
+            new ScheduledAgentCreatorOptions());
 
         var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
         var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
@@ -707,12 +736,14 @@ public sealed class AgentBuilderToolTests
         var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
         var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
         var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
-        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
-        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
-        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceMapper = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver, null!, scheduledAgentApiKeyIssuer);
+        var missingSourceIssuer = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
@@ -726,6 +757,8 @@ public sealed class AgentBuilderToolTests
         missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
         missingSourceCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
         missingSourceCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+        missingSourceMapper.Should().Throw<ArgumentNullException>().WithParameterName("scheduledAgentMapper");
+        missingSourceIssuer.Should().Throw<ArgumentNullException>().WithParameterName("scheduledAgentApiKeyIssuer");
     }
 
     [Fact]
@@ -784,11 +817,17 @@ public sealed class AgentBuilderToolTests
             nyxClientFactory,
             skillRunnerPort,
             catalogCommandPort,
-            callerScopeResolver);
+            callerScopeResolver,
+            new ScheduledAgentCreateRequestMapper(),
+            new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions()));
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().ContainSingle();
-        tools[0].Name.Should().Be("agent_builder");
+        tools.Select(tool => tool.Name).Should().BeEquivalentTo("agent_builder", "scheduled_agent_creator");
+        var managementTool = tools.Single(tool => tool.Name == "agent_builder");
+        var creatorTool = tools.Single(tool => tool.Name == "scheduled_agent_creator");
+        creatorTool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        creatorTool.IsReadOnly.Should().BeFalse();
+        creatorTool.IsDestructive.Should().BeFalse();
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -796,7 +835,7 @@ public sealed class AgentBuilderToolTests
         });
         try
         {
-            var result = await tools[0].ExecuteAsync("""{"action":"list_agents"}""");
+            var result = await managementTool.ExecuteAsync("""{"action":"list_agents"}""");
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("total").GetInt32().Should().Be(0);
 

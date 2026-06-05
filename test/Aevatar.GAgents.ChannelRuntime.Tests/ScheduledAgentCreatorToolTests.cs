@@ -1,0 +1,469 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Scheduled;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
+using Xunit;
+
+namespace Aevatar.GAgents.ChannelRuntime.Tests;
+
+public sealed class ScheduledAgentCreatorToolTests
+{
+    [Fact]
+    public void ToolContract_ShouldRequireApproval_AndExposeClosedSchema()
+    {
+        var tool = CreateHarness().Tool;
+
+        tool.Name.Should().Be("scheduled_agent_creator");
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.IsReadOnly.Should().BeFalse();
+        tool.IsDestructive.Should().BeFalse();
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
+        var properties = schema.RootElement.GetProperty("properties");
+        properties.TryGetProperty("scope_id", out _).Should().BeFalse();
+        properties.TryGetProperty("owner_scope", out _).Should().BeFalse();
+        properties.TryGetProperty("nyx_api_key", out _).Should().BeFalse();
+        properties.TryGetProperty("nyx_provider_slug", out _).Should().BeFalse();
+        properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
+        properties.TryGetProperty("skill_content", out _).Should().BeFalse();
+        properties.TryGetProperty("provider_base_url", out _).Should().BeFalse();
+        schema.RootElement.GetProperty("required").EnumerateArray().Select(static x => x.GetString())
+            .Should().BeEquivalentTo("skill_ref", "schedule_cron", "schedule_timezone");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenNoToken_ShouldFailClosed()
+    {
+        var harness = CreateHarness();
+
+        var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Contain("access token");
+        harness.Handler.Requests.Should().BeEmpty();
+        await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+            Arg.Any<string>(),
+            Arg.Any<InitializeSkillRunnerCommand>(),
+            Arg.Any<bool>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCallerScopeUnavailable_ShouldFailClosedBeforeNyxCalls()
+    {
+        var harness = CreateHarness(callerScopeUnavailable: true);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("caller_scope_unavailable");
+            harness.Handler.Requests.Should().BeEmpty();
+        });
+    }
+
+    [Theory]
+    [InlineData("""{"skill_ref":"","schedule_cron":"0 9 * * *","schedule_timezone":"UTC"}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"","schedule_timezone":"UTC"}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":""}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","nyx_api_key":"bad"}""")]
+    public async Task ExecuteAsync_InvalidRequests_ShouldFailBeforeKeyCreation(string argumentsJson)
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(argumentsJson);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
+            harness.Handler.Requests.Should().BeEmpty();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_VersionedSkillRef_ShouldReturnTypedErrorBeforeSideEffects()
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "skill_ref": "daily@1.2",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("versioned_skill_ref_not_supported_yet");
+            document.RootElement.GetProperty("skill_ref").GetString().Should().Be("daily@1.2");
+            harness.Handler.Requests.Should().BeEmpty();
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenTrustedOutboundSlugMissing_ShouldFailClosedBeforeKeyCreation()
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(async () =>
+        {
+            AgentToolRequestContext.Current = AgentToolRequestContext.Current! with
+            {
+                ExternalMetadata = BaseExternalMetadata(includeOutboundSlug: false),
+            };
+
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
+            document.RootElement.GetProperty("detail").GetString().Should().Be("lark_outbound_provider_slug_unavailable");
+            harness.Handler.Requests.Should().BeEmpty();
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRequiredServiceMissing_ShouldFailClosedWithoutBroadKey()
+    {
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """{"user_services":[{"id":"svc-lark","slug":"api-lark-bot"}]}""");
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("required_service_not_found:ornn-api");
+            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRequiredServiceAmbiguous_ShouldFailClosedWithoutKeyCreation()
+    {
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "user_services": [
+                {"id":"svc-ornn-1","slug":"ornn-api"},
+                {"id":"svc-ornn-2","slug":"ornn-api"},
+                {"id":"svc-lark","slug":"api-lark-bot"}
+              ]
+            }
+            """);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("required_service_ambiguous:ornn-api");
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Success_ShouldMintScopedKey_MapCommand_AndReturnAcceptedOnly()
+    {
+        var caller = OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender");
+        var harness = CreateHarness(scope: caller);
+        InitializeSkillRunnerCommand? captured = null;
+        string? capturedAgentId = null;
+        bool? capturedRunImmediately = null;
+        harness.SkillRunnerPort.InitializeAsync(
+                Arg.Do<string>(value => capturedAgentId = value),
+                Arg.Do<InitializeSkillRunnerCommand>(value => captured = value),
+                Arg.Do<bool>(value => capturedRunImmediately = value),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "skill_ref": "daily-report",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "Asia/Singapore",
+                  "display_name": "Daily Report",
+                  "execution_prompt": "Send concise bullets.",
+                  "provider_name": "nyxid",
+                  "model": "gpt-5.1",
+                  "temperature": 0.2,
+                  "max_tokens": 1200,
+                  "max_tool_rounds": 6,
+                  "max_history_messages": 12,
+                  "requires_nyxid_proxy_success": true,
+                  "run_immediately": true
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            document.RootElement.GetProperty("api_key_id").GetString().Should().Be("key-created");
+            document.RootElement.TryGetProperty("full_key", out _).Should().BeFalse();
+            document.RootElement.TryGetProperty("committed", out _).Should().BeFalse();
+
+            capturedAgentId.Should().StartWith("skill-runner-");
+            capturedRunImmediately.Should().BeTrue();
+            captured.Should().NotBeNull();
+            captured!.SkillName.Should().Be("daily-report");
+            captured.TemplateName.Should().Be("Daily Report");
+            captured.SkillContent.Should().Contain("Scheduled Ornn skill reference bootstrap.");
+            captured.SkillContent.Should().Contain("skill_ref: daily-report");
+            captured.ExecutionPrompt.Should().Be("Send concise bullets.");
+            captured.ScheduleCron.Should().Be("0 9 * * *");
+            captured.ScheduleTimezone.Should().Be("Asia/Singapore");
+            captured.Enabled.Should().BeTrue();
+            captured.ScopeId.Should().Be("scope-bot-1");
+            captured.ProviderName.Should().Be("nyxid");
+            captured.Model.Should().Be("gpt-5.1");
+            captured.Temperature.Should().Be(0.2);
+            captured.MaxTokens.Should().Be(1200);
+            captured.MaxToolRounds.Should().Be(6);
+            captured.MaxHistoryMessages.Should().Be(12);
+            captured.RequiresNyxidProxySuccess.Should().BeTrue();
+            captured.OutboundConfig.NyxApiKey.Should().Be("full-secret-key");
+            captured.OutboundConfig.ApiKeyId.Should().Be("key-created");
+            captured.OutboundConfig.NyxProviderSlug.Should().Be("api-lark-bot");
+            captured.OutboundConfig.FailureNotificationProviderSlug.Should().Be("api-lark-bot-inbound");
+            captured.OutboundConfig.ConversationId.Should().Be("oc_conversation");
+            captured.OutboundConfig.LarkReceiveId.Should().Be("oc_chat");
+            captured.OutboundConfig.LarkReceiveIdType.Should().Be("chat_id");
+            captured.OutboundConfig.LarkReceiveIdFallback.Should().Be("on_union");
+            captured.OutboundConfig.LarkReceiveIdTypeFallback.Should().Be("union_id");
+            captured.OutboundConfig.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
+            captured.OutboundConfig.OwnerNyxUserId.Should().BeEmpty();
+            captured.OutboundConfig.Platform.Should().BeEmpty();
+
+            var createRequest = harness.Handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenInitializeFails_ShouldBestEffortDeleteIssuedKey()
+    {
+        var harness = CreateHarness();
+        harness.SkillRunnerPort.InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("dispatch failed"));
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("initialize_failed");
+            harness.Handler.Requests.Should().Contain(request =>
+                request.Method == HttpMethod.Delete &&
+                request.Path == "/api/v1/api-keys/key-created");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotQueryCatalogOrPollReadModels()
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(async () =>
+        {
+            _ = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            await harness.CatalogQueryPort.DidNotReceive().QueryByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await harness.CatalogQueryPort.DidNotReceive().GetForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await harness.CatalogQueryPort.DidNotReceive().GetStateVersionForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    private const string BaseArgs = """
+        {
+          "skill_ref": "daily-report",
+          "schedule_cron": "0 9 * * *",
+          "schedule_timezone": "UTC"
+        }
+        """;
+
+    private static CreatorHarness CreateHarness(
+        RoutingJsonHandler? handler = null,
+        OwnerScope? scope = null,
+        bool callerScopeUnavailable = false)
+    {
+        handler ??= CreateSuccessHandler();
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        var nyxClientFactory = new TestNyxIdApiClientFactory(nyxClient);
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        skillRunnerPort.InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        var resolvedScope = callerScopeUnavailable
+            ? null
+            : scope ?? OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender");
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(resolvedScope));
+
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<INyxIdApiClientFactory>(nyxClientFactory);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(resolver);
+        services.AddSingleton(queryPort);
+        services.AddSingleton(new ScheduledAgentCreatorOptions());
+        services.AddSingleton<ScheduledAgentCreateRequestMapper>();
+        services.AddSingleton<ScheduledAgentApiKeyIssuer>();
+
+        var provider = services.BuildServiceProvider();
+        var tool = new ScheduledAgentCreatorTool(
+            provider.GetRequiredService<ISkillRunnerCommandPort>(),
+            provider.GetRequiredService<ICallerScopeResolver>(),
+            provider.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
+            provider.GetRequiredService<ScheduledAgentApiKeyIssuer>());
+
+        return new CreatorHarness(tool, handler, skillRunnerPort, queryPort);
+    }
+
+    private static RoutingJsonHandler CreateSuccessHandler()
+    {
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "user_services": [
+                {"id":"svc-ornn","slug":"ornn-api"},
+                {"id":"svc-lark","slug":"api-lark-bot"},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-created","full_key":"full-secret-key"}""");
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-created", """{"ok":true}""");
+        return handler;
+    }
+
+    private static async Task WithToolContext(Func<Task> action)
+    {
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("session-token", "session-token", null),
+            Caller = new AgentToolCallerContext("scope-bot-1", null, "message-1"),
+            Channel = new AgentToolChannelContext("lark", "ou_sender", "scope-bot-1", "message-1", "om_1"),
+            ExternalMetadata = BaseExternalMetadata(),
+        };
+        try
+        {
+            await action();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> BaseExternalMetadata(bool includeOutboundSlug = true)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [ChannelMetadataKeys.ConversationId] = "oc_conversation",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.LarkChatId] = "oc_chat",
+            [ChannelMetadataKeys.LarkUnionId] = "on_union",
+            [ChannelMetadataKeys.InboundChannelBotProxySlug] = "api-lark-bot-inbound",
+        };
+        if (includeOutboundSlug)
+            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = "api-lark-bot";
+        return metadata;
+    }
+
+    private sealed record CreatorHarness(
+        ScheduledAgentCreatorTool Tool,
+        RoutingJsonHandler Handler,
+        ISkillRunnerCommandPort SkillRunnerPort,
+        IUserAgentCatalogQueryPort CatalogQueryPort);
+
+    private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
+    {
+        private readonly NyxIdApiClient _client;
+
+        public TestNyxIdApiClientFactory(NyxIdApiClient client)
+        {
+            _client = client;
+        }
+
+        public NyxIdApiClient CreateClient() => _client;
+    }
+
+    private sealed class RoutingJsonHandler : HttpMessageHandler
+    {
+        private readonly Dictionary<string, string> _responses = new(StringComparer.OrdinalIgnoreCase);
+
+        public List<RecordedRequest> Requests { get; } = [];
+
+        public void Add(HttpMethod method, string path, string json)
+        {
+            _responses[$"{method.Method}:{path}"] = json;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.PathAndQuery ?? string.Empty;
+            var body = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            Requests.Add(new RecordedRequest(request.Method, path, body));
+
+            return _responses.TryGetValue($"{request.Method.Method}:{path}", out var json)
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json"),
+                }
+                : new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent("""{"error":true,"message":"not found"}""", Encoding.UTF8, "application/json"),
+                };
+        }
+    }
+
+    private sealed record RecordedRequest(HttpMethod Method, string Path, string? Body);
+}

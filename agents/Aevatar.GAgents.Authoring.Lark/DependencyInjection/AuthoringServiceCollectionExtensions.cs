@@ -27,6 +27,9 @@ public static class AuthoringServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
+        services.TryAddSingleton<ScheduledAgentCreatorOptions>();
+        services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
+        services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, AgentBuilderToolSource>());
 
         return services;

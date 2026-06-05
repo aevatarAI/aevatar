@@ -1,0 +1,311 @@
+using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Scheduled;
+
+namespace Aevatar.GAgents.Authoring.Lark;
+
+internal sealed class ScheduledAgentCreateRequestMapper
+{
+    private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
+    {
+        "skill_ref",
+        "schedule_cron",
+        "schedule_timezone",
+        "display_name",
+        "execution_prompt",
+        "provider_name",
+        "model",
+        "temperature",
+        "max_tokens",
+        "max_tool_rounds",
+        "max_history_messages",
+        "requires_nyxid_proxy_success",
+        "run_immediately",
+    };
+
+    public ScheduledAgentCreatePlanResult Plan(string argumentsJson, OwnerScope caller, string agentId)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+
+        var args = CreatorArgs.Parse(argumentsJson);
+        if (args.Error is not null)
+            return ScheduledAgentCreatePlanResult.JsonError(args.Error);
+
+        var unknown = args.Properties.Keys.Where(key => !AllowedProperties.Contains(key)).Order(StringComparer.Ordinal).ToArray();
+        if (unknown.Length > 0)
+            return ScheduledAgentCreatePlanResult.Failed($"unsupported_fields:{string.Join(",", unknown)}");
+
+        var referenceParse = ScheduledSkillReference.Parse(args.Str("skill_ref"));
+        if (referenceParse.ErrorJson is not null)
+            return ScheduledAgentCreatePlanResult.RawError(referenceParse.ErrorJson);
+
+        var reference = referenceParse.Reference!;
+        var cron = Normalize(args.Str("schedule_cron"));
+        if (cron is null)
+            return ScheduledAgentCreatePlanResult.Failed("schedule_cron is required");
+
+        var timezone = Normalize(args.Str("schedule_timezone"));
+        if (timezone is null)
+            return ScheduledAgentCreatePlanResult.Failed("schedule_timezone is required");
+
+        var scopeId = Normalize(AgentToolRequestContext.ScopeId ?? AgentToolRequestContext.ChannelRegistrationScopeId);
+        if (scopeId is null)
+            return ScheduledAgentCreatePlanResult.Failed("scope_id_unavailable");
+
+        var conversationId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.ConversationId));
+        if (conversationId is null)
+            return ScheduledAgentCreatePlanResult.Failed("conversation_id_unavailable");
+
+        var primarySlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.LarkOutboundProxySlug));
+        if (primarySlug is null)
+            return ScheduledAgentCreatePlanResult.Failed("lark_outbound_provider_slug_unavailable");
+
+        var target = LarkConversationTargets.BuildFromInboundWithFallback(
+            AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.ChatType),
+            conversationId,
+            AgentToolRequestContext.ChannelSenderId,
+            AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.LarkUnionId),
+            AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.LarkChatId));
+
+        if (string.IsNullOrWhiteSpace(target.Primary.ReceiveId) ||
+            string.IsNullOrWhiteSpace(target.Primary.ReceiveIdType))
+        {
+            return ScheduledAgentCreatePlanResult.Failed("lark_receive_target_unavailable");
+        }
+
+        var failureSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.InboundChannelBotProxySlug));
+        if (string.Equals(failureSlug, primarySlug, StringComparison.Ordinal))
+            failureSlug = null;
+
+        return new ScheduledAgentCreatePlanResult(
+            Success: true,
+            Request: new ScheduledAgentCreatePlannedRequest(
+                Reference: reference,
+                DisplayName: Normalize(args.Str("display_name")),
+                ExecutionPrompt: Normalize(args.Str("execution_prompt")),
+                ScheduleCron: cron,
+                ScheduleTimezone: timezone,
+                ScopeId: scopeId,
+                ProviderName: Normalize(args.Str("provider_name")),
+                Model: Normalize(args.Str("model")),
+                Temperature: args.TryDouble("temperature", out var temperature) ? temperature : null,
+                MaxTokens: args.TryInt("max_tokens", out var maxTokens) ? maxTokens : null,
+                MaxToolRounds: args.TryInt("max_tool_rounds", out var maxToolRounds) ? maxToolRounds : null,
+                MaxHistoryMessages: args.TryInt("max_history_messages", out var maxHistoryMessages) ? maxHistoryMessages : null,
+                RequiresNyxidProxySuccess: args.Bool("requires_nyxid_proxy_success") ?? false,
+                RunImmediately: args.Bool("run_immediately") ?? false,
+                ConversationId: conversationId,
+                PrimaryOutboundSlug: primarySlug,
+                FailureNotificationSlug: failureSlug,
+                ReceiveTarget: target,
+                Caller: caller.Clone()),
+            ServiceSlugs: new ScheduledAgentServiceSlugs(primarySlug, failureSlug),
+            ErrorJson: null);
+    }
+
+    public ScheduledAgentCreateMapResult Map(
+        ScheduledAgentCreatePlannedRequest request,
+        ScheduledAgentApiKeyIssueResult issuedKey)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(issuedKey);
+
+        if (!issuedKey.Success || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId) || string.IsNullOrWhiteSpace(issuedKey.FullKey))
+            return ScheduledAgentCreateMapResult.Failed("api_key_unavailable");
+
+        var command = new InitializeSkillRunnerCommand
+        {
+            SkillName = request.Reference.Name,
+            TemplateName = request.DisplayName ?? request.Reference.Name,
+            SkillContent = BuildOrnnReferenceBootstrap(request.Reference.Name),
+            ExecutionPrompt = request.ExecutionPrompt ??
+                              "Execute the configured Ornn skill and return plain text only.",
+            ScheduleCron = request.ScheduleCron,
+            ScheduleTimezone = request.ScheduleTimezone,
+            Enabled = true,
+            ScopeId = request.ScopeId,
+            ProviderName = request.ProviderName ?? string.Empty,
+            Model = request.Model ?? string.Empty,
+            RequiresNyxidProxySuccess = request.RequiresNyxidProxySuccess,
+            OutboundConfig = new SkillRunnerOutboundConfig
+            {
+                ConversationId = request.ConversationId,
+                NyxProviderSlug = request.PrimaryOutboundSlug,
+                NyxApiKey = issuedKey.FullKey,
+                ApiKeyId = issuedKey.ApiKeyId,
+                LarkReceiveId = request.ReceiveTarget.Primary.ReceiveId,
+                LarkReceiveIdType = request.ReceiveTarget.Primary.ReceiveIdType,
+                LarkReceiveIdFallback = request.ReceiveTarget.Fallback?.ReceiveId ?? string.Empty,
+                LarkReceiveIdTypeFallback = request.ReceiveTarget.Fallback?.ReceiveIdType ?? string.Empty,
+                OwnerScope = request.Caller.Clone(),
+                FailureNotificationProviderSlug = request.FailureNotificationSlug ?? string.Empty,
+            },
+        };
+
+        if (request.Temperature.HasValue)
+            command.Temperature = request.Temperature.Value;
+        if (request.MaxTokens.HasValue)
+            command.MaxTokens = request.MaxTokens.Value;
+        if (request.MaxToolRounds.HasValue)
+            command.MaxToolRounds = request.MaxToolRounds.Value;
+        if (request.MaxHistoryMessages.HasValue)
+            command.MaxHistoryMessages = request.MaxHistoryMessages.Value;
+
+        return new ScheduledAgentCreateMapResult(
+            Success: true,
+            Command: command,
+            RunImmediately: request.RunImmediately,
+            ErrorJson: null);
+    }
+
+    internal static string BuildOrnnReferenceBootstrap(string skillName) =>
+        $"Scheduled Ornn skill reference bootstrap.\nskill_ref: {skillName}\nThis is not inline skill content. Resolve the referenced Ornn skill through the standard scheduled-skill execution path; issue 1789 will replace this compatibility bootstrap with typed SkillReference execution.";
+
+    private static string? Normalize(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    private sealed class CreatorArgs
+    {
+        private CreatorArgs(Dictionary<string, JsonElement> properties, string? error)
+        {
+            Properties = properties;
+            Error = error;
+        }
+
+        public IReadOnlyDictionary<string, JsonElement> Properties { get; }
+        public string? Error { get; }
+
+        public static CreatorArgs Parse(string? json)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                    return new CreatorArgs([], "arguments must be a JSON object");
+
+                var properties = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+                foreach (var property in document.RootElement.EnumerateObject())
+                    properties[property.Name] = property.Value.Clone();
+
+                return new CreatorArgs(properties, null);
+            }
+            catch (JsonException ex)
+            {
+                return new CreatorArgs([], ex.Message);
+            }
+        }
+
+        public string? Str(string name)
+        {
+            if (!Properties.TryGetValue(name, out var value))
+                return null;
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number => value.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => null,
+            };
+        }
+
+        public bool? Bool(string name)
+        {
+            if (!Properties.TryGetValue(name, out var value))
+                return null;
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+                _ => null,
+            };
+        }
+
+        public bool TryInt(string name, out int value)
+        {
+            value = 0;
+            if (!Properties.TryGetValue(name, out var element))
+                return false;
+
+            if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out value))
+                return true;
+
+            return element.ValueKind == JsonValueKind.String && int.TryParse(element.GetString(), out value);
+        }
+
+        public bool TryDouble(string name, out double value)
+        {
+            value = 0;
+            if (!Properties.TryGetValue(name, out var element))
+                return false;
+
+            if (element.ValueKind == JsonValueKind.Number && element.TryGetDouble(out value))
+                return true;
+
+            return element.ValueKind == JsonValueKind.String && double.TryParse(element.GetString(), out value);
+        }
+    }
+}
+
+internal sealed record ScheduledAgentCreateMapResult(
+    bool Success,
+    InitializeSkillRunnerCommand? Command,
+    bool RunImmediately,
+    string? ErrorJson)
+{
+    public static ScheduledAgentCreateMapResult Failed(string error) =>
+        new(false, null, false, JsonSerializer.Serialize(new { error = "validation_error", detail = error }));
+
+    public static ScheduledAgentCreateMapResult JsonError(string error) =>
+        new(false, null, false, JsonSerializer.Serialize(new { error = error }));
+
+    public static ScheduledAgentCreateMapResult RawError(string json) =>
+        new(false, null, false, json);
+}
+
+internal sealed record ScheduledAgentCreatePlanResult(
+    bool Success,
+    ScheduledAgentCreatePlannedRequest? Request,
+    ScheduledAgentServiceSlugs? ServiceSlugs,
+    string? ErrorJson)
+{
+    public static ScheduledAgentCreatePlanResult Failed(string error) =>
+        new(false, null, null, JsonSerializer.Serialize(new { error = "validation_error", detail = error }));
+
+    public static ScheduledAgentCreatePlanResult JsonError(string error) =>
+        new(false, null, null, JsonSerializer.Serialize(new { error = error }));
+
+    public static ScheduledAgentCreatePlanResult RawError(string json) =>
+        new(false, null, null, json);
+}
+
+internal sealed record ScheduledAgentCreatePlannedRequest(
+    ScheduledSkillReference Reference,
+    string? DisplayName,
+    string? ExecutionPrompt,
+    string ScheduleCron,
+    string ScheduleTimezone,
+    string ScopeId,
+    string? ProviderName,
+    string? Model,
+    double? Temperature,
+    int? MaxTokens,
+    int? MaxToolRounds,
+    int? MaxHistoryMessages,
+    bool RequiresNyxidProxySuccess,
+    bool RunImmediately,
+    string ConversationId,
+    string PrimaryOutboundSlug,
+    string? FailureNotificationSlug,
+    LarkReceiveTargetWithFallback ReceiveTarget,
+    OwnerScope Caller);
