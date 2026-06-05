@@ -8,11 +8,15 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -847,6 +851,44 @@ public sealed class AgentBuilderToolTests
         {
             AgentToolRequestContext.Current = null;
         }
+    }
+
+    [Fact]
+    public async Task AddLarkAgentAuthoring_ShouldResolveToolSource_AndDiscoverRegisteredTools()
+    {
+        var handler = new RoutingJsonHandler();
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
+        services.AddSingleton(nyxClient);
+        services.AddSingleton(Substitute.For<IUserAgentDeliveryTargetReader>());
+        services.AddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<ILogger<FeishuCardHumanInteractionPort>>(NullLogger<FeishuCardHumanInteractionPort>.Instance);
+        services.AddSingleton(callerScopeResolver);
+
+        services.AddLarkAgentAuthoring();
+
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>().Should().ContainSingle().Subject;
+        source.Should().BeOfType<AgentBuilderToolSource>();
+        provider.GetRequiredService<IHumanInteractionPort>().Should().BeOfType<FeishuCardHumanInteractionPort>();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(tool => tool.Name).Should().BeEquivalentTo("agent_builder", "scheduled_agent_creator");
+        tools.Single(tool => tool.Name == "scheduled_agent_creator").ApprovalMode
+            .Should().Be(ToolApprovalMode.AlwaysRequire);
     }
 
     private static AgentBuilderTool CreateTool(IServiceCollection services)

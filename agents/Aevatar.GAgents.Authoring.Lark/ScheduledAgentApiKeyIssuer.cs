@@ -201,7 +201,7 @@ internal sealed class ScheduledAgentApiKeyIssuer
         }
         catch (JsonException)
         {
-            return true;
+            return false;
         }
     }
 

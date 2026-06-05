@@ -140,6 +140,32 @@ public sealed class ScheduledAgentCreatorToolTests
         });
     }
 
+    [Theory]
+    [InlineData("missing_scope", "scope_id_unavailable")]
+    [InlineData("missing_conversation", "conversation_id_unavailable")]
+    [InlineData("missing_receive_target", "lark_receive_target_unavailable")]
+    public async Task ExecuteAsync_WhenTrustedContextIncomplete_ShouldFailClosedBeforeKeyCreation(
+        string caseName,
+        string expectedDetail)
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(CreateContextForValidationCase(caseName), async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
+            document.RootElement.GetProperty("detail").GetString().Should().Be(expectedDetail);
+            harness.Handler.Requests.Should().BeEmpty();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
     [Fact]
     public async Task ExecuteAsync_WhenRequiredServiceMissing_ShouldFailClosedWithoutBroadKey()
     {
@@ -180,6 +206,35 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("required_service_ambiguous:ornn-api");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+        });
+    }
+
+    [Theory]
+    [InlineData("""{"error":true,"message":"create failed"}""", "api_key_create_failed")]
+    [InlineData("not-json", "api_key_create_invalid_json")]
+    [InlineData("""{"full_key":"full-secret-key"}""", "api_key_create_missing_id")]
+    [InlineData("""{"id":"key-created"}""", "api_key_create_missing_full_key")]
+    public async Task ExecuteAsync_WhenApiKeyCreateResponseInvalid_ShouldFailWithoutDispatch(
+        string createResponseJson,
+        string expectedError)
+    {
+        var handler = CreateSuccessHandler(createResponseJson);
+        var harness = CreateHarness(handler: handler);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
+            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
+            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Post);
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
         });
     }
 
@@ -365,7 +420,7 @@ public sealed class ScheduledAgentCreatorToolTests
         return new CreatorHarness(tool, handler, skillRunnerPort, queryPort);
     }
 
-    private static RoutingJsonHandler CreateSuccessHandler()
+    private static RoutingJsonHandler CreateSuccessHandler(string createApiKeyResponse = """{"id":"key-created","full_key":"full-secret-key"}""")
     {
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Get, "/api/v1/user-services", """
@@ -377,20 +432,17 @@ public sealed class ScheduledAgentCreatorToolTests
               ]
             }
             """);
-        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-created","full_key":"full-secret-key"}""");
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", createApiKeyResponse);
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-created", """{"ok":true}""");
         return handler;
     }
 
-    private static async Task WithToolContext(Func<Task> action)
+    private static async Task WithToolContext(Func<Task> action) =>
+        await WithToolContext(CreateToolContext(), action);
+
+    private static async Task WithToolContext(AgentToolExecutionContext context, Func<Task> action)
     {
-        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
-        {
-            Credentials = new AgentToolCredentials("session-token", "session-token", null),
-            Caller = new AgentToolCallerContext("scope-bot-1", null, "message-1"),
-            Channel = new AgentToolChannelContext("lark", "ou_sender", "scope-bot-1", "message-1", "om_1"),
-            ExternalMetadata = BaseExternalMetadata(),
-        };
+        AgentToolRequestContext.Current = context;
         try
         {
             await action();
@@ -401,16 +453,48 @@ public sealed class ScheduledAgentCreatorToolTests
         }
     }
 
-    private static IReadOnlyDictionary<string, string> BaseExternalMetadata(bool includeOutboundSlug = true)
+    private static AgentToolExecutionContext CreateContextForValidationCase(string caseName) =>
+        caseName switch
+        {
+            "missing_scope" => CreateToolContext(callerScopeId: null, channelRegistrationScopeId: null),
+            "missing_conversation" => CreateToolContext(
+                externalMetadata: BaseExternalMetadata(includeConversationId: false)),
+            "missing_receive_target" => CreateToolContext(
+                channelSenderId: null,
+                externalMetadata: BaseExternalMetadata(includeChatId: false, includeUnionId: false)),
+            _ => throw new ArgumentOutOfRangeException(nameof(caseName), caseName, null),
+        };
+
+    private static AgentToolExecutionContext CreateToolContext(
+        string? callerScopeId = "scope-bot-1",
+        string? channelRegistrationScopeId = "scope-bot-1",
+        string? channelSenderId = "ou_sender",
+        IReadOnlyDictionary<string, string>? externalMetadata = null) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("session-token", "session-token", null),
+            Caller = new AgentToolCallerContext(callerScopeId, null, "message-1"),
+            Channel = new AgentToolChannelContext("lark", channelSenderId, channelRegistrationScopeId, "message-1", "om_1"),
+            ExternalMetadata = externalMetadata ?? BaseExternalMetadata(),
+        };
+
+    private static IReadOnlyDictionary<string, string> BaseExternalMetadata(
+        bool includeOutboundSlug = true,
+        bool includeConversationId = true,
+        bool includeChatId = true,
+        bool includeUnionId = true)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [ChannelMetadataKeys.ConversationId] = "oc_conversation",
             [ChannelMetadataKeys.ChatType] = "p2p",
-            [ChannelMetadataKeys.LarkChatId] = "oc_chat",
-            [ChannelMetadataKeys.LarkUnionId] = "on_union",
             [ChannelMetadataKeys.InboundChannelBotProxySlug] = "api-lark-bot-inbound",
         };
+        if (includeConversationId)
+            metadata[ChannelMetadataKeys.ConversationId] = "oc_conversation";
+        if (includeChatId)
+            metadata[ChannelMetadataKeys.LarkChatId] = "oc_chat";
+        if (includeUnionId)
+            metadata[ChannelMetadataKeys.LarkUnionId] = "on_union";
         if (includeOutboundSlug)
             metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = "api-lark-bot";
         return metadata;
