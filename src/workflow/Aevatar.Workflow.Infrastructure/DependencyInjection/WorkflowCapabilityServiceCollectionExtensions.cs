@@ -3,6 +3,7 @@ using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Extensions.Schedules;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -37,6 +38,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             IProjectionProjector<WorkflowExecutionProjectionContext>,
             WorkflowHumanApprovalResolutionProjector>());
         services.AddWorkflowApplication();
+        services.AddWorkflowScheduleExtensions();
         services.AddWorkflowDefinitionFileSource(options =>
         {
             options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));

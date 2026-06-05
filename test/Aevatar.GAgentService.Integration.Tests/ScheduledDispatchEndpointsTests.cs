@@ -417,6 +417,7 @@ public sealed class ScheduledDispatchEndpointsTests
     private sealed class RecordingScheduledDispatchApplicationService : IScheduledDispatchApplicationService
     {
         public List<ScheduledDispatchConfiguration> Created { get; } = [];
+        public List<ScheduledDispatchConfiguration> Ensured { get; } = [];
         public List<(string ScheduleId, ScheduledDispatchConfiguration Configuration)> Updated { get; } = [];
         public List<(string ScheduleId, string Reason)> Enabled { get; } = [];
         public List<(string ScheduleId, string Reason)> Disabled { get; } = [];
@@ -442,6 +443,21 @@ public sealed class ScheduledDispatchEndpointsTests
             if (CreateException != null)
                 throw CreateException;
 
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                configuration.ScheduleId,
+                $"actor:{configuration.ScheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
+            ScheduledDispatchConfiguration configuration,
+            CancellationToken ct = default)
+        {
+            Ensured.Add(configuration);
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 configuration.ScheduleId,
                 $"actor:{configuration.ScheduleId}",

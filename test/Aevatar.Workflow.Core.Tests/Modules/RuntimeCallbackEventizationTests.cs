@@ -1385,17 +1385,8 @@ public class RuntimeCallbackEventizationTests
             TimeSpan period,
             IMessage evt,
             EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default)
-        {
-            _ = dueTime;
-            _ = period;
-            _ = options;
-            _ = ct;
-            var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
-            _generations[callbackId] = generation;
-            Scheduled.Add(new ScheduledCallback(callbackId, generation, evt));
-            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
-        }
+            CancellationToken ct = default) =>
+            ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, options, ct);
 
         public Task CancelDurableCallbackAsync(
             RuntimeCallbackLease lease,

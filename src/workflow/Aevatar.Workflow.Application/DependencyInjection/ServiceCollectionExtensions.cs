@@ -123,6 +123,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         services.TryAddSingleton<IWorkflowScheduleApplicationService, WorkflowScheduleApplicationService>();
+        services.TryAddSingleton<IWorkflowScheduleCommandPort, WorkflowScheduleCommandPort>();
         return services;
     }
 }

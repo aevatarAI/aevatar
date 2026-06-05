@@ -175,7 +175,6 @@ public sealed class WorkflowExecutionContextAdapterTests
         var inner = new RecordingEventHandlerContext();
         var adapter = WorkflowExecutionContextAdapter.Create(inner, new RecordingStateHost { RunId = "run-42" });
         var timeoutEvent = new Empty();
-        var timerEvent = new StringValue { Value = "tick" };
         var cancelLease = new RuntimeCallbackLease("agent-1", "cancel-me", 7, RuntimeCallbackBackend.InMemory);
 
         adapter.AgentId.Should().Be("agent-1");
@@ -201,19 +200,6 @@ public sealed class WorkflowExecutionContextAdapterTests
                 },
             },
             CancellationToken.None);
-        var timerLease = await adapter.ScheduleSelfDurableTimerAsync(
-            "timer-1",
-            TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(2),
-            timerEvent,
-            new EventEnvelopePublishOptions
-            {
-                Propagation = new EventEnvelopePropagationOverrides
-                {
-                    Baggage = { ["mode"] = "timer" },
-                },
-            },
-            CancellationToken.None);
         await adapter.CancelDurableCallbackAsync(cancelLease, CancellationToken.None);
 
         inner.Published.Should().ContainSingle(x =>
@@ -223,9 +209,7 @@ public sealed class WorkflowExecutionContextAdapterTests
             x.TargetActorId == "child-1" &&
             x.Event.Unpack<Int32Value>().Value == 3);
         timeoutLease.CallbackId.Should().Be("timeout-1");
-        timerLease.CallbackId.Should().Be("timer-1");
         inner.ScheduledTimeouts.Should().ContainSingle(x => x.CallbackId == "timeout-1");
-        inner.ScheduledTimers.Should().ContainSingle(x => x.CallbackId == "timer-1");
         inner.Canceled.Should().ContainSingle(x => x.CallbackId == "cancel-me");
     }
 
@@ -270,8 +254,6 @@ public sealed class WorkflowExecutionContextAdapterTests
         public List<(string TargetActorId, Any Event)> Sent { get; } = [];
 
         public List<RecordedCallback> ScheduledTimeouts { get; } = [];
-
-        public List<RecordedTimer> ScheduledTimers { get; } = [];
 
         public List<RuntimeCallbackLease> Canceled { get; } = [];
 
@@ -320,7 +302,6 @@ public sealed class WorkflowExecutionContextAdapterTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            ScheduledTimers.Add(new RecordedTimer(callbackId, dueTime, period, Any.Pack(evt), options));
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 2, RuntimeCallbackBackend.InMemory));
         }
 
@@ -502,13 +483,6 @@ public sealed class WorkflowExecutionContextAdapterTests
     private sealed record RecordedCallback(
         string CallbackId,
         TimeSpan DueTime,
-        Any Event,
-        EventEnvelopePublishOptions? Options);
-
-    private sealed record RecordedTimer(
-        string CallbackId,
-        TimeSpan DueTime,
-        TimeSpan Period,
         Any Event,
         EventEnvelopePublishOptions? Options);
 

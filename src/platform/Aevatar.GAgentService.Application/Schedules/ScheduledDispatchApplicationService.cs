@@ -37,6 +37,23 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
     }
 
+    public async Task<ScheduledDispatchMutationReceipt> EnsureAsync(
+        ScheduledDispatchConfiguration configuration,
+        CancellationToken ct = default)
+    {
+        var normalized = NormalizeConfiguration(configuration, requireScheduleId: true);
+        ValidateSchedule(normalized);
+
+        var dispatch = await _targetPreparationService.PrepareAsync(
+            normalized,
+            BuildScheduleCommandId(normalized.ScheduleId),
+            BuildScheduleCorrelationId(normalized.ScheduleId),
+            ct);
+        var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
+        var admission = await _actorPort.DispatchEnsureAsync(actorId, normalized, dispatch, ct);
+        return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
+    }
+
     public async Task<ScheduledDispatchMutationReceipt> UpdateAsync(
         string scheduleId,
         ScheduledDispatchConfiguration configuration,

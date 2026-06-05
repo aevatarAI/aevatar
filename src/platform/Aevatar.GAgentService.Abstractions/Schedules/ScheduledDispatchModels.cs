@@ -140,6 +140,12 @@ public interface IScheduledDispatchActorPort
         PreparedScheduledDispatchTarget dispatch,
         CancellationToken ct = default);
 
+    Task<DispatchAdmission> DispatchEnsureAsync(
+        string actorId,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
+        CancellationToken ct = default);
+
     Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
@@ -196,6 +202,10 @@ public interface IScheduledServiceInvocationDispatchPort
 public interface IScheduledDispatchApplicationService
 {
     Task<ScheduledDispatchMutationReceipt> CreateAsync(
+        ScheduledDispatchConfiguration configuration,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> EnsureAsync(
         ScheduledDispatchConfiguration configuration,
         CancellationToken ct = default);
 

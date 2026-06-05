@@ -532,14 +532,6 @@ public sealed class WorkflowExecutionRuntimeContextTests
             EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default) => throw new NotSupportedException();
 
-        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
-            string callbackId,
-            TimeSpan dueTime,
-            TimeSpan period,
-            IMessage evt,
-            EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default) => throw new NotSupportedException();
-
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task PublishAsync<TEvent>(

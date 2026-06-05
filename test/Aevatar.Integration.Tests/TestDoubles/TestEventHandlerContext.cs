@@ -168,6 +168,7 @@ internal sealed class TestEventHandlerContext :
         EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
+        _ = ct;
         var lease = Schedule(callbackId, evt, dueTime, period, options);
         return Task.FromResult(lease);
     }
