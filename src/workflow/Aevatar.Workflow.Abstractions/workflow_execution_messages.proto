@@ -492,6 +492,130 @@ message WorkflowToolCallCompletedEvent
   string error = 6;
 }
 
+enum WorkflowLeaseConflictPolicy {
+  WORKFLOW_LEASE_CONFLICT_POLICY_UNSPECIFIED = 0;
+  WORKFLOW_LEASE_CONFLICT_POLICY_FAIL = 1;
+  WORKFLOW_LEASE_CONFLICT_POLICY_WAIT = 2;
+}
+
+enum WorkflowLeaseOperation {
+  WORKFLOW_LEASE_OPERATION_UNSPECIFIED = 0;
+  WORKFLOW_LEASE_OPERATION_ACQUIRE = 1;
+  WORKFLOW_LEASE_OPERATION_RENEW = 2;
+  WORKFLOW_LEASE_OPERATION_RELEASE = 3;
+}
+
+enum WorkflowLeaseRejectionReason {
+  WORKFLOW_LEASE_REJECTION_REASON_UNSPECIFIED = 0;
+  WORKFLOW_LEASE_REJECTION_REASON_LEASE_BUSY = 1;
+  WORKFLOW_LEASE_REJECTION_REASON_WAIT_QUEUE_FULL = 2;
+  WORKFLOW_LEASE_REJECTION_REASON_WAIT_TIMEOUT = 3;
+  WORKFLOW_LEASE_REJECTION_REASON_STALE_HOLDER = 4;
+  WORKFLOW_LEASE_REJECTION_REASON_INVALID_REQUEST = 5;
+}
+
+message WorkflowLeaseAcquireRequestedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  int32 ttl_ms = 6;
+  WorkflowLeaseConflictPolicy on_conflict = 7;
+  int32 wait_timeout_ms = 8;
+}
+
+message WorkflowLeaseAcquiredEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+  int64 expires_at_unix_ms = 8;
+  int32 ttl_ms = 9;
+}
+
+message WorkflowLeaseRenewRequestedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+  int32 ttl_ms = 8;
+}
+
+message WorkflowLeaseRenewedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+  int64 expires_at_unix_ms = 8;
+  int32 ttl_ms = 9;
+}
+
+message WorkflowLeaseReleaseRequestedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+}
+
+message WorkflowLeaseReleasedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  string holder_token = 6;
+  int64 generation = 7;
+}
+
+message WorkflowLeaseRejectedEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+  WorkflowLeaseOperation operation = 6;
+  WorkflowLeaseRejectionReason reason = 7;
+  string current_holder_run_id = 8;
+  string error = 9;
+}
+
+message WorkflowLeaseExpirationFiredEvent
+{
+  string lease_key = 1;
+  string holder_token = 2;
+  int64 generation = 3;
+  int64 expires_at_unix_ms = 4;
+}
+
+message WorkflowLeaseWaitTimeoutFiredEvent
+{
+  string lease_key = 1;
+  string request_id = 2;
+  string requester_run_id = 3;
+  string requester_actor_id = 4;
+  string requester_step_id = 5;
+}
+
 // Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
 message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
 

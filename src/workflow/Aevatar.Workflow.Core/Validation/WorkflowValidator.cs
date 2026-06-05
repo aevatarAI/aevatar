@@ -226,6 +226,12 @@ public static class WorkflowValidator
             return;
         }
 
+        if (stepType == "lease")
+        {
+            ValidateLeaseStep(step, errors);
+            return;
+        }
+
         if (stepType == "parallel")
         {
             ValidateParallelVoteAgreement(step, errors);
@@ -262,6 +268,73 @@ public static class WorkflowValidator
 
         if (!VoteAgreementRuleConfigurationParser.TryParse(voteParameters, out _, out var error))
             errors.Add($"步骤 '{step.Id}'（parallel.vote）{error}");
+    }
+
+    private static void ValidateLeaseStep(StepDefinition step, List<string> errors)
+    {
+        var action = GetParameterOrDefault(step.Parameters, "action", "acquire").Trim().ToLowerInvariant();
+        if (action is not "acquire" and not "renew" and not "release")
+            errors.Add($"步骤 '{step.Id}'（lease）action 仅支持 acquire|renew|release，当前值 '{action}'");
+
+        if (!TryGetParameter(step.Parameters, "key", out var key) || string.IsNullOrWhiteSpace(key))
+            errors.Add($"步骤 '{step.Id}'（lease）缺少 key 参数");
+
+        ValidateOptionalBoundedInt(
+            step,
+            "ttl_ms",
+            WorkflowLeaseGAgent.MinLeaseTtlMs,
+            WorkflowLeaseGAgent.MaxLeaseTtlMs,
+            errors);
+        ValidateOptionalBoundedInt(
+            step,
+            "wait_timeout_ms",
+            WorkflowLeaseGAgent.MinWaitTimeoutMs,
+            WorkflowLeaseGAgent.MaxWaitTimeoutMs,
+            errors);
+
+        if (TryGetParameter(step.Parameters, "on_conflict", out var onConflict) &&
+            !string.IsNullOrWhiteSpace(onConflict) &&
+            !string.Equals(onConflict.Trim(), "fail", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(onConflict.Trim(), "wait", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"步骤 '{step.Id}'（lease）on_conflict 仅支持 fail|wait，当前值 '{onConflict}'");
+        }
+
+        var hasHolderToken = TryGetParameter(step.Parameters, "holder_token", out var holderToken) &&
+                             !string.IsNullOrWhiteSpace(holderToken);
+        var hasGeneration = TryGetParameter(step.Parameters, "generation", out var generation) &&
+                            !string.IsNullOrWhiteSpace(generation);
+        if (action is "renew" or "release")
+        {
+            if (!hasHolderToken)
+                errors.Add($"步骤 '{step.Id}'（lease）{action} 必须声明 holder_token");
+            if (!hasGeneration)
+                errors.Add($"步骤 '{step.Id}'（lease）{action} 必须声明 generation");
+        }
+        else
+        {
+            if (hasHolderToken)
+                errors.Add($"步骤 '{step.Id}'（lease）acquire 不允许声明 holder_token");
+            if (hasGeneration)
+                errors.Add($"步骤 '{step.Id}'（lease）acquire 不允许声明 generation");
+        }
+    }
+
+    private static void ValidateOptionalBoundedInt(
+        StepDefinition step,
+        string parameterName,
+        int min,
+        int max,
+        List<string> errors)
+    {
+        if (!TryGetParameter(step.Parameters, parameterName, out var raw) ||
+            string.IsNullOrWhiteSpace(raw))
+        {
+            return;
+        }
+
+        if (!int.TryParse(raw.Trim(), out var value) || value < min || value > max)
+            errors.Add($"步骤 '{step.Id}'（lease）{parameterName} 必须是 {min}..{max} 范围内的整数");
     }
 
     private static void ValidateConfiguredDecisionBranches(
@@ -315,6 +388,14 @@ public static class WorkflowValidator
         value = string.Empty;
         return false;
     }
+
+    private static string GetParameterOrDefault(
+        IReadOnlyDictionary<string, string> parameters,
+        string key,
+        string fallback) =>
+        TryGetParameter(parameters, key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : fallback;
 
     public sealed class WorkflowValidationOptions
     {

@@ -225,6 +225,45 @@ steps:
       duration_ms: "1500"
 ```
 
+### `lease`（别名：`mutex`）
+
+- 作用：在多个 workflow run 之间协调同一个单例资源的持有权。
+- 事实源：每个 canonical `key` 对应一个 `WorkflowLeaseGAgent` actor；run actor 只发请求并等待 continuation event。
+- v1 action：`acquire`、`renew`、`release`。缺省 action 为 `acquire`。
+- 常用参数：`key`、`on_conflict`、`ttl_ms`、`wait_timeout_ms`、`holder_token`、`generation`、`holder_token_variable`。
+- TTL 默认 `300000` ms，范围 `1000..3600000`；wait timeout 默认 `300000` ms，范围 `1000..3600000`。
+- `on_conflict` 仅 `fail|wait`；`wait` 使用固定 FIFO 队列，队列上限固定 32。
+- acquire 成功输出为 `holder_token`，并写入 `lease.*` annotations；renew/release 必须显式传回 `holder_token + generation`。
+- v1 不支持 `with_lease` 或自动持凭据。
+
+```yaml
+steps:
+  - id: acquire_lease
+    type: lease
+    parameters:
+      key: "billing/export"
+      on_conflict: wait
+      ttl_ms: "300000"
+      wait_timeout_ms: "120000"
+      holder_token_variable: billing_export_lease_token
+    next: do_singleton_work
+
+  - id: do_singleton_work
+    type: connector_call
+    parameters:
+      connector: billing_export
+      operation: run
+    next: release_lease
+
+  - id: release_lease
+    type: lease
+    parameters:
+      action: release
+      key: "billing/export"
+      holder_token: "${steps.acquire_lease.annotations.lease.holder_token}"
+      generation: "${steps.acquire_lease.annotations.lease.generation}"
+```
+
 ### `wait_signal`（别名：`wait`）
 
 - 作用：等待外部信号（可设置超时）。

@@ -36,6 +36,7 @@ public static class WorkflowPrimitiveCatalog
             ["secure_connector"] = "secure_connector_call",
             ["secret_input"] = "secure_input",
             ["vote_consensus"] = "vote",
+            ["mutex"] = "lease",
         };
 
     private static readonly string[] IdentityPrimitives =
@@ -50,7 +51,7 @@ public static class WorkflowPrimitiveCatalog
         "llm_call", "tool_call", "connector_call", "secure_connector_call",
         "evaluate", "reflect", "human_input", "secure_input",
         "human_approval", "wait_signal", "emit", "parallel", "race",
-        "map_reduce", "vote", "foreach", "dynamic_workflow",
+        "map_reduce", "vote", "foreach", "dynamic_workflow", "lease",
     ];
 
     public static IReadOnlySet<string> BuiltInCanonicalTypes { get; } = DeriveBuiltInCanonicalTypes();
