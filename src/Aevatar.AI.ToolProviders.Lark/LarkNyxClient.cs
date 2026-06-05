@@ -350,7 +350,12 @@ public sealed class LarkNyxClient : ILarkNyxClient
             ["external_access"] = false,
             ["security_entity"] = "anyone_can_view",
             ["comment_entity"] = "anyone_can_view",
-            ["share_entity"] = "anyone_can_view",
+            // Lark's share_entity uses a DISTINCT enum (anyone | same_tenant | only_full_access),
+            // NOT the security/comment/copy "anyone_can_view" vocabulary. Sending "anyone_can_view"
+            // here fails Lark param validation (400) and aborts the entire public-permission PATCH,
+            // so even link_share_entity never applies and the doc stays private. "same_tenant"
+            // matches the tenant_readable/editable link scope.
+            ["share_entity"] = "same_tenant",
             ["copy_entity"] = "anyone_can_view",
         };
 

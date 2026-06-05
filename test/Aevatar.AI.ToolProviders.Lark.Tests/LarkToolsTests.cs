@@ -1684,6 +1684,10 @@ public class LarkToolsTests
             .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/drive/v1/permissions/doccn_123/public?type=docx");
         handler.LastBody.Should().Contain("\"link_share_entity\":\"tenant_editable\"");
         handler.LastBody.Should().Contain("\"receive_id\":\"oc_chat_1\"");
+        // share_entity must use Lark's enum (anyone | same_tenant | only_full_access), never the
+        // security/comment "anyone_can_view" value which Lark rejects with a 400 param error.
+        handler.LastBody.Should().Contain("\"share_entity\":\"same_tenant\"");
+        handler.LastBody.Should().NotContain("\"share_entity\":\"anyone_can_view\"");
     }
 
     [Fact]
