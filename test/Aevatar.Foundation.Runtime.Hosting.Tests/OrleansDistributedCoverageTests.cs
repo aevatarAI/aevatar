@@ -10,6 +10,7 @@ using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 using Orleans.Runtime;
+using Orleans.Storage;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -384,6 +385,93 @@ public sealed class OrleansDistributedCoverageTests
     }
 
     [Fact]
+    public async Task StreamTopologyGrain_ShouldRefreshAndRetryUpsertAfterStorageConflict()
+    {
+        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
+        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
+        stateProxy.ConflictsBeforeWriteSuccess = 1;
+        stateProxy.StateAfterRead = new StreamTopologyGrainState
+        {
+            Revision = 5,
+            BindingsByTarget =
+            {
+                ["target-existing"] = CreateEntry("source-1", "target-existing", 4, "lease-existing"),
+            },
+        };
+        var grain = new StreamTopologyGrain(state);
+
+        await grain.UpsertAsync(CreateBinding("source-1", "target-new", 6, "lease-new"));
+
+        stateProxy.ReadCount.Should().Be(1);
+        stateProxy.WriteCount.Should().Be(2);
+        stateProxy.State.Revision.Should().Be(6);
+        var listed = await grain.ListAsync();
+        listed.Should().Contain(x => x.TargetStreamId == "target-existing");
+        listed.Should().Contain(x => x.TargetStreamId == "target-new" && x.LeaseId == "lease-new");
+    }
+
+    [Fact]
+    public async Task StreamTopologyGrain_ShouldSkipRetryWriteWhenRefreshedStateAlreadyContainsUpsert()
+    {
+        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
+        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
+        stateProxy.ConflictsBeforeWriteSuccess = 1;
+        stateProxy.StateAfterRead = new StreamTopologyGrainState
+        {
+            Revision = 9,
+            BindingsByTarget =
+            {
+                ["target-1"] = CreateEntry("source-1", "target-1", 1, "lease-1"),
+            },
+        };
+        var grain = new StreamTopologyGrain(state);
+
+        await grain.UpsertAsync(CreateBinding("source-1", "target-1", 1, "lease-1"));
+
+        stateProxy.ReadCount.Should().Be(1);
+        stateProxy.WriteCount.Should().Be(1);
+        stateProxy.State.Revision.Should().Be(9);
+        (await grain.ListAsync()).Should().ContainSingle(x => x.TargetStreamId == "target-1");
+    }
+
+    [Fact]
+    public async Task StreamTopologyGrain_ShouldSkipRetryWriteWhenRefreshedStateAlreadyRemovedTarget()
+    {
+        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
+        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
+        stateProxy.State.BindingsByTarget["target-1"] = CreateEntry("source-1", "target-1", 1, "lease-1");
+        stateProxy.State.Revision = 1;
+        stateProxy.ConflictsBeforeWriteSuccess = 1;
+        stateProxy.StateAfterRead = new StreamTopologyGrainState
+        {
+            Revision = 2,
+        };
+        var grain = new StreamTopologyGrain(state);
+
+        await grain.RemoveAsync("target-1");
+
+        stateProxy.ReadCount.Should().Be(1);
+        stateProxy.WriteCount.Should().Be(1);
+        stateProxy.State.Revision.Should().Be(2);
+        (await grain.ListAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StreamTopologyGrain_ShouldPropagateNonConflictStorageFailures()
+    {
+        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
+        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
+        stateProxy.WriteFailure = new InvalidOperationException("storage unavailable");
+        var grain = new StreamTopologyGrain(state);
+
+        var act = () => grain.UpsertAsync(CreateBinding("source-1", "target-1", 1, "lease-1"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("storage unavailable");
+        stateProxy.ReadCount.Should().Be(0);
+        stateProxy.WriteCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task StreamTopologyGrain_ShouldSupportLegacyListState()
     {
         var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
@@ -556,6 +644,22 @@ public sealed class OrleansDistributedCoverageTests
             ForwardingMode = StreamForwardingMode.HandleThenForward,
             DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Children, TopologyAudience.ParentAndChildren },
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt" },
+            Version = version,
+            LeaseId = leaseId,
+        };
+
+    private static StreamForwardingBindingEntry CreateEntry(
+        string source,
+        string target,
+        long version,
+        string? leaseId) =>
+        new()
+        {
+            SourceStreamId = source,
+            TargetStreamId = target,
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
+            EventTypeFilter = ["evt"],
             Version = version,
             LeaseId = leaseId,
         };
@@ -741,6 +845,14 @@ public sealed class OrleansDistributedCoverageTests
     {
         public StreamTopologyGrainState State { get; set; } = new();
 
+        public StreamTopologyGrainState? StateAfterRead { get; set; }
+
+        public Exception? WriteFailure { get; set; }
+
+        public int ConflictsBeforeWriteSuccess { get; set; }
+
+        public int ReadCount { get; private set; }
+
         public int WriteCount { get; private set; }
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
@@ -756,9 +868,29 @@ public sealed class OrleansDistributedCoverageTests
             if (name == "WriteStateAsync")
             {
                 WriteCount++;
+                if (WriteFailure != null)
+                    return Task.FromException(WriteFailure);
+
+                if (ConflictsBeforeWriteSuccess > 0)
+                {
+                    ConflictsBeforeWriteSuccess--;
+                    return Task.FromException(new InconsistentStateException(
+                        "Version conflict while writing stream topology state.",
+                        "stored-etag",
+                        "current-etag"));
+                }
+
                 return Task.CompletedTask;
             }
-            if (name == "ReadStateAsync" || name == "ClearStateAsync")
+            if (name == "ReadStateAsync")
+            {
+                ReadCount++;
+                if (StateAfterRead != null)
+                    State = StateAfterRead;
+
+                return Task.CompletedTask;
+            }
+            if (name == "ClearStateAsync")
                 return Task.CompletedTask;
             if (name == "get_RecordExists")
                 return true;
