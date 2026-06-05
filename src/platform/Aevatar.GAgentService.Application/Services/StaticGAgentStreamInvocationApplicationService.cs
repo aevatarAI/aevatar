@@ -62,8 +62,7 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
         EnsureStaticChatTarget(target, invocationRequest);
         var staticPlan = target.Artifact.DeploymentPlan.StaticPlan;
         var agentKind = staticPlan?.AgentKind?.Trim() ?? string.Empty;
-        var actorTypeName = staticPlan?.ActorTypeName?.Trim() ?? string.Empty;
-        if (agentKind.Length == 0 && actorTypeName.Length == 0)
+        if (agentKind.Length == 0)
             throw new InvalidOperationException("Static GAgent service has no agent kind configured.");
 
         StaticGAgentStreamAcceptedReceipt? accepted = null;
@@ -93,14 +92,13 @@ public sealed class StaticGAgentStreamInvocationApplicationService : IStaticGAge
         var interaction = await _interactionPort.ExecuteAsync(
             new GAgentDraftRunInteractionRequest(
                 ScopeId: identity.TenantId,
-                ActorTypeName: actorTypeName,
+                AgentKind: agentKind,
                 Prompt: prompt,
                 PreferredActorId: preferredActorId,
                 SessionId: input.SessionId,
                 Headers: headers,
                 InputParts: input.InputParts,
                 UseCorrelationIdAsFallbackSessionId: false,
-                AgentKind: agentKind,
                 ToolContext: input.ToolContext,
                 LlmControl: input.LlmControl),
             EmitObservedAsync,

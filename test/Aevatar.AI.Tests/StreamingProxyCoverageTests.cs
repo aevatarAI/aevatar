@@ -3064,7 +3064,7 @@ public class StreamingProxyCoverageTests
             GAgentActorRegistration registration,
             CancellationToken cancellationToken = default)
         {
-            AddedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            AddedActors.Add((registration.ScopeId, registration.AgentKind, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionVisible));
@@ -3077,7 +3077,7 @@ public class StreamingProxyCoverageTests
             if (UnregisterException is not null)
                 throw UnregisterException;
 
-            RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            RemovedActors.Add((registration.ScopeId, registration.AgentKind, registration.ActorId));
             return Task.FromResult(new GAgentActorRegistryCommandReceipt(
                 registration,
                 GAgentActorRegistryCommandStage.AdmissionRemoved));

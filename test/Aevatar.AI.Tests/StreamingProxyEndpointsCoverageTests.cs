@@ -264,8 +264,8 @@ public sealed class StreamingProxyEndpointsCoverageTests
         IGAgentActorRegistryQueryPort,
         IScopeResourceAdmissionPort
     {
-        public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
-        public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
+        public List<(string ScopeId, string AgentKind, string ActorId)> AddedActors { get; } = [];
+        public List<(string ScopeId, string AgentKind, string ActorId)> RemovedActors { get; } = [];
         public Exception? ThrowOnRegister { get; init; }
         public Exception? ThrowOnUnregister { get; init; }
         public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
@@ -286,7 +286,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CancellationToken cancellationToken = default)
         {
             operations.Add($"store:add:{registration.ActorId}");
-            AddedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            AddedActors.Add((registration.ScopeId, registration.AgentKind, registration.ActorId));
             if (ThrowOnRegister is not null)
                 throw ThrowOnRegister;
 
@@ -300,7 +300,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
             CancellationToken cancellationToken = default)
         {
             operations.Add($"store:remove:{registration.ActorId}");
-            RemovedActors.Add((registration.ScopeId, registration.GAgentType, registration.ActorId));
+            RemovedActors.Add((registration.ScopeId, registration.AgentKind, registration.ActorId));
             if (ThrowOnUnregister is not null)
                 throw ThrowOnUnregister;
 

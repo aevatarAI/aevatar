@@ -243,7 +243,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             case MemberImplementationKindNames.GAgent:
                 message.Gagent = new StudioMemberGAgentRef
                 {
-                    ActorTypeName = implementation.ActorTypeName ?? string.Empty,
+                    ActorTypeName = implementation.DiagnosticActorTypeName ?? string.Empty,
                 };
                 break;
             default:
@@ -287,7 +287,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             case MemberImplementationKindNames.GAgent:
                 request.Gagent = new StudioMemberGAgentBindingRequest
                 {
-                    ActorTypeName = binding.GAgent?.ActorTypeName ?? string.Empty,
+                    AgentKind = binding.GAgent?.AgentKind ?? string.Empty,
                 };
                 foreach (var endpoint in binding.GAgent?.Endpoints ?? [])
                 {

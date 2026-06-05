@@ -61,7 +61,7 @@ public sealed record StudioMemberImplementationRefResponse(
     string? WorkflowRevision = null,
     string? ScriptId = null,
     string? ScriptRevision = null,
-    string? ActorTypeName = null);
+    string? DiagnosticActorTypeName = null);
 
 public sealed record StudioMemberSummaryResponse(
     string MemberId,
@@ -202,7 +202,7 @@ public sealed record StudioMemberGAgentEndpointSpec(
     string? Description = null);
 
 public sealed record StudioMemberGAgentBindingSpec(
-    string ActorTypeName,
+    string AgentKind,
     IReadOnlyList<StudioMemberGAgentEndpointSpec>? Endpoints = null);
 
 public sealed record StudioMemberBindingAcceptedResponse(

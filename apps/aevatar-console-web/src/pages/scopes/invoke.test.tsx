@@ -92,7 +92,7 @@ jest.mock('@/shared/studio/api', () => ({
       deploymentStatus: 'Active',
       updatedAt: '2026-03-26T08:00:00Z',
       gAgent: {
-        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        agentKind: 'nyxid.chat',
         preferredActorId: 'NyxIdChat:scope-a',
       },
     })),
@@ -758,7 +758,7 @@ describe('ScopeInvokePage', () => {
 
     await waitFor(() => {
       expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
-        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        agentKind: 'nyxid.chat',
         displayName: 'NyxID Chat',
         endpoints: [
           {

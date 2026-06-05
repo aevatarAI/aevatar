@@ -415,10 +415,10 @@ public sealed class StudioMemberService : IStudioMemberService
         {
             count++;
             implementationKind = MemberImplementationKindNames.GAgent;
-            if (string.IsNullOrWhiteSpace(request.GAgent.ActorTypeName))
+            if (string.IsNullOrWhiteSpace(request.GAgent.AgentKind))
             {
                 throw new InvalidOperationException(
-                    $"member '{memberId}' bind: actorTypeName is required for gagent members.");
+                    $"member '{memberId}' bind: agentKind is required for gagent members.");
             }
         }
 

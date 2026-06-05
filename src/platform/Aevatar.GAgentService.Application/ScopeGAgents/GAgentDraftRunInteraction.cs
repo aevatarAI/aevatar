@@ -25,20 +25,20 @@ internal sealed class GAgentDraftRunCommandTarget
 
     public GAgentDraftRunCommandTarget(
         IActor actor,
-        string actorTypeName,
+        string diagnosticClrTypeName,
         IGAgentDraftRunProjectionPort projectionPort,
         IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
-        ActorTypeName = string.IsNullOrWhiteSpace(actorTypeName)
-            ? throw new ArgumentException("Actor type name is required.", nameof(actorTypeName))
-            : actorTypeName.Trim();
+        DiagnosticClrTypeName = string.IsNullOrWhiteSpace(diagnosticClrTypeName)
+            ? throw new ArgumentException("Diagnostic CLR type name is required.", nameof(diagnosticClrTypeName))
+            : diagnosticClrTypeName.Trim();
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
     public IActor Actor { get; }
-    public string ActorTypeName { get; }
+    public string DiagnosticClrTypeName { get; }
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
     public string SessionId { get; private set; } = string.Empty;
@@ -240,7 +240,7 @@ internal sealed class GAgentDraftRunCommandTargetResolver
         if (implementation is null)
         {
             return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Failure(
-                GAgentDraftRunStartError.UnknownActorType);
+                GAgentDraftRunStartError.UnknownAgentKind);
         }
 
         agentKind = implementation.Metadata.Kind;
@@ -258,7 +258,7 @@ internal sealed class GAgentDraftRunCommandTargetResolver
                 if (!await MatchesExpectedKindAsync(existingActor, agentKind, ct))
                 {
                     return CommandTargetResolution<GAgentDraftRunCommandTarget, GAgentDraftRunStartError>.Failure(
-                        GAgentDraftRunStartError.ActorTypeMismatch);
+                        GAgentDraftRunStartError.ActorKindMismatch);
                 }
 
                 actor = existingActor;
@@ -514,7 +514,7 @@ internal sealed class GAgentDraftRunAcceptedReceiptFactory
 
         return new GAgentDraftRunAcceptedReceipt(
             target.ActorId,
-            target.ActorTypeName,
+            target.DiagnosticClrTypeName,
             context.CommandId,
             context.CorrelationId,
             target.SessionId);

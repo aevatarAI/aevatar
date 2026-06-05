@@ -28,7 +28,7 @@ public sealed class BindingBindTool : IAgentTool
     public string Description =>
         "Bind a service to the current scope. " +
         "Supports three implementation kinds: 'workflow' (requires workflow_name or workflow_yamls), " +
-        "'scripting' (requires script_id), and 'gagent' (requires gagent_type). " +
+        "'scripting' (requires script_id), and 'gagent' (requires agent_kind). " +
         "Use binding_list to see existing bindings before creating new ones.";
 
     public string ParametersSchema => """
@@ -57,9 +57,9 @@ public sealed class BindingBindTool : IAgentTool
               "type": "string",
               "description": "Optional script revision (for 'scripting' kind)"
             },
-            "gagent_type": {
+            "agent_kind": {
               "type": "string",
-              "description": "GAgent actor type name (required for 'gagent' kind)"
+              "description": "Canonical GAgent kind (required for 'gagent' kind)"
             },
             "display_name": {
               "type": "string",
@@ -114,9 +114,12 @@ public sealed class BindingBindTool : IAgentTool
                     request = scReq;
                     break;
                 case "gagent":
+                    if (!string.IsNullOrWhiteSpace(args.Str("gagent_type")))
+                        return JsonDefaults.Error("'gagent_type' is not accepted. Use 'agent_kind'.");
+
                     var gaReq = BuildGAgentRequest(scopeId, serviceId, args);
                     if (gaReq == null)
-                        return JsonDefaults.Error("'gagent_type' is required for 'gagent' kind");
+                        return JsonDefaults.Error("'agent_kind' is required for 'gagent' kind");
                     request = gaReq;
                     break;
                 default:
@@ -196,20 +199,22 @@ public sealed class BindingBindTool : IAgentTool
     private static ScopeBindingUpsertRequest? BuildGAgentRequest(
         string scopeId, string? serviceId, ToolArgs args)
     {
-        var gagentType = args.Str("gagent_type");
-        if (string.IsNullOrWhiteSpace(gagentType))
+        var agentKind = args.Str("agent_kind");
+        if (string.IsNullOrWhiteSpace(agentKind))
             return null;
 
-        // Use short type name for service ID (e.g., "MyAgent" from "Namespace.MyAgent")
-        var shortType = gagentType.Contains('.')
-            ? gagentType[(gagentType.LastIndexOf('.') + 1)..]
-            : gagentType;
+        var normalizedKind = agentKind.Trim();
+        var shortKind = normalizedKind.Contains('.')
+            ? normalizedKind[(normalizedKind.LastIndexOf('.') + 1)..]
+            : normalizedKind;
 
         return new ScopeBindingUpsertRequest(
             ScopeId: scopeId,
             ImplementationKind: ScopeBindingImplementationKind.GAgent,
-            GAgent: new ScopeBindingGAgentSpec(gagentType, []),
-            DisplayName: args.Str("display_name") ?? shortType,
-            ServiceId: serviceId ?? $"agent-{shortType.ToLowerInvariant()}");
+            GAgent: new ScopeBindingGAgentSpec(
+                AgentKind: normalizedKind,
+                Endpoints: []),
+            DisplayName: args.Str("display_name") ?? shortKind,
+            ServiceId: serviceId ?? $"agent-{shortKind.ToLowerInvariant()}");
     }
 }

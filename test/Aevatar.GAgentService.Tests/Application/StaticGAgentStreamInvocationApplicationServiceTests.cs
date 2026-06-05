@@ -46,7 +46,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var receipt = new GAgentDraftRunAcceptedReceipt(
             ActorId: "gagent-actor-1",
-            ActorTypeName: typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+            DiagnosticClrTypeName: typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
             CommandId: "cmd-gagent-1",
             CorrelationId: "corr-gagent-1");
         var interaction = new RecordingGAgentDraftRunInteractionService
@@ -120,7 +120,6 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         var delegated = interaction.Requests[0];
         delegated.ScopeId.Should().Be(identity.TenantId);
         delegated.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
-        delegated.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
         delegated.Prompt.Should().Be("hello static");
         delegated.PreferredActorId.Should().Be("preferred-actor");
         delegated.SessionId.Should().Be("session-1");
@@ -245,7 +244,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var interaction = new RecordingGAgentDraftRunInteractionService
         {
-            Failure = GAgentDraftRunStartError.UnknownActorType,
+            Failure = GAgentDraftRunStartError.UnknownAgentKind,
         };
         var registration = new RecordingServiceRunRegistrationPort();
         var service = await CreateServiceAsync(
@@ -260,7 +259,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
 
         result.Succeeded.Should().BeFalse();
         result.Accepted.Should().BeNull();
-        result.StartError.Should().Be(GAgentDraftRunStartError.UnknownActorType);
+        result.StartError.Should().Be(GAgentDraftRunStartError.UnknownAgentKind);
         registration.Records.Should().BeEmpty();
     }
 

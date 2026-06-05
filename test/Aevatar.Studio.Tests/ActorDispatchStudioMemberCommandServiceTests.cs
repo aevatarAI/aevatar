@@ -124,7 +124,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ScriptRevision: "v2"),
             MemberImplementationKindNames.GAgent => new StudioMemberImplementationRefResponse(
                 ImplementationKind: kind,
-                ActorTypeName: "MyActor"),
+                DiagnosticActorTypeName: "MyActor"),
             _ => throw new InvalidOperationException("unreachable"),
         };
 
@@ -258,7 +258,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "MyCompany.MyGAgent",
+                        AgentKind: "my-company.my-gagent",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "chat",
@@ -272,7 +272,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
 
         var evt = dispatch.Dispatches.Should().ContainSingle().Which
             .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
-        evt.Request.Gagent.ActorTypeName.Should().Be("MyCompany.MyGAgent");
+        evt.Request.Gagent.AgentKind.Should().Be("my-company.my-gagent");
         evt.Request.Gagent.Endpoints.Should().ContainSingle()
             .Which.Should().BeEquivalentTo(new StudioMemberGAgentEndpointBindingRequest
             {
@@ -299,7 +299,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "Example.Studio.CommandMember, Example.Studio",
+                        AgentKind: "example.studio.command-member",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "run",
@@ -336,7 +336,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "MyCompany.MyGAgent",
+                        AgentKind: "my-company.my-gagent",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "chat",

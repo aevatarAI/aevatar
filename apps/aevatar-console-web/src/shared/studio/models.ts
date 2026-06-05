@@ -287,7 +287,7 @@ export interface StudioScopeBindingResult {
     readonly definitionActorId: string;
   } | null;
   readonly gAgent?: {
-    readonly actorTypeName: string;
+    readonly diagnosticClrTypeName: string;
   } | null;
 }
 
@@ -316,6 +316,7 @@ export interface StudioScopeBindingRevision {
   readonly scriptDefinitionActorId: string;
   readonly scriptSourceHash: string;
   readonly staticActorTypeName: string;
+  readonly staticAgentKind?: string;
 }
 
 export interface StudioScopeBindingStatus {
@@ -360,7 +361,7 @@ export function describeStudioScopeBindingRevisionTarget(
     case 'script':
       return revision.scriptId || 'Script';
     case 'gagent':
-      return revision.staticActorTypeName || 'GAgent';
+      return revision.staticAgentKind || revision.staticActorTypeName || 'GAgent';
     default:
       return 'Unknown';
   }
@@ -471,7 +472,8 @@ export interface StudioMemberImplementationRef {
   readonly workflowRevision?: string | null;
   readonly scriptId?: string | null;
   readonly scriptRevision?: string | null;
-  readonly actorTypeName?: string | null;
+  readonly agentKind?: string | null;
+  readonly diagnosticActorTypeName?: string | null;
 }
 
 export interface StudioMemberBindingContract {
@@ -648,7 +650,7 @@ export interface StudioScopeGAgentBindingInput {
   readonly scopeId: string;
   readonly serviceId?: string | null;
   readonly displayName?: string | null;
-  readonly actorTypeName: string;
+  readonly agentKind: string;
   readonly endpoints: readonly StudioScopeGAgentEndpointInput[];
   readonly revisionId?: string | null;
 }

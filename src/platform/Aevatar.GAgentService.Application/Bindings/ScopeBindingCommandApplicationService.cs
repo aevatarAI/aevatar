@@ -454,7 +454,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var gagent = request.GAgent
             ?? throw new InvalidOperationException("gagent is required for implementationKind 'gagent'.");
         var agentKind = NormalizeGAgentKind(gagent);
-        var actorTypeName = NormalizeLegacyActorTypeName(gagent.ActorTypeName, agentKind);
+        var diagnosticClrTypeName = ResolveDiagnosticClrTypeName(agentKind);
 
         // Start with caller-supplied endpoints, then ensure a chat endpoint always exists.
         var endpointSpecs = (gagent.Endpoints ?? [])
@@ -483,7 +483,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ImplementationKind = ServiceImplementationKind.Static,
                     StaticSpec = new StaticServiceRevisionSpec
                     {
-                        ActorTypeName = actorTypeName,
+                        ActorTypeName = diagnosticClrTypeName,
                         AgentKind = agentKind,
                     },
                 };
@@ -499,7 +499,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ScopeBindingImplementationKind.GAgent,
                     $"gagent-service:static-runtime:{expectedDeploymentId}",
                     GAgent: new ScopeBindingGAgentResult(
-                        actorTypeName),
+                        diagnosticClrTypeName),
                     ExpectedDeploymentId: expectedDeploymentId));
     }
 
@@ -509,20 +509,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (!string.IsNullOrWhiteSpace(agentKind))
             return agentKind;
 
-        var actorTypeName = ScopeWorkflowCapabilityConventions.NormalizeOptional(gagent.ActorTypeName);
-        if (string.IsNullOrWhiteSpace(actorTypeName))
-            ScopeWorkflowCapabilityOptions.NormalizeRequired(string.Empty, nameof(gagent.AgentKind));
-
-        throw new InvalidOperationException(
-            $"gagent actor_type_name '{actorTypeName}' is deprecated and cannot be used for identity. Provide gagent agentKind.");
+        ScopeWorkflowCapabilityOptions.NormalizeRequired(string.Empty, nameof(gagent.AgentKind));
+        throw new InvalidOperationException("gagent agentKind is required.");
     }
 
-    private string NormalizeLegacyActorTypeName(string? actorTypeName, string agentKind)
+    private string ResolveDiagnosticClrTypeName(string agentKind)
     {
-        var normalizedActorTypeName = ScopeWorkflowCapabilityConventions.NormalizeOptional(actorTypeName);
-        if (!string.IsNullOrWhiteSpace(normalizedActorTypeName))
-            return normalizedActorTypeName;
-
         if (_agentKindRegistry != null)
         {
             var implementation = _agentKindRegistry.Resolve(agentKind);

@@ -24,6 +24,7 @@ namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 public sealed class AevatarInvocationDispatcher
 {
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
+    private const string DeletedGAgentActorNameAlias = "actor_name";
     private static readonly string[] ProtectedCallerMetadataKeys =
     [
         LLMRequestMetadataKeys.ScopeId,
@@ -92,6 +93,13 @@ public sealed class AevatarInvocationDispatcher
         string argumentsJson,
         CancellationToken ct = default)
     {
+        var forbiddenAlias = ProtoToolArguments.RejectForbiddenRootField(
+            argumentsJson,
+            DeletedGAgentActorNameAlias,
+            "agent_kind or actor_id");
+        if (forbiddenAlias != null)
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(forbiddenAlias), forbiddenAlias);
+
         var parsed = ProtoToolArguments.Parse<InvokeGAgentToolRequest>(argumentsJson);
         if (parsed.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(parsed.Error), parsed.Error);
@@ -584,32 +592,32 @@ public sealed class AevatarInvocationDispatcher
             return ActorTargetResolution.Success(actorId);
         }
 
-        if (string.IsNullOrWhiteSpace(request.ActorName))
+        if (string.IsNullOrWhiteSpace(request.AgentKind))
         {
             return ActorTargetResolution.Failed(Error(
                 "invalid_arguments",
-                "actor_id or actor_name is required.",
+                "actor_id or agent_kind is required.",
                 "actor_id"));
         }
 
-        var actorName = request.ActorName.Trim();
+        var agentKind = request.AgentKind.Trim();
         var snapshot = await _actorRegistryQueryPort.ListActorsAsync(scope.ScopeId, ct);
         var group = snapshot.Groups.FirstOrDefault(g =>
-            string.Equals(g.GAgentType, actorName, StringComparison.OrdinalIgnoreCase));
+            string.Equals(g.AgentKind, agentKind, StringComparison.Ordinal));
         if (group == null || group.ActorIds.Count == 0)
         {
             return ActorTargetResolution.Failed(Error(
                 "actor_not_found",
-                $"No actor_name '{actorName}' is registered in caller scope '{scope.ScopeId}'.",
-                "actor_name"));
+                $"No agent_kind '{agentKind}' is registered in caller scope '{scope.ScopeId}'.",
+                "agent_kind"));
         }
 
         if (group.ActorIds.Count > 1)
         {
             return ActorTargetResolution.Failed(Error(
-                "actor_name_ambiguous",
-                $"actor_name '{actorName}' resolved to {group.ActorIds.Count} actors. Use actor_id.",
-                "actor_name"));
+                "agent_kind_ambiguous",
+                $"agent_kind '{agentKind}' resolved to {group.ActorIds.Count} actors. Use actor_id.",
+                "agent_kind"));
         }
 
         return ActorTargetResolution.Success(group.ActorIds[0]);

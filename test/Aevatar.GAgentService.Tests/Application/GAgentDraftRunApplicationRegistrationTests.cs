@@ -65,10 +65,9 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         var result = await port.ExecuteAsync(
             new GAgentDraftRunInteractionRequest(
                 "scope-a",
-                typeof(TestAgent).AssemblyQualifiedName!,
+                TestAgentKind,
                 "hello",
-                PreferredActorId: "draft-actor",
-                AgentKind: TestAgentKind),
+                PreferredActorId: "draft-actor"),
             (evt, _) =>
             {
                 emitted.Add(evt);

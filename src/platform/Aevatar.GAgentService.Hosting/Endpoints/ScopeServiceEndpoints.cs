@@ -183,6 +183,15 @@ public static class ScopeServiceEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
+            if (request.GAgent?.HasLegacyActorTypeName == true)
+            {
+                return Results.BadRequest(new
+                {
+                    code = "LEGACY_ACTOR_TYPE_NAME_REJECTED",
+                    message = "gagent.actorTypeName is not accepted. Use gagent.agentKind.",
+                });
+            }
+
             var result = await commandPort.UpsertAsync(
                 new ScopeBindingUpsertRequest(
                     scopeId,
@@ -205,8 +214,7 @@ public static class ScopeServiceEndpoints
                                 endpoint.RequestTypeUrl,
                                 endpoint.ResponseTypeUrl,
                                 endpoint.Description))
-                            .ToArray(),
-                            request.GAgent.ActorTypeName),
+                            .ToArray()),
                     request.DisplayName,
                     request.RevisionId,
                     request.AppId,
@@ -1684,13 +1692,13 @@ public static class ScopeServiceEndpoints
                 OnAcceptedAsync,
                 ct);
 
-            if (!result.Succeeded && result.StartError == GAgentDraftRunStartError.UnknownActorType)
+            if (!result.Succeeded && result.StartError == GAgentDraftRunStartError.UnknownAgentKind)
             {
                 throw new InvalidOperationException(
-                    "GAgent type could not be resolved.");
+                    "GAgent kind could not be resolved.");
             }
 
-            if (!result.Succeeded && result.StartError == GAgentDraftRunStartError.ActorTypeMismatch)
+            if (!result.Succeeded && result.StartError == GAgentDraftRunStartError.ActorKindMismatch)
             {
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' is not compatible with requested static GAgent service.");
@@ -2598,7 +2606,8 @@ const response = await fetch("{{invokePath}}", {
                     revision.Implementation?.Scripting?.Revision ?? string.Empty,
                     revision.Implementation?.Scripting?.DefinitionActorId ?? string.Empty,
                     revision.Implementation?.Scripting?.SourceHash ?? string.Empty,
-                    revision.Implementation?.Static?.ActorTypeName ?? string.Empty);
+                    revision.Implementation?.Static?.ActorTypeName ?? string.Empty,
+                    revision.Implementation?.Static?.AgentKind ?? string.Empty);
             })
             .OrderByDescending(x => x.IsDefaultServing)
             .ThenByDescending(x => x.IsActiveServing)
@@ -3330,9 +3339,17 @@ const response = await fetch("{{invokePath}}", {
         string? ScriptRevision = null);
 
     public sealed record ScopeBindingGAgentHttpRequest(
-        string ActorTypeName,
-        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints,
-        string? AgentKind = null);
+        string AgentKind,
+        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints)
+    {
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtraFields { get; init; }
+
+        public bool HasLegacyActorTypeName =>
+            ExtraFields?.Keys.Any(key =>
+                string.Equals(key, "actorTypeName", StringComparison.Ordinal) ||
+                string.Equals(key, "ActorTypeName", StringComparison.Ordinal)) == true;
+    }
 
     public sealed record StreamScopeServiceHttpRequest(
         string? Prompt,
@@ -3449,7 +3466,8 @@ const response = await fetch("{{invokePath}}", {
         string ScriptRevision = "",
         string ScriptDefinitionActorId = "",
         string ScriptSourceHash = "",
-        string StaticActorTypeName = "");
+        string StaticActorTypeName = "",
+        string StaticAgentKind = "");
 
     public sealed record ScopeBindingActivationHttpResponse(
         string ScopeId,

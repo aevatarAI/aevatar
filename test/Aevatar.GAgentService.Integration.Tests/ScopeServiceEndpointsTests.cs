@@ -214,7 +214,7 @@ public sealed class ScopeServiceEndpointsTests
             implementationKind = "gagent",
             gagent = new
             {
-                actorTypeName = "Tests.DemoActor, Tests",
+                agentKind = "tests.demo",
                 endpoints = new[]
                 {
                     new
@@ -238,8 +238,31 @@ public sealed class ScopeServiceEndpointsTests
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         host.ScopeBindingPort.LastRequest.GAgent.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest.GAgent!.AgentKind.Should().Be("tests.demo");
         host.ScopeBindingPort.LastRequest.GAgent!.Endpoints.Should().ContainSingle();
         host.ScopeBindingPort.LastRequest.GAgent.Endpoints[0].EndpointId.Should().Be("run");
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldRejectLegacyGAgentActorTypeNameEvenWithAgentKind()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/binding", new
+        {
+            implementationKind = "gagent",
+            gagent = new
+            {
+                agentKind = "tests.demo",
+                actorTypeName = "Tests.DemoActor, Tests",
+                endpoints = Array.Empty<object>(),
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("LEGACY_ACTOR_TYPE_NAME_REJECTED");
+        host.ScopeBindingPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -5088,7 +5111,7 @@ public sealed class ScopeServiceEndpointsTests
                 GAgent: request.GAgent == null
                     ? null
                     : new ScopeBindingGAgentResult(
-                        request.GAgent.ActorTypeName)));
+                        request.GAgent.AgentKind)));
         }
     }
 
@@ -5712,7 +5735,7 @@ public sealed class ScopeServiceEndpointsTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(
                 CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>
-                    .Failure(GAgentDraftRunStartError.UnknownActorType));
+                    .Failure(GAgentDraftRunStartError.UnknownAgentKind));
         }
     }
 
@@ -5738,7 +5761,7 @@ public sealed class ScopeServiceEndpointsTests
             var result = await interactionService.ExecuteAsync(
                 new GAgentDraftRunInteractionRequest(
                     ScopeId: request.Identity.TenantId,
-                    ActorTypeName: "TestStaticGAgent",
+                    AgentKind: "TestStaticGAgent",
                     Prompt: input.Prompt,
                     PreferredActorId: input.PreferredActorId,
                     SessionId: input.SessionId,

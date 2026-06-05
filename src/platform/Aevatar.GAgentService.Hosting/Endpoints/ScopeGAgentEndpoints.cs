@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -26,7 +27,7 @@ public static class ScopeGAgentEndpoints
     public static IEndpointRouteBuilder MapScopeGAgentCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("ScopeGAgent");
-        group.MapGet("/gagent-types", HandleListGAgentTypesAsync);
+        group.MapGet("/gagent-kinds", HandleListGAgentKindsAsync);
         group.MapPost("/{scopeId}/gagent/draft-run", HandleDraftRunAsync);
         group.MapGet("/{scopeId}/gagent-actors", HandleListActorsAsync);
         group.MapPost("/{scopeId}/gagent-actors", HandleAddActorAsync);
@@ -35,16 +36,13 @@ public static class ScopeGAgentEndpoints
         return app;
     }
 
-    // Refactor (iter39/cluster-039-gagent-reflection-catalog):
-    //   Old pattern: ScopeGAgentEndpoints 通过 AppDomain reflection + AIGAgentBase + [EventHandler] + protobuf descriptors 发现 GAgent 类型,把进程内加载的 CLR class 当成业务事实源。
-    //   New principle: GAgent type 列表必须来自 registered service revision catalog readmodel,不是反射偶然加载的 CLR class。保留 endpoint 路由,换实现为读 readmodel。
-    private static async Task<IResult> HandleListGAgentTypesAsync(
+    private static async Task<IResult> HandleListGAgentKindsAsync(
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
         CancellationToken ct)
     {
         var services = await catalogReader.QueryAllAsync(ct: ct);
-        var gAgentTypes = new Dictionary<string, GAgentTypeCatalogHttpResponse>(StringComparer.Ordinal);
+        var gAgentKinds = new Dictionary<string, GAgentKindCatalogHttpResponse>(StringComparer.Ordinal);
 
         foreach (var service in services)
         {
@@ -55,28 +53,28 @@ public static class ScopeGAgentEndpoints
 
             foreach (var revision in revisions.Revisions)
             {
-                var actorTypeName = revision.Implementation?.Static?.ActorTypeName?.Trim() ?? string.Empty;
-                if (actorTypeName.Length == 0)
+                var agentKind = revision.Implementation?.Static?.AgentKind?.Trim() ?? string.Empty;
+                if (agentKind.Length == 0)
                     continue;
 
                 var endpoints = revision.Endpoints.Select(MapGAgentEndpoint).ToList();
-                if (gAgentTypes.TryGetValue(actorTypeName, out var existing))
+                if (gAgentKinds.TryGetValue(agentKind, out var existing))
                 {
                     MergeEndpoints(existing.Endpoints, endpoints);
                     continue;
                 }
 
-                gAgentTypes[actorTypeName] = new GAgentTypeCatalogHttpResponse(
-                    ResolveTypeDisplayName(actorTypeName),
-                    actorTypeName,
-                    ResolveAssemblyName(actorTypeName),
+                gAgentKinds[agentKind] = new GAgentKindCatalogHttpResponse(
+                    agentKind,
+                    string.IsNullOrWhiteSpace(service.DisplayName) ? agentKind : service.DisplayName,
+                    revision.Implementation?.Static?.ActorTypeName?.Trim() ?? string.Empty,
                     endpoints);
             }
         }
 
-        return Results.Ok(gAgentTypes.Values
-            .OrderBy(x => x.TypeName, StringComparer.Ordinal)
-            .ThenBy(x => x.FullName, StringComparer.Ordinal)
+        return Results.Ok(gAgentKinds.Values
+            .OrderBy(x => x.DisplayName, StringComparer.Ordinal)
+            .ThenBy(x => x.AgentKind, StringComparer.Ordinal)
             .ToList());
     }
 
@@ -112,19 +110,6 @@ public static class ScopeGAgentEndpoints
         }
     }
 
-    private static string ResolveTypeDisplayName(string actorTypeName)
-    {
-        var typeName = actorTypeName.Split(',', 2)[0].Trim();
-        var lastDot = typeName.LastIndexOf('.');
-        return lastDot < 0 ? typeName : typeName[(lastDot + 1)..];
-    }
-
-    private static string ResolveAssemblyName(string actorTypeName)
-    {
-        var separator = actorTypeName.IndexOf(',');
-        return separator < 0 ? string.Empty : actorTypeName[(separator + 1)..].Trim();
-    }
-
     private static string NormalizeEndpointKind(string kind) =>
         kind switch
         {
@@ -151,7 +136,7 @@ public static class ScopeGAgentEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            if (!TryValidateDraftRunRequest(http.Response, request))
+            if (!await TryValidateDraftRunRequestAsync(http.Response, request, ct))
                 return;
 
             var (defaultModel, preferredRoute) = await TryGetUserLlmDefaultsAsync(http, ct);
@@ -166,7 +151,7 @@ public static class ScopeGAgentEndpoints
             var interaction = await interactionPort.ExecuteAsync(
                 new GAgentDraftRunInteractionRequest(
                     ScopeId: scopeId,
-                    ActorTypeName: request.ActorTypeName,
+                    AgentKind: request.AgentKind,
                     Prompt: request.Prompt,
                     PreferredActorId: request.PreferredActorId,
                     SessionId: request.SessionId,
@@ -182,7 +167,7 @@ public static class ScopeGAgentEndpoints
                 await WriteDraftRunStartErrorAsync(
                     http.Response,
                     interaction.Receipt,
-                    request.ActorTypeName,
+                    request.AgentKind,
                     request.PreferredActorId,
                     interaction.Error,
                     ct);
@@ -209,7 +194,7 @@ public static class ScopeGAgentEndpoints
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
+            logger.LogError(ex, "GAgent draft-run failed for agent kind {AgentKind}", request.AgentKind);
             var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
 
             if (!session.ResponseStarted)
@@ -232,14 +217,26 @@ public static class ScopeGAgentEndpoints
         }
     }
 
-    private static bool TryValidateDraftRunRequest(
+    private static async Task<bool> TryValidateDraftRunRequestAsync(
         HttpResponse response,
-        GAgentDraftRunHttpRequest request)
+        GAgentDraftRunHttpRequest request,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(response);
         ArgumentNullException.ThrowIfNull(request);
 
-        if (string.IsNullOrWhiteSpace(request.ActorTypeName))
+        if (request.HasLegacyActorTypeName)
+        {
+            response.StatusCode = StatusCodes.Status400BadRequest;
+            await WriteJsonErrorAsync(
+                response,
+                "LEGACY_ACTOR_TYPE_NAME_REJECTED",
+                "actorTypeName is not accepted. Use agentKind.",
+                ct);
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.AgentKind))
         {
             response.StatusCode = StatusCodes.Status400BadRequest;
             return false;
@@ -285,35 +282,32 @@ public static class ScopeGAgentEndpoints
     private static async Task WriteDraftRunStartErrorAsync(
         HttpResponse response,
         GAgentDraftRunAcceptedReceipt? receipt,
-        string requestedActorTypeName,
+        string requestedAgentKind,
         string? requestedActorId,
         GAgentDraftRunStartError error,
         CancellationToken ct)
     {
         switch (error)
         {
-            case GAgentDraftRunStartError.UnknownActorType:
+            case GAgentDraftRunStartError.UnknownAgentKind:
                 response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonErrorAsync(
                     response,
-                    "UNKNOWN_GAGENT_TYPE",
-                    $"GAgent type '{requestedActorTypeName}' could not be resolved.",
+                    "UNKNOWN_GAGENT_KIND",
+                    $"GAgent kind '{requestedAgentKind}' could not be resolved.",
                     ct);
                 break;
-            case GAgentDraftRunStartError.ActorTypeMismatch:
+            case GAgentDraftRunStartError.ActorKindMismatch:
                 var actorId = string.IsNullOrWhiteSpace(receipt?.ActorId)
                     ? requestedActorId?.Trim()
                     : receipt.ActorId;
-                var actorTypeName = string.IsNullOrWhiteSpace(receipt?.ActorTypeName)
-                    ? requestedActorTypeName
-                    : receipt.ActorTypeName;
                 response.StatusCode = StatusCodes.Status409Conflict;
                 await WriteJsonErrorAsync(
                     response,
-                    "GAGENT_ACTOR_TYPE_MISMATCH",
+                    "GAGENT_ACTOR_KIND_MISMATCH",
                     string.IsNullOrWhiteSpace(actorId)
-                        ? $"Requested actor is not compatible with requested type '{actorTypeName}'."
-                        : $"Actor '{actorId}' is not compatible with requested type '{actorTypeName}'.",
+                        ? $"Requested actor is not compatible with requested agent kind '{requestedAgentKind}'."
+                        : $"Actor '{actorId}' is not compatible with requested agent kind '{requestedAgentKind}'.",
                     ct);
                 break;
             case GAgentDraftRunStartError.ProjectionUnavailable:
@@ -414,6 +408,7 @@ public static class ScopeGAgentEndpoints
         HttpContext http,
         string scopeId,
         string actorId,
+        [FromQuery] string? agentKind,
         [FromQuery] string? gagentType,
         [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
@@ -425,15 +420,18 @@ public static class ScopeGAgentEndpoints
 
         try
         {
-            if (string.IsNullOrWhiteSpace(gagentType))
-                return Results.BadRequest(new { code = "INVALID_REQUEST", message = "gagentType query parameter is required." });
+            if (!string.IsNullOrWhiteSpace(gagentType))
+                return Results.BadRequest(new { code = "LEGACY_GAGENT_TYPE_REJECTED", message = "gagentType is not accepted. Use agentKind." });
 
-            var registration = new GAgentActorRegistration(scopeId, gagentType.Trim(), actorId.Trim());
+            if (string.IsNullOrWhiteSpace(agentKind))
+                return Results.BadRequest(new { code = "INVALID_REQUEST", message = "agentKind query parameter is required." });
+
+            var registration = new GAgentActorRegistration(scopeId, agentKind.Trim(), actorId.Trim());
             var admission = await admissionPort.AuthorizeTargetAsync(
                 new ScopeResourceTarget(
                     registration.ScopeId,
                     ScopeResourceKind.GAgentActor,
-                    registration.GAgentType,
+                    registration.AgentKind,
                     registration.ActorId,
                     ScopeResourceOperation.Delete),
                 ct);
@@ -653,10 +651,10 @@ public static class ScopeGAgentEndpoints
 
     // ─── Request models ───
 
-    public sealed record GAgentTypeCatalogHttpResponse(
-        string TypeName,
-        string FullName,
-        string AssemblyName,
+    public sealed record GAgentKindCatalogHttpResponse(
+        string AgentKind,
+        string DisplayName,
+        string DiagnosticClrTypeName,
         List<GAgentEndpointCatalogHttpResponse> Endpoints);
 
     public sealed record GAgentEndpointCatalogHttpResponse(
@@ -668,14 +666,42 @@ public static class ScopeGAgentEndpoints
         string Description,
         bool Auto);
 
-    public sealed record GAgentDraftRunHttpRequest(
-        string ActorTypeName,
-        string Prompt,
-        string? PreferredActorId = null,
-        string? SessionId = null,
-        int TimeoutMs = 0);
+    public sealed class GAgentDraftRunHttpRequest
+    {
+        public GAgentDraftRunHttpRequest()
+        {
+        }
+
+        public GAgentDraftRunHttpRequest(
+            string agentKind,
+            string prompt,
+            string? preferredActorId = null,
+            string? sessionId = null,
+            int timeoutMs = 0)
+        {
+            AgentKind = agentKind;
+            Prompt = prompt;
+            PreferredActorId = preferredActorId;
+            SessionId = sessionId;
+            TimeoutMs = timeoutMs;
+        }
+
+        public string AgentKind { get; init; } = string.Empty;
+        public string Prompt { get; init; } = string.Empty;
+        public string? PreferredActorId { get; init; }
+        public string? SessionId { get; init; }
+        public int TimeoutMs { get; init; }
+
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtensionData { get; init; }
+
+        public bool HasLegacyActorTypeName =>
+            ExtensionData?.Keys.Any(key =>
+                string.Equals(key, "actorTypeName", StringComparison.Ordinal) ||
+                string.Equals(key, "ActorTypeName", StringComparison.Ordinal)) == true;
+    }
 
     public sealed record AddGAgentActorHttpRequest(
-        string GAgentType,
+        string AgentKind,
         string ActorId);
 }

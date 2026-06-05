@@ -84,7 +84,7 @@ public sealed class StudioMemberServiceBindingTests
             MemberId,
             new UpdateStudioMemberBindingRequest(
                 GAgent: new StudioMemberGAgentBindingSpec(
-                    ActorTypeName: "MyActor",
+                    AgentKind: "my.actor",
                     Endpoints: [
                         new StudioMemberGAgentEndpointSpec(
                             EndpointId: "chat",
@@ -97,7 +97,7 @@ public sealed class StudioMemberServiceBindingTests
 
         var started = commandPort.StartedRuns.Should().ContainSingle().Which;
         started.ImplementationKind.Should().Be(MemberImplementationKindNames.GAgent);
-        started.Binding.GAgent!.ActorTypeName.Should().Be("MyActor");
+        started.Binding.GAgent!.AgentKind.Should().Be("my.actor");
         started.Binding.GAgent.Endpoints.Should().ContainSingle()
             .Which.Kind.Should().Be("chat");
     }

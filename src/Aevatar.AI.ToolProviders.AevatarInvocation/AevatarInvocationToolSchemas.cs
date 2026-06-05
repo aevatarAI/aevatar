@@ -28,7 +28,7 @@ internal static class AevatarInvocationToolSchemas
         oneOfRequiredGroups:
         [
             ["actor_id"],
-            ["actor_name"],
+            ["agent_kind"],
         ],
         emitTopLevelOneOf: false);
 

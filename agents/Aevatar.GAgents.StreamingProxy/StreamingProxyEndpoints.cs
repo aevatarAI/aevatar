@@ -123,7 +123,7 @@ public static class StreamingProxyEndpoints
         {
             var snapshot = await registryQueryPort.ListActorsAsync(scopeId, ct);
             var group = snapshot.Groups.FirstOrDefault(g =>
-                string.Equals(g.GAgentType, StreamingProxyDefaults.GAgentKind, StringComparison.Ordinal));
+                string.Equals(g.AgentKind, StreamingProxyDefaults.GAgentKind, StringComparison.Ordinal));
             var roomIds = group?.ActorIds ?? [];
             return Results.Ok(new
             {
