@@ -1065,14 +1065,6 @@ public sealed class AevatarInvocationToolSourceTests
     private static void ShouldCarryTypedTrustedCallerValues(WorkflowChatRunRequest command)
     {
         command.ScopeId.Should().Be("scope-1");
-        command.ToolContext.Should().NotBeNull();
-        command.ToolContext!.Caller.ScopeId.Should().Be("scope-1");
-        command.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        command.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
-        command.ToolContext.Routing.ModelOverride.Should().Be("model-1");
-        command.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-1");
-        command.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         ShouldCarryWorkflowLlmControlValues(command.LlmControl);
     }
 

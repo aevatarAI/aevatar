@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -93,52 +92,6 @@ public sealed class WorkflowCoreModulesCoverageTests
         var toolResult = ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Single();
         toolResult.Success.Should().BeTrue();
         toolResult.ResultJson.Should().Be("""{"msg":"ok"}""");
-    }
-
-    [Fact]
-    public async Task ToolCallModule_ShouldPushWorkflowToolContextDuringToolExecution()
-    {
-        var previous = AgentToolRequestContext.Current;
-        AgentToolRequestContext.Current = null;
-        try
-        {
-            AgentToolExecutionContext? observedDuringExecution = null;
-            var tool = new FakeAgentTool("capture_context", _ =>
-            {
-                observedDuringExecution = AgentToolRequestContext.Current;
-                return "{}";
-            });
-            var module = new ToolCallModule([new CountingToolSource([tool])], NullLogger<ToolCallModule>.Instance);
-            var ctx = CreateContext();
-            ctx.RuntimeContext.ToolContext = AgentToolExecutionContext.Empty with
-            {
-                Request = new AgentToolRequestIdentity("cmd-1", null),
-                Credentials = new AgentToolCredentials("token-1", null, null),
-                Caller = new AgentToolCallerContext("scope-1", "owner-1", "response-1"),
-            };
-
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
-                {
-                    StepId = "step-context",
-                    StepType = "tool_call",
-                    Input = "{}",
-                    Parameters = { ["tool"] = "capture_context" },
-                }),
-                ctx,
-                CancellationToken.None);
-
-            observedDuringExecution.Should().NotBeNull();
-            observedDuringExecution!.Credentials.NyxIdAccessToken.Should().Be("token-1");
-            observedDuringExecution.Caller.ScopeId.Should().Be("scope-1");
-            observedDuringExecution.Request.RequestId.Should().Be("cmd-1");
-            observedDuringExecution.Request.CallId.Should().Be("step-context");
-            AgentToolRequestContext.Current.Should().BeNull();
-        }
-        finally
-        {
-            AgentToolRequestContext.Current = previous;
-        }
     }
 
     [Fact]

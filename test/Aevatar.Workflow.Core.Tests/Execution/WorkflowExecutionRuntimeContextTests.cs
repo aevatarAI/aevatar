@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
@@ -43,57 +42,6 @@ public sealed class WorkflowExecutionRuntimeContextTests
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("model_override");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("llm.max_tool_rounds");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey("llm.user_memory_prompt");
-    }
-
-    [Fact]
-    public void Clear_ShouldClearToolContext()
-    {
-        var context = new WorkflowExecutionRuntimeContext();
-        context.ToolContext = AgentToolExecutionContext.Empty with
-        {
-            Credentials = new AgentToolCredentials("token-1", null, null),
-        };
-        context.ApplyRequestMetadata(new Dictionary<string, string>
-        {
-            ["trace-id"] = "trace-1",
-        });
-
-        context.Clear();
-
-        context.ToolContext.Should().BeNull();
-        context.RequestPassthroughMetadata.Values.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void WorkflowToolExecutionContextAccess_ShouldApplyCommandContextAndStepCallId()
-    {
-        var runtimeContext = new WorkflowExecutionRuntimeContext();
-        var payload = (AgentToolExecutionContext.Empty with
-        {
-            Credentials = new AgentToolCredentials("token-1", null, null),
-            Caller = new AgentToolCallerContext(null, "owner-1", null),
-        }).ToPayload();
-        var executionContext = new RecordingWorkflowExecutionContext
-        {
-            RuntimeContext = runtimeContext,
-        };
-
-        WorkflowToolExecutionContextAccess.ApplyFromCommand(
-            runtimeContext,
-            payload,
-            "cmd-1",
-            "scope-1",
-            "session-1");
-        var stepContext = WorkflowToolExecutionContextAccess.GetForStep(executionContext, "step-1");
-
-        runtimeContext.ToolContext.Should().NotBeNull();
-        runtimeContext.ToolContext!.Request.RequestId.Should().Be("cmd-1");
-        runtimeContext.ToolContext.Caller.ScopeId.Should().Be("scope-1");
-        runtimeContext.ToolContext.Caller.ResponseId.Should().Be("session-1");
-        stepContext.Should().NotBeNull();
-        stepContext!.Credentials.NyxIdAccessToken.Should().Be("token-1");
-        stepContext.Request.CallId.Should().Be("step-1");
-        runtimeContext.ToolContext.Request.CallId.Should().BeNull();
     }
 
     [Fact]
@@ -364,7 +312,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         public string RunId => "run-1";
 
-        public WorkflowExecutionRuntimeContext RuntimeContext { get; init; } = new();
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
@@ -410,7 +358,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
 
-        public WorkflowExecutionRuntimeContext RuntimeContext { get; init; } = new();
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 

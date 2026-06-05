@@ -507,26 +507,14 @@ public class WorkflowGAgentCoverageTests
                 MaxToolRoundsOverride = 4,
                 UserMemoryPrompt = " memory-main ",
             },
-            ToolContext = (AgentToolExecutionContext.Empty with
-            {
-                Credentials = new AgentToolCredentials("nyx-token-1", "org-token-1", null),
-                Caller = new AgentToolCallerContext("scope-1", "owner-1", "response-1"),
-            }).ToPayload(),
         });
 
         agent1.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
         agent1.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model-main");
-        agent1.State.ToByteString().ToStringUtf8().Should().NotContain("nyx-token-1");
         await agent1.DeactivateAsync();
 
         var persisted = await eventStore.GetEventsAsync(agent1.Id);
-        var startedRecord = persisted.Should()
-            .ContainSingle(x => x.EventType.Contains(nameof(WorkflowRunExecutionStartedEvent), StringComparison.Ordinal))
-            .Subject;
-        var started = startedRecord.EventData.Unpack<WorkflowRunExecutionStartedEvent>();
-        started.ExecutionContextDelta.ToByteString().ToStringUtf8().Should().NotContain("nyx-token-1");
-        started.ExecutionContextDelta.Llm.ModelOverride.Should().Be("model-main");
-        started.ExecutionContextDelta.Connector.HttpAuthorization.Should().Be("Bearer secret");
+        persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(WorkflowRunExecutionStartedEvent), StringComparison.Ordinal));
 
         var agent2 = CreateRunAgent(runtime: runtime, eventStore: eventStore);
         SetAgentId(agent2, "workflow-run-context-replay");
@@ -536,7 +524,6 @@ public class WorkflowGAgentCoverageTests
         agent2.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model-main");
         agent2.State.ExecutionContext.Llm.MaxToolRoundsOverride.Should().Be(4);
         agent2.State.ExecutionContext.Llm.UserMemoryPrompt.Should().Be("memory-main");
-        agent2.State.ToByteString().ToStringUtf8().Should().NotContain("nyx-token-1");
     }
 
     [Fact]

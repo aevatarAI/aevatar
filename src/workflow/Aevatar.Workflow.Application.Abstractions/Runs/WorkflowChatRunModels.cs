@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using System.Text.Json.Serialization;
 
@@ -133,7 +132,6 @@ public sealed record WorkflowChatRunRequest(
     //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null,
     WorkflowLlmControl? LlmControl = null,
-    AgentToolExecutionContext? ToolContext = null,
     // Refactor (iter169/cluster-issue1551): Old pattern: trusted connector bearer was smuggled through Metadata. New principle: Host/Application pass connector HTTP authorization as a typed command scalar.
     string? ConnectorHttpAuthorization = null,
     IReadOnlyDictionary<string, string>? Headers = null,

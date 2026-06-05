@@ -81,9 +81,6 @@ flowchart LR
 补充约束：
 
 - 通用 actor 发送态使用 `ActorSendState`（`target_actor_id + payload`）。
-- `WorkflowChatRequestEvent.tool_context` 只用于 command-time trusted tool execution context。它由 Host 或内部 tool invocation 派生，进入 run actor 后仅保存在 volatile runtime context 中，用于 workflow `tool_call` 执行期间建立 `AgentToolContextScope`。
-- Public `ChatInput` 不暴露 `toolContext`；strict JSON 边界会拒绝客户端提交的同名字段。
-- `WorkflowRunState.ExecutionContext`、committed started delta、Projection/readmodel 不持有 bearer 或 tool context credential。
 
 这个 typed wrapper 定义在 `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`，并通过 `WorkflowRunState.ExecutionStates` 持久化。
 

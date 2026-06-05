@@ -3,7 +3,6 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
-import "ai_messages.proto";
 
 enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_UNSPECIFIED = 0;
@@ -38,7 +37,6 @@ message WorkflowChatRequestEvent {
   map<string, string> metadata = 7;
   WorkflowLlmControlContext llm_control = 8;
   string connector_http_authorization = 9;
-  aevatar.ai.AgentToolExecutionContextPayload tool_context = 10;
 }
 
 message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }

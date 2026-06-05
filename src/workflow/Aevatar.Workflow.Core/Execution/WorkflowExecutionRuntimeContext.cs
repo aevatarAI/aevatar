@@ -1,5 +1,3 @@
-using Aevatar.AI.Abstractions.ToolProviders;
-
 namespace Aevatar.Workflow.Core.Execution;
 
 // Refactor (iter16/cluster-031):
@@ -21,13 +19,7 @@ internal sealed class WorkflowExecutionRuntimeContext
 {
     public WorkflowRequestPassthroughMetadata RequestPassthroughMetadata { get; } = new();
 
-    public AgentToolExecutionContext? ToolContext { get; set; }
-
-    public void Clear()
-    {
-        RequestPassthroughMetadata.Clear();
-        ToolContext = null;
-    }
+    public void Clear() => RequestPassthroughMetadata.Clear();
 
     public void ApplyRequestMetadata(IReadOnlyDictionary<string, string>? metadata)
     {

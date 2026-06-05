@@ -1353,95 +1353,6 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
-    public async Task ScopeDraftRunEndpoint_ShouldInjectServerDerivedToolContextFromBearer()
-    {
-        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.InteractionService.ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
-        {
-            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
-            if (onAcceptedAsync != null)
-                await onAcceptedAsync(receipt, ct);
-
-            await emitAsync(new WorkflowRunEventEnvelope
-            {
-                TextMessageContent = new WorkflowTextMessageContentEventPayload
-                {
-                    MessageId = "msg-1",
-                    Delta = "hello",
-                },
-            }, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
-        };
-
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/workflow/draft-run")
-        {
-            Content = JsonContent.Create(new
-            {
-                prompt = "run the draft",
-                sessionId = "session-1",
-                workflowYamls = new[]
-                {
-                    "name: main\nsteps:\n  - run: echo hello",
-                },
-                headers = new Dictionary<string, string>
-                {
-                    ["source"] = "draft-test",
-                    ["scope_id"] = "client-scope",
-                    ["connector.http.authorization"] = "Bearer stale-metadata-token",
-                },
-            }),
-        };
-        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token-123");
-
-        var response = await host.Client.SendAsync(httpRequest);
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
-        host.InteractionService.LastRequest.Should().NotBeNull();
-        var request = host.InteractionService.LastRequest!;
-        request.ToolContext.Should().NotBeNull();
-        request.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-123");
-        request.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-123");
-        request.ToolContext.Caller.ScopeId.Should().Be("scope-a");
-        request.ToolContext.Caller.ResponseId.Should().Be("session-1");
-        request.ToolContext.Channel.Platform.Should().Be("scope-workflow");
-        request.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-a");
-        request.ToolContext.ExternalMetadata.Should().ContainKey("source").WhoseValue.Should().Be("draft-test");
-        request.ToolContext.ExternalMetadata.Should().NotContainKey("scope_id");
-        request.ToolContext.ExternalMetadata.Should().NotContainKey("connector.http.authorization");
-        request.Metadata.Should().BeNullOrEmpty();
-        request.Headers.Should().ContainKey("source").WhoseValue.Should().Be("draft-test");
-        request.Headers.Should().NotContainKey("scope_id");
-        request.Headers.Should().NotContainKey("connector.http.authorization");
-    }
-
-    [Fact]
-    public async Task ScopeDraftRunEndpoint_ShouldRejectClientToolContext()
-    {
-        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
-        {
-            prompt = "run the draft",
-            workflowYamls = new[]
-            {
-                "name: main\nsteps:\n  - run: echo hello",
-            },
-            toolContext = new
-            {
-                credentials = new
-                {
-                    nyxIdAccessToken = "client-token",
-                },
-            },
-        });
-
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        host.InteractionService.LastRequest.Should().BeNull();
-    }
-
-    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldEmitAguiEvents_WhenRequested()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -1632,15 +1543,6 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("source").WhoseValue.Should().Be("tests");
-        host.InteractionService.LastRequest.ToolContext.Should().NotBeNull();
-        host.InteractionService.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-123");
-        host.InteractionService.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-123");
-        host.InteractionService.LastRequest.ToolContext.Caller.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.ToolContext.Caller.ResponseId.Should().BeNull();
-        host.InteractionService.LastRequest.ToolContext.Channel.Platform.Should().Be("scope-workflow");
-        host.InteractionService.LastRequest.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.ToolContext.ExternalMetadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
-        host.InteractionService.LastRequest.ToolContext.ExternalMetadata.Should().NotContainKey("connector.http.authorization");
         // Service-run registry receives the actual workflow run actor id as the run id, so
         // /runs/{runId} can resolve the same id the SSE RunStarted frame carries.
         host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle();
@@ -2319,15 +2221,6 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
-        host.InteractionService.LastRequest.ToolContext.Should().NotBeNull();
-        host.InteractionService.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-orders");
-        host.InteractionService.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-orders");
-        host.InteractionService.LastRequest.ToolContext.Caller.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.ToolContext.Caller.ResponseId.Should().BeNull();
-        host.InteractionService.LastRequest.ToolContext.Channel.Platform.Should().Be("scope-workflow");
-        host.InteractionService.LastRequest.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.ToolContext.ExternalMetadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
-        host.InteractionService.LastRequest.ToolContext.ExternalMetadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]

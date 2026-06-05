@@ -116,31 +116,6 @@ public class ChatWebSocketCommandParserTests
     }
 
     [Fact]
-    public void TryParse_ClientToolContext_ShouldReturnInvalidCommand()
-    {
-        var frame = TextFrame("""
-        {
-          "type": "chat.command",
-          "requestId": "req-tool",
-          "payload": {
-            "prompt": "hello",
-            "toolContext": {
-              "credentials": {
-                "nyxIdAccessToken": "client-token"
-              }
-            }
-          }
-        }
-        """);
-
-        var ok = ChatWebSocketCommandParser.TryParse(frame, out _, out var error);
-
-        ok.Should().BeFalse();
-        error.Code.Should().Be("INVALID_COMMAND");
-        error.Message.Should().NotContain("toolContext");
-    }
-
-    [Fact]
     public void TryParse_BinaryFrame_ShouldKeepBinaryResponseType()
     {
         var frame = new ChatWebSocketInboundFrame(

@@ -4,8 +4,6 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Abstractions;
@@ -399,60 +397,6 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Metadata.Should().Contain("client-note", "open-extension");
         request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Metadata.Should().NotContainKey("scope_id");
-    }
-
-    [Fact]
-    public void EnvelopeFactory_ShouldCarryTrustedToolContextAsTypedProtoField()
-    {
-        var services = new ServiceCollection();
-        services.AddWorkflowApplication();
-        using var provider = services.BuildServiceProvider();
-        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
-        var toolContext = AgentToolExecutionContext.Empty with
-        {
-            Request = new AgentToolRequestIdentity("req-1", null),
-            Credentials = new AgentToolCredentials("token-1", "org-token-1", null),
-            Caller = new AgentToolCallerContext("scope-1", "owner-1", "response-1"),
-            Routing = new LLMRequestRoutingContext("model-1", "route-1", 4, "memory-1"),
-            ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
-                ["trace-id"] = "trace-1",
-            },
-        };
-        var command = new WorkflowChatRunRequest(
-            "hello",
-            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
-            Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
-                [LLMRequestMetadataKeys.ScopeId] = "metadata-scope",
-                ["client-note"] = "open-extension",
-            },
-            ScopeId: "scope-1",
-            ToolContext: toolContext);
-
-        var envelope = factory.CreateEnvelope(command, new CommandContext(
-            "actor-1",
-            "cmd-1",
-            "corr-1",
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "header-token",
-            }));
-        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
-
-        request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token-1");
-        request.ToolContext.Credentials.NyxIdOrgToken.Should().Be("org-token-1");
-        request.ToolContext.Caller.ScopeId.Should().Be("scope-1");
-        request.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        request.ToolContext.Routing.ModelOverride.Should().Be("model-1");
-        request.ToolContext.ExternalMetadata.Should().Contain("trace-id", "trace-1");
-        request.ToolContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        request.Metadata.Should().Contain("client-note", "open-extension");
-        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        request.Headers.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
     }
 
     [Fact]

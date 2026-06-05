@@ -255,7 +255,6 @@ public sealed class AevatarInvocationDispatcher
             InputParts: ToWorkflowInputParts(request.Inputs),
             Metadata: metadata,
             ScopeId: scope.Value!.ScopeId,
-            ToolContext: AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty,
             LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current));
 
         var result = await _workflowDispatchService.DispatchAsync(command, ct);

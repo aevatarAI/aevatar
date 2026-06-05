@@ -195,36 +195,16 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatInputJson_ShouldRejectClientToolContext()
-    {
-        const string json = """
-        {
-          "prompt": "hello",
-          "toolContext": {
-            "credentials": {
-              "nyxIdAccessToken": "client-token"
-            }
-          }
-        }
-        """;
-
-        var act = () => JsonSerializer.Deserialize<ChatInput>(json, ChatWebSocketProtocol.JsonOptions);
-
-        act.Should().Throw<JsonException>();
-    }
-
-    [Fact]
-    public void ChatRunRequestNormalizer_ShouldUseOnlyTrustedToolContextArgument()
+    public void ChatRunRequestNormalizer_ShouldKeepToolContextOutOfWorkflowCommand()
     {
         var toolContext = AgentToolExecutionContext.Empty with
         {
-            Request = new AgentToolRequestIdentity("req-1", "call-1"),
-            Credentials = new AgentToolCredentials("token-1", "org-token-1", null),
-            Caller = new AgentToolCallerContext("scope-1", "owner-1", "response-1"),
+            Request = new AgentToolRequestIdentity(" req-1 ", " call-1 "),
+            Caller = new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
             Routing = LLMRequestRoutingContext.Empty with
             {
-                ModelOverride = "model-a",
-                NyxIdRoutePreference = "route-a",
+                ModelOverride = " model-a ",
+                NyxIdRoutePreference = " route-a ",
                 MaxToolRoundsOverride = 2,
             },
             ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -235,32 +215,15 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var input = new ChatInput
         {
             Prompt = "hello",
-            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "client-token",
-                [LLMRequestMetadataKeys.ScopeId] = "client-scope",
-                ["trace-id"] = "trace-2",
-            },
-            Headers = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = "header-token",
-            },
-            LlmControl = new ChatLlmControlInput
-            {
-                NyxIdAccessToken = "ignored-control-token",
-                ModelOverride = "model-b",
-            },
+            ToolContext = toolContext,
         };
 
-        var result = ChatRunRequestNormalizer.Normalize(input, trustedToolContext: toolContext);
+        var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.ToolContext.Should().BeSameAs(toolContext);
-        result.Request.LlmControl.Should().Be(new WorkflowLlmControl("model-b", null, null));
-        result.Request.Metadata.Should().Contain("trace-id", "trace-2");
-        result.Request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        result.Request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        result.Request.Headers.Should().BeNullOrEmpty();
+        result.Request!.ScopeId.Should().BeNull();
+        result.Request.LlmControl.Should().BeNull();
+        result.Request.Metadata.Should().BeEmpty();
     }
 
     [Fact]
