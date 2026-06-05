@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -287,6 +288,27 @@ public sealed class OrnnPublishSkillToolTests
         root.GetProperty("guid").GetString().Should().Be("skill-2");
         root.GetProperty("version").GetString().Should().Be("1.0");
         root.GetProperty("skillHash").GetString().Should().Be("hash-2");
+    }
+
+    [Fact]
+    public async Task CreateSuccessReceipt_ShouldMapPublishedSkillSubjectFromToolResult()
+    {
+        var handler = new CapturingHandler(
+            """{ "data": { "valid": true, "violations": [] } }""",
+            """{ "data": { "id": "skill-3", "hash": "hash-3" } }""");
+        var tool = CreateTool(handler);
+
+        using var _ = BeginTokenScope();
+        var result = await tool.ExecuteAsync(ValidArguments());
+        var receipt = tool.CreateSuccessReceipt("call-1", tool.Name, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("ornn.publish.skill");
+        receipt.SubjectKind.Should().Be("ornn.skill");
+        receipt.SubjectId.Should().Be("skill-3");
+        receipt.SubjectVersion.Should().Be("1.0");
+        receipt.SubjectHash.Should().Be("hash-3");
     }
 
     private static string ValidArguments(string? extraFields = null)

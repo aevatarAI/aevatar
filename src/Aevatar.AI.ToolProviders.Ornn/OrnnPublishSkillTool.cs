@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 
@@ -33,6 +34,28 @@ public sealed class OrnnPublishSkillTool : IAgentTool
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
 
     public string SideEffectKind => "ornn.publish.skill";
+
+    public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson)
+    {
+        var published = ExtractPublishedSkill(resultJson);
+        if (!published.HasAny)
+            return null;
+
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+            IsDestructive = false,
+            SideEffectKind = SideEffectKind,
+            SubjectKind = "ornn.skill",
+            SubjectId = published.Guid ?? string.Empty,
+            SubjectVersion = published.Version ?? string.Empty,
+            SubjectHash = published.SkillHash ?? string.Empty,
+            ResultJson = resultJson ?? string.Empty,
+        };
+    }
 
     public string ParametersSchema => """
         {

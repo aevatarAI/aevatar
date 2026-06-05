@@ -1,10 +1,8 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Core.Tools;
 
-// refactor helper, no behavior change: centralizes typed receipt construction for tool side-effect authority.
 internal static class AgentToolReceiptFactory
 {
     public static bool IsReceiptWorthy(IAgentTool tool)
@@ -24,9 +22,12 @@ internal static class AgentToolReceiptFactory
         if (!IsReceiptWorthy(tool))
             return null;
 
+        var providerReceipt = tool.CreateSuccessReceipt(callId, toolName, resultJson ?? string.Empty);
+        if (providerReceipt is not null)
+            return NormalizeProviderSuccessReceipt(tool, callId, toolName, resultJson, providerReceipt);
+
         var receipt = CreateBase(tool, callId, toolName, AgentToolReceiptStatus.Success);
         receipt.ResultJson = resultJson ?? string.Empty;
-        ApplySubject(receipt, resultJson);
         return receipt;
     }
 
@@ -121,45 +122,27 @@ internal static class AgentToolReceiptFactory
     private static string NormalizeSideEffectKind(string? sideEffectKind) =>
         string.IsNullOrWhiteSpace(sideEffectKind) ? string.Empty : sideEffectKind.Trim().ToLowerInvariant();
 
-    private static void ApplySubject(AgentToolReceipt receipt, string? resultJson)
+    private static AgentToolReceipt NormalizeProviderSuccessReceipt(
+        IAgentTool tool,
+        string callId,
+        string toolName,
+        string? resultJson,
+        AgentToolReceipt receipt)
     {
-        if (!string.Equals(receipt.SideEffectKind, "ornn.publish.skill", StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(resultJson))
-        {
-            return;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(resultJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return;
-
-            receipt.SubjectKind = "ornn.skill";
-            receipt.SubjectId = TryGetString(doc.RootElement, "guid", "id", "skill_id", "skillId") ?? string.Empty;
-            receipt.SubjectVersion = TryGetString(doc.RootElement, "version", "subject_version", "subjectVersion") ?? string.Empty;
-            receipt.SubjectHash = TryGetString(doc.RootElement, "skillHash", "skill_hash", "hash", "subject_hash") ?? string.Empty;
-        }
-        catch (JsonException)
-        {
-            return;
-        }
-    }
-
-    private static string? TryGetString(JsonElement element, params string[] keys)
-    {
-        foreach (var key in keys)
-        {
-            if (!element.TryGetProperty(key, out var value))
-                continue;
-
-            if (value.ValueKind == JsonValueKind.String)
-                return value.GetString();
-
-            if (value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
-                return value.ToString();
-        }
-
-        return null;
+        var normalized = receipt.Clone();
+        normalized.CallId = string.IsNullOrWhiteSpace(normalized.CallId) ? callId ?? string.Empty : normalized.CallId;
+        normalized.ToolName = string.IsNullOrWhiteSpace(normalized.ToolName)
+            ? string.IsNullOrWhiteSpace(toolName) ? tool.Name ?? string.Empty : toolName
+            : normalized.ToolName;
+        normalized.Status = AgentToolReceiptStatus.Success;
+        if (normalized.ApprovalMode == AgentToolReceiptApprovalMode.Unspecified)
+            normalized.ApprovalMode = MapApprovalMode(tool.ApprovalMode);
+        normalized.IsDestructive = normalized.IsDestructive || tool.IsDestructive;
+        normalized.SideEffectKind = string.IsNullOrWhiteSpace(normalized.SideEffectKind)
+            ? NormalizeSideEffectKind(tool.SideEffectKind)
+            : NormalizeSideEffectKind(normalized.SideEffectKind);
+        if (string.IsNullOrWhiteSpace(normalized.ResultJson))
+            normalized.ResultJson = resultJson ?? string.Empty;
+        return normalized;
     }
 }
