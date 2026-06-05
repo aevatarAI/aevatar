@@ -11,4 +11,10 @@ public sealed class WorkflowPrimitiveCatalogTests
         WorkflowPrimitiveCatalog.ToCanonicalType("mutex").Should().Be("lease");
         WorkflowPrimitiveCatalog.BuiltInCanonicalTypes.Should().Contain("lease");
     }
+
+    [Fact]
+    public void ToCanonicalType_ShouldResolveScheduleWorkflowAlias()
+    {
+        WorkflowPrimitiveCatalog.ToCanonicalType("schedule_workflow").Should().Be("self_reschedule");
+    }
 }
