@@ -6,9 +6,14 @@ using Aevatar.Configuration;
 using Aevatar.Hosting;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
@@ -27,6 +32,8 @@ using Aevatar.Workflow.Projection.Workflows;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -103,6 +110,64 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().NotContain(x =>
             x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
+    }
+
+    [Fact]
+    public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreMissing_ShouldSkipScheduleRoutes()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddLogging();
+        builder.Services.AddWorkflowCapability(new ConfigurationBuilder().Build());
+        var app = builder.Build();
+
+        app.MapWorkflowCapabilityEndpoints();
+
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .Should()
+            .NotContain(route => route != null && route.Contains("workflow-schedules", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreRegistered_ShouldMapScheduleRoutes()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddLogging();
+        builder.Services.AddGAgentServiceCapability(new ConfigurationBuilder().Build());
+        var app = builder.Build();
+
+        app.MapWorkflowCapabilityEndpoints();
+
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .Should()
+            .Contain(route => route != null && route.Contains("workflow-schedules", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AddScheduledDispatchCapability_ShouldSupplyWorkflowScheduleDependenciesWithoutFullCapability()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
+        services.AddSingleton<IActorDispatchPort, RecordingActorDispatchPort>();
+        services.AddSingleton<IScriptRuntimeCommandPort, RecordingScriptRuntimeCommandPort>();
+        services.AddSingleton<IWorkflowRunProvisioningPort, RecordingWorkflowRunProvisioningPort>();
+
+        services.AddScheduledDispatchCapability(new ConfigurationBuilder().Build());
+        services.AddWorkflowCapability(new ConfigurationBuilder().Build());
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        provider.GetRequiredService<IWorkflowScheduleApplicationService>().Should().NotBeNull();
+        provider.GetRequiredService<IScheduledServiceInvocationDispatchPort>().Should().NotBeNull();
+        provider.GetRequiredService<IServiceInvocationPort>().Should().NotBeNull();
+        services.Should().NotContain(x => x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType != null &&
+            x.ImplementationType.Name.Contains("GAgentServiceDemo", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -497,6 +562,39 @@ public sealed class WorkflowInfrastructureCoverageTests
         {
             Envelopes.Add((actorId, envelope));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class RecordingScriptRuntimeCommandPort : IScriptRuntimeCommandPort
+    {
+        public Task RunRuntimeAsync(
+            string runtimeActorId,
+            string runId,
+            Google.Protobuf.WellKnownTypes.Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingWorkflowRunProvisioningPort : IWorkflowRunProvisioningPort
+    {
+        public Task<WorkflowRunCreationReceipt> CreateRunAsync(
+            WorkflowDefinitionBinding definition,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new WorkflowRunCreationReceipt("workflow-run-1", "definition-1", []));
+        }
+
+        public Task DestroyAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
         }
     }
 

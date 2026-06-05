@@ -380,6 +380,54 @@ public sealed partial class ResponsesWebCacheEntryReadModel
     }
 }
 
+public sealed partial class ScheduledDispatchDocument : IProjectionReadModel<ScheduledDispatchDocument>
+{
+    public DateTimeOffset CreatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
+        set => CreatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
+        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset? NextFireAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(NextFireAtUtcValue);
+        set => NextFireAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? LastFireAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(LastFireAtUtcValue);
+        set => LastFireAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public IDictionary<string, string> Headers
+    {
+        get => HeadersMap;
+        set => ServiceProjectionReadModelSupport.ReplaceMap(HeadersMap, value);
+    }
+}
+
+public sealed partial class ScheduledDispatchFireRecordDocument
+{
+    public DateTimeOffset ScheduledFireAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ScheduledFireAtUtcValue);
+        set => ScheduledFireAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset CompletedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(CompletedAtUtcValue);
+        set => CompletedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+}
+
 internal static class ServiceProjectionReadModelSupport
 {
     public static Timestamp ToTimestamp(DateTimeOffset value) =>
@@ -399,5 +447,17 @@ internal static class ServiceProjectionReadModelSupport
         target.Clear();
         if (source != null)
             target.Add(source);
+    }
+
+    public static void ReplaceMap<TKey, TValue>(
+        MapField<TKey, TValue> target,
+        IEnumerable<KeyValuePair<TKey, TValue>>? source)
+    {
+        target.Clear();
+        if (source == null)
+            return;
+
+        foreach (var pair in source)
+            target[pair.Key] = pair.Value;
     }
 }

@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Hosting.Endpoints;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -35,6 +36,7 @@ public static partial class ServiceEndpoints
         app.MapScopeWorkflowCapabilityEndpoints();
         app.MapScopeScriptCapabilityEndpoints();
         app.MapScopeGAgentCapabilityEndpoints();
+        ScheduledDispatchEndpoints.Map(app.MapGroup("/api"));
         return app;
     }
 
