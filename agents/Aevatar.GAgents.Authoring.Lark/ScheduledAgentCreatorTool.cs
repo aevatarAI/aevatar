@@ -89,6 +89,30 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
               "type": "boolean",
               "description": "When true, the run must observe a successful NyxID proxy call."
             },
+            "external_trigger_sources": {
+              "type": "array",
+              "description": "Optional external trigger source declarations. For channel run_agent, use source_id channel:<platform>:<registration_scope_id> and kind channel_inbound.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "source_id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": ["webhook", "channel_inbound"]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  }
+                },
+                "required": ["source_id", "kind"]
+              }
+            },
             "run_immediately": {
               "type": "boolean",
               "description": "When true, trigger the first run after initialization is accepted."

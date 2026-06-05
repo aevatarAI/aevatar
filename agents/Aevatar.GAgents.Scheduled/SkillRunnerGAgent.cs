@@ -219,6 +219,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         await base.OnActivateAsync(ct);
         await Scheduler.BootstrapOnActivateAsync(ct);
+        await RecoverExternalTriggerDeliveriesAsync(ct);
     }
 
     protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(SkillRunnerState state)
@@ -250,6 +251,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             .On<SkillRunnerExecutionCompletedEvent>(ApplyCompleted)
             .On<SkillRunnerExecutionFailedEvent>(ApplyFailed)
             .On<SkillRunnerExecutionRejectedEvent>(ApplyRejected)
+            .On<SkillRunnerExternalTriggerAdmittedEvent>(ApplyExternalTriggerAdmitted)
+            .On<SkillRunnerExternalTriggerDispatchRequestedEvent>(ApplyExternalTriggerDispatchRequested)
+            .On<SkillRunnerExternalTriggerRejectedEvent>(ApplyExternalTriggerRejected)
+            .On<SkillRunnerExternalTriggerDuplicateIgnoredEvent>(ApplyExternalTriggerDuplicateIgnored)
+            .On<ExternalTriggerSourceEnabledEvent>(ApplyExternalTriggerSourceEnabled)
             .On<SkillRunnerDisabledEvent>(ApplyDisabled)
             .On<SkillRunnerEnabledEvent>(ApplyEnabled)
             .OrCurrent();
@@ -304,6 +310,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         if (command.HasMaxHistoryMessages)
             initialized.MaxHistoryMessages = command.MaxHistoryMessages;
 
+        initialized.ExternalTriggerSources.AddRange(command.ExternalTriggerSources
+            .Select(NormalizeExternalTriggerSource)
+            .Where(static source => !string.IsNullOrWhiteSpace(source.SourceId)));
+
         await PersistDomainEventAsync(initialized);
 
         // Refactor (iter89/cluster-089-scheduled-runner-wall-clock):
@@ -313,9 +323,82 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await UpsertRegistryAsync(CancellationToken.None);
     }
 
+    [EventHandler]
+    public async Task HandleAdmitExternalTriggerAsync(AdmitSkillRunnerExternalTriggerCommand command)
+    {
+        var now = _clock.UtcNow;
+        var identity = NormalizeExternalTriggerIdentity(command.Identity, now);
+        if (!IsValidExternalTriggerIdentity(identity))
+        {
+            await PersistDomainEventAsync(new SkillRunnerExternalTriggerRejectedEvent
+            {
+                Identity = identity,
+                RejectedAt = Timestamp.FromDateTimeOffset(now),
+                Reason = SkillRunnerDefaults.ExternalTriggerRejectedReasonMalformedDelivery,
+            });
+            return;
+        }
+
+        var source = State.FindExternalTriggerSource(identity.SourceId);
+        if (source is null)
+        {
+            await PersistDomainEventAsync(new SkillRunnerExternalTriggerRejectedEvent
+            {
+                Identity = identity,
+                RejectedAt = Timestamp.FromDateTimeOffset(now),
+                Reason = SkillRunnerDefaults.ExternalTriggerRejectedReasonUnknownSource,
+            });
+            return;
+        }
+
+        if (!source.Enabled)
+        {
+            await PersistDomainEventAsync(new SkillRunnerExternalTriggerRejectedEvent
+            {
+                Identity = NormalizeExternalTriggerIdentity(identity, source, now),
+                RejectedAt = Timestamp.FromDateTimeOffset(now),
+                Reason = SkillRunnerDefaults.ExternalTriggerRejectedReasonDisabledSource,
+            });
+            return;
+        }
+
+        identity = NormalizeExternalTriggerIdentity(identity, source, now);
+        if (State.FindExternalTriggerDelivery(identity) is not null)
+        {
+            await PersistDomainEventAsync(new SkillRunnerExternalTriggerDuplicateIgnoredEvent
+            {
+                Identity = identity,
+                IgnoredAt = Timestamp.FromDateTimeOffset(now),
+                Reason = SkillRunnerDefaults.ExternalTriggerDuplicateReasonAlreadyAdmitted,
+            });
+            return;
+        }
+
+        await PersistDomainEventAsync(new SkillRunnerExternalTriggerAdmittedEvent
+        {
+            Identity = identity,
+            AdmittedAt = Timestamp.FromDateTimeOffset(now),
+        });
+
+        await DispatchExternalTriggerExecutionAsync(identity, dispatchAttempt: 1, ct: CancellationToken.None);
+    }
+
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleTriggerAsync(TriggerSkillRunnerExecutionCommand command)
     {
+        var externalIdentity = NormalizeExternalTriggerIdentity(command.ExternalTriggerIdentity, _clock.UtcNow);
+        var hasExternalTrigger = IsValidExternalTriggerIdentity(externalIdentity);
+        if (hasExternalTrigger && State.IsExternalTriggerTerminal(externalIdentity))
+        {
+            await PersistDomainEventAsync(new SkillRunnerExternalTriggerDuplicateIgnoredEvent
+            {
+                Identity = externalIdentity,
+                IgnoredAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
+                Reason = SkillRunnerDefaults.ExternalTriggerDuplicateReasonAlreadyAdmitted,
+            });
+            return;
+        }
+
         if (!State.Enabled)
         {
             Logger.LogInformation("Skill runner {ActorId} ignored trigger because it is disabled", Id);
@@ -323,6 +406,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             {
                 RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
                 Reason = SkillRunnerDefaults.RejectionReasonRunnerDisabled,
+                ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
             });
             return;
         }
@@ -349,6 +433,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 WorkflowName = result.WorkflowReceipt?.WorkflowName ?? string.Empty,
                 WorkflowCommandId = result.WorkflowReceipt?.CommandId ?? string.Empty,
                 WorkflowCorrelationId = result.WorkflowReceipt?.CorrelationId ?? string.Empty,
+                ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
             });
 
             await CancelRetryLeaseAsync(CancellationToken.None);
@@ -364,7 +449,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
             if (command.RetryAttempt < SkillRunnerDefaults.MaxRetryAttempts)
             {
-                await ScheduleRetryAsync(command.RetryAttempt + 1, CancellationToken.None);
+                await ScheduleRetryAsync(command, command.RetryAttempt + 1, CancellationToken.None);
                 return;
             }
 
@@ -378,6 +463,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 SkillVersion = executionFailure?.SkillVersion ?? string.Empty,
                 WorkflowId = executionFailure?.WorkflowId ?? string.Empty,
                 ErrorCode = executionFailure?.ErrorCode ?? SkillRunnerExecutionErrorCode.Unspecified,
+                ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
@@ -385,13 +471,29 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
-    private async Task ScheduleRetryAsync(int retryAttempt, CancellationToken ct)
+    [EventHandler]
+    public async Task HandleSetExternalTriggerSourceEnabledAsync(SetExternalTriggerSourceEnabledCommand command)
+    {
+        var sourceId = command.SourceId?.Trim();
+        if (string.IsNullOrWhiteSpace(sourceId) || State.FindExternalTriggerSource(sourceId) is null)
+            return;
+
+        await PersistDomainEventAsync(new ExternalTriggerSourceEnabledEvent
+        {
+            SourceId = sourceId,
+            Enabled = command.Enabled,
+        });
+    }
+
+    private async Task ScheduleRetryAsync(TriggerSkillRunnerExecutionCommand command, int retryAttempt, CancellationToken ct)
     {
         await CancelRetryLeaseAsync(ct);
+        var retryCommand = command.Clone();
+        retryCommand.RetryAttempt = retryAttempt;
         _retryLease = await ScheduleSelfDurableTimeoutAsync(
             SkillRunnerDefaults.RetryCallbackId,
             SkillRunnerDefaults.RetryBackoff,
-            new TriggerSkillRunnerExecutionCommand { Reason = "retry", RetryAttempt = retryAttempt },
+            retryCommand,
             ct: ct);
         Logger.LogInformation(
             "Skill runner {ActorId} scheduled retry attempt {Attempt} in {Backoff}",
@@ -430,6 +532,52 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
 
         await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
+    }
+
+    private async Task RecoverExternalTriggerDeliveriesAsync(CancellationToken ct)
+    {
+        foreach (var record in State.RecoverableExternalTriggerDeliveries())
+        {
+            var identity = NormalizeExternalTriggerIdentity(record.Identity, _clock.UtcNow);
+            if (!IsValidExternalTriggerIdentity(identity))
+                continue;
+
+            var nextAttempt = record.DispatchAttempt + 1;
+            if (nextAttempt > SkillRunnerDefaults.ExternalTriggerMaxDispatchAttempts)
+            {
+                await PersistDomainEventAsync(new SkillRunnerExternalTriggerRejectedEvent
+                {
+                    Identity = identity,
+                    RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
+                    Reason = SkillRunnerDefaults.ExternalTriggerRejectedReasonDispatchAttemptsExhausted,
+                }, ct);
+                continue;
+            }
+
+            await DispatchExternalTriggerExecutionAsync(identity, nextAttempt, ct);
+        }
+    }
+
+    private async Task DispatchExternalTriggerExecutionAsync(
+        SkillRunnerExternalTriggerIdentity identity,
+        int dispatchAttempt,
+        CancellationToken ct)
+    {
+        await SendToAsync(
+            Id,
+            new TriggerSkillRunnerExecutionCommand
+            {
+                Reason = SkillRunnerDefaults.ExternalTriggerReason,
+                ExternalTriggerIdentity = identity.Clone(),
+            },
+            ct);
+
+        await PersistDomainEventAsync(new SkillRunnerExternalTriggerDispatchRequestedEvent
+        {
+            Identity = identity.Clone(),
+            RequestedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
+            DispatchAttempt = dispatchAttempt,
+        }, ct);
     }
 
     private async Task<SkillRunnerExecutionResult> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
@@ -1464,6 +1612,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         next.MaxToolRounds = evt.HasMaxToolRounds ? evt.MaxToolRounds : SkillRunnerDefaults.DefaultMaxToolRounds;
         next.MaxHistoryMessages = evt.HasMaxHistoryMessages ? evt.MaxHistoryMessages : SkillRunnerDefaults.DefaultMaxHistoryMessages;
+        next.ExternalTriggerSources.Clear();
+        next.ExternalTriggerSources.AddRange(evt.ExternalTriggerSources
+            .Select(NormalizeExternalTriggerSource)
+            .Where(static source => !string.IsNullOrWhiteSpace(source.SourceId)));
+        next.RecentExternalTriggerDeliveries.Clear();
         return next;
     }
 
@@ -1481,6 +1634,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.LastOutput = evt.Output ?? string.Empty;
         next.LastError = string.Empty;
         next.ErrorCount = 0;
+        if (IsValidExternalTriggerIdentity(evt.ExternalTriggerIdentity))
+        {
+            next.UpsertExternalTriggerDelivery(
+                evt.ExternalTriggerIdentity,
+                SkillRunnerExternalTriggerDeliveryStatus.Completed,
+                evt.CompletedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
+            next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.CompletedAt));
+        }
+
         return next;
     }
 
@@ -1490,6 +1652,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.LastRunAt = evt.FailedAt;
         next.LastError = evt.Error ?? string.Empty;
         next.ErrorCount += 1;
+        if (IsValidExternalTriggerIdentity(evt.ExternalTriggerIdentity))
+        {
+            next.UpsertExternalTriggerDelivery(
+                evt.ExternalTriggerIdentity,
+                SkillRunnerExternalTriggerDeliveryStatus.Failed,
+                evt.FailedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                evt.Error ?? string.Empty);
+            next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.FailedAt));
+        }
+
         return next;
     }
 
@@ -1499,6 +1671,97 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.LastRunAt = evt.RejectedAt;
         next.LastError = evt.Reason ?? string.Empty;
         next.ErrorCount += 1;
+        if (IsValidExternalTriggerIdentity(evt.ExternalTriggerIdentity))
+        {
+            next.UpsertExternalTriggerDelivery(
+                evt.ExternalTriggerIdentity,
+                SkillRunnerExternalTriggerDeliveryStatus.Rejected,
+                evt.RejectedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                evt.Reason ?? string.Empty);
+            next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.RejectedAt));
+        }
+
+        return next;
+    }
+
+    private static SkillRunnerState ApplyExternalTriggerAdmitted(
+        SkillRunnerState current,
+        SkillRunnerExternalTriggerAdmittedEvent evt)
+    {
+        var next = current.Clone();
+        if (IsValidExternalTriggerIdentity(evt.Identity))
+        {
+            next.UpsertExternalTriggerDelivery(
+                evt.Identity,
+                SkillRunnerExternalTriggerDeliveryStatus.Admitted,
+                evt.AdmittedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow));
+        }
+
+        return next;
+    }
+
+    private static SkillRunnerState ApplyExternalTriggerDispatchRequested(
+        SkillRunnerState current,
+        SkillRunnerExternalTriggerDispatchRequestedEvent evt)
+    {
+        var next = current.Clone();
+        if (IsValidExternalTriggerIdentity(evt.Identity))
+        {
+            next.UpsertExternalTriggerDelivery(
+                evt.Identity,
+                SkillRunnerExternalTriggerDeliveryStatus.DispatchRequested,
+                evt.RequestedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                dispatchAttempt: evt.DispatchAttempt);
+        }
+
+        return next;
+    }
+
+    private static SkillRunnerState ApplyExternalTriggerRejected(
+        SkillRunnerState current,
+        SkillRunnerExternalTriggerRejectedEvent evt)
+    {
+        var next = current.Clone();
+        if (IsValidExternalTriggerIdentity(evt.Identity))
+        {
+            next.UpsertExternalTriggerDelivery(
+                evt.Identity,
+                SkillRunnerExternalTriggerDeliveryStatus.Rejected,
+                evt.RejectedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                evt.Reason ?? string.Empty);
+            next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.RejectedAt));
+        }
+
+        return next;
+    }
+
+    private static SkillRunnerState ApplyExternalTriggerDuplicateIgnored(
+        SkillRunnerState current,
+        SkillRunnerExternalTriggerDuplicateIgnoredEvent evt)
+    {
+        var next = current.Clone();
+        if (IsValidExternalTriggerIdentity(evt.Identity))
+        {
+            if (next.FindExternalTriggerDelivery(evt.Identity) is null)
+            {
+                next.UpsertExternalTriggerDelivery(
+                    evt.Identity,
+                    SkillRunnerExternalTriggerDeliveryStatus.DuplicateIgnored,
+                    evt.IgnoredAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    evt.Reason ?? string.Empty);
+                next.TrimExternalTriggerDeliveries(ToDateTimeOffset(evt.IgnoredAt));
+            }
+        }
+
+        return next;
+    }
+
+    private static SkillRunnerState ApplyExternalTriggerSourceEnabled(
+        SkillRunnerState current,
+        ExternalTriggerSourceEnabledEvent evt)
+    {
+        var next = current.Clone();
+        next.SetExternalTriggerSourceEnabled(evt.SourceId, evt.Enabled);
         return next;
     }
 
@@ -1539,4 +1802,52 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private static string ResolvePlatform(string? platform) =>
         string.IsNullOrWhiteSpace(platform) ? SkillRunnerDefaults.DefaultPlatform : platform.Trim();
+
+    private static ExternalTriggerSource NormalizeExternalTriggerSource(ExternalTriggerSource source)
+    {
+        var normalized = source.Clone();
+        normalized.SourceId = normalized.SourceId?.Trim() ?? string.Empty;
+        normalized.DisplayName = normalized.DisplayName?.Trim() ?? string.Empty;
+        if (normalized.Kind == ExternalTriggerSourceKind.Unspecified)
+            normalized.Kind = ExternalTriggerSourceKind.Webhook;
+        return normalized;
+    }
+
+    private static SkillRunnerExternalTriggerIdentity NormalizeExternalTriggerIdentity(
+        SkillRunnerExternalTriggerIdentity? identity,
+        DateTimeOffset now)
+    {
+        var normalized = identity?.Clone() ?? new SkillRunnerExternalTriggerIdentity();
+        normalized.SourceId = normalized.SourceId?.Trim() ?? string.Empty;
+        normalized.DeliveryId = normalized.DeliveryId?.Trim() ?? string.Empty;
+        normalized.AdmissionId = string.IsNullOrWhiteSpace(normalized.AdmissionId)
+            ? Guid.NewGuid().ToString("N")
+            : normalized.AdmissionId.Trim();
+        normalized.PayloadSummary = normalized.PayloadSummary?.Trim() ?? string.Empty;
+        normalized.PayloadRef = normalized.PayloadRef?.Trim() ?? string.Empty;
+        if (normalized.Kind == ExternalTriggerSourceKind.Unspecified)
+            normalized.Kind = ExternalTriggerSourceKind.Webhook;
+        normalized.ReceivedAt ??= Timestamp.FromDateTimeOffset(now);
+        return normalized;
+    }
+
+    private static SkillRunnerExternalTriggerIdentity NormalizeExternalTriggerIdentity(
+        SkillRunnerExternalTriggerIdentity identity,
+        ExternalTriggerSource source,
+        DateTimeOffset now)
+    {
+        var normalized = NormalizeExternalTriggerIdentity(identity, now);
+        normalized.Kind = source.Kind == ExternalTriggerSourceKind.Unspecified
+            ? ExternalTriggerSourceKind.Webhook
+            : source.Kind;
+        return normalized;
+    }
+
+    private static bool IsValidExternalTriggerIdentity(SkillRunnerExternalTriggerIdentity? identity) =>
+        identity is not null &&
+        !string.IsNullOrWhiteSpace(identity.SourceId) &&
+        !string.IsNullOrWhiteSpace(identity.DeliveryId);
+
+    private static DateTimeOffset ToDateTimeOffset(Timestamp? timestamp) =>
+        timestamp?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
 }

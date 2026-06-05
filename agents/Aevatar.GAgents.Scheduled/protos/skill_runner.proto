@@ -33,12 +33,55 @@ enum SkillRunnerExecutionErrorCode {
   SKILL_RUNNER_EXECUTION_ERROR_CODE_WORKFLOW_DISPATCH_REJECTED = 9;
 }
 
+enum ExternalTriggerSourceKind {
+  EXTERNAL_TRIGGER_SOURCE_KIND_UNSPECIFIED = 0;
+  EXTERNAL_TRIGGER_SOURCE_KIND_WEBHOOK = 1;
+  EXTERNAL_TRIGGER_SOURCE_KIND_CHANNEL_INBOUND = 2;
+}
+
+enum SkillRunnerExternalTriggerDeliveryStatus {
+  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_UNSPECIFIED = 0;
+  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_ADMITTED = 1;
+  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_DISPATCH_REQUESTED = 2;
+  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_RUNNING = 3;
+  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_COMPLETED = 4;
+  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_FAILED = 5;
+  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_REJECTED = 6;
+  SKILL_RUNNER_EXTERNAL_TRIGGER_DELIVERY_STATUS_DUPLICATE_IGNORED = 7;
+}
+
 message SkillRunnerSkillReference {
   string name = 1;
   string version = 2;
   SkillRunnerSkillSource source = 3;
   string workflow_id = 4;
   bool allow_inline_fallback = 5;
+}
+
+message ExternalTriggerSource {
+  string source_id = 1;
+  ExternalTriggerSourceKind kind = 2;
+  bool enabled = 3;
+  string display_name = 4;
+}
+
+message SkillRunnerExternalTriggerIdentity {
+  string source_id = 1;
+  string delivery_id = 2;
+  string admission_id = 3;
+  ExternalTriggerSourceKind kind = 4;
+  google.protobuf.Timestamp received_at = 5;
+  string payload_summary = 6;
+  string payload_ref = 7;
+}
+
+message SkillRunnerExternalTriggerDeliveryRecord {
+  SkillRunnerExternalTriggerIdentity identity = 1;
+  SkillRunnerExternalTriggerDeliveryStatus status = 2;
+  google.protobuf.Timestamp admitted_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  string reason = 5;
+  int32 dispatch_attempt = 6;
 }
 
 message SkillRunnerOutboundConfig {
@@ -107,6 +150,8 @@ message SkillRunnerState {
   // failed. Skills that don't fan out to nyxid_proxy at all leave this false.
   bool requires_nyxid_proxy_success = 21;
   SkillRunnerSkillReference skill_ref = 22;
+  repeated ExternalTriggerSource external_trigger_sources = 23;
+  repeated SkillRunnerExternalTriggerDeliveryRecord recent_external_trigger_deliveries = 24;
 }
 
 message SkillRunnerExecutionDocument {
@@ -146,6 +191,7 @@ message InitializeSkillRunnerCommand {
   // See SkillRunnerState.requires_nyxid_proxy_success for semantics.
   bool requires_nyxid_proxy_success = 16;
   SkillRunnerSkillReference skill_ref = 17;
+  repeated ExternalTriggerSource external_trigger_sources = 18;
 }
 
 message SkillRunnerInitializedEvent {
@@ -167,6 +213,7 @@ message SkillRunnerInitializedEvent {
   // See SkillRunnerState.requires_nyxid_proxy_success for semantics.
   bool requires_nyxid_proxy_success = 16;
   SkillRunnerSkillReference skill_ref = 17;
+  repeated ExternalTriggerSource external_trigger_sources = 18;
 }
 
 message TriggerSkillRunnerExecutionCommand {
@@ -175,6 +222,11 @@ message TriggerSkillRunnerExecutionCommand {
   // Bounded by SkillRunnerDefaults.MaxRetryAttempts; retries are event-ified
   // via ScheduleSelfDurableTimeoutAsync and never block the actor turn.
   int32 retry_attempt = 2;
+  SkillRunnerExternalTriggerIdentity external_trigger_identity = 3;
+}
+
+message AdmitSkillRunnerExternalTriggerCommand {
+  SkillRunnerExternalTriggerIdentity identity = 1;
 }
 
 message SkillRunnerNextRunScheduledEvent {
@@ -192,6 +244,7 @@ message SkillRunnerExecutionCompletedEvent {
   string workflow_name = 8;
   string workflow_command_id = 9;
   string workflow_correlation_id = 10;
+  SkillRunnerExternalTriggerIdentity external_trigger_identity = 11;
 }
 
 message SkillRunnerExecutionFailedEvent {
@@ -202,11 +255,46 @@ message SkillRunnerExecutionFailedEvent {
   string skill_version = 5;
   string workflow_id = 6;
   SkillRunnerExecutionErrorCode error_code = 7;
+  SkillRunnerExternalTriggerIdentity external_trigger_identity = 8;
 }
 
 message SkillRunnerExecutionRejectedEvent {
   google.protobuf.Timestamp rejected_at = 1;
   string reason = 2;
+  SkillRunnerExternalTriggerIdentity external_trigger_identity = 3;
+}
+
+message SkillRunnerExternalTriggerAdmittedEvent {
+  SkillRunnerExternalTriggerIdentity identity = 1;
+  google.protobuf.Timestamp admitted_at = 2;
+}
+
+message SkillRunnerExternalTriggerDispatchRequestedEvent {
+  SkillRunnerExternalTriggerIdentity identity = 1;
+  google.protobuf.Timestamp requested_at = 2;
+  int32 dispatch_attempt = 3;
+}
+
+message SkillRunnerExternalTriggerRejectedEvent {
+  SkillRunnerExternalTriggerIdentity identity = 1;
+  google.protobuf.Timestamp rejected_at = 2;
+  string reason = 3;
+}
+
+message SkillRunnerExternalTriggerDuplicateIgnoredEvent {
+  SkillRunnerExternalTriggerIdentity identity = 1;
+  google.protobuf.Timestamp ignored_at = 2;
+  string reason = 3;
+}
+
+message SetExternalTriggerSourceEnabledCommand {
+  string source_id = 1;
+  bool enabled = 2;
+}
+
+message ExternalTriggerSourceEnabledEvent {
+  string source_id = 1;
+  bool enabled = 2;
 }
 
 message DisableSkillRunnerCommand {

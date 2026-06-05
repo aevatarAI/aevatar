@@ -12,6 +12,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Runtime;
@@ -317,6 +318,227 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.State.Enabled.Should().BeFalse();
         _agent.State.LastError.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
         _agent.State.ErrorCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithExternalTriggerSource_ShouldPersistSourceDeclaration()
+    {
+        var command = CreateInitializeCommand();
+        command.ExternalTriggerSources.Add(new ExternalTriggerSource
+        {
+            SourceId = " webhook-main ",
+            Kind = ExternalTriggerSourceKind.Webhook,
+            Enabled = true,
+            DisplayName = " Main webhook ",
+        });
+
+        await _agent.HandleInitializeAsync(command);
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var initialized = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerInitializedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerInitializedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        initialized.ExternalTriggerSources.Should().ContainSingle()
+            .Which.SourceId.Should().Be("webhook-main");
+        _agent.State.ExternalTriggerSources.Should().ContainSingle()
+            .Which.DisplayName.Should().Be("Main webhook");
+    }
+
+    [Fact]
+    public async Task HandleAdmitExternalTriggerAsync_FirstDelivery_ShouldPersistAdmittedThenDispatchRequested()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+
+        await _agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand
+        {
+            Identity = CreateExternalIdentity("delivery-1"),
+        });
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var externalEvents = persisted
+            .Select(x => x.EventData)
+            .Where(x =>
+                x.Is(SkillRunnerExternalTriggerAdmittedEvent.Descriptor) ||
+                x.Is(SkillRunnerExternalTriggerDispatchRequestedEvent.Descriptor))
+            .ToArray();
+        externalEvents.Should().HaveCount(2);
+        externalEvents[0].Is(SkillRunnerExternalTriggerAdmittedEvent.Descriptor).Should().BeTrue();
+        externalEvents[1].Is(SkillRunnerExternalTriggerDispatchRequestedEvent.Descriptor).Should().BeTrue();
+        var dispatchRequested = externalEvents[1].Unpack<SkillRunnerExternalTriggerDispatchRequestedEvent>();
+        dispatchRequested.DispatchAttempt.Should().Be(1);
+        dispatchRequested.Identity.DeliveryId.Should().Be("delivery-1");
+
+        var record = _agent.State.FindExternalTriggerDelivery(CreateExternalIdentity("delivery-1"));
+        record.Should().NotBeNull();
+        record!.Status.Should().Be(SkillRunnerExternalTriggerDeliveryStatus.DispatchRequested);
+    }
+
+    [Theory]
+    [InlineData("missing-source", SkillRunnerDefaults.ExternalTriggerRejectedReasonUnknownSource)]
+    [InlineData("disabled-source", SkillRunnerDefaults.ExternalTriggerRejectedReasonDisabledSource)]
+    public async Task HandleAdmitExternalTriggerAsync_UnknownOrDisabledSource_ShouldCommitRejectedWithoutDispatch(
+        string sourceId,
+        string expectedReason)
+    {
+        var command = CreateInitializeCommandWithExternalSource();
+        command.ExternalTriggerSources.Add(new ExternalTriggerSource
+        {
+            SourceId = "disabled-source",
+            Kind = ExternalTriggerSourceKind.Webhook,
+            Enabled = false,
+        });
+        await _agent.HandleInitializeAsync(command);
+
+        await _agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand
+        {
+            Identity = CreateExternalIdentity("delivery-rejected", sourceId),
+        });
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var rejected = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExternalTriggerRejectedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExternalTriggerRejectedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        rejected.Reason.Should().Be(expectedReason);
+        persisted.Select(x => x.EventData)
+            .Should()
+            .NotContain(x => x.Is(SkillRunnerExternalTriggerDispatchRequestedEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task HandleAdmitExternalTriggerAsync_DuplicateDelivery_ShouldCommitDuplicateIgnoredWithoutSecondDispatch()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+        var command = new AdmitSkillRunnerExternalTriggerCommand
+        {
+            Identity = CreateExternalIdentity("delivery-dup"),
+        };
+
+        await _agent.HandleAdmitExternalTriggerAsync(command);
+        await _agent.HandleAdmitExternalTriggerAsync(command.Clone());
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        persisted.Select(x => x.EventData)
+            .Count(x => x.Is(SkillRunnerExternalTriggerDispatchRequestedEvent.Descriptor))
+            .Should()
+            .Be(1);
+        persisted.Select(x => x.EventData)
+            .Count(x => x.Is(SkillRunnerExternalTriggerDuplicateIgnoredEvent.Descriptor))
+            .Should()
+            .Be(1);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_ExternalCompleted_ShouldPreserveIdentityAndMarkTerminal()
+    {
+        var provider = new StubStreamingProviderFactory("external output");
+        var agent = CreateAgent("skill-runner-external-complete", providerFactory: provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+        var identity = CreateExternalIdentity("delivery-complete");
+        await agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand { Identity = identity });
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = SkillRunnerDefaults.ExternalTriggerReason,
+            ExternalTriggerIdentity = identity.Clone(),
+        });
+
+        var completed = await ReadSingleCompletedEventAsync(_store, "skill-runner-external-complete");
+        completed.ExternalTriggerIdentity.Should().NotBeNull();
+        completed.ExternalTriggerIdentity.DeliveryId.Should().Be("delivery-complete");
+        agent.State.FindExternalTriggerDelivery(identity)!.Status
+            .Should()
+            .Be(SkillRunnerExternalTriggerDeliveryStatus.Completed);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_DisabledExternalDelivery_ShouldPreserveIdentityInExecutionRejected()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+        var identity = CreateExternalIdentity("delivery-disabled-runner");
+        await _agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand { Identity = identity });
+        await _agent.HandleDisableAsync(new DisableSkillRunnerCommand { Reason = "operator" });
+
+        await _agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = SkillRunnerDefaults.ExternalTriggerReason,
+            ExternalTriggerIdentity = identity.Clone(),
+        });
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var rejected = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExecutionRejectedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExecutionRejectedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        rejected.ExternalTriggerIdentity.DeliveryId.Should().Be("delivery-disabled-runner");
+        _agent.State.FindExternalTriggerDelivery(identity)!.Status
+            .Should()
+            .Be(SkillRunnerExternalTriggerDeliveryStatus.Rejected);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_ExternalRetry_ShouldPreserveIdentityInRetryCommand()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services => services.AddSingleton<Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>(scheduler));
+        var agent = CreateAgent(
+            "skill-runner-external-retry",
+            provider,
+            providerFactory: new StubStreamingProviderFactory(new StubStreamingTurn(new InvalidOperationException("fail once"))));
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+        var identity = CreateExternalIdentity("delivery-retry");
+        await agent.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand { Identity = identity });
+
+        await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = SkillRunnerDefaults.ExternalTriggerReason,
+            ExternalTriggerIdentity = identity.Clone(),
+        });
+
+        scheduler.Timeouts.Should().ContainSingle();
+        var retry = scheduler.Timeouts[0].TriggerEnvelope.Payload.Unpack<TriggerSkillRunnerExecutionCommand>();
+        retry.RetryAttempt.Should().Be(1);
+        retry.ExternalTriggerIdentity.DeliveryId.Should().Be("delivery-retry");
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_RecoverableExternalDelivery_ShouldRedispatchWithBoundedAttempt()
+    {
+        var store = new InMemoryEventStore();
+        using var provider = BuildServiceProvider(store);
+        var first = CreateAgent("skill-runner-external-recover", provider);
+        await first.ActivateAsync();
+        await first.HandleInitializeAsync(CreateInitializeCommandWithExternalSource());
+        await first.HandleAdmitExternalTriggerAsync(new AdmitSkillRunnerExternalTriggerCommand
+        {
+            Identity = CreateExternalIdentity("delivery-recover"),
+        });
+
+        var recovered = CreateAgent("skill-runner-external-recover", provider);
+        await recovered.ActivateAsync();
+
+        var persisted = await store.GetEventsAsync("skill-runner-external-recover");
+        var dispatches = persisted
+            .Select(x => x.EventData)
+            .Where(x => x.Is(SkillRunnerExternalTriggerDispatchRequestedEvent.Descriptor))
+            .Select(x => x.Unpack<SkillRunnerExternalTriggerDispatchRequestedEvent>())
+            .ToArray();
+        dispatches.Should().HaveCount(2);
+        dispatches[^1].DispatchAttempt.Should().Be(2);
     }
 
     [Fact]
@@ -1828,6 +2050,47 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         public DateTimeOffset UtcNow => now;
     }
 
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Timeouts.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Timeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            throw new NotSupportedException("Timer scheduling is not required for this test.");
+        }
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
     /// <summary>
     /// Returns a different response per request in the order given. Used to simulate the
     /// `bot not in chat` rejection on the primary attempt followed by a successful fallback
@@ -1912,6 +2175,34 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             NyxProviderSlug = "api-lark-bot",
             NyxApiKey = "nyx-api-key",
         },
+    };
+
+    private static InitializeSkillRunnerCommand CreateInitializeCommandWithExternalSource(
+        string sourceId = "webhook-main")
+    {
+        var command = CreateInitializeCommand();
+        command.ExternalTriggerSources.Add(new ExternalTriggerSource
+        {
+            SourceId = sourceId,
+            Kind = ExternalTriggerSourceKind.Webhook,
+            Enabled = true,
+            DisplayName = "Webhook main",
+        });
+        return command;
+    }
+
+    private static SkillRunnerExternalTriggerIdentity CreateExternalIdentity(
+        string deliveryId,
+        string sourceId = "webhook-main") => new()
+    {
+        SourceId = sourceId,
+        DeliveryId = deliveryId,
+        AdmissionId = $"admit-{deliveryId}",
+        Kind = ExternalTriggerSourceKind.Webhook,
+        ReceivedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 6, 6, 8, 0, 0, TimeSpan.Zero)),
+        PayloadSummary = "test delivery",
+        PayloadRef = $"test://deliveries/{deliveryId}",
     };
 
     private static InitializeSkillRunnerCommand CreateSkillRefCommand(string name)
