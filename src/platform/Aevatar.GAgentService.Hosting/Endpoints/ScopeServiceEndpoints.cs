@@ -124,13 +124,21 @@ public static class ScopeServiceEndpoints
                 return;
             }
 
+            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            if (!callerCredential.Succeeded)
+            {
+                var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
+                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                return;
+            }
+
             var chatRequest = new WorkflowChatRunRequest(
                 Prompt: request.Prompt?.Trim() ?? string.Empty,
                 Source: WorkflowChatSource.InlineYamlBundle(request.WorkflowYamls),
                 SessionId: request.SessionId,
                 Metadata: scopedHeaders,
                 ScopeId: scopeId,
-                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                CallerCredential: callerCredential.Credential,
                 LlmControl: ToWorkflowLlmControl(await BuildScopedLlmControlAsync(http, ct)),
                 Headers: scopedHeaders);
 
@@ -1507,6 +1515,14 @@ public static class ScopeServiceEndpoints
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
             var scopedHeaders = BuildScopedHeaders(request.Headers);
+            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            if (!callerCredential.Succeeded)
+            {
+                var (statusCode, code, message) = ScopeWorkflowEndpoints.MapRunStartError(callerCredential.Error);
+                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+                return;
+            }
+
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -1514,7 +1530,7 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 normalizedPrompt,
                 scopedHeaders,
-                ConnectorHttpAuthorizationExtractor.Extract(http),
+                callerCredential.Credential,
                 request.RevisionId,
                 appId);
             var target = await resolutionService.ResolveAsync(invocationRequest, ct);
@@ -2888,7 +2904,7 @@ const response = await fetch("{{invokePath}}", {
         string endpointId,
         string prompt,
         IReadOnlyDictionary<string, string>? headers,
-        string? connectorHttpAuthorization,
+        WorkflowCallerCredential? callerCredential,
         string? revisionId,
         string? appId = null)
     {
@@ -2896,7 +2912,7 @@ const response = await fetch("{{invokePath}}", {
         {
             Prompt = prompt,
             ScopeId = scopeId,
-            ConnectorHttpAuthorization = connectorHttpAuthorization ?? string.Empty,
+            ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential),
         };
         if (headers != null)
         {
@@ -2917,6 +2933,12 @@ const response = await fetch("{{invokePath}}", {
                 AppId = string.Empty,
             },
         };
+    }
+
+    private static string ToConnectorHttpAuthorization(WorkflowCallerCredential? callerCredential)
+    {
+        var token = callerCredential?.BearerToken?.Trim();
+        return string.IsNullOrWhiteSpace(token) ? string.Empty : $"Bearer {token}";
     }
 
     private static void EnsureWorkflowStreamTarget(
@@ -2961,8 +2983,6 @@ const response = await fetch("{{invokePath}}", {
 
         return new ChatLlmControlInput
         {
-            NyxIdAccessToken = control.NyxIdAccessToken,
-            NyxIdOrgToken = control.NyxIdOrgToken,
             ModelOverride = control.ModelOverride,
             NyxIdRoutePreference = control.NyxIdRoutePreference,
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
@@ -2977,16 +2997,18 @@ const response = await fetch("{{invokePath}}", {
 
         var model = NormalizeOptional(control.ModelOverride);
         var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
+        var routePreference = NormalizeOptional(control.NyxIdRoutePreference);
         var maxToolRounds = control.MaxToolRoundsOverride is > 0
             ? control.MaxToolRoundsOverride
             : null;
-        if (model == null && userMemoryPrompt == null && maxToolRounds == null)
+        if (model == null && userMemoryPrompt == null && routePreference == null && maxToolRounds == null)
             return null;
 
         return new WorkflowLlmControl(
             model,
             maxToolRounds,
-            userMemoryPrompt);
+            userMemoryPrompt,
+            routePreference);
     }
 
     private static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
@@ -2996,10 +3018,9 @@ const response = await fetch("{{invokePath}}", {
         if (http == null)
             return null;
 
-        var bearerToken = ExtractBearerToken(http);
         var control = new LLMControlContext(
-            NyxIdAccessToken: bearerToken,
-            NyxIdOrgToken: bearerToken,
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
@@ -3035,16 +3056,6 @@ const response = await fetch("{{invokePath}}", {
         }
 
         return control == LLMControlContext.Empty ? null : control;
-    }
-
-    private static string? ExtractBearerToken(HttpContext http)
-    {
-        var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var bearerToken = auth["Bearer ".Length..].Trim();
-        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
     }
 
     private static void CopyHeaders(

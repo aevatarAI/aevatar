@@ -101,6 +101,8 @@ public sealed class WorkflowRunGAgent
         ? Id
         : State.RunId;
 
+    public string ScopeId => State.ScopeId ?? string.Empty;
+
     WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
 
     // Refactor (iter115/cluster-3): Old pattern: callers received the mutable
@@ -261,8 +263,7 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        // Refactor (iter169/cluster-issue1551): Old pattern: connector auth was promoted from request.Metadata. New principle: connector auth is carried by WorkflowChatRequestEvent.ConnectorHttpAuthorization.
-        var connectorAuthorizationDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(request.ConnectorHttpAuthorization);
+        var callerCredentialDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(request.CallerCredential);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
 
@@ -271,7 +272,7 @@ public sealed class WorkflowRunGAgent
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var executionContextDelta = MergeExecutionContextDeltas(connectorAuthorizationDelta, llmControlDelta);
+        var executionContextDelta = MergeExecutionContextDeltas(callerCredentialDelta, llmControlDelta);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
@@ -826,12 +827,12 @@ public sealed class WorkflowRunGAgent
         {
             if (delta.ClearLlm)
                 merged.ClearLlm = true;
-            if (delta.ClearConnector)
-                merged.ClearConnector = true;
+            if (delta.ClearCallerCredential)
+                merged.ClearCallerCredential = true;
             if (delta.Llm != null)
                 merged.Llm = delta.Llm.Clone();
-            if (delta.Connector != null)
-                merged.Connector = delta.Connector.Clone();
+            if (delta.CallerCredential != null)
+                merged.CallerCredential = delta.CallerCredential.Clone();
         }
 
         return merged;
@@ -846,8 +847,8 @@ public sealed class WorkflowRunGAgent
 
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
 
         if (delta.Llm != null)
         {
@@ -855,16 +856,18 @@ public sealed class WorkflowRunGAgent
             {
                 ModelOverride = delta.Llm.ModelOverride?.Trim() ?? string.Empty,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt?.Trim() ?? string.Empty,
+                RoutePreference = delta.Llm.RoutePreference?.Trim() ?? string.Empty,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            var parsed = WorkflowCallerCredentialTokens.ParseOptional(delta.CallerCredential.BearerToken);
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization?.Trim() ?? string.Empty,
+                BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
             };
         }
     }

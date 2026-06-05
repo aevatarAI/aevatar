@@ -25,7 +25,10 @@ public sealed record WorkflowChatInputPart
 public sealed record WorkflowLlmControl(
     string? ModelOverride = null,
     int? MaxToolRoundsOverride = null,
-    string? UserMemoryPrompt = null);
+    string? UserMemoryPrompt = null,
+    string? RoutePreference = null);
+
+public sealed record WorkflowCallerCredential(string? BearerToken = null);
 
 public enum WorkflowChatSourceKind
 {
@@ -132,8 +135,7 @@ public sealed record WorkflowChatRunRequest(
     //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null,
     WorkflowLlmControl? LlmControl = null,
-    // Refactor (iter169/cluster-issue1551): Old pattern: trusted connector bearer was smuggled through Metadata. New principle: Host/Application pass connector HTTP authorization as a typed command scalar.
-    string? ConnectorHttpAuthorization = null,
+    WorkflowCallerCredential? CallerCredential = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     string? CommandIdSeed = null,
     string? CorrelationIdSeed = null,
@@ -165,6 +167,7 @@ public enum WorkflowChatRunStartError
     WorkflowNameMismatch = 8,
     PromptRequired = 9,
     ProjectionUnavailable = 10,
+    InvalidCallerCredential = 11,
 }
 
 public enum WorkflowProjectionCompletionStatus

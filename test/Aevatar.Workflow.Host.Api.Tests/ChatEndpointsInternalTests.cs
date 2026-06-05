@@ -327,7 +327,7 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_ShouldPassTrustedBearerAsTypedConnectorAuthorization()
+    public async Task HandleChat_ShouldPassTrustedBearerAsWorkflowCallerCredential()
     {
         var capturedCommand = default(WorkflowChatRunRequest);
         var interactionService = new FakeCommandInteractionService
@@ -357,8 +357,74 @@ public sealed class ChatEndpointsInternalTests
             CancellationToken.None);
 
         capturedCommand.Should().NotBeNull();
-        capturedCommand!.ConnectorHttpAuthorization.Should().Be("Bearer trusted-token");
+        capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
         capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldReturnInvalidCallerCredential_WhenAuthorizationBearerIsMalformed()
+    {
+        var called = false;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.AgentNotFound));
+            },
+        };
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer token 123";
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CALLER_CREDENTIAL");
+        body.Should().Contain("Caller credential is invalid.");
+        called.Should().BeFalse();
+    }
+
+    [Fact]
+    public void WorkflowCallerCredentialExtractor_ShouldExposeMissingValidAndInvalidStatus()
+    {
+        var missingHttpContext = WorkflowCallerCredentialExtractor.Extract(null);
+        var missingHttp = CreateHttpContext();
+        var unsupportedSchemeHttp = CreateHttpContext();
+        unsupportedSchemeHttp.Request.Headers.Authorization = "Basic token-123";
+        var validHttp = CreateHttpContext();
+        validHttp.Request.Headers.Authorization = "Bearer token-123";
+        var bareBearerHttp = CreateHttpContext();
+        bareBearerHttp.Request.Headers.Authorization = "Bearer";
+        var invalidHttp = CreateHttpContext();
+        invalidHttp.Request.Headers.Authorization = "Bearer token 123";
+
+        var missing = WorkflowCallerCredentialExtractor.Extract(missingHttp);
+        var unsupportedScheme = WorkflowCallerCredentialExtractor.Extract(unsupportedSchemeHttp);
+        var valid = WorkflowCallerCredentialExtractor.Extract(validHttp);
+        var bareBearer = WorkflowCallerCredentialExtractor.Extract(bareBearerHttp);
+        var invalid = WorkflowCallerCredentialExtractor.Extract(invalidHttp);
+
+        missingHttpContext.Succeeded.Should().BeTrue();
+        missingHttpContext.Credential.Should().BeNull();
+        missing.Succeeded.Should().BeTrue();
+        missing.Credential.Should().BeNull();
+        unsupportedScheme.Succeeded.Should().BeTrue();
+        unsupportedScheme.Credential.Should().BeNull();
+        valid.Succeeded.Should().BeTrue();
+        valid.Credential!.BearerToken.Should().Be("token-123");
+        bareBearer.Succeeded.Should().BeFalse();
+        bareBearer.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        bareBearer.Credential.Should().BeNull();
+        invalid.Succeeded.Should().BeFalse();
+        invalid.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        invalid.Credential.Should().BeNull();
     }
 
     [Fact]

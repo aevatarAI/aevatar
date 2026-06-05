@@ -76,7 +76,7 @@ public sealed class WorkflowCoreModulesCoverageTests
                 new FakeAgentTool("echo", args => args),
             ]);
         IWorkflowToolSource[] toolSources = [new ThrowingToolSource(), source];
-        var module = new ToolCallModule(toolSources, NullLogger<ToolCallModule>.Instance);
+        var module = CreateToolCallModule(toolSources);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -101,7 +101,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("cached_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var module = CreateToolCallModule([source]);
         var ctx = CreateContext();
 
         await module.HandleAsync(
@@ -137,7 +137,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("parallel_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var module = CreateToolCallModule([source]);
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var readyCount = 0;
@@ -186,7 +186,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("delayed_echo", args => args),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var module = CreateToolCallModule([source]);
         var cancelledContext = CreateContext();
         using var cts = new CancellationTokenSource();
 
@@ -231,7 +231,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             [
                 new FakeAgentTool("explode", _ => throw new InvalidOperationException("boom")),
             ]);
-        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var module = CreateToolCallModule([source]);
         var ctx = CreateContext();
 
         await module.HandleAsync(
@@ -247,6 +247,33 @@ public sealed class WorkflowCoreModulesCoverageTests
         var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Last();
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("execution failed: boom");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldExecuteWorkflowToolDirectly()
+    {
+        var tool = new CountingFakeAgentTool("safe_echo", args => args);
+        var module = new ToolCallModule([new CountingToolSource([tool])], NullLogger<ToolCallModule>.Instance);
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "step-direct-tool",
+                StepType = "tool_call",
+                Input = """{"msg":"ok"}""",
+                Parameters = { ["tool"] = "safe_echo" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        tool.ExecuteCalls.Should().Be(1);
+        var toolResult = ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Single();
+        toolResult.Success.Should().BeTrue();
+        toolResult.ResultJson.Should().Be("""{"msg":"ok"}""");
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("""{"msg":"ok"}""");
     }
 
     [Fact]
@@ -1411,13 +1438,30 @@ public sealed class WorkflowCoreModulesCoverageTests
         };
     }
 
+    private static ToolCallModule CreateToolCallModule(IReadOnlyList<IWorkflowToolSource> toolSources) =>
+        new(toolSources, NullLogger<ToolCallModule>.Instance);
+
     private sealed class FakeAgentTool(string name, Func<string, string> execute) : IWorkflowTool
     {
         public string Name { get; } = name;
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
-            return Task.FromResult(execute(argumentsJson));
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(execute(request.ArgumentsJson));
+        }
+    }
+
+    private sealed class CountingFakeAgentTool(string name, Func<string, string> execute) : IWorkflowTool
+    {
+        public string Name { get; } = name;
+        public int ExecuteCalls { get; private set; }
+
+        public Task<string> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ExecuteCalls++;
+            return Task.FromResult(execute(request.ArgumentsJson));
         }
     }
 

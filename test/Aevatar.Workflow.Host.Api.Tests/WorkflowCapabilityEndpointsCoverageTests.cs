@@ -190,7 +190,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.LlmControl.Should().Be(new WorkflowLlmControl(
             "model",
             3,
-            UserMemoryPrompt: null));
+            UserMemoryPrompt: null,
+            RoutePreference: "route"));
         result.Request.Metadata.Should().BeEmpty();
     }
 
@@ -804,7 +805,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldScrubConnectorAuthorizationMetadata_AndUseTrustedTypedCarrier()
+    public void ChatRunRequestNormalizer_ShouldScrubConnectorAuthorizationMetadata_AndUseTrustedCallerCredential()
     {
         var input = new ChatInput
         {
@@ -823,12 +824,28 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = ChatRunRequestNormalizer.Normalize(
             input,
             defaultMetadata: defaultMetadata,
-            trustedConnectorHttpAuthorization: " Bearer trusted ");
+            trustedCallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(" trusted "));
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.ConnectorHttpAuthorization.Should().Be("Bearer trusted");
+        result.Request!.CallerCredential!.BearerToken.Should().Be("trusted");
         result.Request.Metadata.Should().Contain("trace", "trace-1");
         result.Request.Metadata.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectMalformedTrustedCallerCredential()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedCallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential("Bearer trusted"));
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
     }
 
     [Fact]

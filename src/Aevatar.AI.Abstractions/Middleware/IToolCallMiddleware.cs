@@ -12,6 +12,16 @@ public interface IToolCallMiddleware
     Task InvokeAsync(ToolCallContext context, Func<Task> next);
 }
 
+/// <summary>Closed middleware termination status for tool-call policy outcomes.</summary>
+public enum ToolCallTerminationKind
+{
+    None = 0,
+    ApprovalDenied = 1,
+    ApprovalTimedOut = 2,
+    ApprovalPending = 3,
+    MiddlewareTerminated = 4,
+}
+
 public sealed record ToolApprovalPendingContext(
     string ApprovalRequestId,
     string ToolName,
@@ -50,6 +60,12 @@ public sealed class ToolCallContext
 
     /// <summary>When true, tool execution is skipped and Result is returned as-is.</summary>
     public bool Terminate { get; set; }
+
+    /// <summary>Closed reason for middleware termination.</summary>
+    public ToolCallTerminationKind TerminationKind { get; set; }
+
+    /// <summary>Human-readable policy or middleware termination reason.</summary>
+    public string? TerminationReason { get; set; }
 
     /// <summary>Arbitrary items shared across the middleware chain.</summary>
     public IDictionary<string, object> Items { get; } = new Dictionary<string, object>();

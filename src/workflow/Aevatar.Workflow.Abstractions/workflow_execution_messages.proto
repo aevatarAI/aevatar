@@ -25,9 +25,16 @@ message WorkflowLlmControlContext {
   string model_override = 1;
   optional int32 max_tool_rounds_override = 2;
   string user_memory_prompt = 3;
+  string route_preference = 4;
+}
+
+message WorkflowCallerCredential {
+  string bearer_token = 1;
 }
 
 message WorkflowChatRequestEvent {
+  reserved 9;
+  reserved "connector_http_authorization";
   string prompt = 1;
   string session_id = 2;
   map<string, string> headers = 3;
@@ -36,7 +43,7 @@ message WorkflowChatRequestEvent {
   repeated WorkflowChatInputPartPayload input_parts = 6;
   map<string, string> metadata = 7;
   WorkflowLlmControlContext llm_control = 8;
-  string connector_http_authorization = 9;
+  WorkflowCallerCredential caller_credential = 10;
 }
 
 message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
@@ -69,9 +76,11 @@ message WorkflowRunExecutionStartedEvent
 message WorkflowRunExecutionContextDelta
 {
   WorkflowRunLlmExecutionContextDelta llm = 1;
-  WorkflowRunConnectorExecutionContextDelta connector = 2;
+  reserved 2, 4;
+  reserved "connector", "clear_connector";
   bool clear_llm = 3;
-  bool clear_connector = 4;
+  WorkflowCallerCredential caller_credential = 5;
+  bool clear_caller_credential = 6;
 }
 message WorkflowRunLlmExecutionContextDelta
 {
@@ -80,10 +89,7 @@ message WorkflowRunLlmExecutionContextDelta
   string model_override = 2;
   optional int32 max_tool_rounds_override = 4;
   string user_memory_prompt = 5;
-}
-message WorkflowRunConnectorExecutionContextDelta
-{
-  string http_authorization = 1;
+  string route_preference = 7;
 }
 message WorkflowRunExecutionContextUpdatedEvent
 {
@@ -333,6 +339,8 @@ message WorkflowRoleReplyRecordedEvent
 
 message WorkflowLlmExecutionIntent
 {
+  reserved 11;
+  reserved "connector_http_authorization";
   string run_id = 1;
   string step_id = 2;
   string session_id = 3;
@@ -343,6 +351,8 @@ message WorkflowLlmExecutionIntent
   int32 timeout_ms = 8;
   map<string, string> headers = 9;
   map<string, string> annotations = 10;
+  WorkflowCallerCredential caller_credential = 12;
+  string route_preference = 13;
 }
 
 message WorkflowLlmInvocationStartedEvent

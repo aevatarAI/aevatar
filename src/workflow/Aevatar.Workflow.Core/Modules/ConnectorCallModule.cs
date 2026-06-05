@@ -337,8 +337,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, requestMetadata);
         var connectorRequest = new ConnectorRequest
         {
-            Metadata = requestMetadata,
-            HttpAuthorization = ExtractConnectorHttpAuthorization(ctx),
+            HttpAuthorization = ReconstructConnectorHttpAuthorization(ctx),
             RunId = runId,
             StepId = request.StepId,
             Connector = connectorName,
@@ -826,16 +825,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 
-    // Refactor (issue1422/phase9-first-slice):
-    //   Old pattern: Connector execution rewrapped typed runtime authorization into Metadata.
-    //   New principle: Connector authorization crosses the execution boundary as a typed request field.
-    private static string ExtractConnectorHttpAuthorization(
+    private static string ReconstructConnectorHttpAuthorization(
         IWorkflowExecutionContext ctx)
     {
-        if (ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(ctx, out var authorization) &&
-            !string.IsNullOrWhiteSpace(authorization))
+        if (WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(ctx, out var credential) &&
+            !string.IsNullOrWhiteSpace(credential.BearerToken))
         {
-            return authorization.Trim();
+            var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken);
+            return parsed.IsValid ? $"Bearer {parsed.NormalizedBearerToken}" : string.Empty;
         }
 
         return string.Empty;

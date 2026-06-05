@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
+using WorkflowProtocol = Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -32,7 +33,7 @@ internal static class ChatRunRequestNormalizer
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
-        string? trustedConnectorHttpAuthorization = null)
+        WorkflowCallerCredential? trustedCallerCredential = null)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
@@ -54,6 +55,10 @@ internal static class ChatRunRequestNormalizer
         if (rawPrompt.Length == 0)
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
+        var callerCredentialResult = NormalizeCallerCredential(trustedCallerCredential);
+        if (callerCredentialResult.Error != WorkflowChatRunStartError.None)
+            return ChatRunRequestNormalizationResult.Failed(callerCredentialResult.Error);
+
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 Prompt: rawPrompt,
@@ -63,8 +68,22 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
-                ConnectorHttpAuthorization: NormalizeOptional(trustedConnectorHttpAuthorization),
+                CallerCredential: callerCredentialResult.Credential,
                 Headers: normalizedContext.Headers));
+    }
+
+    private readonly record struct CallerCredentialNormalizationResult(
+        WorkflowCallerCredential? Credential,
+        WorkflowChatRunStartError Error);
+
+    private static CallerCredentialNormalizationResult NormalizeCallerCredential(WorkflowCallerCredential? source)
+    {
+        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
+        if (parsed.IsInvalid)
+            return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.InvalidCallerCredential);
+        return new CallerCredentialNormalizationResult(
+            parsed.IsMissing ? null : new WorkflowCallerCredential(parsed.NormalizedBearerToken),
+            WorkflowChatRunStartError.None);
     }
 
     private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)
@@ -75,7 +94,8 @@ internal static class ChatRunRequestNormalizer
         return new WorkflowLlmControl(
             NormalizeOptional(source.ModelOverride),
             source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,
-            NormalizeOptional(source.UserMemoryPrompt));
+            NormalizeOptional(source.UserMemoryPrompt),
+            NormalizeOptional(source.NyxIdRoutePreference));
     }
 
     private static string? NormalizeOptional(string? value) =>
@@ -333,7 +353,6 @@ internal static class ChatRunRequestNormalizer
         metadata[normalizedKey] = normalizedValue;
     }
 
-    // Refactor (iter169/cluster-issue1551): Old pattern: public metadata could carry connector authorization. New principle: only trusted adapter code can set the typed ConnectorHttpAuthorization command field.
     private static bool IsReservedMetadataKey(string key) =>
         IsScopeMetadataKey(key) ||
         string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal);

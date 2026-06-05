@@ -74,9 +74,11 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
         var denialCount = GetRequestScopedDenialCount(context);
         if (denialCount >= MaxConsecutiveDenials)
         {
+            var reason = $"Tool '{context.ToolName}' has been denied {denialCount} times consecutively.";
             context.Terminate = true;
-            context.Result = $"Tool '{context.ToolName}' has been denied {denialCount} times consecutively. " +
-                             "Automatic block applied. Consider using a different approach.";
+            context.TerminationKind = ToolCallTerminationKind.ApprovalDenied;
+            context.TerminationReason = reason;
+            context.Result = $"{reason} Automatic block applied. Consider using a different approach.";
             return;
         }
 
@@ -120,6 +122,8 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             case ToolApprovalDecision.Denied:
                 context.Items[DenialCountItemKey] = denialCount + 1;
                 context.Terminate = true;
+                context.TerminationKind = ToolCallTerminationKind.ApprovalDenied;
+                context.TerminationReason = result.Reason;
                 context.Result = !string.IsNullOrWhiteSpace(result.Reason)
                     ? $"Tool '{context.ToolName}' execution denied: {result.Reason}"
                     : $"Tool '{context.ToolName}' execution denied by approval handler.";
@@ -134,6 +138,8 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
 
             case ToolApprovalDecision.Timeout:
                 context.Terminate = true;
+                context.TerminationKind = ToolCallTerminationKind.ApprovalTimedOut;
+                context.TerminationReason = result.Reason;
                 context.Result = $"Tool '{context.ToolName}' approval timed out. " +
                                  "The tool was not executed. Please try again or approve when prompted.";
                 context.Receipt = AgentToolReceiptFactory.CreateApprovalError(
@@ -150,6 +156,8 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                 // 非阻塞 yield：返回 pending result，不增加 denial counter。
                 // Actor 层检测此 result 后持久化 pending state 并走事件化续传。
                 context.Terminate = true;
+                context.TerminationKind = ToolCallTerminationKind.ApprovalPending;
+                context.TerminationReason = result.Reason;
                 context.PendingApproval = new ToolApprovalPendingContext(
                     request.RequestId,
                     request.ToolName,

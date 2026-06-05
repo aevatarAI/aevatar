@@ -1408,8 +1408,41 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(1);
-        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.CallerCredential!.BearerToken.Should().Be("token-123");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldPropagateScopedPreferredLlmRouteToAguiRequest()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync(
+            userConfigQueryPort: new StubUserConfigStore(
+                new UserConfig(DefaultModel: string.Empty, PreferredLlmRoute: "/preferred-route")));
+        host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
+            },
+            eventFormat = "agui",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.LlmControl.Should().NotBeNull();
+        host.InteractionService.LastRequest.LlmControl!.RoutePreference.Should().Be("/preferred-route");
+        host.InteractionService.LastRequest.LlmControl.ModelOverride.Should().BeNull();
     }
 
     [Fact]
@@ -1448,6 +1481,33 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_SCOPE_DRAFT_RUN_REQUEST");
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldReturnInvalidCallerCredential_WhenBearerIsMalformed()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/workflow/draft-run")
+        {
+            Content = JsonContent.Create(new
+            {
+                prompt = "run the draft",
+                workflowYamls = new[]
+                {
+                    "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
+                },
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token 123");
+
+        var response = await host.Client.SendAsync(httpRequest);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_CALLER_CREDENTIAL");
+        body["message"].Should().Be("Caller credential is invalid.");
+        host.InteractionService.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -1539,7 +1599,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        host.InteractionService.LastRequest.CallerCredential!.BearerToken.Should().Be("token-123");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("source").WhoseValue.Should().Be("tests");
@@ -1550,6 +1610,30 @@ public sealed class ScopeServiceEndpointsTests
         host.ServiceRunRegistrationPort.RegisterCalls[0].CommandId.Should().Be("cmd-1");
         host.ServiceRunRegistrationPort.RegisterCalls[0].TargetActorId.Should().Be("run-actor-1");
         host.ServiceRunRegistrationPort.RegisterCalls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
+    }
+
+    [Fact]
+    public async Task ScopeInvokeStreamEndpoint_ShouldReturnInvalidCallerCredential_WhenBearerIsMalformed()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/invoke/chat:stream")
+        {
+            Content = JsonContent.Create(new
+            {
+                prompt = "hello",
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token 123");
+
+        var response = await host.Client.SendAsync(httpRequest);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_CALLER_CREDENTIAL");
+        body["message"].Should().Be("Caller credential is invalid.");
+        host.ServiceCatalogReader.Service.Should().BeNull();
+        host.InteractionService.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -2217,7 +2301,7 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-orders");
         host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
-        host.InteractionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-orders");
+        host.InteractionService.LastRequest.CallerCredential!.BearerToken.Should().Be("token-orders");
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
@@ -4079,8 +4163,8 @@ public sealed class ScopeServiceEndpointsTests
             successContext,
             CancellationToken.None);
         scopedControl.Should().Be(new LLMControlContext(
-            NyxIdAccessToken: "token-123",
-            NyxIdOrgToken: "token-123",
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: "user-model",
             NyxIdRoutePreference: "/preferred-route",
@@ -4315,7 +4399,7 @@ public sealed class ScopeServiceEndpointsTests
             " chat ",
             "prompt",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
-            "Bearer connector-token",
+            new WorkflowCallerCredential("connector-token"),
             " rev-1 ",
             " app-x ");
         invocation.Identity.AppId.Should().Be("app-x");
@@ -4850,7 +4934,9 @@ public sealed class ScopeServiceEndpointsTests
 
         public FakeServiceRunQueryPort ServiceRunQueryPort { get; }
 
-        public static async Task<ScopeServiceEndpointTestHost> StartAsync(bool authenticationEnabled = true)
+        public static async Task<ScopeServiceEndpointTestHost> StartAsync(
+            bool authenticationEnabled = true,
+            IUserConfigQueryPort? userConfigQueryPort = null)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -4923,6 +5009,8 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
             builder.Services.AddSingleton<IServiceRunRegistrationPort>(serviceRunRegistrationPort);
             builder.Services.AddSingleton<IServiceRunQueryPort>(serviceRunQueryPort);
+            if (userConfigQueryPort != null)
+                builder.Services.AddSingleton(userConfigQueryPort);
             builder.Services.AddSingleton<IOptions<ScopeWorkflowCapabilityOptions>>(
                 Options.Create(new ScopeWorkflowCapabilityOptions
                 {

@@ -35,7 +35,37 @@ public sealed class WorkflowChatRunInteractionServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldResolveAndInvokeInnerWithSeedsAndTargetSeed()
+    public async Task ExecuteAsync_ShouldReturnInvalidCallerCredential_BeforeActorResolutionOrActivation()
+    {
+        var actorResolver = new RecordingActorResolver();
+        var projectionPort = new RecordingProjectionPort();
+        var runProvisioningPort = new RecordingRunProvisioningPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            projectionPort,
+            runProvisioningPort,
+            inner);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                CallerCredential: new WorkflowCallerCredential("Bearer token-123")),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        actorResolver.Requests.Should().BeEmpty();
+        projectionPort.AttachExistingCalls.Should().BeEmpty();
+        projectionPort.DetachCalls.Should().BeEmpty();
+        projectionPort.ReleaseCalls.Should().BeEmpty();
+        inner.Requests.Should().BeEmpty();
+        runProvisioningPort.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldResolveActivateAndInvokeInnerWithSeedsAndTargetSeed()
     {
         var actorResolver = new RecordingActorResolver
         {

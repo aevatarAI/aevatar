@@ -500,7 +500,10 @@ public class WorkflowGAgentCoverageTests
             {
                 ["trace-id"] = " trace-abc ",
             },
-            ConnectorHttpAuthorization = " Bearer secret ",
+            CallerCredential = new WorkflowCallerCredential
+            {
+                BearerToken = " secret ",
+            },
             LlmControl = new WorkflowLlmControlContext
             {
                 ModelOverride = " model-main ",
@@ -509,7 +512,7 @@ public class WorkflowGAgentCoverageTests
             },
         });
 
-        agent1.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent1.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
         agent1.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model-main");
         await agent1.DeactivateAsync();
 
@@ -520,7 +523,7 @@ public class WorkflowGAgentCoverageTests
         SetAgentId(agent2, "workflow-run-context-replay");
         await agent2.ActivateAsync();
 
-        agent2.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent2.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
         agent2.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model-main");
         agent2.State.ExecutionContext.Llm.MaxToolRoundsOverride.Should().Be(4);
         agent2.State.ExecutionContext.Llm.UserMemoryPrompt.Should().Be("memory-main");
@@ -543,9 +546,12 @@ public class WorkflowGAgentCoverageTests
             "wf_redaction",
             runId: "run-redaction");
 
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             agent,
-            "Bearer secret");
+            new WorkflowCallerCredential
+            {
+                BearerToken = "secret",
+            });
         await WorkflowRequestMetadataRuntimeContextAccess.SetLlmControlAsync(
             agent,
             new WorkflowLlmControlContext
@@ -572,7 +578,7 @@ public class WorkflowGAgentCoverageTests
             }));
 
         agent.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model");
-        agent.State.ExecutionContext.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        agent.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
         agent.State.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
             .Unpack<SecureInputModuleState>()
             .Captured["run-redaction::api_key"]
@@ -588,7 +594,7 @@ public class WorkflowGAgentCoverageTests
         observedState.ExecutionContext.Llm!.ModelOverride.Should().Be("model");
         observedState.ExecutionContext.Llm.MaxToolRoundsOverride.Should().Be(2);
         observedState.ExecutionContext.Llm.UserMemoryPrompt.Should().Be("memory");
-        observedState.ExecutionContext.Connector!.HttpAuthorization.Should().BeEmpty();
+        observedState.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
         observedState.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
             .Unpack<SecureInputModuleState>()
             .Captured["run-redaction::api_key"]
@@ -613,7 +619,7 @@ public class WorkflowGAgentCoverageTests
             .Select(x => x.Unpack<WorkflowRunExecutionContextUpdatedEvent>())
             .ToList();
         observedContextEvent.Should().HaveCount(2);
-        observedContextEvent[0].ExecutionContextDelta.Connector!.HttpAuthorization.Should().BeEmpty();
+        observedContextEvent[0].ExecutionContextDelta.CallerCredential!.BearerToken.Should().BeEmpty();
         observedContextEvent[1].ExecutionContextDelta.Llm!.ModelOverride.Should().Be("model");
         observedContextEvent[1].ExecutionContextDelta.Llm.MaxToolRoundsOverride.Should().Be(2);
         observedContextEvent[1].ExecutionContextDelta.Llm.UserMemoryPrompt.Should().Be("memory");
@@ -1639,6 +1645,10 @@ public class WorkflowGAgentCoverageTests
             Model = "model-a",
             MaxToolRounds = 3,
             UserMemoryPrompt = "remember this",
+            CallerCredential = new WorkflowCallerCredential
+            {
+                BearerToken = "token-123",
+            },
             Headers = { ["trace-id"] = "trace-1" },
             Annotations = { ["annotation"] = "value" },
         });
@@ -1650,6 +1660,9 @@ public class WorkflowGAgentCoverageTests
         request.LlmControl!.ModelOverride.Should().Be("model-a");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
         request.LlmControl.UserMemoryPrompt.Should().Be("remember this");
+        request.ToolContext.Should().NotBeNull();
+        request.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-123");
+        request.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-123");
         request.Metadata.Should().NotBeNull();
         request.Metadata!.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
         request.Metadata.Should().ContainKey("annotation").WhoseValue.Should().Be("value");
@@ -1680,6 +1693,39 @@ public class WorkflowGAgentCoverageTests
         completion.Content.Should().Be("workflow answer");
         completion.ReasoningContent.Should().Be("reasoning");
         completion.ToolCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenWorkflowLlmIntentHasMetadataOnlyAuthorization_ShouldNotPromoteToolCredentials()
+    {
+        var eventStore = new InMemoryEventStore();
+        var llm = new RecordingWorkflowIntentLlmProvider();
+        var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+            eventStore,
+            llm,
+            "workflow-role-agent-metadata-auth");
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-metadata-auth",
+            StepId = "step-metadata-auth",
+            SessionId = "session-metadata-auth",
+            Prompt = "hello",
+            Headers =
+            {
+                ["connector.http.authorization"] = "Bearer metadata-token",
+                ["trace-id"] = "trace-1",
+            },
+        });
+
+        llm.Requests.Should().ContainSingle();
+        var request = llm.Requests[0];
+        request.ToolContext.Should().NotBeNull();
+        request.ToolContext!.Credentials.NyxIdAccessToken.Should().BeNull();
+        request.ToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
+        request.Metadata.Should().NotBeNull();
+        request.Metadata!.Should().NotContainKey("connector.http.authorization");
+        request.Metadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
     }
 
     [Fact]
@@ -2129,16 +2175,16 @@ public class WorkflowGAgentCoverageTests
             new WorkflowRunExecutionContextDelta
             {
                 ClearLlm = true,
-                ClearConnector = true,
+                ClearCallerCredential = true,
                 Llm = new WorkflowRunLlmExecutionContextDelta
                 {
                     ModelOverride = "model",
                     MaxToolRoundsOverride = 2,
                     UserMemoryPrompt = "memory",
                 },
-                Connector = new WorkflowRunConnectorExecutionContextDelta
+                CallerCredential = new WorkflowCallerCredential
                 {
-                    HttpAuthorization = "Bearer secret",
+                    BearerToken = "secret",
                 },
             });
         host.RuntimeContext.RequestPassthroughMetadata.Set("trace-id", "abc");
@@ -2148,7 +2194,7 @@ public class WorkflowGAgentCoverageTests
     {
         var host = (IWorkflowExecutionStateHost)agent;
         host.ExecutionContextSnapshot.Llm.Should().BeNull();
-        host.ExecutionContextSnapshot.Connector.Should().BeNull();
+        host.ExecutionContextSnapshot.CallerCredential.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 

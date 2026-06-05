@@ -29,7 +29,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         AppendMetadata(chatRequest.Metadata, command.Metadata);
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToProto(command.LlmControl);
-        chatRequest.ConnectorHttpAuthorization = Normalize(command.ConnectorHttpAuthorization);
+        chatRequest.CallerCredential = ToProto(command.CallerCredential);
 
         var envelope = new EventEnvelope
         {
@@ -78,10 +78,24 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             ModelOverride = source.ModelOverride ?? string.Empty,
             UserMemoryPrompt = source.UserMemoryPrompt ?? string.Empty,
+            RoutePreference = source.RoutePreference ?? string.Empty,
         };
         if (source.MaxToolRoundsOverride.HasValue)
             payload.MaxToolRoundsOverride = source.MaxToolRoundsOverride.Value;
         return payload;
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential ToProto(
+        Application.Abstractions.Runs.WorkflowCallerCredential? source)
+    {
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
+        if (parsed.IsInvalid)
+            throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
+
+        return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
+        {
+            BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+        };
     }
 
     private static void AppendMetadata(
@@ -112,6 +126,4 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         string.Equals(key, "scope_id", StringComparison.Ordinal) ||
         string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
 
-    private static string Normalize(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }

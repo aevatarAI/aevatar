@@ -385,9 +385,13 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         {
             intent.Model = Normalize(llm.ModelOverride) ?? string.Empty;
             intent.UserMemoryPrompt = Normalize(llm.UserMemoryPrompt) ?? string.Empty;
+            intent.RoutePreference = Normalize(llm.RoutePreference) ?? string.Empty;
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
+        intent.CallerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var callerCredential)
+            ? callerCredential
+            : new WorkflowCallerCredential();
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);

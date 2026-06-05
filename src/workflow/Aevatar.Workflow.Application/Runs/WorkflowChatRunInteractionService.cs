@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -85,6 +86,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     {
         if (!_projectionPort.ProjectionEnabled)
             return AttemptStartResult.Failure(WorkflowChatRunStartError.ProjectionDisabled);
+
+        if (WorkflowCallerCredentialTokens.ParseOptional(request.CallerCredential?.BearerToken).IsInvalid)
+            return AttemptStartResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
 
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(request, ct).ConfigureAwait(false);
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Target == null)
