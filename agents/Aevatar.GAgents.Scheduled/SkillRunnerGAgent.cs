@@ -549,8 +549,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             plan.SkillName,
             plan.SkillVersion);
         var selection = BuildWorkflowSelection(workflow);
-        var dispatchService = _workflowDispatchService ??
-                              Services.GetService<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>();
+        var dispatchService = _workflowDispatchService;
         if (dispatchService is null)
         {
             throw new SkillRunnerExecutionException(
@@ -891,7 +890,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 workflowId: normalized.WorkflowId);
         }
 
-        var fetcher = _remoteSkillFetcher ?? Services.GetService<IRemoteSkillFetcher>();
+        var fetcher = _remoteSkillFetcher;
         if (fetcher is null)
         {
             if (normalized.AllowInlineFallback && !string.IsNullOrWhiteSpace(State.SkillContent))
