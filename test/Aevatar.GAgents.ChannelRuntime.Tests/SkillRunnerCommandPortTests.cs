@@ -40,6 +40,34 @@ public sealed class SkillRunnerCommandPortTests
     }
 
     [Fact]
+    public async Task InitializeAsync_WithSkillRef_PreservesTypedReferenceInEnvelope()
+    {
+        var fixture = new Fixture();
+        fixture.Runtime.GetAsync(AgentId).Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+
+        var command = new InitializeSkillRunnerCommand
+        {
+            SkillName = "demo",
+            SkillRef = new SkillRunnerSkillReference
+            {
+                Name = "daily-report",
+                Source = SkillRunnerSkillSource.Ornn,
+                WorkflowId = "daily_flow",
+            },
+        };
+
+        await fixture.Port.InitializeAsync(AgentId, command, runImmediately: false, CancellationToken.None);
+
+        fixture.Captured.Should().ContainSingle();
+        var initialized = fixture.Captured[0].Payload.Unpack<InitializeSkillRunnerCommand>();
+        initialized.SkillRef.Should().NotBeNull();
+        initialized.SkillRef.Name.Should().Be("daily-report");
+        initialized.SkillRef.Source.Should().Be(SkillRunnerSkillSource.Ornn);
+        initialized.SkillRef.WorkflowId.Should().Be("daily_flow");
+        initialized.SkillContent.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task InitializeAsync_WhenRunImmediatelyTrue_DispatchesInitializeThenTrigger_WithCreateAgentReason()
     {
         var fixture = new Fixture();

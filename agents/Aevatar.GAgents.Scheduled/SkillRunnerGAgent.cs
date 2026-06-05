@@ -7,6 +7,8 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -14,6 +16,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +35,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private readonly NyxIdApiClient? _nyxIdApiClient;
     private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
+    private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
+    private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? _workflowDispatchService;
     private readonly IClock _clock;
     private readonly ITimeZoneResolver _timeZoneResolver;
     // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
@@ -39,6 +44,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
     // #439 — see EnsureToolStatusAllowsCompletion.
     private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
+    private string? _systemPromptOverride;
     private ChannelScheduleRunner? _scheduler;
     private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _retryLease;
 
@@ -51,6 +57,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        IRemoteSkillFetcher? remoteSkillFetcher = null,
+        ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService = null,
         IToolApprovalHandler? approvalHandler = null,
         IClock? clock = null,
         ITimeZoneResolver? timeZoneResolver = null,
@@ -64,6 +72,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             toolSources,
             nyxIdApiClient,
             ownerLlmConfigSource,
+            remoteSkillFetcher,
+            workflowDispatchService,
             approvalHandler,
             clock,
             timeZoneResolver,
@@ -80,6 +90,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentToolSource>? toolSources,
         NyxIdApiClient? nyxIdApiClient,
         IOwnerLlmConfigSource? ownerLlmConfigSource,
+        IRemoteSkillFetcher? remoteSkillFetcher,
+        ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService,
         IToolApprovalHandler? approvalHandler,
         IClock? clock,
         ITimeZoneResolver? timeZoneResolver,
@@ -96,6 +108,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         _nyxIdApiClient = nyxIdApiClient;
         _larkOutboundDispatcher = larkOutboundDispatcher;
         _ownerLlmConfigSource = ownerLlmConfigSource;
+        _remoteSkillFetcher = remoteSkillFetcher;
+        _workflowDispatchService = workflowDispatchService;
         _clock = clock ?? new SystemClock();
         _timeZoneResolver = timeZoneResolver ?? new TimeZoneResolver();
         _toolFailureCounter = toolMiddlewareChain.Counter;
@@ -104,6 +118,75 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private readonly record struct ToolMiddlewareChain(
         IReadOnlyList<IToolCallMiddleware> Middlewares,
         SkillRunnerToolFailureCounter Counter);
+
+    private sealed record SkillRunnerExecutionPlan(
+        SkillRunnerExecutionKind Kind,
+        string SkillName,
+        string SkillVersion,
+        string Instructions,
+        SkillWorkflowDescriptor? Workflow,
+        SkillRunnerSkillReference? SkillRef);
+
+    private sealed record WorkflowSelection(
+        string WorkflowId,
+        IReadOnlyList<WorkflowChatInlineYamlDocument> Documents);
+
+    private sealed record SkillRunnerExecutionResult(
+        string Output,
+        SkillRunnerExecutionKind ExecutionKind,
+        string SkillName,
+        string SkillVersion,
+        string WorkflowId,
+        WorkflowChatRunAcceptedReceipt? WorkflowReceipt)
+    {
+        public static SkillRunnerExecutionResult Prompt(
+            string output,
+            SkillRunnerExecutionPlan plan) =>
+            new(
+                output,
+                SkillRunnerExecutionKind.Prompt,
+                plan.SkillName,
+                plan.SkillVersion,
+                string.Empty,
+                null);
+
+        public static SkillRunnerExecutionResult Workflow(
+            string output,
+            SkillRunnerExecutionPlan plan,
+            WorkflowChatRunAcceptedReceipt receipt) =>
+            new(
+                output,
+                SkillRunnerExecutionKind.Workflow,
+                plan.SkillName,
+                plan.SkillVersion,
+                plan.Workflow?.WorkflowId ?? string.Empty,
+                receipt);
+    }
+
+    private sealed class SkillRunnerExecutionException : InvalidOperationException
+    {
+        public SkillRunnerExecutionException(
+            string message,
+            SkillRunnerExecutionErrorCode errorCode,
+            SkillRunnerExecutionKind executionKind = SkillRunnerExecutionKind.Unspecified,
+            string skillName = "",
+            string skillVersion = "",
+            string workflowId = "")
+            : base(message)
+        {
+            ErrorCode = errorCode;
+            ExecutionKind = executionKind;
+            SkillName = skillName;
+            SkillVersion = skillVersion;
+            WorkflowId = workflowId;
+        }
+
+        public SkillRunnerExecutionErrorCode ErrorCode { get; }
+        public SkillRunnerExecutionKind ExecutionKind { get; }
+        public string SkillName { get; }
+        public string SkillVersion { get; }
+        public string WorkflowId { get; }
+    }
 
     /// <summary>Test-only accessor for the per-run nyxid_proxy counter.</summary>
     internal SkillRunnerToolFailureCounter ToolFailureCounterForTesting => _toolFailureCounter;
@@ -146,7 +229,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ProviderName = state.ProviderName,
             HasModel = !string.IsNullOrWhiteSpace(state.Model),
             Model = state.Model,
-            HasSystemPrompt = !string.IsNullOrWhiteSpace(state.SkillContent),
+            HasSystemPrompt = !HasSkillReference(state.SkillRef) && !string.IsNullOrWhiteSpace(state.SkillContent),
             SystemPrompt = state.SkillContent,
             HasTemperature = state.HasTemperature,
             Temperature = state.HasTemperature ? state.Temperature : null,
@@ -174,9 +257,22 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     [EventHandler]
     public async Task HandleInitializeAsync(InitializeSkillRunnerCommand command)
     {
-        if (string.IsNullOrWhiteSpace(command.SkillContent))
+        var skillRef = NormalizeSkillReference(command.SkillRef ?? new SkillRunnerSkillReference());
+        var hasSkillRef = HasSkillReference(skillRef) && !string.IsNullOrWhiteSpace(skillRef.Name);
+        var hasInlineSkillContent = !string.IsNullOrWhiteSpace(command.SkillContent);
+        if (!hasSkillRef && !hasInlineSkillContent)
         {
-            Logger.LogWarning("Skill runner {ActorId} initialization ignored because skill_content is empty", Id);
+            Logger.LogWarning(
+                "Skill runner {ActorId} initialization ignored because skill_ref.name and legacy skill_content are both empty",
+                Id);
+            return;
+        }
+
+        if (hasSkillRef && hasInlineSkillContent && !skillRef.AllowInlineFallback)
+        {
+            Logger.LogWarning(
+                "Skill runner {ActorId} initialization ignored because skill_ref.name and skill_content were both provided without allow_inline_fallback",
+                Id);
             return;
         }
 
@@ -184,7 +280,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             SkillName = command.SkillName?.Trim() ?? string.Empty,
             TemplateName = command.TemplateName?.Trim() ?? string.Empty,
-            SkillContent = command.SkillContent,
+            SkillContent = hasSkillRef && !skillRef.AllowInlineFallback
+                ? string.Empty
+                : command.SkillContent,
+            SkillRef = hasSkillRef ? skillRef : null,
             ExecutionPrompt = command.ExecutionPrompt?.Trim() ?? string.Empty,
             ScheduleCron = command.ScheduleCron?.Trim() ?? string.Empty,
             ScheduleTimezone = NormalizeTimezone(command.ScheduleTimezone),
@@ -231,7 +330,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var now = _clock.UtcNow;
         try
         {
-            var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
+            var result = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
             // Streaming-edit delivery happens in-line during ExecuteSkillAsync via the
             // SkillRunnerStreamingReplySink (POST initial + PUT each delta — Lark's text-edit
             // verb; PATCH on the same path is reserved for cards). When streaming can't be
@@ -241,7 +340,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             await PersistDomainEventAsync(new SkillRunnerExecutionCompletedEvent
             {
                 CompletedAt = Timestamp.FromDateTimeOffset(now),
-                Output = output,
+                Output = result.Output,
+                ExecutionKind = result.ExecutionKind,
+                SkillName = result.SkillName,
+                SkillVersion = result.SkillVersion,
+                WorkflowId = result.WorkflowId,
+                WorkflowActorId = result.WorkflowReceipt?.ActorId ?? string.Empty,
+                WorkflowName = result.WorkflowReceipt?.WorkflowName ?? string.Empty,
+                WorkflowCommandId = result.WorkflowReceipt?.CommandId ?? string.Empty,
+                WorkflowCorrelationId = result.WorkflowReceipt?.CorrelationId ?? string.Empty,
             });
 
             await CancelRetryLeaseAsync(CancellationToken.None);
@@ -261,10 +368,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 return;
             }
 
+            var executionFailure = ex as SkillRunnerExecutionException;
             await PersistDomainEventAsync(new SkillRunnerExecutionFailedEvent
             {
                 FailedAt = Timestamp.FromDateTimeOffset(now),
                 Error = ex.Message,
+                ExecutionKind = executionFailure?.ExecutionKind ?? SkillRunnerExecutionKind.Unspecified,
+                SkillName = executionFailure?.SkillName ?? string.Empty,
+                SkillVersion = executionFailure?.SkillVersion ?? string.Empty,
+                WorkflowId = executionFailure?.WorkflowId ?? string.Empty,
+                ErrorCode = executionFailure?.ErrorCode ?? SkillRunnerExecutionErrorCode.Unspecified,
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
@@ -319,13 +432,28 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await Scheduler.ScheduleNextRunAsync(CancellationToken.None);
     }
 
-    private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
+    private async Task<SkillRunnerExecutionResult> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
     {
         // Reset before each run so retries / scheduled triggers each see a clean slate.
         // The counter is populated by NyxIdProxyToolFailureCountingMiddleware as the LLM
         // fans out nyxid_proxy calls inside the ChatStreamAsync loop.
         _toolFailureCounter.Reset();
 
+        var plan = await BuildExecutionPlanAsync(ct);
+        if (plan.Kind == SkillRunnerExecutionKind.Workflow)
+            return await ExecuteWorkflowSkillAsync(plan, now, reason, ct);
+
+        return SkillRunnerExecutionResult.Prompt(
+            await ExecutePromptSkillAsync(plan, now, reason, ct),
+            plan);
+    }
+
+    private async Task<string> ExecutePromptSkillAsync(
+        SkillRunnerExecutionPlan plan,
+        DateTimeOffset now,
+        string? reason,
+        CancellationToken ct)
+    {
         var prompt = BuildExecutionPrompt(now, reason);
         var metadata = await BuildExecutionMetadataAsync(ct);
         var llmControl = await BuildExecutionLlmControlAsync(ct);
@@ -339,6 +467,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             : new SkillRunnerStreamingRunState(sink, SkillRunnerDefaults.StreamingEditThrottle, TimeProvider.System);
         try
         {
+            _systemPromptOverride = plan.Instructions;
             await foreach (var chunk in ChatStreamAsync(
                                [ContentPart.TextPart(prompt)],
                                requestId,
@@ -402,8 +531,69 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
         finally
         {
+            _systemPromptOverride = null;
             sink?.Dispose();
         }
+    }
+
+    private async Task<SkillRunnerExecutionResult> ExecuteWorkflowSkillAsync(
+        SkillRunnerExecutionPlan plan,
+        DateTimeOffset now,
+        string? reason,
+        CancellationToken ct)
+    {
+        var workflow = plan.Workflow ?? throw new SkillRunnerExecutionException(
+            "Workflow execution plan is missing a selected workflow.",
+            SkillRunnerExecutionErrorCode.WorkflowSelectionRequired,
+            SkillRunnerExecutionKind.Workflow,
+            plan.SkillName,
+            plan.SkillVersion);
+        var selection = BuildWorkflowSelection(workflow);
+        var dispatchService = _workflowDispatchService ??
+                              Services.GetService<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>();
+        if (dispatchService is null)
+        {
+            throw new SkillRunnerExecutionException(
+                "Workflow dispatch service is not available for scheduled skill runner.",
+                SkillRunnerExecutionErrorCode.WorkflowDispatchUnavailable,
+                SkillRunnerExecutionKind.Workflow,
+                plan.SkillName,
+                plan.SkillVersion,
+                workflow.WorkflowId);
+        }
+
+        var requestId = Guid.NewGuid().ToString("N");
+        var prompt = BuildExecutionPrompt(now, reason);
+        var command = new WorkflowChatRunRequest(
+            Prompt: prompt,
+            Source: WorkflowChatSource.InlineYamlBundle(
+                null,
+                selection.Documents),
+            SessionId: requestId,
+            Metadata: await BuildExecutionMetadataAsync(ct),
+            ScopeId: State.ScopeId,
+            LlmControl: ToWorkflowLlmControl(await BuildExecutionLlmControlAsync(ct)),
+            CallerCredential: new WorkflowCallerCredential(State.OutboundConfig?.NyxApiKey),
+            CommandIdSeed: requestId,
+            CorrelationIdSeed: requestId);
+
+        var result = await dispatchService.DispatchAsync(command, ct);
+        if (!result.Succeeded || result.Receipt is null)
+        {
+            throw new SkillRunnerExecutionException(
+                $"Workflow start failed: {result.Error}",
+                SkillRunnerExecutionErrorCode.WorkflowDispatchRejected,
+                SkillRunnerExecutionKind.Workflow,
+                plan.SkillName,
+                plan.SkillVersion,
+                workflow.WorkflowId);
+        }
+
+        var receipt = result.Receipt;
+        var output =
+            $"Workflow start accepted: workflow_id={workflow.WorkflowId}, actor_id={receipt.ActorId}, command_id={receipt.CommandId}, correlation_id={receipt.CorrelationId}.";
+        await SendOutputAsync(output, ct);
+        return SkillRunnerExecutionResult.Workflow(output, plan, receipt);
     }
 
     /// <summary>
@@ -632,6 +822,225 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 "Refusing to record this run as a successful execution.");
         }
     }
+
+    protected override string DecorateSystemPrompt(string basePrompt) =>
+        _systemPromptOverride ?? base.DecorateSystemPrompt(basePrompt);
+
+    private async Task<SkillRunnerExecutionPlan> BuildExecutionPlanAsync(CancellationToken ct)
+    {
+        var skillRef = State.SkillRef;
+        if (HasSkillReference(skillRef))
+            return await BuildRemoteExecutionPlanAsync(skillRef, ct);
+
+        if (string.IsNullOrWhiteSpace(State.SkillContent))
+        {
+            throw new SkillRunnerExecutionException(
+                "Skill runner requires either skill_ref.name or legacy skill_content.",
+                SkillRunnerExecutionErrorCode.SkillReferenceRequired);
+        }
+
+        return new SkillRunnerExecutionPlan(
+            SkillRunnerExecutionKind.Prompt,
+            State.SkillName ?? string.Empty,
+            string.Empty,
+            State.SkillContent,
+            null,
+            null);
+    }
+
+    private async Task<SkillRunnerExecutionPlan> BuildRemoteExecutionPlanAsync(
+        SkillRunnerSkillReference skillRef,
+        CancellationToken ct)
+    {
+        var normalized = NormalizeSkillReference(skillRef);
+        if (!string.IsNullOrEmpty(normalized.Version))
+        {
+            throw new SkillRunnerExecutionException(
+                "Versioned scheduled skill references are not supported yet.",
+                SkillRunnerExecutionErrorCode.SkillVersionUnsupported,
+                skillName: normalized.Name,
+                skillVersion: normalized.Version,
+                workflowId: normalized.WorkflowId);
+        }
+
+        if (string.IsNullOrWhiteSpace(normalized.Name))
+        {
+            if (normalized.AllowInlineFallback && !string.IsNullOrWhiteSpace(State.SkillContent))
+            {
+                return new SkillRunnerExecutionPlan(
+                    SkillRunnerExecutionKind.Prompt,
+                    State.SkillName ?? string.Empty,
+                    string.Empty,
+                    State.SkillContent,
+                    null,
+                    normalized);
+            }
+
+            throw new SkillRunnerExecutionException(
+                "Scheduled skill reference name is required.",
+                SkillRunnerExecutionErrorCode.SkillReferenceRequired);
+        }
+
+        if (normalized.Source != SkillRunnerSkillSource.Ornn)
+        {
+            throw new SkillRunnerExecutionException(
+                "Scheduled skill runner only supports Ornn skill references.",
+                SkillRunnerExecutionErrorCode.SkillReferenceRequired,
+                skillName: normalized.Name,
+                skillVersion: normalized.Version,
+                workflowId: normalized.WorkflowId);
+        }
+
+        var fetcher = _remoteSkillFetcher ?? Services.GetService<IRemoteSkillFetcher>();
+        if (fetcher is null)
+        {
+            if (normalized.AllowInlineFallback && !string.IsNullOrWhiteSpace(State.SkillContent))
+            {
+                return new SkillRunnerExecutionPlan(
+                    SkillRunnerExecutionKind.Prompt,
+                    normalized.Name,
+                    string.Empty,
+                    State.SkillContent,
+                    null,
+                    normalized);
+            }
+
+            throw new SkillRunnerExecutionException(
+                "Remote skill fetcher is not available for scheduled skill runner.",
+                SkillRunnerExecutionErrorCode.SkillFetcherUnavailable,
+                skillName: normalized.Name,
+                skillVersion: normalized.Version,
+                workflowId: normalized.WorkflowId);
+        }
+
+        var skill = await fetcher.FetchSkillAsync(State.OutboundConfig?.NyxApiKey ?? string.Empty, normalized.Name, ct);
+        if (skill is null)
+        {
+            if (normalized.AllowInlineFallback && !string.IsNullOrWhiteSpace(State.SkillContent))
+            {
+                return new SkillRunnerExecutionPlan(
+                    SkillRunnerExecutionKind.Prompt,
+                    normalized.Name,
+                    string.Empty,
+                    State.SkillContent,
+                    null,
+                    normalized);
+            }
+
+            throw new SkillRunnerExecutionException(
+                $"Scheduled skill '{normalized.Name}' was not found.",
+                SkillRunnerExecutionErrorCode.SkillNotFound,
+                skillName: normalized.Name,
+                skillVersion: normalized.Version,
+                workflowId: normalized.WorkflowId);
+        }
+
+        var selectedWorkflow = SelectWorkflow(skill, normalized);
+        var instructions = string.IsNullOrWhiteSpace(skill.Instructions)
+            ? State.SkillContent
+            : skill.Instructions;
+        return new SkillRunnerExecutionPlan(
+            selectedWorkflow is null ? SkillRunnerExecutionKind.Prompt : SkillRunnerExecutionKind.Workflow,
+            string.IsNullOrWhiteSpace(skill.Name) ? normalized.Name : skill.Name.Trim(),
+            normalized.Version,
+            instructions ?? string.Empty,
+            selectedWorkflow,
+            normalized);
+    }
+
+    private static SkillRunnerSkillReference NormalizeSkillReference(SkillRunnerSkillReference skillRef)
+    {
+        var normalized = skillRef.Clone();
+        normalized.Name = normalized.Name?.Trim() ?? string.Empty;
+        normalized.Version = normalized.Version?.Trim() ?? string.Empty;
+        normalized.WorkflowId = normalized.WorkflowId?.Trim() ?? string.Empty;
+        if (normalized.Source == SkillRunnerSkillSource.Unspecified)
+            normalized.Source = SkillRunnerSkillSource.Ornn;
+        return normalized;
+    }
+
+    private SkillWorkflowDescriptor? SelectWorkflow(
+        SkillDefinition skill,
+        SkillRunnerSkillReference skillRef)
+    {
+        var workflows = skill.Workflows?
+            .Where(static workflow => workflow.WorkflowYamls.Any(static yaml => !string.IsNullOrWhiteSpace(yaml)))
+            .ToArray() ?? [];
+        if (workflows.Length == 0)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(skillRef.WorkflowId))
+        {
+            var selected = workflows.FirstOrDefault(workflow =>
+                string.Equals(workflow.WorkflowId?.Trim(), skillRef.WorkflowId, StringComparison.OrdinalIgnoreCase));
+            if (selected is null)
+            {
+                throw new SkillRunnerExecutionException(
+                    $"Workflow '{skillRef.WorkflowId}' was not found in scheduled skill '{skillRef.Name}'.",
+                    SkillRunnerExecutionErrorCode.WorkflowNotFound,
+                    SkillRunnerExecutionKind.Workflow,
+                    skill.Name,
+                    skillRef.Version,
+                    skillRef.WorkflowId);
+            }
+
+            return selected;
+        }
+
+        if (workflows.Length > 1)
+        {
+            throw new SkillRunnerExecutionException(
+                $"Scheduled skill '{skillRef.Name}' has multiple workflows; skill_ref.workflow_id is required.",
+                SkillRunnerExecutionErrorCode.WorkflowSelectionRequired,
+                SkillRunnerExecutionKind.Workflow,
+                skill.Name,
+                skillRef.Version);
+        }
+
+        return workflows[0];
+    }
+
+    private static WorkflowSelection BuildWorkflowSelection(SkillWorkflowDescriptor workflow)
+    {
+        var workflowId = workflow.WorkflowId?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(workflowId))
+        {
+            throw new SkillRunnerExecutionException(
+                "Selected workflow descriptor has no workflow_id.",
+                SkillRunnerExecutionErrorCode.WorkflowSelectionRequired,
+                SkillRunnerExecutionKind.Workflow);
+        }
+
+        var documents = workflow.WorkflowYamls
+            .Where(static yaml => !string.IsNullOrWhiteSpace(yaml))
+            .Select(static yaml => new WorkflowChatInlineYamlDocument(string.Empty, yaml.Trim()))
+            .ToArray();
+        if (documents.Length == 0)
+        {
+            throw new SkillRunnerExecutionException(
+                $"Selected workflow '{workflowId}' has no workflow YAML.",
+                SkillRunnerExecutionErrorCode.WorkflowNotFound,
+                SkillRunnerExecutionKind.Workflow,
+                workflowId: workflowId);
+        }
+
+        return new WorkflowSelection(workflowId, documents);
+    }
+
+    private static WorkflowLlmControl ToWorkflowLlmControl(LLMControlContext llmControl) =>
+        new(
+            ModelOverride: llmControl.ModelOverride,
+            MaxToolRoundsOverride: llmControl.MaxToolRoundsOverride,
+            UserMemoryPrompt: llmControl.UserMemoryPrompt,
+            RoutePreference: llmControl.NyxIdRoutePreference);
+
+    private static bool HasSkillReference(SkillRunnerSkillReference? skillRef) =>
+        skillRef is not null &&
+        (!string.IsNullOrWhiteSpace(skillRef.Name) ||
+         !string.IsNullOrWhiteSpace(skillRef.Version) ||
+         !string.IsNullOrWhiteSpace(skillRef.WorkflowId) ||
+         skillRef.Source != SkillRunnerSkillSource.Unspecified ||
+         skillRef.AllowInlineFallback);
 
     private AgentToolExecutionContext BuildExecutionToolContext(
         string requestId,
@@ -1024,6 +1433,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.SkillName = evt.SkillName ?? string.Empty;
         next.TemplateName = evt.TemplateName ?? string.Empty;
         next.SkillContent = evt.SkillContent ?? string.Empty;
+        next.SkillRef = evt.SkillRef?.Clone();
         next.ExecutionPrompt = evt.ExecutionPrompt ?? string.Empty;
         next.ScheduleCron = evt.ScheduleCron ?? string.Empty;
         next.ScheduleTimezone = NormalizeTimezone(evt.ScheduleTimezone);

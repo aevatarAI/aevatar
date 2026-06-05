@@ -72,6 +72,33 @@ public sealed class SkillWorkflowsWiringTests
     }
 
     [Fact]
+    public async Task OrnnRemoteSkillFetcher_ReadsSkillMarkdownCaseInsensitively()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Translator",
+                "files": {
+                  "skill.md": "---\nname: translator\n---\nUse lowercase file name.",
+                  "workflows/translate.yaml": "name: translate_flow\nsteps:\n  - id: do\n",
+                  "docs/readme.md": "reference"
+                }
+              }
+            }
+            """);
+        var client = CreateClient(handler);
+        var fetcher = new OrnnRemoteSkillFetcher(client);
+
+        var skill = await fetcher.FetchSkillAsync("token", "Translator");
+
+        skill.Should().NotBeNull();
+        skill!.Name.Should().Be("translator");
+        skill.Instructions.Should().Be("Use lowercase file name.");
+        skill.AssociatedFiles.Should().NotContainKey("skill.md");
+        skill.AssociatedFiles.Should().ContainKey("docs/readme.md");
+    }
+
+    [Fact]
     public async Task UseSkillTool_RendersWorkflowsSectionWithStartWorkflowInstructions()
     {
         var catalog = new LocalSkillCatalog();

@@ -1264,6 +1264,14 @@ public static class GAgentSchedulingExtensions {
 
 **为什么不继承**：Orleans `GAgentBase<TState, TEvent>` 的继承链已经够深。再加一层中间基类会让诊断/反射/序列化复杂化。composition over inheritance：`ISchedulable` 做 capability 标记，extension method 提供共享逻辑，`ScheduleState` 做数据容器。
 
+### 7.2.1 Scheduled SkillRunner remote skill contract
+
+Scheduled SkillRunner stores the executable remote identity as typed `skill_ref` instead of encoding an Ornn lookup hint inside `skill_content`. `skill_ref.name` and legacy inline `skill_content` are mutually exclusive by default; inline fallback is a compatibility path only when `allow_inline_fallback=true`.
+
+For `skill_ref.source=ORNN` with empty `version`, every trigger fetches the current `SkillDefinition` through `IRemoteSkillFetcher` using the owner Nyx token from the runner outbound configuration. The runner does not keep a service cache, registry, or versioned package download layer. Non-empty `skill_ref.version` fails before fetch; this avoids silently treating a versioned request as latest.
+
+Prompt-only skills continue through `ChatStreamAsync`, with the fetched instructions used only as the current run's system prompt override. Workflow-bearing skills do not ask the LLM to decide workflow startup; `SkillRunnerGAgent` maps the selected descriptor to `WorkflowChatSource.InlineYamlBundle` and dispatches `WorkflowChatRunRequest` through the existing workflow command dispatch service. The returned workflow receipt is accepted-only: it means the workflow run command was accepted for dispatch, not that the workflow completed or its read model is visible.
+
 ### 7.3 `AgentRegistry → UserAgentCatalog` 改名
 
 ChannelRuntime 里的 `AgentRegistryGAgent` 和平台级 `Aevatar.GAgents.Registry.GAgentRegistryGAgent` 命名冲突——前者是"用户所有 SkillRunner/WorkflowAgent 的执行状态目录"，后者是"平台 actor 类型注册表"。两者职责本来就不同，原命名是历史遗留。

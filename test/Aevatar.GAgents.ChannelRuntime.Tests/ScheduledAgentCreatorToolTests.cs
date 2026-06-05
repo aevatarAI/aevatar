@@ -336,8 +336,12 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.Should().NotBeNull();
             captured!.SkillName.Should().Be("daily-report");
             captured.TemplateName.Should().Be("Daily Report");
-            captured.SkillContent.Should().Contain("Scheduled Ornn skill reference bootstrap.");
-            captured.SkillContent.Should().Contain("skill_ref: daily-report");
+            captured.SkillContent.Should().BeEmpty();
+            captured.SkillRef.Should().NotBeNull();
+            captured.SkillRef.Name.Should().Be("daily-report");
+            captured.SkillRef.Source.Should().Be(SkillRunnerSkillSource.Ornn);
+            captured.SkillRef.Version.Should().BeEmpty();
+            captured.SkillRef.AllowInlineFallback.Should().BeFalse();
             captured.ExecutionPrompt.Should().Be("Send concise bullets.");
             captured.ScheduleCron.Should().Be("0 9 * * *");
             captured.ScheduleTimezone.Should().Be("Asia/Singapore");

@@ -43,6 +43,27 @@ public class LayerDependencyTests
     }
 
     [Fact]
+    public void ScheduledAgents_ShouldUseSkillsAbstractionWithoutDependingOnOrnnProvider()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "agents", "Aevatar.GAgents.Scheduled", "Aevatar.GAgents.Scheduled.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.Contains(
+            "Aevatar.AI.ToolProviders.Skills.csproj",
+            project,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Aevatar.Workflow.Application.Abstractions.csproj",
+            project,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Aevatar.AI.ToolProviders.Ornn.csproj",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WorkflowCore_ShouldNot_DependOn_AICore()
     {
         IArchRule rule = Types().That()

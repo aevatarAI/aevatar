@@ -9,6 +9,38 @@ import "agent_messages.proto";
 
 // ─── Skill Runner (persistent scheduled agent) ───
 
+enum SkillRunnerSkillSource {
+  SKILL_RUNNER_SKILL_SOURCE_UNSPECIFIED = 0;
+  SKILL_RUNNER_SKILL_SOURCE_ORNN = 1;
+}
+
+enum SkillRunnerExecutionKind {
+  SKILL_RUNNER_EXECUTION_KIND_UNSPECIFIED = 0;
+  SKILL_RUNNER_EXECUTION_KIND_PROMPT = 1;
+  SKILL_RUNNER_EXECUTION_KIND_WORKFLOW = 2;
+}
+
+enum SkillRunnerExecutionErrorCode {
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_UNSPECIFIED = 0;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_SKILL_REFERENCE_REQUIRED = 1;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_INLINE_FALLBACK_DISABLED = 2;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_SKILL_FETCHER_UNAVAILABLE = 3;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_SKILL_NOT_FOUND = 4;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_SKILL_VERSION_UNSUPPORTED = 5;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_WORKFLOW_SELECTION_REQUIRED = 6;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_WORKFLOW_NOT_FOUND = 7;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_WORKFLOW_DISPATCH_UNAVAILABLE = 8;
+  SKILL_RUNNER_EXECUTION_ERROR_CODE_WORKFLOW_DISPATCH_REJECTED = 9;
+}
+
+message SkillRunnerSkillReference {
+  string name = 1;
+  string version = 2;
+  SkillRunnerSkillSource source = 3;
+  string workflow_id = 4;
+  bool allow_inline_fallback = 5;
+}
+
 message SkillRunnerOutboundConfig {
   string conversation_id = 1;
   string nyx_provider_slug = 2;
@@ -74,6 +106,7 @@ message SkillRunnerState {
   // by the original safety net, which only fired when ≥1 nyxid_proxy call had
   // failed. Skills that don't fan out to nyxid_proxy at all leave this false.
   bool requires_nyxid_proxy_success = 21;
+  SkillRunnerSkillReference skill_ref = 22;
 }
 
 message SkillRunnerExecutionDocument {
@@ -112,6 +145,7 @@ message InitializeSkillRunnerCommand {
   optional int32 max_history_messages = 15;
   // See SkillRunnerState.requires_nyxid_proxy_success for semantics.
   bool requires_nyxid_proxy_success = 16;
+  SkillRunnerSkillReference skill_ref = 17;
 }
 
 message SkillRunnerInitializedEvent {
@@ -132,6 +166,7 @@ message SkillRunnerInitializedEvent {
   optional int32 max_history_messages = 15;
   // See SkillRunnerState.requires_nyxid_proxy_success for semantics.
   bool requires_nyxid_proxy_success = 16;
+  SkillRunnerSkillReference skill_ref = 17;
 }
 
 message TriggerSkillRunnerExecutionCommand {
@@ -149,11 +184,24 @@ message SkillRunnerNextRunScheduledEvent {
 message SkillRunnerExecutionCompletedEvent {
   google.protobuf.Timestamp completed_at = 1;
   string output = 2;
+  SkillRunnerExecutionKind execution_kind = 3;
+  string skill_name = 4;
+  string skill_version = 5;
+  string workflow_id = 6;
+  string workflow_actor_id = 7;
+  string workflow_name = 8;
+  string workflow_command_id = 9;
+  string workflow_correlation_id = 10;
 }
 
 message SkillRunnerExecutionFailedEvent {
   google.protobuf.Timestamp failed_at = 1;
   string error = 2;
+  SkillRunnerExecutionKind execution_kind = 3;
+  string skill_name = 4;
+  string skill_version = 5;
+  string workflow_id = 6;
+  SkillRunnerExecutionErrorCode error_code = 7;
 }
 
 message SkillRunnerExecutionRejectedEvent {
