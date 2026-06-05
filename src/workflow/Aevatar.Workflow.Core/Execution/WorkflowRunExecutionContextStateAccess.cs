@@ -38,13 +38,15 @@ internal static class WorkflowRunExecutionContextStateAccess
         {
             ClearCallerCredential = true,
         };
-        var normalized = Normalize(credential?.BearerToken);
-        if (string.IsNullOrWhiteSpace(normalized))
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
+        if (parsed.IsInvalid)
+            throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
+        if (parsed.IsMissing)
             return delta;
 
         delta.CallerCredential = new WorkflowCallerCredential
         {
-            BearerToken = normalized,
+            BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
         };
 
         return delta;
@@ -73,12 +75,14 @@ internal static class WorkflowRunExecutionContextStateAccess
         {
             ModelOverride = Normalize(llmControl.ModelOverride),
             UserMemoryPrompt = Normalize(llmControl.UserMemoryPrompt),
+            RoutePreference = Normalize(llmControl.RoutePreference),
         };
         if (llmControl.HasMaxToolRoundsOverride)
             llm.MaxToolRoundsOverride = llmControl.MaxToolRoundsOverride;
 
         if (string.IsNullOrWhiteSpace(llm.ModelOverride) &&
             string.IsNullOrWhiteSpace(llm.UserMemoryPrompt) &&
+            string.IsNullOrWhiteSpace(llm.RoutePreference) &&
             !llm.HasMaxToolRoundsOverride)
         {
             return delta;
@@ -93,11 +97,12 @@ internal static class WorkflowRunExecutionContextStateAccess
         out WorkflowCallerCredential credential)
     {
         var callerCredential = Get(ctx).CallerCredential;
-        if (!string.IsNullOrWhiteSpace(callerCredential?.BearerToken))
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(callerCredential?.BearerToken);
+        if (parsed.IsValid)
         {
             credential = new WorkflowCallerCredential
             {
-                BearerToken = callerCredential.BearerToken.Trim(),
+                BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
             };
             return true;
         }
@@ -113,6 +118,7 @@ internal static class WorkflowRunExecutionContextStateAccess
         llm = Get(ctx).Llm ?? new WorkflowLlmExecutionContextState();
         return !string.IsNullOrWhiteSpace(llm.ModelOverride) ||
                !string.IsNullOrWhiteSpace(llm.UserMemoryPrompt) ||
+               !string.IsNullOrWhiteSpace(llm.RoutePreference) ||
                llm.HasMaxToolRoundsOverride;
     }
 

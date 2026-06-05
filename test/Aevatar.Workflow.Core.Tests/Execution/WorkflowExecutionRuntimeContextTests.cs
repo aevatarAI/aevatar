@@ -56,11 +56,13 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ModelOverride = " model ",
                 MaxToolRoundsOverride = 3,
                 UserMemoryPrompt = " memory ",
+                RoutePreference = " route-a ",
             });
 
         host.ExecutionContextState.Llm.ModelOverride.Should().Be("model");
         host.ExecutionContextState.Llm.MaxToolRoundsOverride.Should().Be(3);
         host.ExecutionContextState.Llm.UserMemoryPrompt.Should().Be("memory");
+        host.ExecutionContextState.Llm.RoutePreference.Should().Be("route-a");
     }
 
     [Fact]
@@ -165,6 +167,12 @@ public sealed class WorkflowExecutionRuntimeContextTests
             new WorkflowCallerCredential { BearerToken = " " });
         emptyDelta.ClearCallerCredential.Should().BeTrue();
         emptyDelta.CallerCredential.Should().BeNull();
+
+        FluentActions.Invoking(() => WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
+                new WorkflowCallerCredential { BearerToken = "Bearer secret" }))
+            .Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*caller credential*invalid*");
     }
 
     [Fact]
@@ -190,6 +198,14 @@ public sealed class WorkflowExecutionRuntimeContextTests
         await WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(host);
 
         host.ExecutionContextState.CallerCredential.Should().BeNull();
+
+        await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+                host,
+                new WorkflowCallerCredential { BearerToken = "Bearer secret" }))
+            .Should()
+            .ThrowAsync<ArgumentException>()
+            .WithMessage("*caller credential*invalid*");
+
         await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
                 null!,
                 new WorkflowCallerCredential { BearerToken = "secret" }))
@@ -215,6 +231,12 @@ public sealed class WorkflowExecutionRuntimeContextTests
         credential.BearerToken.Should().Be("secret");
 
         context.ExecutionContextState.CallerCredential.BearerToken = " ";
+        WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out credential)
+            .Should()
+            .BeFalse();
+        credential.BearerToken.Should().BeEmpty();
+
+        context.ExecutionContextState.CallerCredential.BearerToken = "Bearer secret";
         WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out credential)
             .Should()
             .BeFalse();
@@ -461,6 +483,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             {
                 ModelOverride = delta.Llm.ModelOverride,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+                RoutePreference = delta.Llm.RoutePreference,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;

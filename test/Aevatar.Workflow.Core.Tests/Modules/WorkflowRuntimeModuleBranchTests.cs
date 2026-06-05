@@ -245,6 +245,10 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 {
                     BearerToken = " typed-token ",
                 },
+                Llm = new WorkflowLlmExecutionContextState
+                {
+                    RoutePreference = " route-a ",
+                },
             },
         };
         ctx.RuntimeContext.ApplyRequestMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
@@ -266,6 +270,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         var intent = DispatchedLlmIntent(ctx);
         intent.CallerCredential.BearerToken.Should().Be("typed-token");
+        intent.RoutePreference.Should().Be("route-a");
         intent.Headers.Should().Contain("trace-id", "trace-1");
         intent.Headers.Should().NotContainKey("connector.http.authorization");
     }
@@ -1022,6 +1027,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 {
                     ModelOverride = delta.Llm.ModelOverride,
                     UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+                    RoutePreference = delta.Llm.RoutePreference,
                 };
                 if (delta.Llm.HasMaxToolRoundsOverride)
                     ExecutionContextState.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;

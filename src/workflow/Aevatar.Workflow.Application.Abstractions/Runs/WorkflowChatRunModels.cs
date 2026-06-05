@@ -25,7 +25,8 @@ public sealed record WorkflowChatInputPart
 public sealed record WorkflowLlmControl(
     string? ModelOverride = null,
     int? MaxToolRoundsOverride = null,
-    string? UserMemoryPrompt = null);
+    string? UserMemoryPrompt = null,
+    string? RoutePreference = null);
 
 public sealed record WorkflowCallerCredential(string? BearerToken = null);
 
@@ -166,6 +167,7 @@ public enum WorkflowChatRunStartError
     WorkflowNameMismatch = 8,
     PromptRequired = 9,
     ProjectionUnavailable = 10,
+    InvalidCallerCredential = 11,
 }
 
 public enum WorkflowProjectionCompletionStatus

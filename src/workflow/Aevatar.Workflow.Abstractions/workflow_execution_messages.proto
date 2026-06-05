@@ -25,6 +25,7 @@ message WorkflowLlmControlContext {
   string model_override = 1;
   optional int32 max_tool_rounds_override = 2;
   string user_memory_prompt = 3;
+  string route_preference = 4;
 }
 
 message WorkflowCallerCredential {
@@ -88,6 +89,7 @@ message WorkflowRunLlmExecutionContextDelta
   string model_override = 2;
   optional int32 max_tool_rounds_override = 4;
   string user_memory_prompt = 5;
+  string route_preference = 7;
 }
 message WorkflowRunExecutionContextUpdatedEvent
 {
@@ -341,6 +343,7 @@ message WorkflowLlmExecutionIntent
   map<string, string> headers = 9;
   map<string, string> annotations = 10;
   WorkflowCallerCredential caller_credential = 12;
+  string route_preference = 13;
 }
 
 message WorkflowLlmInvocationStartedEvent

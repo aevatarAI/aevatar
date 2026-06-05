@@ -7,42 +7,19 @@ internal static class WorkflowCallerCredentialToolContextMapper
 {
     public static AgentToolExecutionContext FromCredential(WorkflowCallerCredential? credential)
     {
-        var token = NormalizeToken(credential?.BearerToken);
-        if (token == null)
+        var token = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
+        if (token.IsMissing)
             return AgentToolExecutionContext.Empty;
+        if (token.IsInvalid)
+            throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
 
         return AgentToolExecutionContext.Empty with
         {
             Credentials = AgentToolCredentials.Empty with
             {
-                NyxIdAccessToken = token,
-                NyxIdOrgToken = token,
+                NyxIdAccessToken = token.NormalizedBearerToken,
+                NyxIdOrgToken = token.NormalizedBearerToken,
             },
         };
-    }
-
-    private static string? NormalizeToken(string? rawToken)
-    {
-        var normalized = string.IsNullOrWhiteSpace(rawToken) ? string.Empty : rawToken.Trim();
-        if (normalized.Length == 0 ||
-            string.Equals(normalized, "Bearer", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
-            ContainsWhitespace(normalized))
-        {
-            return null;
-        }
-
-        return normalized;
-    }
-
-    private static bool ContainsWhitespace(string value)
-    {
-        foreach (var c in value)
-        {
-            if (char.IsWhiteSpace(c))
-                return true;
-        }
-
-        return false;
     }
 }

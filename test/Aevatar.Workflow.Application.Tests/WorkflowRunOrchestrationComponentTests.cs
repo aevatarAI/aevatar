@@ -106,6 +106,33 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Fact]
+    public async Task WorkflowRunCommandTargetResolver_ShouldRejectInvalidCallerCredential_BeforeTargetResolution()
+    {
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("unexpected", string.Empty, []), "auto", WorkflowChatRunStartError.None));
+        var resolver = new WorkflowRunCommandTargetResolver(
+            actorResolver,
+            new FakeProjectionPort(),
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var request = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.CatalogWorkflow("direct"),
+            CallerCredential: new WorkflowCallerCredential("Bearer token-123"),
+            TargetSeed: new WorkflowRunTargetSeed(
+                ActorId: "run-1",
+                WorkflowNameForRun: "direct",
+                CreatedActorIds: ["definition-1", "run-1"],
+                Source: WorkflowChatSource.CatalogWorkflow("direct")));
+
+        var result = await resolver.ResolveAsync(request);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        actorResolver.ResolveCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task WorkflowRunCommandTargetResolver_ShouldRejectSeed_WhenWorkflowNameDiffersFromRequest()
     {
         var resolver = new WorkflowRunCommandTargetResolver(
@@ -204,6 +231,27 @@ public sealed class WorkflowRunOrchestrationComponentTests
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
         result.Target.Should().BeNull();
         actorResolver.ResolveCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTargetResolver_ShouldRejectInvalidCallerCredential_BeforeActorResolution()
+    {
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(new WorkflowRunCreationReceipt("unexpected", string.Empty, []), "auto", WorkflowChatRunStartError.None));
+        var resolver = new WorkflowRunAcceptedCommandTargetResolver(
+            actorResolver,
+            new FakeWorkflowRunActorPort());
+
+        var result = await resolver.ResolveAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowChatSource.CatalogWorkflow("auto"),
+                CallerCredential: new WorkflowCallerCredential("Bearer token-123")));
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        result.Target.Should().BeNull();
+        actorResolver.ResolveCallCount.Should().Be(0);
     }
 
     [Fact]

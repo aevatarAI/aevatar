@@ -80,7 +80,7 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
-    public async Task ToolCallModule_ShouldExecuteToolsThroughExecutionPort()
+    public async Task ToolCallModule_ShouldExecuteTypedWorkflowToolRequest()
     {
         var tool = new FakeAgentTool("echo", argumentsJson => argumentsJson);
         var module = CreateModule(tool);
@@ -354,6 +354,7 @@ public sealed class ToolCallModuleContextTests
                 {
                     ModelOverride = delta.Llm.ModelOverride,
                     UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+                    RoutePreference = delta.Llm.RoutePreference,
                 };
                 if (delta.Llm.HasMaxToolRoundsOverride)
                     ExecutionContextState.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;

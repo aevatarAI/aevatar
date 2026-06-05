@@ -10,7 +10,10 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        if (string.IsNullOrWhiteSpace(credential?.BearerToken))
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
+        if (parsed.IsInvalid)
+            throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
+        if (parsed.IsMissing)
         {
             return stateHost.UpdateExecutionContextAsync(
                 new WorkflowRunExecutionContextDelta
@@ -26,7 +29,7 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
                 ClearCallerCredential = true,
                 CallerCredential = new WorkflowCallerCredential
                 {
-                    BearerToken = credential.BearerToken.Trim(),
+                    BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
                 },
             },
             ct);

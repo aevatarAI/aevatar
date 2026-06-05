@@ -390,6 +390,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         {
             intent.Model = Normalize(llm.ModelOverride) ?? string.Empty;
             intent.UserMemoryPrompt = Normalize(llm.UserMemoryPrompt) ?? string.Empty;
+            intent.RoutePreference = Normalize(llm.RoutePreference) ?? string.Empty;
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
