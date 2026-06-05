@@ -525,8 +525,9 @@ public static partial class ServiceEndpoints
         IServiceInvocationCatalogQueryReader invocationCatalogQueryReader,
         CancellationToken ct)
     {
-        var identity = ToIdentity(service.TenantId, service.AppId, service.Namespace, service.ServiceId);
-        var catalog = await invocationCatalogQueryReader.GetAsync(identity, ct);
+        var catalog = HasCompleteInvocationIdentity(service)
+            ? await invocationCatalogQueryReader.GetAsync(ToIdentity(service.TenantId, service.AppId, service.Namespace, service.ServiceId), ct)
+            : null;
         var entries = catalog?.Entries ?? [];
         var ready = entries.Count > 0 &&
                     entries.All(x => x.ReadinessStatus == ServiceInvokeReadinessStatus.Ready);
@@ -558,6 +559,12 @@ public static partial class ServiceEndpoints
             status.ToString(),
             reason);
     }
+
+    private static bool HasCompleteInvocationIdentity(ServiceCatalogSnapshot service) =>
+        !string.IsNullOrWhiteSpace(service.TenantId) &&
+        !string.IsNullOrWhiteSpace(service.AppId) &&
+        !string.IsNullOrWhiteSpace(service.Namespace) &&
+        !string.IsNullOrWhiteSpace(service.ServiceId);
 
     internal static ServiceIdentity ToIdentity(string? tenantId, string? appId, string? @namespace, string serviceId)
     {

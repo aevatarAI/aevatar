@@ -493,8 +493,60 @@ public sealed class ServiceEndpointsTests
                 ],
                 [],
                 DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")),
+            new ServiceCatalogSnapshot(
+                "tenant/app/ns/billing",
+                "tenant",
+                "app",
+                "ns",
+                "billing",
+                "Billing",
+                "rev-2",
+                "rev-2",
+                "dep-2",
+                "actor-2",
+                "active",
+                [
+                    new ServiceEndpointSnapshot("charge", "Charge", "command", "req", string.Empty, "charge"),
+                ],
+                [],
+                DateTimeOffset.Parse("2026-03-14T00:10:00+00:00")),
+            new ServiceCatalogSnapshot(
+                "tenant/app/ns/search",
+                "tenant",
+                "app",
+                "ns",
+                "search",
+                "Search",
+                "rev-3",
+                "rev-3",
+                "dep-3",
+                "actor-3",
+                "active",
+                [
+                    new ServiceEndpointSnapshot("query", "Query", "command", "req", string.Empty, "query"),
+                ],
+                [],
+                DateTimeOffset.Parse("2026-03-14T00:20:00+00:00")),
         ];
         host.QueryPort.GetServiceResult = host.QueryPort.ListServicesResult[0];
+        host.InvocationCatalogReader.CatalogsByServiceKey["tenant:app:ns:orders"] = BuildInvocationCatalog(
+            "tenant:app:ns:orders",
+            "submit",
+            ServiceInvokeReadinessStatus.Ready,
+            ServiceInvokeUnavailableReason.Unspecified,
+            "rev-1",
+            "dep-1",
+            "actor-1",
+            21);
+        host.InvocationCatalogReader.CatalogsByServiceKey["tenant:app:ns:billing"] = BuildInvocationCatalog(
+            "tenant:app:ns:billing",
+            "charge",
+            ServiceInvokeReadinessStatus.Unavailable,
+            ServiceInvokeUnavailableReason.PreparedArtifactMissing,
+            "rev-2",
+            "dep-2",
+            "actor-2",
+            22);
         host.QueryPort.GetServiceRevisionsResult = new ServiceRevisionCatalogSnapshot(
             "tenant/app/ns/orders",
             [
@@ -514,12 +566,24 @@ public sealed class ServiceEndpointsTests
             ],
             DateTimeOffset.Parse("2026-03-14T00:03:00+00:00"));
 
-        var listResponse = await host.Client.GetFromJsonAsync<List<ServiceCatalogSnapshot>>("/api/services/?take=10");
-        var getResponse = await host.Client.GetFromJsonAsync<ServiceCatalogSnapshot>("/api/services/orders?tenantId=tenant&appId=app&namespace=ns");
+        var listResponse = await host.Client.GetFromJsonAsync<List<ServiceEndpoints.ServiceWithInvokeReadinessHttpResponse>>("/api/services/?take=10");
+        var getResponse = await host.Client.GetFromJsonAsync<ServiceEndpoints.ServiceWithInvokeReadinessHttpResponse>("/api/services/orders?tenantId=tenant&appId=app&namespace=ns");
         var revisionResponse = await host.Client.GetFromJsonAsync<ServiceRevisionCatalogSnapshot>("/api/services/orders/revisions?tenantId=tenant&appId=app&namespace=ns");
 
-        listResponse.Should().ContainSingle();
+        listResponse.Should().HaveCount(3);
+        listResponse!.Single(x => x.ServiceId == "orders").InvokeReady.Should().BeTrue();
+        listResponse.Single(x => x.ServiceId == "orders").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
+        listResponse.Single(x => x.ServiceId == "orders").InvokeUnavailableReason.Should().BeNull();
+        listResponse.Single(x => x.ServiceId == "billing").InvokeReady.Should().BeFalse();
+        listResponse.Single(x => x.ServiceId == "billing").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unavailable.ToString());
+        listResponse.Single(x => x.ServiceId == "billing").InvokeUnavailableReason.Should().Be(ServiceInvokeUnavailableReason.PreparedArtifactMissing.ToString());
+        listResponse.Single(x => x.ServiceId == "search").InvokeReady.Should().BeFalse();
+        listResponse.Single(x => x.ServiceId == "search").InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified.ToString());
+        listResponse.Single(x => x.ServiceId == "search").InvokeUnavailableReason.Should().BeNull();
         getResponse!.ServiceId.Should().Be("orders");
+        getResponse.InvokeReady.Should().BeTrue();
+        getResponse.InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Ready.ToString());
+        getResponse.InvokeUnavailableReason.Should().BeNull();
         revisionResponse!.Revisions.Should().ContainSingle();
         host.QueryPort.LastListServicesTake.Should().Be(10);
         host.QueryPort.LastGetServiceIdentity!.ServiceId.Should().Be("orders");
@@ -562,6 +626,47 @@ public sealed class ServiceEndpointsTests
             Namespace = "ns-claim",
             ServiceId = "orders",
         });
+    }
+
+    [Fact]
+    public async Task GetServiceAsync_ShouldReturnUnspecifiedInvokeReadiness_WhenInvocationCatalogHasNoEntries()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.QueryPort.GetServiceResult = new ServiceCatalogSnapshot(
+            "tenant/app/ns/orders",
+            "tenant",
+            "app",
+            "ns",
+            "orders",
+            "Orders",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            "actor-1",
+            "active",
+            [
+                new ServiceEndpointSnapshot("submit", "Submit", "command", "req", string.Empty, "desc"),
+            ],
+            [],
+            DateTimeOffset.Parse("2026-03-14T00:00:00+00:00"));
+        host.InvocationCatalogReader.CatalogsByServiceKey["tenant:app:ns:orders"] = new ServiceInvocationCatalogSnapshot(
+            "tenant:app:ns:orders",
+            [],
+            DateTimeOffset.Parse("2026-03-14T00:05:00+00:00"),
+            5,
+            "evt-5",
+            2,
+            3,
+            4);
+
+        var response = await host.Client.GetFromJsonAsync<ServiceEndpoints.ServiceWithInvokeReadinessHttpResponse>(
+            "/api/services/orders?tenantId=tenant&appId=app&namespace=ns");
+
+        response.Should().NotBeNull();
+        response!.ServiceId.Should().Be("orders");
+        response.InvokeReady.Should().BeFalse();
+        response.InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified.ToString());
+        response.InvokeUnavailableReason.Should().BeNull();
     }
 
     [Fact]
@@ -977,12 +1082,15 @@ public sealed class ServiceEndpointsTests
             [],
             DateTimeOffset.UtcNow);
 
-        var listResponse = await host.Client.GetFromJsonAsync<List<ServiceCatalogSnapshot>>("/api/services");
-        var getResponse = await host.Client.GetFromJsonAsync<ServiceCatalogSnapshot>("/api/services/orders");
+        var listResponse = await host.Client.GetFromJsonAsync<List<ServiceEndpoints.ServiceWithInvokeReadinessHttpResponse>>("/api/services");
+        var getResponse = await host.Client.GetFromJsonAsync<ServiceEndpoints.ServiceWithInvokeReadinessHttpResponse>("/api/services/orders");
         var revisionsResponse = await host.Client.GetFromJsonAsync<ServiceRevisionCatalogSnapshot>("/api/services/orders/revisions");
 
         listResponse.Should().BeEmpty();
         getResponse.Should().NotBeNull();
+        getResponse!.InvokeReady.Should().BeFalse();
+        getResponse.InvokeReadinessStatus.Should().Be(ServiceInvokeReadinessStatus.Unspecified.ToString());
+        getResponse.InvokeUnavailableReason.Should().BeNull();
         revisionsResponse.Should().NotBeNull();
         host.QueryPort.LastListServicesTake.Should().Be(200);
         host.QueryPort.LastGetServiceIdentity.Should().BeEquivalentTo(new ServiceIdentity
@@ -1592,12 +1700,18 @@ public sealed class ServiceEndpointsTests
 
     private sealed class FakeServiceInvocationCatalogQueryReader(FakeServiceCatalogQueryReader catalogReader) : IServiceInvocationCatalogQueryReader
     {
+        public Dictionary<string, ServiceInvocationCatalogSnapshot?> CatalogsByServiceKey { get; } = new(StringComparer.Ordinal);
+
         public ServiceInvocationCatalogSnapshot? Catalog { get; set; }
 
         public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             if (Catalog != null)
                 return Task.FromResult<ServiceInvocationCatalogSnapshot?>(Catalog);
+
+            var serviceKey = ServiceKeys.Build(identity);
+            if (CatalogsByServiceKey.TryGetValue(serviceKey, out var configuredCatalog))
+                return Task.FromResult(configuredCatalog);
 
             var service = catalogReader.Service;
             if (service == null)
@@ -1616,10 +1730,10 @@ public sealed class ServiceEndpointsTests
                 ? "actor-1"
                 : service.PrimaryActorId;
             return Task.FromResult<ServiceInvocationCatalogSnapshot?>(new ServiceInvocationCatalogSnapshot(
-                ServiceKeys.Build(identity),
+                serviceKey,
                 [
                     new ServiceInvokeReadinessSnapshot(
-                        ServiceKeys.Build(identity),
+                        serviceKey,
                         endpointId,
                         ServiceInvokeReadinessStatus.Ready,
                         ServiceInvokeUnavailableReason.Unspecified,
@@ -1628,19 +1742,53 @@ public sealed class ServiceEndpointsTests
                         actorId,
                         DateTimeOffset.UtcNow,
                         1,
-                        $"{ServiceKeys.Build(identity)}:invocation-catalog:1",
+                        $"{serviceKey}:invocation-catalog:1",
                         1,
                         1,
                         1),
                 ],
                 DateTimeOffset.UtcNow,
                 1,
-                $"{ServiceKeys.Build(identity)}:invocation-catalog:1",
+                $"{serviceKey}:invocation-catalog:1",
                 1,
                 1,
                 1));
         }
     }
+
+    private static ServiceInvocationCatalogSnapshot BuildInvocationCatalog(
+        string serviceKey,
+        string endpointId,
+        ServiceInvokeReadinessStatus status,
+        ServiceInvokeUnavailableReason reason,
+        string revisionId,
+        string deploymentId,
+        string actorId,
+        long stateVersion) =>
+        new(
+            serviceKey,
+            [
+                new ServiceInvokeReadinessSnapshot(
+                    serviceKey,
+                    endpointId,
+                    status,
+                    reason,
+                    revisionId,
+                    deploymentId,
+                    actorId,
+                    DateTimeOffset.Parse("2026-03-14T00:04:00+00:00"),
+                    stateVersion,
+                    $"evt-{stateVersion}",
+                    stateVersion - 2,
+                    stateVersion - 1,
+                    stateVersion),
+            ],
+            DateTimeOffset.Parse("2026-03-14T00:04:00+00:00"),
+            stateVersion,
+            $"evt-{stateVersion}",
+            stateVersion - 2,
+            stateVersion - 1,
+            stateVersion);
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
