@@ -1,0 +1,58 @@
+namespace Aevatar.Workflow.Abstractions;
+
+// refactor helper, no behavior change
+public enum WorkflowCallerCredentialTokenParseStatus
+{
+    Missing = 0,
+    Valid = 1,
+    Invalid = 2,
+}
+
+// refactor helper, no behavior change
+public readonly record struct WorkflowCallerCredentialTokenParseResult(
+    WorkflowCallerCredentialTokenParseStatus Status,
+    string? NormalizedBearerToken)
+{
+    public bool IsMissing => Status == WorkflowCallerCredentialTokenParseStatus.Missing;
+
+    public bool IsValid => Status == WorkflowCallerCredentialTokenParseStatus.Valid;
+
+    public bool IsInvalid => Status == WorkflowCallerCredentialTokenParseStatus.Invalid;
+}
+
+// refactor helper, no behavior change
+public static class WorkflowCallerCredentialTokens
+{
+    public static WorkflowCallerCredentialTokenParseResult ParseOptional(string? rawBearerToken)
+    {
+        if (string.IsNullOrWhiteSpace(rawBearerToken))
+            return new WorkflowCallerCredentialTokenParseResult(
+                WorkflowCallerCredentialTokenParseStatus.Missing,
+                null);
+
+        var normalized = rawBearerToken.Trim();
+        if (string.Equals(normalized, "Bearer", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
+            ContainsWhitespace(normalized))
+        {
+            return new WorkflowCallerCredentialTokenParseResult(
+                WorkflowCallerCredentialTokenParseStatus.Invalid,
+                null);
+        }
+
+        return new WorkflowCallerCredentialTokenParseResult(
+            WorkflowCallerCredentialTokenParseStatus.Valid,
+            normalized);
+    }
+
+    private static bool ContainsWhitespace(string value)
+    {
+        foreach (var c in value)
+        {
+            if (char.IsWhiteSpace(c))
+                return true;
+        }
+
+        return false;
+    }
+}

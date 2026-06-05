@@ -78,6 +78,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             ModelOverride = source.ModelOverride ?? string.Empty,
             UserMemoryPrompt = source.UserMemoryPrompt ?? string.Empty,
+            RoutePreference = source.RoutePreference ?? string.Empty,
         };
         if (source.MaxToolRoundsOverride.HasValue)
             payload.MaxToolRoundsOverride = source.MaxToolRoundsOverride.Value;
@@ -85,11 +86,17 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential ToProto(
-        Application.Abstractions.Runs.WorkflowCallerCredential? source) =>
-        new()
+        Application.Abstractions.Runs.WorkflowCallerCredential? source)
+    {
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
+        if (parsed.IsInvalid)
+            throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
+
+        return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
         {
-            BearerToken = Normalize(source?.BearerToken),
+            BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
         };
+    }
 
     private static void AppendMetadata(
         Google.Protobuf.Collections.MapField<string, string> destination,

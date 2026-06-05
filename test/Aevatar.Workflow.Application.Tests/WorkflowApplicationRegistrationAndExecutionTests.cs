@@ -347,7 +347,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             LlmControl: new WorkflowLlmControl(
                 ModelOverride: " model-a ",
                 MaxToolRoundsOverride: 3,
-                UserMemoryPrompt: " memory "));
+                UserMemoryPrompt: " memory ",
+                RoutePreference: " route-a "));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -359,6 +360,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.ModelOverride.Should().Be(" model-a ");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
         request.LlmControl.UserMemoryPrompt.Should().Be(" memory ");
+        request.LlmControl.RoutePreference.Should().Be(" route-a ");
     }
 
     [Fact]
@@ -381,7 +383,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             LlmControl: new WorkflowLlmControl(
                 ModelOverride: "model-a",
                 MaxToolRoundsOverride: 5,
-                UserMemoryPrompt: "memory"));
+                UserMemoryPrompt: "memory",
+                RoutePreference: "route-a"));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -394,9 +397,32 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.ModelOverride.Should().Be("model-a");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
         request.LlmControl.UserMemoryPrompt.Should().Be("memory");
+        request.LlmControl.RoutePreference.Should().Be("route-a");
         request.Metadata.Should().Contain("client-note", "open-extension");
         request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Metadata.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldRejectMalformedDirectCallerCredential()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential("Bearer token-123"));
+
+        FluentActions.Invoking(() => factory.CreateEnvelope(command, new CommandContext(
+                "actor-1",
+                "cmd-1",
+                "corr-1",
+                new Dictionary<string, string>())))
+            .Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*caller credential*invalid*");
     }
 
     [Fact]

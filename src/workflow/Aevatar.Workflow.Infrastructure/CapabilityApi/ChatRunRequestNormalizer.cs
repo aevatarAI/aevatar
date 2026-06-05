@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
+using WorkflowProtocol = Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -54,6 +55,10 @@ internal static class ChatRunRequestNormalizer
         if (rawPrompt.Length == 0)
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
+        var callerCredentialResult = NormalizeCallerCredential(trustedCallerCredential);
+        if (callerCredentialResult.Error != WorkflowChatRunStartError.None)
+            return ChatRunRequestNormalizationResult.Failed(callerCredentialResult.Error);
+
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 Prompt: rawPrompt,
@@ -63,14 +68,22 @@ internal static class ChatRunRequestNormalizer
                 Metadata: normalizedMetadata,
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
-                CallerCredential: NormalizeCallerCredential(trustedCallerCredential),
+                CallerCredential: callerCredentialResult.Credential,
                 Headers: normalizedContext.Headers));
     }
 
-    private static WorkflowCallerCredential? NormalizeCallerCredential(WorkflowCallerCredential? source)
+    private readonly record struct CallerCredentialNormalizationResult(
+        WorkflowCallerCredential? Credential,
+        WorkflowChatRunStartError Error);
+
+    private static CallerCredentialNormalizationResult NormalizeCallerCredential(WorkflowCallerCredential? source)
     {
-        var bearer = NormalizeOptional(source?.BearerToken);
-        return bearer == null ? null : new WorkflowCallerCredential(bearer);
+        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
+        if (parsed.IsInvalid)
+            return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.InvalidCallerCredential);
+        return new CallerCredentialNormalizationResult(
+            parsed.IsMissing ? null : new WorkflowCallerCredential(parsed.NormalizedBearerToken),
+            WorkflowChatRunStartError.None);
     }
 
     private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)
@@ -81,7 +94,8 @@ internal static class ChatRunRequestNormalizer
         return new WorkflowLlmControl(
             NormalizeOptional(source.ModelOverride),
             source.MaxToolRoundsOverride is > 0 ? source.MaxToolRoundsOverride : null,
-            NormalizeOptional(source.UserMemoryPrompt));
+            NormalizeOptional(source.UserMemoryPrompt),
+            NormalizeOptional(source.NyxIdRoutePreference));
     }
 
     private static string? NormalizeOptional(string? value) =>

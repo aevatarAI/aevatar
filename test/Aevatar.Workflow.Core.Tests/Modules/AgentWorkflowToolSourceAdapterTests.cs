@@ -69,10 +69,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
     [Theory]
     [InlineData("")]
-    [InlineData("Basic token-123")]
-    [InlineData("Bearer token-123")]
-    [InlineData("Bearer ")]
-    public async Task WorkflowTool_ShouldIgnoreMalformedWorkflowCredential(string authorization)
+    [InlineData("  ")]
+    public async Task WorkflowTool_ShouldUseEmptyAgentToolContextWhenWorkflowCredentialIsMissing(string authorization)
     {
         var agentTool = new CapturingAgentTool();
         var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
@@ -91,6 +89,34 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         agentTool.ObservedAccessToken.Should().BeNull();
         agentTool.ObservedOrgToken.Should().BeNull();
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("Basic token-123")]
+    [InlineData("Bearer token-123")]
+    [InlineData("Bearer ")]
+    [InlineData("token 123")]
+    public async Task WorkflowTool_ShouldRejectMalformedWorkflowCredential(string authorization)
+    {
+        var agentTool = new CapturingAgentTool();
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        await FluentActions.Awaiting(() => workflowTool.ExecuteAsync(
+                new WorkflowToolExecutionRequest(
+                    ArgumentsJson: "{}",
+                    RunId: "run-1",
+                    StepId: "step-1",
+                    ExecutionId: "exec-1",
+                    CallId: "call-1",
+                    ScopeId: "scope-1",
+                    CallerCredential: new WorkflowCallerCredential { BearerToken = authorization }),
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<ArgumentException>()
+            .WithMessage("*caller credential*invalid*");
+
         AgentToolRequestContext.Current.Should().BeNull();
     }
 

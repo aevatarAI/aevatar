@@ -859,6 +859,7 @@ public sealed class WorkflowRunGAgent
             {
                 ModelOverride = delta.Llm.ModelOverride?.Trim() ?? string.Empty,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt?.Trim() ?? string.Empty,
+                RoutePreference = delta.Llm.RoutePreference?.Trim() ?? string.Empty,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
@@ -866,9 +867,10 @@ public sealed class WorkflowRunGAgent
 
         if (delta.CallerCredential != null)
         {
+            var parsed = WorkflowCallerCredentialTokens.ParseOptional(delta.CallerCredential.BearerToken);
             state.CallerCredential = new WorkflowCallerCredentialState
             {
-                BearerToken = delta.CallerCredential.BearerToken?.Trim() ?? string.Empty,
+                BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
             };
         }
     }

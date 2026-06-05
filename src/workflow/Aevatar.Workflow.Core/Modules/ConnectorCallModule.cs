@@ -829,7 +829,8 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         if (WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(ctx, out var credential) &&
             !string.IsNullOrWhiteSpace(credential.BearerToken))
         {
-            return $"Bearer {credential.BearerToken.Trim()}";
+            var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken);
+            return parsed.IsValid ? $"Bearer {parsed.NormalizedBearerToken}" : string.Empty;
         }
 
         return string.Empty;

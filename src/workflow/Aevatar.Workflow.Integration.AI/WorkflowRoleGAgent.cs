@@ -129,16 +129,29 @@ public class WorkflowRoleGAgent(
 
     private static ChatRequestEvent BuildChatRequestFromWorkflowIntent(WorkflowLlmExecutionIntent intent)
     {
+        var toolContext = WorkflowCallerCredentialToolContextMapper.FromCredential(intent.CallerCredential);
+        if (!string.IsNullOrWhiteSpace(intent.RoutePreference))
+        {
+            toolContext = toolContext with
+            {
+                Routing = toolContext.Routing with
+                {
+                    NyxIdRoutePreference = intent.RoutePreference.Trim(),
+                },
+            };
+        }
+
         var request = new ChatRequestEvent
         {
             Prompt = intent.Prompt ?? string.Empty,
             SessionId = intent.SessionId ?? string.Empty,
             TimeoutMs = intent.TimeoutMs,
-            ToolContext = AgentToolExecutionContextMapper.ToPayload(
-                WorkflowCallerCredentialToolContextMapper.FromCredential(intent.CallerCredential)),
+            ToolContext = AgentToolExecutionContextMapper.ToPayload(toolContext),
             LlmControl = new LLMControlContextPayload
             {
+                NyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken ?? string.Empty,
                 ModelOverride = intent.Model ?? string.Empty,
+                NyxIdRoutePreference = toolContext.Routing.NyxIdRoutePreference ?? string.Empty,
                 UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
             },
         };
