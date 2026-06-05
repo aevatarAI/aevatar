@@ -1428,6 +1428,33 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldReturnInvalidCallerCredential_WhenBearerIsMalformed()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/workflow/draft-run")
+        {
+            Content = JsonContent.Create(new
+            {
+                prompt = "run the draft",
+                workflowYamls = new[]
+                {
+                    "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
+                },
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token 123");
+
+        var response = await host.Client.SendAsync(httpRequest);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_CALLER_CREDENTIAL");
+        body["message"].Should().Be("Caller credential is invalid.");
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ScopeInvokeStreamEndpoint_ShouldResolveDefaultServiceAndDelegateToWorkflowPipeline()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -1527,6 +1554,30 @@ public sealed class ScopeServiceEndpointsTests
         host.ServiceRunRegistrationPort.RegisterCalls[0].CommandId.Should().Be("cmd-1");
         host.ServiceRunRegistrationPort.RegisterCalls[0].TargetActorId.Should().Be("run-actor-1");
         host.ServiceRunRegistrationPort.RegisterCalls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
+    }
+
+    [Fact]
+    public async Task ScopeInvokeStreamEndpoint_ShouldReturnInvalidCallerCredential_WhenBearerIsMalformed()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/invoke/chat:stream")
+        {
+            Content = JsonContent.Create(new
+            {
+                prompt = "hello",
+            }),
+        };
+        httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "token 123");
+
+        var response = await host.Client.SendAsync(httpRequest);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_CALLER_CREDENTIAL");
+        body["message"].Should().Be("Caller credential is invalid.");
+        host.ServiceCatalogReader.Service.Should().BeNull();
+        host.InteractionService.LastRequest.Should().BeNull();
     }
 
     [Fact]

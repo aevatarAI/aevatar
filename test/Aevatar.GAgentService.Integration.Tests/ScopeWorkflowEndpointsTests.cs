@@ -426,6 +426,51 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnInvalidCallerCredential_WhenBearerIsMalformed()
+    {
+        var snapshot = new ServiceCatalogSnapshot(
+            "tenant-a:workflow-app:user:token:approval",
+            "tenant-a",
+            "workflow-app",
+            "user:user-1-token",
+            "approval",
+            "Approval",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            "definition-actor-1",
+            "active",
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult = [snapshot],
+        };
+        queryPort.GetServiceResults.Enqueue(snapshot);
+        var interactionService = new FakeCommandInteractionService();
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer token 123";
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
+                "hello",
+                EventFormat: "agui"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CALLER_CREDENTIAL");
+        body.Should().Contain("Caller credential is invalid.");
+        interactionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleRunWorkflowByIdStreamAsync_ShouldSerializeRawObservedWorkflowExecutionStartedPayload()
     {
         var snapshot = new ServiceCatalogSnapshot(
