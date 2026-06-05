@@ -16,4 +16,5 @@ internal static class ServiceProjectionKinds
     public const string GAgentRunTerminalApproval = "gagent-run-terminal-approval";
     public const string ResponseSessions = "response-sessions";
     public const string ResponsesAgentTools = "responses-agent-tools";
+    public const string ScheduledDispatches = "scheduled-dispatches";
 }

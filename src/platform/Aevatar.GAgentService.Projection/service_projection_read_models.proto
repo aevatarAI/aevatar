@@ -285,9 +285,9 @@ message LlmSessionTokenUsageReadModel {
 message ResponsesAgentToolStateCurrentStateReadModel {
   // Refactor (issue1183/first-slice):
   //   Old pattern: ResponsesTaskTrace dead trace surface — task_substitute / task_trace
-  //                readmodel surface 无 consumer,占用 proto field number。
+  //                readmodel surface had no consumer and occupied proto field numbers.
   //   New principle: deleted / reserved per Phase 9 r1 consensus (hybrid minimal/
-  //                  structural/delete), proto field number reserved 防重新占用。
+  //                  structural/delete), with proto field numbers reserved against reuse.
   reserved 10;
   reserved "task_trace_entries";
   string id = 1;
@@ -341,4 +341,50 @@ message ResponsesWebCacheEntryReadModel {
   google.protobuf.Timestamp last_hit_at_utc_value = 7;
   int64 hit_count = 8;
   aevatar.gagentservice.ResponsesWebToolResult typed_result = 9;
+}
+
+// --- ScheduledDispatchReadModel ---
+
+message ScheduledDispatchDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp created_at_utc_value = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string schedule_id = 6;
+  string actor_id = 7;
+  string display_name = 8;
+  string target_kind = 9;
+  string payload_type_url = 10;
+  string cron_expression = 11;
+  string timezone = 12;
+  bool enabled = 13;
+  google.protobuf.Timestamp next_fire_at_utc_value = 14;
+  google.protobuf.Timestamp last_fire_at_utc_value = 15;
+  string last_target_actor_id = 16;
+  string last_command_id = 17;
+  string last_correlation_id = 18;
+  string last_error = 19;
+  int32 fire_count = 20;
+  int32 failure_count = 21;
+  map<string, string> headers_map = 22;
+  string service_key = 23;
+  string target_actor_id = 24;
+  repeated ScheduledDispatchFireRecordDocument fire_records = 25;
+  reserved 26;
+  string schedule_actor_id = 27;
+  string service_id = 28;
+  string service_endpoint_id = 29;
+  string schedule_kind = 30;
+}
+
+message ScheduledDispatchFireRecordDocument {
+  google.protobuf.Timestamp scheduled_fire_at_utc_value = 1;
+  google.protobuf.Timestamp completed_at_utc_value = 2;
+  string idempotency_key = 3;
+  string target_actor_id = 4;
+  string command_id = 5;
+  string correlation_id = 6;
+  string error = 7;
+  bool manual = 8;
 }

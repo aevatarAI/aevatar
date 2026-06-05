@@ -1,6 +1,4 @@
-using Aevatar.Workflow.Application.Abstractions.Runs;
-
-namespace Aevatar.Workflow.Application.Runs;
+namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public interface IWorkflowRunActorResolver
 {

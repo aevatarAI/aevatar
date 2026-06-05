@@ -15,5 +15,14 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Schedules/scheduled_dispatch_state.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\Aevatar.Foundation.Abstractions;..\Aevatar.GAgentService.Abstractions\Protos" />
   </ItemGroup>
 </Project>

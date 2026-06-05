@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Infrastructure.Capabilities;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
