@@ -21,6 +21,9 @@ public interface IAgentTool
     /// <summary>工具是否有破坏性（删除、覆写等不可逆操作）。Auto 模式下破坏性工具要求审批。</summary>
     bool IsDestructive => false;
 
+    /// <summary>Stable side-effect kind for receipt-worthy tool calls; empty means no declared side effect.</summary>
+    string SideEffectKind => "";
+
     /// <summary>
     /// Runtime approval check: given the actual call arguments, does this specific
     /// invocation require approval? Returns null to fall back to the static

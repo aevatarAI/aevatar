@@ -87,6 +87,27 @@ public sealed class AIAbstractionsProtoCoverageTests
     [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
     {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "call-1",
+            ToolName = "ornn_publish_skill",
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+            IsDestructive = false,
+            SideEffectKind = "ornn.publish.skill",
+            SubjectKind = "ornn.skill",
+            SubjectId = "skill-1",
+            SubjectVersion = "1.0",
+            SubjectHash = "hash-1",
+            ApprovalRequestId = "approval-1",
+            ErrorCode = "",
+            ErrorMessage = "",
+            ResultJson = """{"guid":"skill-1","version":"1.0","skillHash":"hash-1"}""",
+        };
+        var receiptRoundTrip = RoundTrip(receipt, AgentToolReceipt.Parser);
+        receiptRoundTrip.SubjectId.Should().Be("skill-1");
+        receiptRoundTrip.SubjectHash.Should().Be("hash-1");
+
         var request = RoundTrip(new ChatRequestEvent
         {
             Prompt = "hello",
@@ -175,8 +196,10 @@ public sealed class AIAbstractionsProtoCoverageTests
             ResultJson = "{\"ok\":true}",
             Success = true,
             Error = "",
+            Receipt = receipt.Clone(),
         }, ToolResultEvent.Parser);
         toolResult.Success.Should().BeTrue();
+        toolResult.Receipt.SubjectId.Should().Be("skill-1");
 
         var tokenUsage = RoundTrip(new TokenUsagePayload
         {
@@ -240,6 +263,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     CallId = "call-1",
                 },
             },
+            ToolReceipts = { receipt.Clone() },
             OutputParts =
             {
                 new ChatContentPart
@@ -256,6 +280,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         sessionCompleted.Usage.TotalTokens.Should().Be(36);
         sessionCompleted.Model.Should().Be("nyxid-model");
         sessionCompleted.ToolCalls.Should().ContainSingle();
+        sessionCompleted.ToolReceipts.Should().ContainSingle(x => x.SubjectHash == "hash-1");
         sessionCompleted.OutputParts.Should().ContainSingle();
 
         var initialize = RoundTrip(new InitializeRoleAgentEvent
@@ -367,6 +392,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                             CallId = "call-1",
                         },
                     },
+                    ToolReceipts = { receipt.Clone() },
                 },
             },
         }, RoleGAgentState.Parser);
@@ -379,6 +405,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.Sessions["session-1"].InputParts.Should().ContainSingle();
         state.Sessions["session-1"].OutputParts.Should().ContainSingle();
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
+        state.Sessions["session-1"].ToolReceipts.Should().ContainSingle(x => x.SubjectId == "skill-1");
         state.PendingApproval.Should().NotBeNull();
         state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
         state.PendingApproval.ToolContext.Should().NotBeNull();
@@ -398,6 +425,64 @@ public sealed class AIAbstractionsProtoCoverageTests
         pendingContext.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-from-context");
         state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
         state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
+    }
+
+    [Fact]
+    public void AgentToolReceipt_ShouldUseCanonicalWireContract()
+    {
+        ((int)AgentToolReceiptStatus.Unspecified).Should().Be(0);
+        ((int)AgentToolReceiptStatus.Success).Should().Be(1);
+        ((int)AgentToolReceiptStatus.ApprovalRequired).Should().Be(2);
+        ((int)AgentToolReceiptStatus.Denied).Should().Be(3);
+        ((int)AgentToolReceiptStatus.Error).Should().Be(4);
+
+        ((int)AgentToolReceiptApprovalMode.Unspecified).Should().Be(0);
+        ((int)AgentToolReceiptApprovalMode.NeverRequire).Should().Be(1);
+        ((int)AgentToolReceiptApprovalMode.AlwaysRequire).Should().Be(2);
+        ((int)AgentToolReceiptApprovalMode.Auto).Should().Be(3);
+
+        AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Equal(
+                (1, "call_id"),
+                (2, "tool_name"),
+                (3, "status"),
+                (4, "approval_mode"),
+                (5, "is_destructive"),
+                (6, "side_effect_kind"),
+                (7, "subject_kind"),
+                (8, "subject_id"),
+                (9, "subject_version"),
+                (10, "subject_hash"),
+                (11, "approval_request_id"),
+                (12, "error_code"),
+                (13, "error_message"),
+                (14, "result_json"));
+
+        AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => field.Name)
+            .Should()
+            .NotContain(["observed_at_unix_ms", "subject_name", "is_read_only"]);
+
+        ToolResultEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((5, "receipt"))
+            .And.NotContain((5, "tool_name"));
+        ToolResultEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => field.Name)
+            .Should()
+            .NotContain("tool_name");
+
+        RoleChatSessionCompletedEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((11, "tool_receipts"));
+        RoleChatSessionState.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((12, "tool_receipts"));
     }
 
     [Fact]

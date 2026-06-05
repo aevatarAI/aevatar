@@ -265,6 +265,37 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public void ApplyReplyProduced_ShouldPersistTypedToolReceiptsToRunState()
+    {
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(),
+            new RecordingReplyGenerator(() => false),
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        var receipt = NewPublishReceipt(status: Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success);
+        var evt = new AgentRunReplyProducedEvent
+        {
+            RunId = "run-receipts",
+            CorrelationId = "corr-receipts",
+            TargetActorId = "actor-1",
+            ProducedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReplyText = "done",
+            ToolReceipts = { receipt },
+        };
+
+        var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), evt);
+
+        next.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        next.ToolReceipts.Should().ContainSingle(x =>
+            x.CallId == "call-1" &&
+            x.Status == Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success &&
+            x.SubjectId == "skill-1" &&
+            x.SubjectHash == "hash-1");
+    }
+
+    [Fact]
     public async Task HandleStartAsync_WhenAccepted_PersistsGenerationRequestedAndHandsOffToExecutor()
     {
         var actor = Substitute.For<IActor>();
@@ -480,6 +511,53 @@ public sealed class AgentRunGAgentTests
         // eviction — acceptable trade-off vs. delivering a duplicate user-visible fallback.
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
         runtime.State.ProducedReplyText.Should().Be("the real reply");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenReplyProducedWithReceipt_ShouldRedispatchPersistedReceiptRenderedTextWithoutRerunningLlm()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-produced-retry",
+            CorrelationId = "corr-produced-retry",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyProduced,
+            ProducedReplyText = "Done.\n[tool receipt] Completed: ornn.skill skill-1 (version=1.0, hash=hash-1)",
+            ProducedTerminalState = LlmReplyTerminalState.Completed,
+            ToolReceipts = { NewPublishReceipt(status: Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success) },
+        });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-produced-retry",
+            RunId = "run-produced-retry",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-produced-retry",
+        });
+
+        replyGenerator.CallCount.Should().Be(0);
+        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+        var ready = handled.Single().Payload.Unpack<LlmReplyReadyEvent>();
+        ready.Outbound.Text.Should().Be(runtime.State.ProducedReplyText);
+        ready.Outbound.Text.Should().Contain("[tool receipt] Completed: ornn.skill skill-1");
     }
 
     [Fact]
@@ -2293,6 +2371,15 @@ public sealed class AgentRunGAgentTests
         throw new InvalidOperationException("Unable to set agent id via reflection.");
     }
 
+    private static void SetState(AgentRunGAgent agent, AgentRunGAgentState state)
+    {
+        var stateField = typeof(Aevatar.Foundation.Core.GAgentBase<AgentRunGAgentState>).GetField(
+            "_state",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        stateField.Should().NotBeNull();
+        stateField!.SetValue(agent, state);
+    }
+
     private static string ExpectedRunActorId(string runId) => $"channel-agent-run:{runId}";
 
     private static ChatActivity BuildRelayActivity() =>
@@ -2313,6 +2400,22 @@ public sealed class AgentRunGAgentTests
                 ReplyMessageId = "relay-msg-1",
                 CorrelationId = "corr-1",
             },
+        };
+
+    private static Aevatar.AI.Abstractions.AgentToolReceipt NewPublishReceipt(
+        Aevatar.AI.Abstractions.AgentToolReceiptStatus status) =>
+        new()
+        {
+            CallId = "call-1",
+            ToolName = "ornn_publish_skill",
+            Status = status,
+            ApprovalMode = Aevatar.AI.Abstractions.AgentToolReceiptApprovalMode.AlwaysRequire,
+            SideEffectKind = "ornn.publish.skill",
+            SubjectKind = "ornn.skill",
+            SubjectId = "skill-1",
+            SubjectVersion = "1.0",
+            SubjectHash = "hash-1",
+            ResultJson = """{"status":"spoofed","subject_id":"wrong"}""",
         };
 
     private static LLMControlContext ControlForAgentRun(

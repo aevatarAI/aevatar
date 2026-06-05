@@ -45,6 +45,9 @@ public abstract class AgentToolBase<TParams> : IAgentTool where TParams : class
     public virtual bool IsDestructive => false;
 
     /// <inheritdoc />
+    public virtual string SideEffectKind => "";
+
+    /// <inheritdoc />
     public virtual bool? RequiresApproval(string argumentsJson) => null;
 
     /// <summary>Type-safe execution method.</summary>

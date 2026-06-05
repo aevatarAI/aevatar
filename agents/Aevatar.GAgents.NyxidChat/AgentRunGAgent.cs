@@ -61,6 +61,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private readonly IActorRuntimeCallbackScheduler? _callbackScheduler;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunGAgent> _logger;
+    private readonly IAgentToolReceiptRenderer _toolReceiptRenderer;
 
     public AgentRunGAgent(
         IActorRuntime actorRuntime,
@@ -68,7 +69,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
         ILogger<AgentRunGAgent> logger,
         IActorRuntimeCallbackScheduler? callbackScheduler = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IAgentToolReceiptRenderer? toolReceiptRenderer = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
@@ -76,6 +78,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         _callbackScheduler = callbackScheduler;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _toolReceiptRenderer = toolReceiptRenderer ?? new AgentToolReceiptRenderer();
     }
 
     protected override AgentRunGAgentState TransitionState(AgentRunGAgentState current, IMessage evt) =>
@@ -547,7 +550,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
             hasReplyText ? string.Empty : "empty_reply",
             hasReplyText ? string.Empty : $"Reply generator returned an empty response ({emptyReplyDiagnostics}).",
-            stepState.AppendedHistory.ToArray());
+            stepState.AppendedHistory.ToArray(),
+            stepState.ToolReceipts.ToArray(),
+            stepState.PendingToolCalls.ToArray());
     }
 
     // Diagnostic context for the otherwise-silent empty-reply terminal path. Reads only
@@ -778,6 +783,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
         next.AppendedHistory.AddRange(
             result.ResultMessages.Select(AgentRunReplyStepMappers.ToConversationHistoryEntry));
+        next.ToolReceipts.AddRange(result.ToolReceipts.Select(receipt => receipt.Clone()));
         if (result.AdvanceRound)
             next.Round++;
         return next;
@@ -813,22 +819,26 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         LlmReplyTerminalState terminalState,
         string errorCode,
         string errorSummary,
-        IReadOnlyList<ConversationHistoryEntry>? appendedHistory = null)
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory = null,
+        IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts = null,
+        IReadOnlyList<AgentRunToolCall>? toolCalls = null)
     {
+        var renderedReplyText = RenderReplyWithReceipts(replyText, toolReceipts, toolCalls);
         await PersistReplyProducedAsync(
             request,
             runId,
-            replyText,
+            renderedReplyText,
             outboundIntent,
             terminalState,
             errorCode,
             errorSummary,
-            appendedHistory);
+            appendedHistory,
+            toolReceipts);
 
         await DispatchReadyEventAsync(
             request,
             runId,
-            replyText,
+            renderedReplyText,
             outboundIntent,
             terminalState,
             errorCode,
@@ -948,7 +958,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         LlmReplyTerminalState terminalState,
         string errorCode,
         string errorSummary,
-        IReadOnlyList<ConversationHistoryEntry>? appendedHistory)
+        IReadOnlyList<ConversationHistoryEntry>? appendedHistory,
+        IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts)
     {
         var evt = new AgentRunReplyProducedEvent
         {
@@ -964,7 +975,26 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (outbound is not null)
             evt.Outbound = outbound.Clone();
         evt.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
+        evt.ToolReceipts.AddRange((toolReceipts ?? []).Select(receipt => receipt.Clone()));
         await PersistDomainEventAsync(evt);
+    }
+
+    private string RenderReplyWithReceipts(
+        string replyText,
+        IReadOnlyList<Aevatar.AI.Abstractions.AgentToolReceipt>? toolReceipts,
+        IReadOnlyList<AgentRunToolCall>? toolCalls)
+    {
+        if (toolReceipts is not { Count: > 0 })
+            return replyText ?? string.Empty;
+
+        var rendered = _toolReceiptRenderer.Render(toolReceipts, toolCalls ?? []);
+        if (string.IsNullOrWhiteSpace(rendered))
+            return replyText ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(replyText))
+            return rendered;
+
+        return $"{replyText.TrimEnd()}\n\n{rendered}";
     }
 
     private async Task PersistReplyDispatchedAsync(NeedsLlmReplyEvent request, string runId)
@@ -1640,6 +1670,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.ProducedTerminalState = evt.TerminalState;
         next.ProducedAppendedHistory.Clear();
         next.ProducedAppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
+        next.ToolReceipts.Clear();
+        next.ToolReceipts.AddRange(evt.ToolReceipts.Select(receipt => receipt.Clone()));
         // Backward-compat: AgentRunReplyProducedEvents persisted by the pre-refactor
         // codepath have no reply_text / outbound / terminal_state fields (proto3 defaults
         // on deserialize). Historically, Status=ReplyProduced was only written *after* the

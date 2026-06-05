@@ -78,6 +78,7 @@ message AgentRunGAgentState {
   // Immutable history entries produced by the LLM run. Output-dispatch retries
   // re-deliver these entries without re-running the LLM/tool chain.
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry produced_appended_history = 23;
+  repeated aevatar.ai.AgentToolReceipt tool_receipts = 24;
 }
 
 enum AgentRunReplyStepKind {
@@ -129,6 +130,7 @@ message AgentRunReplyStepState {
   map<string, string> external_metadata = 19;
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 21;
+  repeated aevatar.ai.AgentToolReceipt tool_receipts = 22;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -150,6 +152,7 @@ message AgentRunLlmStepResult {
 message AgentRunToolStepResult {
   repeated AgentRunChatMessage result_messages = 1;
   bool advance_round = 2;
+  repeated aevatar.ai.AgentToolReceipt tool_receipts = 3;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -217,6 +220,7 @@ message AgentRunReplyProducedEvent {
   string reply_text = 8;
   aevatar.gagents.channel.abstractions.MessageContent outbound = 9;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
+  repeated aevatar.ai.AgentToolReceipt tool_receipts = 11;
 }
 
 // Persisted after admission gates pass and before the transient generation

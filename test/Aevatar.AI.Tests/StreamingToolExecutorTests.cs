@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -611,6 +612,93 @@ public class StreamingToolExecutorTests
         results[0].Result.Should().Contain("not found");
     }
 
+    [Fact]
+    public async Task ReceiptWorthyFormula_ShouldIgnoreNonReadOnlyAlone_AndEmitForApprovalDestructiveOrSideEffect()
+    {
+        var tools = new ToolManager();
+        tools.Register(new ConcurrencyTrackingTool("plain-write", isReadOnly: false, _ => """{"ok":true}"""));
+        tools.Register(new ConcurrencyTrackingTool("approval", isReadOnly: true, _ => """{"ok":true}""")
+        {
+            ApprovalMode = ToolApprovalMode.AlwaysRequire,
+        });
+        tools.Register(new ConcurrencyTrackingTool("destructive", isReadOnly: true, _ => """{"ok":true}""")
+        {
+            IsDestructive = true,
+        });
+        tools.Register(new ConcurrencyTrackingTool("side-effect", isReadOnly: true, _ => """{"id":"side-1"}""")
+        {
+            SideEffectKind = "Example.Publish",
+        });
+
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall { Id = "tc-write", Name = "plain-write", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-approval", Name = "approval", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-destructive", Name = "destructive", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-side", Name = "side-effect", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().HaveCount(4);
+        results[0].Receipt.Should().BeNull("non-read-only alone is not a receipt-worthy side effect");
+        results[1].Receipt.Should().NotBeNull();
+        results[1].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        results[1].Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.AlwaysRequire);
+        results[2].Receipt.Should().NotBeNull();
+        results[2].Receipt!.IsDestructive.Should().BeTrue();
+        results[3].Receipt.Should().NotBeNull();
+        results[3].Receipt!.SideEffectKind.Should().Be("example.publish");
+    }
+
+    [Fact]
+    public async Task ReceiptWorthyReadOnlySearchTool_ShouldNotEmitReceipt()
+    {
+        var tools = new ToolManager();
+        tools.Register(new ConcurrencyTrackingTool("ornn_search_skills", isReadOnly: true, _ => """{"status":"success"}""")
+        {
+            SideEffectKind = "",
+        });
+
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall { Id = "tc-search", Name = "ornn_search_skills", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle();
+        results[0].IsError.Should().BeFalse();
+        results[0].Receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ToolExecutionError_ShouldEmitErrorReceiptForReceiptWorthyTool()
+    {
+        var tools = new ToolManager();
+        tools.Register(new ConcurrencyTrackingTool("publish", isReadOnly: true, _ => Task.FromException<string>(new InvalidOperationException("boom")))
+        {
+            SideEffectKind = "ornn.publish.skill",
+        });
+
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall { Id = "tc-publish", Name = "publish", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().ContainSingle();
+        results[0].IsError.Should().BeTrue();
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        results[0].Receipt.ErrorCode.Should().Be("tool_execution_error");
+        results[0].Receipt.ErrorMessage.Should().Contain("boom");
+    }
+
     // ─── Test helpers ───
 
     private sealed class ConcurrencyTrackingTool : IAgentTool
@@ -633,6 +721,9 @@ public class StreamingToolExecutorTests
         public string Description => "test";
         public string ParametersSchema => "{}";
         public bool IsReadOnly { get; }
+        public ToolApprovalMode ApprovalMode { get; init; } = ToolApprovalMode.NeverRequire;
+        public bool IsDestructive { get; init; }
+        public string SideEffectKind { get; init; } = "";
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) => _execute(ct);
     }

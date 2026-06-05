@@ -17,6 +17,7 @@ public sealed class OrnnPublishSkillToolTests
 
         tool.Name.Should().Be("ornn_publish_skill");
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.SideEffectKind.Should().Be("ornn.publish.skill");
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         var root = schema.RootElement;
         root.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
@@ -252,7 +253,7 @@ public sealed class OrnnPublishSkillToolTests
     {
         var handler = new CapturingHandler(
             """{ "data": { "valid": true, "violations": [] } }""",
-            """{ "data": { "guid": "skill-1" } }""");
+            """{ "data": { "guid": "skill-1", "version": "1.1", "skillHash": "hash-1" } }""");
         var tool = CreateTool(handler);
 
         using var _ = BeginTokenScope();
@@ -260,9 +261,32 @@ public sealed class OrnnPublishSkillToolTests
 
         result.Should().Contain("success");
         result.Should().Contain("skill-1");
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("guid").GetString().Should().Be("skill-1");
+        root.GetProperty("version").GetString().Should().Be("1.1");
+        root.GetProperty("skillHash").GetString().Should().Be("hash-1");
         handler.Requests.Select(x => x.RequestUri!.AbsolutePath).Should().Equal(
             "/api/v1/proxy/s/ornn/api/v1/skill-format/validate",
             "/api/v1/proxy/s/ornn/api/v1/skills");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenPublishResponseOmitsVersion_ShouldUseRequestedVersionForReceiptSubject()
+    {
+        var handler = new CapturingHandler(
+            """{ "data": { "valid": true, "violations": [] } }""",
+            """{ "data": { "id": "skill-2", "hash": "hash-2" } }""");
+        var tool = CreateTool(handler);
+
+        using var _ = BeginTokenScope();
+        var result = await tool.ExecuteAsync(ValidArguments());
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("guid").GetString().Should().Be("skill-2");
+        root.GetProperty("version").GetString().Should().Be("1.0");
+        root.GetProperty("skillHash").GetString().Should().Be("hash-2");
     }
 
     private static string ValidArguments(string? extraFields = null)

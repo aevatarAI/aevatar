@@ -39,6 +39,10 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         }
         """;
 
+    public bool IsReadOnly => true;
+
+    public string SideEffectKind => "";
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;

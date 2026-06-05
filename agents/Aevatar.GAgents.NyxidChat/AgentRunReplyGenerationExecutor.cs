@@ -317,6 +317,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             toolStepResult.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
                 ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.ToolName, toolResult.Result)));
+            if (toolResult.Receipt is not null)
+                toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }
 
         // Defense-in-depth complement to the Kafka transport fix (commit f2c2319e7):

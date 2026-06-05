@@ -491,6 +491,8 @@ public sealed class ChatRuntime
                             textToolExecutor.AddTool(textToolState, tc);
                         await foreach (var result in textToolExecutor.GetRemainingResultsAsync(textToolState, runToken))
                         {
+                            if (result.Receipt is not null)
+                                yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
                             var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                             messages.Add(toolMsg);
                             pendingHistoryMessages.Add(toolMsg);
@@ -568,6 +570,8 @@ public sealed class ChatRuntime
 
             await foreach (var result in streamingExecutor.GetRemainingResultsAsync(streamingToolState, runToken))
             {
+                if (result.Receipt is not null)
+                    yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
                 var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
@@ -627,6 +631,8 @@ public sealed class ChatRuntime
                     finalToolExecutor.AddTool(finalToolState, tc);
                 await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(finalToolState, runToken))
                 {
+                    if (result.Receipt is not null)
+                        yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
                     var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                     messages.Add(toolMsg);
                     pendingHistoryMessages.Add(toolMsg);
