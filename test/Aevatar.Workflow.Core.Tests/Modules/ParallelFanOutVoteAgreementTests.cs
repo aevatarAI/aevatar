@@ -114,6 +114,38 @@ public sealed class ParallelFanOutVoteAgreementTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenVoteRuleInvalid_ShouldPublishParentFailureWithoutChildDispatch()
+    {
+        var module = new ParallelFanOutModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "fanout",
+                StepType = "parallel",
+                RunId = "run-1",
+                Input = "work",
+                Parameters =
+                {
+                    ["workers"] = "a,b",
+                    ["vote_step_type"] = "vote",
+                    ["vote_param_rule_mode"] = "quorum",
+                    ["vote_param_quorum_count"] = "0",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("fanout");
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("quorum_count");
+        ctx.Published.Select(x => x.Event).OfType<StepRequestEvent>().Should().BeEmpty();
+        ctx.LoadState<ParallelFanOutModuleState>("parallel_fanout").Parents.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenMakerVoteConfigured_ShouldKeepDelimiterHandoff()
     {
         var module = new ParallelFanOutModule();
@@ -172,6 +204,15 @@ public sealed class ParallelFanOutVoteAgreementTests
         ctx.Published.Clear();
         await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "fanout_sub_0", RunId = "run-1", Success = true, Output = "A" }), ctx, CancellationToken.None);
         ctx.Published.Clear();
+        var decision = new VoteAgreementDecision
+        {
+            Kind = AgreementDecisionKind.Agreed,
+            BranchKey = "agreed",
+            WinnerCandidateId = "winner",
+            Output = "A",
+            Reason = "majority approved",
+        };
+        decision.LabelCounts["approve"] = 1;
 
         await module.HandleAsync(
             Envelope(new StepCompletedEvent
@@ -181,6 +222,7 @@ public sealed class ParallelFanOutVoteAgreementTests
                 Success = true,
                 Output = "A",
                 BranchKey = "agreed",
+                VoteAgreementDecision = decision,
                 Annotations = { ["vote.agreement.kind"] = "Agreed" },
             }),
             ctx,
@@ -190,6 +232,11 @@ public sealed class ParallelFanOutVoteAgreementTests
         completed.StepId.Should().Be("fanout");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("A");
+        completed.BranchKey.Should().Be("agreed");
+        completed.VoteAgreementDecision.Kind.Should().Be(AgreementDecisionKind.Agreed);
+        completed.VoteAgreementDecision.BranchKey.Should().Be("agreed");
+        completed.VoteAgreementDecision.WinnerCandidateId.Should().Be("winner");
+        completed.VoteAgreementDecision.LabelCounts["approve"].Should().Be(1);
         completed.Annotations["parallel.used_vote"].Should().Be("true");
         completed.Annotations["vote.agreement.kind"].Should().Be("Agreed");
     }

@@ -198,7 +198,10 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     Output = evt.Output,
                     Error = evt.Error,
                     WorkerId = evt.WorkerId,
+                    BranchKey = evt.BranchKey,
                 };
+                if (evt.VoteAgreementDecision != null)
+                    final.VoteAgreementDecision = evt.VoteAgreementDecision.Clone();
 
                 foreach (var (key, value) in evt.Annotations)
                     final.Annotations[key] = value;

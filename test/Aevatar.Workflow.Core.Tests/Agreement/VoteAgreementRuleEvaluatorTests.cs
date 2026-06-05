@@ -163,6 +163,86 @@ public sealed class VoteAgreementRuleEvaluatorTests
         decision.Output.Should().Be("B");
     }
 
+    [Fact]
+    public void Evaluate_WhenExactLabelPredicateMatchesAnnotation_ShouldAgreeWithWinner()
+    {
+        var decision = Evaluate(
+            Candidates(
+                Candidate("rejector", true, "needs work", annotations: new Dictionary<string, string> { ["vote"] = "reject" }),
+                Candidate("approver", true, "ship it", annotations: new Dictionary<string, string> { ["vote"] = "approve" })),
+            new VoteAgreementRule
+            {
+                Mode = AgreementRuleMode.Predicate,
+                LabelSource = AgreementCandidateLabelSource.Annotation,
+                LabelField = "vote",
+                PredicateId = "exact_label:approve",
+            });
+
+        decision.Kind.Should().Be(AgreementDecisionKind.Agreed);
+        decision.WinnerCandidateId.Should().Be("approver");
+        decision.Output.Should().Be("ship it");
+        decision.LabelCounts["approve"].Should().Be(1);
+        decision.LabelCounts["reject"].Should().Be(1);
+    }
+
+    [Fact]
+    public void Evaluate_WhenExactLabelPredicateDoesNotMatch_ShouldReject()
+    {
+        var decision = Evaluate(
+            Candidates(Candidate("rejector", true, "needs work", branchKey: "reject")),
+            new VoteAgreementRule
+            {
+                Mode = AgreementRuleMode.Predicate,
+                LabelSource = AgreementCandidateLabelSource.BranchKey,
+                PredicateId = "exact_label:approve",
+            });
+
+        decision.Kind.Should().Be(AgreementDecisionKind.Rejected);
+        decision.WinnerCandidateId.Should().BeEmpty();
+        decision.Output.Should().BeEmpty();
+        decision.Reason.Should().Contain("no candidate matched label");
+    }
+
+    [Fact]
+    public void Parse_WhenJsonCountConstraintsProvided_ShouldPopulateTypedConstraints()
+    {
+        var ok = VoteAgreementRuleConfigurationParser.TryParse(
+            new Dictionary<string, string>
+            {
+                ["rule_mode"] = "label_count_constraints",
+                ["count_constraints"] =
+                    """[{"label":"approve","min_count":2},{"label":"reject","max_count":0}]""",
+            },
+            out var rule,
+            out var error);
+
+        ok.Should().BeTrue(error);
+        rule.CountConstraints.Should().HaveCount(2);
+        rule.CountConstraints[0].Label.Should().Be(AgreementVoteLabel.Approve);
+        rule.CountConstraints[0].MinCount.Should().Be(2);
+        rule.CountConstraints[1].Label.Should().Be(AgreementVoteLabel.Reject);
+        rule.CountConstraints[1].MaxCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("""{"label":"approve"}""", "JSON array")]
+    [InlineData("""[{"label":"unknown","min_count":1}]""", "label approve")]
+    [InlineData("""[{"label":"approve"}]""", "requires min_count or max_count")]
+    public void Parse_WhenJsonCountConstraintsInvalid_ShouldReturnError(string countConstraints, string expectedError)
+    {
+        var ok = VoteAgreementRuleConfigurationParser.TryParse(
+            new Dictionary<string, string>
+            {
+                ["rule_mode"] = "label_count_constraints",
+                ["count_constraints"] = countConstraints,
+            },
+            out _,
+            out var error);
+
+        ok.Should().BeFalse();
+        error.Should().Contain(expectedError);
+    }
+
     private static VoteAgreementDecision Evaluate(
         VoteAgreementCandidateSet candidates,
         VoteAgreementRule rule)
@@ -184,8 +264,10 @@ public sealed class VoteAgreementRuleEvaluatorTests
         string id,
         bool success,
         string output,
-        string branchKey = "") =>
-        new()
+        string branchKey = "",
+        IReadOnlyDictionary<string, string>? annotations = null)
+    {
+        var candidate = new VoteAgreementCandidate
         {
             CandidateId = id,
             Success = success,
@@ -193,4 +275,12 @@ public sealed class VoteAgreementRuleEvaluatorTests
             WorkerId = id,
             BranchKey = branchKey,
         };
+        if (annotations != null)
+        {
+            foreach (var (key, value) in annotations)
+                candidate.Annotations[key] = value;
+        }
+
+        return candidate;
+    }
 }
