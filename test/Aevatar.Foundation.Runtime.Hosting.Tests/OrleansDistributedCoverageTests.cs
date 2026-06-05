@@ -1,6 +1,5 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -11,7 +10,6 @@ using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 using Orleans.Runtime;
-using Orleans.Storage;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -44,10 +42,15 @@ public sealed class OrleansDistributedCoverageTests
     }
 
     [Fact]
-    public void RuntimeEnvelopeRetryPolicy_ShouldBuildRetryEnvelope_ForExplicitPolicy_WhenAttemptWithinLimit()
+    public void RuntimeEnvelopeRetryPolicy_ShouldBuildRetryEnvelope_WhenAttemptWithinLimit()
     {
         var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", "10");
-        var envelope = CreateRetryPolicyEnvelope("evt-1");
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-1",
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
+        };
 
         var built = policy.TryBuildRetryEnvelope(
             envelope,
@@ -67,7 +70,12 @@ public sealed class OrleansDistributedCoverageTests
     public void RuntimeEnvelopeRetryPolicy_ShouldKeepRootOriginEventIdAcrossRetries()
     {
         var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", "10");
-        var envelope = CreateRetryPolicyEnvelope("evt-retry-2");
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-retry-2",
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
+        };
         envelope.Runtime = new EnvelopeRuntime
         {
             Retry = new EnvelopeRetryContext
@@ -90,100 +98,12 @@ public sealed class OrleansDistributedCoverageTests
     }
 
     [Fact]
-    public void RuntimeEnvelopeRetryPolicy_ShouldRetryOccByDefault_WhenEnvironmentNotConfigured()
+    public void RuntimeEnvelopeRetryPolicy_ShouldBeDisabledByDefault_WhenEnvironmentNotConfigured()
     {
         var policy = RuntimeEnvelopeRetryPolicy.FromValues(null, null);
-        var envelope = CreateRetryPolicyEnvelope("evt-default-occ");
 
-        policy.Enabled.Should().BeTrue();
-        policy.MaxAttempts.Should().Be(3);
-        policy.RetryDelayMs.Should().Be(1000);
-        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeTrue();
-
-        var built = policy.TryBuildRetryEnvelope(
-            envelope,
-            new EventStoreOptimisticConcurrencyException("actor-1", expectedVersion: 4, actualVersion: 5),
-            out var retryEnvelope,
-            out var nextAttempt);
-
-        built.Should().BeTrue();
-        nextAttempt.Should().Be(1);
-        retryEnvelope.Runtime!.Retry!.Attempt.Should().Be(1);
-        retryEnvelope.Runtime.Retry.LastErrorType.Should().Be(nameof(EventStoreOptimisticConcurrencyException));
-    }
-
-    [Fact]
-    public void RuntimeEnvelopeRetryPolicy_ShouldRetryWrappedOccByDefault_WhenEnvironmentNotConfigured()
-    {
-        var policy = RuntimeEnvelopeRetryPolicy.FromValues(null, null);
-        var envelope = CreateRetryPolicyEnvelope("evt-default-wrapped-occ");
-
-        var built = policy.TryBuildRetryEnvelope(
-            envelope,
-            new InvalidOperationException(
-                "wrapped",
-                new EventStoreOptimisticConcurrencyException("actor-1", expectedVersion: 4, actualVersion: 5)),
-            out var retryEnvelope,
-            out var nextAttempt);
-
-        built.Should().BeTrue();
-        nextAttempt.Should().Be(1);
-        retryEnvelope.Runtime!.Retry!.Attempt.Should().Be(1);
-    }
-
-    [Fact]
-    public void RuntimeEnvelopeRetryPolicy_ShouldNotRetryNonOccByDefault_WhenEnvironmentNotConfigured()
-    {
-        var policy = RuntimeEnvelopeRetryPolicy.FromValues(null, null);
-        var envelope = CreateRetryPolicyEnvelope("evt-default-non-occ");
-
-        var built = policy.TryBuildRetryEnvelope(
-            envelope,
-            new InvalidOperationException("boom"),
-            out _,
-            out var nextAttempt);
-
-        policy.Enabled.Should().BeTrue();
-        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeTrue();
-        built.Should().BeFalse();
-        nextAttempt.Should().Be(1);
-    }
-
-    [Fact]
-    public void RuntimeEnvelopeRetryPolicy_ShouldRetryNonOcc_WhenAttemptsExplicitlyConfigured()
-    {
-        var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", null);
-        var envelope = CreateRetryPolicyEnvelope("evt-explicit-non-occ");
-
-        var built = policy.TryBuildRetryEnvelope(
-            envelope,
-            new InvalidOperationException("boom"),
-            out var retryEnvelope,
-            out var nextAttempt);
-
-        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeFalse();
-        built.Should().BeTrue();
-        nextAttempt.Should().Be(1);
-        retryEnvelope.Runtime!.Retry!.Attempt.Should().Be(1);
-    }
-
-    [Fact]
-    public void RuntimeEnvelopeRetryPolicy_ShouldKeepDefaultClassifier_WhenAttemptsConfigurationIsInvalid()
-    {
-        var policy = RuntimeEnvelopeRetryPolicy.FromValues("not-a-number", null);
-        var envelope = CreateRetryPolicyEnvelope("evt-invalid-config-non-occ");
-
-        var built = policy.TryBuildRetryEnvelope(
-            envelope,
-            new InvalidOperationException("boom"),
-            out _,
-            out var nextAttempt);
-
-        policy.Enabled.Should().BeTrue();
-        policy.MaxAttempts.Should().Be(3);
-        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeTrue();
-        built.Should().BeFalse();
-        nextAttempt.Should().Be(1);
+        policy.Enabled.Should().BeFalse();
+        policy.MaxAttempts.Should().Be(0);
     }
 
     [Fact]
@@ -194,7 +114,6 @@ public sealed class OrleansDistributedCoverageTests
         policy.Enabled.Should().BeTrue();
         policy.MaxAttempts.Should().Be(2);
         policy.RetryDelayMs.Should().Be(1000);
-        policy.RetryOnlyRecoverableConcurrencyFailures.Should().BeFalse();
     }
 
     [Fact]
@@ -224,14 +143,6 @@ public sealed class OrleansDistributedCoverageTests
         built.Should().BeFalse();
         nextAttempt.Should().Be(2);
     }
-
-    private static EventEnvelope CreateRetryPolicyEnvelope(string id) =>
-        new()
-        {
-            Id = id,
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
-        };
 
     [Fact]
     public async Task OrleansActorTypeProbe_ShouldResolveAndNormalizeTypeName()
@@ -473,93 +384,6 @@ public sealed class OrleansDistributedCoverageTests
     }
 
     [Fact]
-    public async Task StreamTopologyGrain_ShouldRefreshAndRetryUpsertAfterStorageConflict()
-    {
-        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
-        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
-        stateProxy.ConflictsBeforeWriteSuccess = 1;
-        stateProxy.StateAfterRead = new StreamTopologyGrainState
-        {
-            Revision = 5,
-            BindingsByTarget =
-            {
-                ["target-existing"] = CreateEntry("source-1", "target-existing", 4, "lease-existing"),
-            },
-        };
-        var grain = new StreamTopologyGrain(state);
-
-        await grain.UpsertAsync(CreateBinding("source-1", "target-new", 6, "lease-new"));
-
-        stateProxy.ReadCount.Should().Be(1);
-        stateProxy.WriteCount.Should().Be(2);
-        stateProxy.State.Revision.Should().Be(6);
-        var listed = await grain.ListAsync();
-        listed.Should().Contain(x => x.TargetStreamId == "target-existing");
-        listed.Should().Contain(x => x.TargetStreamId == "target-new" && x.LeaseId == "lease-new");
-    }
-
-    [Fact]
-    public async Task StreamTopologyGrain_ShouldSkipRetryWriteWhenRefreshedStateAlreadyContainsUpsert()
-    {
-        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
-        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
-        stateProxy.ConflictsBeforeWriteSuccess = 1;
-        stateProxy.StateAfterRead = new StreamTopologyGrainState
-        {
-            Revision = 9,
-            BindingsByTarget =
-            {
-                ["target-1"] = CreateEntry("source-1", "target-1", 1, "lease-1"),
-            },
-        };
-        var grain = new StreamTopologyGrain(state);
-
-        await grain.UpsertAsync(CreateBinding("source-1", "target-1", 1, "lease-1"));
-
-        stateProxy.ReadCount.Should().Be(1);
-        stateProxy.WriteCount.Should().Be(1);
-        stateProxy.State.Revision.Should().Be(9);
-        (await grain.ListAsync()).Should().ContainSingle(x => x.TargetStreamId == "target-1");
-    }
-
-    [Fact]
-    public async Task StreamTopologyGrain_ShouldSkipRetryWriteWhenRefreshedStateAlreadyRemovedTarget()
-    {
-        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
-        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
-        stateProxy.State.BindingsByTarget["target-1"] = CreateEntry("source-1", "target-1", 1, "lease-1");
-        stateProxy.State.Revision = 1;
-        stateProxy.ConflictsBeforeWriteSuccess = 1;
-        stateProxy.StateAfterRead = new StreamTopologyGrainState
-        {
-            Revision = 2,
-        };
-        var grain = new StreamTopologyGrain(state);
-
-        await grain.RemoveAsync("target-1");
-
-        stateProxy.ReadCount.Should().Be(1);
-        stateProxy.WriteCount.Should().Be(1);
-        stateProxy.State.Revision.Should().Be(2);
-        (await grain.ListAsync()).Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task StreamTopologyGrain_ShouldPropagateNonConflictStorageFailures()
-    {
-        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
-        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
-        stateProxy.WriteFailure = new InvalidOperationException("storage unavailable");
-        var grain = new StreamTopologyGrain(state);
-
-        var act = () => grain.UpsertAsync(CreateBinding("source-1", "target-1", 1, "lease-1"));
-
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("storage unavailable");
-        stateProxy.ReadCount.Should().Be(0);
-        stateProxy.WriteCount.Should().Be(1);
-    }
-
-    [Fact]
     public async Task StreamTopologyGrain_ShouldSupportLegacyListState()
     {
         var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
@@ -732,22 +556,6 @@ public sealed class OrleansDistributedCoverageTests
             ForwardingMode = StreamForwardingMode.HandleThenForward,
             DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Children, TopologyAudience.ParentAndChildren },
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt" },
-            Version = version,
-            LeaseId = leaseId,
-        };
-
-    private static StreamForwardingBindingEntry CreateEntry(
-        string source,
-        string target,
-        long version,
-        string? leaseId) =>
-        new()
-        {
-            SourceStreamId = source,
-            TargetStreamId = target,
-            ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
-            EventTypeFilter = ["evt"],
             Version = version,
             LeaseId = leaseId,
         };
@@ -933,14 +741,6 @@ public sealed class OrleansDistributedCoverageTests
     {
         public StreamTopologyGrainState State { get; set; } = new();
 
-        public StreamTopologyGrainState? StateAfterRead { get; set; }
-
-        public Exception? WriteFailure { get; set; }
-
-        public int ConflictsBeforeWriteSuccess { get; set; }
-
-        public int ReadCount { get; private set; }
-
         public int WriteCount { get; private set; }
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
@@ -956,29 +756,9 @@ public sealed class OrleansDistributedCoverageTests
             if (name == "WriteStateAsync")
             {
                 WriteCount++;
-                if (WriteFailure != null)
-                    return Task.FromException(WriteFailure);
-
-                if (ConflictsBeforeWriteSuccess > 0)
-                {
-                    ConflictsBeforeWriteSuccess--;
-                    return Task.FromException(new InconsistentStateException(
-                        "Version conflict while writing stream topology state.",
-                        "stored-etag",
-                        "current-etag"));
-                }
-
                 return Task.CompletedTask;
             }
-            if (name == "ReadStateAsync")
-            {
-                ReadCount++;
-                if (StateAfterRead != null)
-                    State = StateAfterRead;
-
-                return Task.CompletedTask;
-            }
-            if (name == "ClearStateAsync")
+            if (name == "ReadStateAsync" || name == "ClearStateAsync")
                 return Task.CompletedTask;
             if (name == "get_RecordExists")
                 return true;
