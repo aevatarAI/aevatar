@@ -1632,6 +1632,15 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.ToolContext.Should().NotBeNull();
+        host.InteractionService.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-123");
+        host.InteractionService.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-123");
+        host.InteractionService.LastRequest.ToolContext.Caller.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.ToolContext.Caller.ResponseId.Should().BeNull();
+        host.InteractionService.LastRequest.ToolContext.Channel.Platform.Should().Be("scope-workflow");
+        host.InteractionService.LastRequest.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.ToolContext.ExternalMetadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.ToolContext.ExternalMetadata.Should().NotContainKey("connector.http.authorization");
         // Service-run registry receives the actual workflow run actor id as the run id, so
         // /runs/{runId} can resolve the same id the SSE RunStarted frame carries.
         host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle();
@@ -2310,6 +2319,15 @@ public sealed class ScopeServiceEndpointsTests
         host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
         host.InteractionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         host.InteractionService.LastRequest.Headers.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.ToolContext.Should().NotBeNull();
+        host.InteractionService.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-orders");
+        host.InteractionService.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-orders");
+        host.InteractionService.LastRequest.ToolContext.Caller.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.ToolContext.Caller.ResponseId.Should().BeNull();
+        host.InteractionService.LastRequest.ToolContext.Channel.Platform.Should().Be("scope-workflow");
+        host.InteractionService.LastRequest.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.ToolContext.ExternalMetadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
+        host.InteractionService.LastRequest.ToolContext.ExternalMetadata.Should().NotContainKey("connector.http.authorization");
     }
 
     [Fact]
