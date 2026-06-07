@@ -241,3 +241,9 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - 有无可移除的日志 / 调试代码？
 - 改动是否引入性能回退？
 - 改动是否不必要地增加存储开销（EventStore / readmodel / projection store）？
+
+## Dogfood：consensus-rnd:codex-refactor-loop（本仓库）
+- 本仓库是 `/consensus-rnd:codex-refactor-loop`（插件 `consensus-rnd`）的 dogfood host：无人值守 refactor / issue 闭环在此真实运行，用真实使用反过来打磨该 skill。
+- skill 自身的 bug / 使用问题（误判、漏派、daemon 行为异常、版本缺功能、契约缺陷等）一经发现，**及时自动到上游 skill 仓库 `ChronoAIProject/consensus-rnd` 提 issue**（中文，附复现与证据）；本仓库 issue tracker 只记 aevatar 自身工作项，不混入 skill bug。
+- daemon 只跑当前安装的**最新版本**；发现本仓库（`REPO_ROOT` 为本仓库）残留的历史版本 daemon 进程即停，只保留最新版。注意只约束本仓库——同机其它仓库（如 newmath）的 loop 各自独立，不在此约束内。
+- loop runtime 事实由 host-owned `.config/consensus-rnd/host.env` 注入；该文件是运行时注入点，非 host 生产配置，缺失即停不臆造。
