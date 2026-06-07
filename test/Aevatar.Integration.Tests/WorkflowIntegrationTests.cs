@@ -298,10 +298,7 @@ public class WorkflowIntegrationTests
             },
             agent => agent?.RoleName == "Researcher",
             $"RoleGAgent initialization not visible. actor_id={researcherActorId}",
-            CancellationToken.None,
-            // Fix (remote-ci/coverage-quality): coverage instrumentation can delay local actor initialization
-            // visibility after the child actor IDs are already linked.
-            TimeSpan.FromSeconds(120));
+            CancellationToken.None);
         researcher!.RoleName.Should().Be("Researcher");
     }
 

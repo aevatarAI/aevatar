@@ -33,9 +33,6 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
 {
-    private static readonly TimeSpan ProjectionTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan ProjectionPollInterval = TimeSpan.FromMilliseconds(50);
-
     [Fact]
     public async Task DraftRunEndpoint_ShouldExposeCompletedWorkflowActorCurrentStateViaWorkflowActorCurrentState()
     {
@@ -53,9 +50,12 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         var actorId = ExtractRunContextActorId(body);
         actorId.Should().NotBeNullOrWhiteSpace();
 
-        var snapshot = await WaitForCompletedCurrentStateAsync(host.Client, actorId!, CancellationToken.None);
+        using var snapshotResponse = await host.Client.GetAsync($"/api/workflow-actors/{Uri.EscapeDataString(actorId!)}/current-state");
+        var snapshot = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>();
 
-        snapshot.ActorId.Should().Be(actorId);
+        snapshotResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        snapshot.Should().NotBeNull();
+        snapshot!.ActorId.Should().Be(actorId);
         snapshot.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.Completed);
         snapshot.LastSuccess.Should().BeTrue();
         snapshot.LastOutput.Should().Be("y\nz");
@@ -91,54 +91,6 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         }
 
         return null;
-    }
-
-    private static async Task<WorkflowActorCurrentStateHttpResponse> WaitForCompletedCurrentStateAsync(
-        HttpClient client,
-        string actorId,
-        CancellationToken ct)
-    {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ProjectionTimeout);
-
-        WorkflowActorCurrentStateHttpResponse? lastSnapshot = null;
-        try
-        {
-            while (true)
-            {
-                lastSnapshot = await ReadCurrentStateAsync(client, actorId, timeoutCts.Token);
-                if (lastSnapshot.CompletionStatus == WorkflowRunCompletionStatus.Completed)
-                    return lastSnapshot;
-
-                // Fix (remote-ci/coverage-quality): draft-run SSE completion can precede readmodel visibility;
-                // wait for the projection query contract instead of asserting on a stale current-state copy.
-                await Task.Delay(ProjectionPollInterval, timeoutCts.Token);
-            }
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            throw new InvalidOperationException(
-                $"Workflow actor current-state projection did not complete before timeout. " +
-                $"actor_id={actorId}; last_status={lastSnapshot?.CompletionStatus.ToString() ?? "<none>"}; " +
-                $"last_output={lastSnapshot?.LastOutput ?? "<none>"}");
-        }
-    }
-
-    private static async Task<WorkflowActorCurrentStateHttpResponse> ReadCurrentStateAsync(
-        HttpClient client,
-        string actorId,
-        CancellationToken ct)
-    {
-        using var snapshotResponse = await client.GetAsync(
-            $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state",
-            ct);
-        var snapshot = await snapshotResponse.Content.ReadFromJsonAsync<WorkflowActorCurrentStateHttpResponse>(
-            cancellationToken: ct);
-
-        snapshotResponse.StatusCode.Should().Be(HttpStatusCode.OK);
-        snapshot.Should().NotBeNull();
-
-        return snapshot!;
     }
 
     private sealed class DraftRunWorkflowActorCurrentStateHost : IAsyncDisposable
