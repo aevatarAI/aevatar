@@ -4757,6 +4757,7 @@ const projectMessages = {
   "pages.teams.new.team.information": "Team information",
   "pages.teams.new.team.name": "Team name",
   "pages.teams.new.team.name.2": "Team name",
+  "pages.teams.new.team.name.required": "Please enter a team name.",
   "pages.teams.new.the.current.login.status": "The current login status verification failed, local login information has been used",
   "pages.teams.new.the.current.login.status.2": "The current login status has not resolved the available team scope, please refresh and try again.",
   "pages.teams.new.the.login.status.is": "The login status is temporarily unavailable, please refresh and try again.",
