@@ -303,14 +303,15 @@ internal static class ScriptEvolutionIntegrationTestKit
         Func<CancellationToken, Task<T>> probeAsync,
         Func<T, bool> isReady,
         string timeoutMessage,
-        CancellationToken ct)
+        CancellationToken ct,
+        TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(probeAsync);
         ArgumentNullException.ThrowIfNull(isReady);
         ArgumentException.ThrowIfNullOrWhiteSpace(timeoutMessage);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ObservationTimeout);
+        timeoutCts.CancelAfter(timeout ?? ObservationTimeout);
 
         try
         {
