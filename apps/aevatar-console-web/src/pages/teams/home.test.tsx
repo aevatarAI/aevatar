@@ -230,6 +230,9 @@ describe("TeamsHomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
 
     expect(window.location.pathname).toBe("/teams/new");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("teamName")).toBeNull();
   });
 
   it("does not show the roster view toggle when only one Team is visible", async () => {
@@ -683,5 +686,8 @@ describe("TeamsHomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
 
     expect(window.location.pathname).toBe("/teams/new");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("teamName")).toBeNull();
   });
 });
