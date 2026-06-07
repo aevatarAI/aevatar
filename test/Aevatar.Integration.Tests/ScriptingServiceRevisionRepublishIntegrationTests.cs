@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.GAgentService.Abstractions;
@@ -15,6 +14,7 @@ using Aevatar.GAgentService.Governance.Projection.Orchestration;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -31,6 +31,8 @@ namespace Aevatar.Integration.Tests;
 
 public sealed class ScriptingServiceRevisionRepublishIntegrationTests
 {
+    private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(45);
+
     [Fact]
     public async Task ScopeScriptUpsertPromote_ShouldRepublishBoundServiceToNewRevision()
     {
@@ -113,6 +115,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             runtimeActorId: initialState.ActiveTarget.PrimaryActorId,
             commandId: "svc-command-1",
             inputText: "first input",
+            expectedNormalizedText: "REPUBLISH-V1:FIRST INPUT",
             CancellationToken.None);
         before.NormalizedText.Should().Be("REPUBLISH-V1:FIRST INPUT");
 
@@ -158,6 +161,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             runtimeActorId: promotedState.ActiveTarget.PrimaryActorId,
             commandId: "svc-command-2",
             inputText: "second input",
+            expectedNormalizedText: "REPUBLISH-V2:SECOND INPUT",
             CancellationToken.None);
         after.NormalizedText.Should().Be("REPUBLISH-V2:SECOND INPUT");
     }
@@ -334,6 +338,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             leftPromotedState.ActiveTarget.PrimaryActorId,
             "svc-left-command-1",
             "left path",
+            "EVOLVE-V2:LEFT PATH",
             CancellationToken.None);
         var rightFact = await InvokeThroughServiceAsync(
             provider,
@@ -343,6 +348,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             rightPromotedState.ActiveTarget.PrimaryActorId,
             "svc-right-command-1",
             "right path",
+            "EVOLVE-V2:RIGHT PATH",
             CancellationToken.None);
         leftFact.NormalizedText.Should().Be("EVOLVE-V2:LEFT PATH");
         rightFact.NormalizedText.Should().Be("EVOLVE-V2:RIGHT PATH");
@@ -380,13 +386,12 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         string runtimeActorId,
         string commandId,
         string inputText,
+        string expectedNormalizedText,
         CancellationToken ct)
     {
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
         var lease = await provider.EnsureScriptExecutionProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
-        await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
 
         try
         {
@@ -405,13 +410,48 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
                 },
                 ct);
 
-            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(sink, commandId, ct);
-            return committed.DomainEventPayload.Unpack<TextNormalizationCompleted>().Current;
+            return await WaitForTextNormalizationReadModelAsync(
+                provider.GetRequiredService<IScriptReadModelQueryApplicationService>(),
+                runtimeActorId,
+                expectedNormalizedText,
+                ct);
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(liveSinkLease, ct);
             await projectionPort.ReleaseActorProjectionAsync(lease, ct);
+        }
+    }
+
+    private static async Task<TextNormalizationReadModel> WaitForTextNormalizationReadModelAsync(
+        IScriptReadModelQueryApplicationService queryService,
+        string runtimeActorId,
+        string expectedNormalizedText,
+        CancellationToken ct)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        TextNormalizationReadModel? last = null;
+        try
+        {
+            while (true)
+            {
+                timeoutCts.Token.ThrowIfCancellationRequested();
+                var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, timeoutCts.Token);
+                if (snapshot?.ReadModelPayload != null)
+                {
+                    last = snapshot.ReadModelPayload.Unpack<TextNormalizationReadModel>();
+                    if (string.Equals(last.NormalizedText, expectedNormalizedText, StringComparison.Ordinal))
+                        return last;
+                }
+
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"Timed out waiting for script read model. actor_id={runtimeActorId}, expected_normalized_text={expectedNormalizedText}, last_normalized_text={last?.NormalizedText ?? "<null>"}");
         }
     }
 
