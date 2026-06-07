@@ -4757,7 +4757,6 @@ const projectMessages = {
   "pages.teams.new.team.information": "团队信息",
   "pages.teams.new.team.name": "队名",
   "pages.teams.new.team.name.2": "队名",
-  // Fix (remote-ci/console-web): keep the Form validation key present in both locale catalogs.
   "pages.teams.new.team.name.required": "请输入队名。",
   "pages.teams.new.the.current.login.status": "当前登录态校验失败，已使用本地登录信息",
   "pages.teams.new.the.current.login.status.2": "当前登录状态还没有解析出可用的团队 Scope，请刷新后重试。",

@@ -78,7 +78,6 @@ describe('TeamCreatePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '创建团队' }));
 
-    // Fix (remote-ci/console-web): the validation key is catalog-backed, so this zh-CN suite renders localized copy.
     expect(await screen.findByText('请输入队名。')).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
