@@ -68,14 +68,16 @@ describe("teamRoutes", () => {
     );
   });
 
-  it("preserves draft team names when returning to the create page", () => {
+  it("builds create-team links with only scope context", () => {
     expect(
       buildTeamCreateHref({
-        teamName: "订单助手团队",
+        scopeId: " scope-alpha ",
       }),
-    ).toBe(
-      "/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F",
-    );
+    ).toBe("/teams/new?scopeId=scope-alpha");
+  });
+
+  it("drops empty create-team route context", () => {
+    expect(buildTeamCreateHref({ scopeId: " " })).toBe("/teams/new");
   });
 
   it("reads the canonical team detail route state from path and query", () => {
