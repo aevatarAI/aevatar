@@ -127,6 +127,169 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
         commandPort.Calls.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(" ", "script-a")]
+    [InlineData("tenant", " ")]
+    public async Task BeforePublishAsync_ShouldIgnorePromotedEventsWithBlankLookupIdentity(
+        string scopeId,
+        string scriptId)
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var reader = new FakeCandidateQueryReader();
+        var hook = new ScriptingServiceRevisionRepublishHook(reader, commandPort);
+
+        await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
+        {
+            ScopeId = scopeId,
+            ScriptId = scriptId,
+            Revision = "script-rev-2",
+        }), CancellationToken.None);
+
+        reader.QueryCount.Should().Be(0);
+        commandPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_WhenCreateRevisionAlreadyExists_ShouldContinueLifecycleCommands()
+    {
+        var commandPort = new RecordingServiceCommandPort
+        {
+            CreateRevisionException = new InvalidOperationException("revision already exists"),
+        };
+        var hook = new ScriptingServiceRevisionRepublishHook(
+            new FakeCandidateQueryReader
+            {
+                Result =
+                [
+                    new ServiceScriptingRepublishCandidateSnapshot(
+                        GAgentService.Tests.TestSupport.GAgentServiceTestKit.CreateIdentity("svc-existing"),
+                        "rev-existing",
+                        "dep-existing",
+                        new ServiceRevisionScriptingSnapshot("script-a", "script-rev-1", "def-old", "hash-old"),
+                        null),
+                ],
+            },
+            commandPort);
+
+        await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
+        {
+            ScopeId = "tenant",
+            ScriptId = "script-a",
+            Revision = "script-rev-2",
+            DefinitionActorId = "def-new",
+            SourceHash = "hash-new",
+        }), CancellationToken.None);
+
+        commandPort.Calls.Select(x => x.Method).Should().Equal(
+            "CreateRevisionAsync",
+            "PrepareRevisionAsync",
+            "PublishRevisionAsync",
+            "SetDefaultServingRevisionAsync",
+            "ActivateServiceRevisionAsync");
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_WhenLifecycleCommandFails_ShouldSwallowAndContinuePublication()
+    {
+        var commandPort = new RecordingServiceCommandPort
+        {
+            PrepareRevisionException = new InvalidOperationException("prepare failed"),
+        };
+        var hook = new ScriptingServiceRevisionRepublishHook(
+            new FakeCandidateQueryReader
+            {
+                Result =
+                [
+                    new ServiceScriptingRepublishCandidateSnapshot(
+                        GAgentService.Tests.TestSupport.GAgentServiceTestKit.CreateIdentity("svc-failing"),
+                        "rev-live",
+                        "dep-live",
+                        new ServiceRevisionScriptingSnapshot("script-a", "script-rev-1", "def-old", "hash-old"),
+                        null),
+                ],
+            },
+            commandPort);
+
+        var act = async () => await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
+        {
+            ScopeId = "tenant",
+            ScriptId = "script-a",
+            Revision = "script-rev-2",
+            DefinitionActorId = "def-new",
+            SourceHash = "hash-new",
+        }), CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+        commandPort.Calls.Select(x => x.Method).Should().Equal(
+            "CreateRevisionAsync",
+            "PrepareRevisionAsync");
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldUseStableFallbackSegmentsForBlankRevisionInputs()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var hook = new ScriptingServiceRevisionRepublishHook(
+            new FakeCandidateQueryReader
+            {
+                Result =
+                [
+                    new ServiceScriptingRepublishCandidateSnapshot(
+                        GAgentService.Tests.TestSupport.GAgentServiceTestKit.CreateIdentity("svc-fallback"),
+                        " ",
+                        "dep-live",
+                        new ServiceRevisionScriptingSnapshot("script-a", "script-rev-1", "def-old", "hash-old"),
+                        null),
+                ],
+            },
+            commandPort);
+
+        await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
+        {
+            ScopeId = "tenant",
+            ScriptId = "script-a",
+            Revision = " --Alpha--Beta-- ",
+            DefinitionActorId = "def-new",
+            SourceHash = "hash-new",
+        }), CancellationToken.None);
+
+        var create = (CreateServiceRevisionCommand)commandPort.Calls[0].Command;
+        create.Spec.RevisionId.Should().StartWith("rev-script-alpha-beta-");
+        create.Spec.RevisionId.Should().NotContain("--");
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldUseScriptSegmentWhenPromotedRevisionIsBlank()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var hook = new ScriptingServiceRevisionRepublishHook(
+            new FakeCandidateQueryReader
+            {
+                Result =
+                [
+                    new ServiceScriptingRepublishCandidateSnapshot(
+                        GAgentService.Tests.TestSupport.GAgentServiceTestKit.CreateIdentity("svc-blank-revision"),
+                        "rev-live",
+                        "dep-live",
+                        new ServiceRevisionScriptingSnapshot("script-a", "script-rev-1", "def-old", "hash-old"),
+                        null),
+                ],
+            },
+            commandPort);
+
+        await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
+        {
+            ScopeId = "tenant",
+            ScriptId = "script-a",
+            Revision = " ",
+            DefinitionActorId = "def-new",
+            SourceHash = "hash-new",
+        }), CancellationToken.None);
+
+        var create = (CreateServiceRevisionCommand)commandPort.Calls[0].Command;
+        create.Spec.RevisionId.Should().StartWith("rev-live-script-script-");
+    }
+
     private static CommittedStatePublicationContext CreateContext<TEvent>(TEvent evt)
         where TEvent : class, Google.Protobuf.IMessage<TEvent>
     {
@@ -169,6 +332,10 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
 
         public List<(string Method, object Command)> Calls { get; } = [];
 
+        public Exception? CreateRevisionException { get; init; }
+
+        public Exception? PrepareRevisionException { get; init; }
+
         public Task<ServiceCommandAcceptedReceipt> CreateServiceAsync(CreateServiceDefinitionCommand command, CancellationToken ct = default) =>
             Task.FromResult(Receipt);
 
@@ -178,12 +345,18 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
         public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(CreateServiceRevisionCommand command, CancellationToken ct = default)
         {
             Calls.Add((nameof(CreateRevisionAsync), command));
+            if (CreateRevisionException != null)
+                throw CreateRevisionException;
+
             return Task.FromResult(Receipt);
         }
 
         public Task<ServiceCommandAcceptedReceipt> PrepareRevisionAsync(PrepareServiceRevisionCommand command, CancellationToken ct = default)
         {
             Calls.Add((nameof(PrepareRevisionAsync), command));
+            if (PrepareRevisionException != null)
+                throw PrepareRevisionException;
+
             return Task.FromResult(Receipt);
         }
 

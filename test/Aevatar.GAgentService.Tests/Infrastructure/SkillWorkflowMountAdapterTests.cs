@@ -10,6 +10,39 @@ namespace Aevatar.GAgentService.Tests.Infrastructure;
 public sealed class SkillWorkflowMountAdapterTests
 {
     [Fact]
+    public void Constructor_NullDependencies_Throw()
+    {
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var parser = new StubWorkflowDefinitionParser(new Dictionary<string, string>());
+
+        var noCommandPort = () => new SkillWorkflowMountAdapter(null!, parser);
+        var noParser = () => new SkillWorkflowMountAdapter(commandPort, null!);
+
+        noCommandPort.Should().Throw<ArgumentNullException>().WithParameterName("scopeWorkflowCommandPort");
+        noParser.Should().Throw<ArgumentNullException>().WithParameterName("workflowDefinitionParser");
+    }
+
+    [Fact]
+    public async Task MountAsync_WithNoWorkflows_ReturnsNoWorkflowResult()
+    {
+        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var adapter = new SkillWorkflowMountAdapter(
+            commandPort,
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>()));
+
+        var result = await adapter.MountAsync(new SkillWorkflowMountRequest(
+            ScopeId: "scope-1",
+            NyxIdAccessToken: "token-a",
+            Workflows: []));
+
+        result.Status.Should().Be("no_workflows");
+        result.Mounted.Should().BeFalse();
+        result.Workflows.Should().BeEmpty();
+        result.Message.Should().Be("The skill does not expose workflow YAML bundles.");
+        commandPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task MountAsync_UsesScopeWorkflowUpsert_WithEquivalentRootAndInlineYamls()
     {
         var commandPort = new RecordingScopeWorkflowCommandPort();
@@ -82,6 +115,107 @@ public sealed class SkillWorkflowMountAdapterTests
             .WithMessage("*duplicate workflow name*");
     }
 
+    [Fact]
+    public async Task MountAsync_Throws_WhenWorkflowHasNoYamlDocuments()
+    {
+        var adapter = new SkillWorkflowMountAdapter(
+            new RecordingScopeWorkflowCommandPort(),
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>()));
+
+        var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
+            ScopeId: "scope-1",
+            NyxIdAccessToken: "token-a",
+            Workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "empty",
+                    WorkflowYamls = [],
+                },
+            ]));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Skill workflow 'empty' does not include any YAML documents.");
+    }
+
+    [Fact]
+    public async Task MountAsync_Throws_WhenWorkflowYamlIsBlank()
+    {
+        var adapter = new SkillWorkflowMountAdapter(
+            new RecordingScopeWorkflowCommandPort(),
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>()));
+
+        var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
+            ScopeId: "scope-1",
+            NyxIdAccessToken: "token-a",
+            Workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "blank",
+                    WorkflowYamls = ["  "],
+                },
+            ]));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Skill workflow 'blank' contains an empty YAML document.");
+    }
+
+    [Fact]
+    public async Task MountAsync_Throws_WhenParserReturnsFailure()
+    {
+        var adapter = new SkillWorkflowMountAdapter(
+            new RecordingScopeWorkflowCommandPort(),
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                ["name: bad\nsteps: []"] = "bad",
+            })
+            {
+                Failure = "parse failed",
+            });
+
+        var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
+            ScopeId: "scope-1",
+            NyxIdAccessToken: "token-a",
+            Workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "bad",
+                    WorkflowYamls = ["name: bad\nsteps: []"],
+                },
+            ]));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("parse failed");
+    }
+
+    [Fact]
+    public async Task MountAsync_Throws_WhenParsedWorkflowNameIsBlank()
+    {
+        var adapter = new SkillWorkflowMountAdapter(
+            new RecordingScopeWorkflowCommandPort(),
+            new StubWorkflowDefinitionParser(new Dictionary<string, string>
+            {
+                ["name: blank\nsteps: []"] = " ",
+            }));
+
+        var act = () => adapter.MountAsync(new SkillWorkflowMountRequest(
+            ScopeId: "scope-1",
+            NyxIdAccessToken: "token-a",
+            Workflows:
+            [
+                new SkillWorkflowDescriptor
+                {
+                    WorkflowId = "blank-name",
+                    WorkflowYamls = ["name: blank\nsteps: []"],
+                },
+            ]));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Skill workflow 'blank-name' must define a workflow name.");
+    }
+
     private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
     {
         public List<ScopeWorkflowUpsertRequest> Requests { get; } = [];
@@ -114,12 +248,17 @@ public sealed class SkillWorkflowMountAdapterTests
             _workflowNamesByYaml = workflowNamesByYaml;
         }
 
+        public string? Failure { get; init; }
+
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
             string workflowYaml,
             CancellationToken ct = default)
         {
             if (!_workflowNamesByYaml.TryGetValue(workflowYaml, out var workflowName))
                 throw new InvalidOperationException($"Unexpected YAML: {workflowYaml}");
+
+            if (Failure != null)
+                return Task.FromResult(WorkflowYamlParseResult.Invalid(Failure));
 
             return Task.FromResult(WorkflowYamlParseResult.Success(workflowName));
         }

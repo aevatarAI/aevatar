@@ -351,6 +351,45 @@ public sealed class DefaultCommandInteractionServiceTests
         target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenEmitFails_ShouldResolveDurableCompletionAndPreserveExecutionFailureOverCleanupFailure()
+    {
+        var sink = new EventChannel<string>();
+        sink.Push("progress");
+        sink.Complete();
+
+        var target = new TestTarget("target-1", sink)
+        {
+            ReleaseException = new InvalidOperationException("cleanup failed"),
+        };
+        var receipt = new TestReceipt("target-1", "receipt-5");
+        var durableResolver = new RecordingDurableResolver(
+            new CommandDurableCompletionObservation<string>(true, "durable_after_emit_failure"));
+        var service = CreateService(
+            new TestDispatchPipeline(CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                new CommandDispatchExecution<TestTarget, TestReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext("target-1", "cmd-5", "corr-5", new Dictionary<string, string>()),
+                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-5" },
+                    Receipt = receipt,
+                })),
+            durableResolver: durableResolver);
+
+        var act = () => service.ExecuteAsync(
+            "command-5",
+            static (_, _) => throw new InvalidOperationException("emit failed"),
+            ct: CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("emit failed");
+        durableResolver.Calls.Should().Be(1);
+        target.ReleaseCalls.Should().ContainSingle();
+        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
+        target.ReleaseCalls[0].Cleanup.DurableCompletion.HasTerminalCompletion.Should().BeTrue();
+        target.ReleaseCalls[0].Cleanup.DurableCompletion.Completion.Should().Be("durable_after_emit_failure");
+    }
+
     private static DefaultCommandInteractionService<string, TestTarget, TestReceipt, string, string, string, string> CreateService(
         ICommandDispatchPipeline<string, TestTarget, TestReceipt, string> dispatchPipeline,
         ICommandCompletionPolicy<string, string>? completionPolicy = null,

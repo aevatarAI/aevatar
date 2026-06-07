@@ -800,6 +800,74 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         graph.Edges.Should().Contain(x => x.ToNodeId == "child-1");
     }
 
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldAggregateStepUsageAndClampNegativeMetrics()
+    {
+        var report = new WorkflowRunInsightReportDocument
+        {
+            Id = "root-actor",
+            RootActorId = "root-actor",
+            CommandId = "cmd-usage",
+        };
+        var timestamp = new DateTimeOffset(2026, 3, 18, 6, 15, 0, TimeSpan.Zero);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "step-negative",
+                    Success = true,
+                    Usage = new WorkflowUsageMetrics
+                    {
+                        PromptTokens = -10,
+                        CompletionTokens = -20,
+                        TotalTokens = -30,
+                        Cost = -1,
+                        LatencyMs = -100,
+                    },
+                },
+                28,
+                "evt-usage-negative"),
+            timestamp);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "step-positive",
+                    Success = true,
+                    Usage = new WorkflowUsageMetrics
+                    {
+                        PromptTokens = 11,
+                        CompletionTokens = 7,
+                        TotalTokens = 18,
+                        Model = "gpt-usage",
+                        Cost = 0.42,
+                        LatencyMs = 1234,
+                    },
+                },
+                29,
+                "evt-usage-positive"),
+            timestamp.AddSeconds(1));
+
+        report.Steps.Should().HaveCount(2);
+        report.Steps[0].Usage.PromptTokens.Should().Be(0);
+        report.Steps[0].Usage.CompletionTokens.Should().Be(0);
+        report.Steps[0].Usage.TotalTokens.Should().Be(0);
+        report.Steps[0].Usage.Model.Should().BeEmpty();
+        report.Steps[0].Usage.Cost.Should().Be(0);
+        report.Steps[0].Usage.LatencyMs.Should().Be(0);
+
+        report.Usage.PromptTokens.Should().Be(11);
+        report.Usage.CompletionTokens.Should().Be(7);
+        report.Usage.TotalTokens.Should().Be(18);
+        report.Usage.Model.Should().Be("gpt-usage");
+        report.Usage.Cost.Should().Be(0.42);
+        report.Usage.LatencyMs.Should().Be(1234);
+    }
+
     [Theory]
     [MemberData(nameof(CurrentStateStatusCases))]
     public async Task WorkflowExecutionCurrentStateProjector_ShouldMapCommittedStateSnapshots(
