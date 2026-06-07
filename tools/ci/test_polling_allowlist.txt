@@ -4,6 +4,9 @@ test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsisten
 test/Aevatar.Integration.Tests/ScriptEvolutionIntegrationTestKit.cs
 test/Aevatar.Integration.Tests/ScriptReadModelVisibilityTestHelper.cs
 test/Aevatar.GAgentService.Integration.Tests/ScopeScriptSaveObservationRuntimeTests.cs
+# Draft-run endpoint returns after live SSE completion; workflow actor current-state
+# readmodel visibility is an eventually-consistent HTTP query surface under test.
+test/Aevatar.GAgentService.Integration.Tests/ScopeDraftRunWorkflowRunCurrentStateIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansKafkaProviderRuntimeIntegrationTests.cs
