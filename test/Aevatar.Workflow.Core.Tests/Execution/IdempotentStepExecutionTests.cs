@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
@@ -503,6 +504,61 @@ public sealed class IdempotentStepExecutionTests
         state.Variables["input"].Should().Be("fresh-input");
         state.Variables.Should().NotContainKey("step_a_output");
         state.Variables.Keys.Should().BeEquivalentTo(DefaultStartVariableKeys);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithStepPresentation_ShouldDispatchTypedInteractionSpec()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var workflow = new WorkflowDefinition
+        {
+            Name = "interaction-workflow",
+            Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "approval",
+                    Type = "human_approval",
+                    TargetRole = "worker",
+                    Presentation = new StepPresentation
+                    {
+                        InteractionSpec = new InteractionSpec
+                        {
+                            Title = "Approve ${input}",
+                            Body = "Release ${release}",
+                            Disposition = InteractionDisposition.Ephemeral,
+                            Actions =
+                            {
+                                new InteractionAction
+                                {
+                                    Kind = InteractionActionKind.Button,
+                                    ActionId = "approve",
+                                    Label = "Approve ${release}",
+                                    Value = "${release}",
+                                    Style = InteractionActionStyle.Primary,
+                                },
+                            },
+                        },
+                    },
+                },
+            ],
+        };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var start = new StartWorkflowEvent { RunId = "run-interaction", Input = "deploy" };
+        start.Parameters["release"] = "v1";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.Parameters.Should().NotContainKey("interaction_spec");
+        request.StepParameters.InteractionSpec.Title.Should().Be("Approve deploy");
+        request.StepParameters.InteractionSpec.Body.Should().Be("Release v1");
+        request.StepParameters.InteractionSpec.Disposition.Should().Be(InteractionDisposition.Ephemeral);
+        request.StepParameters.InteractionSpec.Actions[0].Label.Should().Be("Approve v1");
+        request.StepParameters.InteractionSpec.Actions[0].Value.Should().Be("v1");
+        request.StepParameters.InteractionSpec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
     }
 
     // ──── Test infrastructure ────

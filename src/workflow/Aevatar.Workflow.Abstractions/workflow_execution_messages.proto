@@ -3,6 +3,7 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
+import "Interactions/interaction_spec.proto";
 
 enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_UNSPECIFIED = 0;
@@ -220,6 +221,7 @@ message WorkflowStepParameters
   map<string, string> parameters = 1;
   VoteAgreementCandidateSet vote_agreement_candidates = 2;
   VoteAgreementRule vote_agreement_rule = 3;
+  aevatar.foundation.interactions.InteractionSpec interaction_spec = 4;
 }
 message StepRequestEvent
 {

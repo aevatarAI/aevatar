@@ -1,4 +1,5 @@
 using System.Linq;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -201,5 +202,41 @@ public sealed class ChannelAbstractionsProtoTests
             .ShouldContain(nameof(ChannelTransportBinding));
         ScheduleReflection.Descriptor.EnumTypes.Select(x => x.Name)
             .ShouldContain(nameof(ProjectionVerdict));
+    }
+
+    [Fact]
+    public void InteractionSpecMapper_ShouldProjectTypedSpecToMessageContent()
+    {
+        var spec = new InteractionSpec
+        {
+            Title = "Review",
+            Body = "Deploy v1?",
+            Disposition = InteractionDisposition.Ephemeral,
+        };
+        spec.Actions.Add(new InteractionAction
+        {
+            Kind = InteractionActionKind.Select,
+            ActionId = "route",
+            Label = "Route",
+            Style = InteractionActionStyle.Primary,
+            Options =
+            {
+                new InteractionOption { Label = "Canary", Value = "canary" },
+            },
+        });
+        spec.Fields.Add(new InteractionField
+        {
+            Title = "Env",
+            Text = "prod",
+            IsShort = true,
+        });
+
+        var content = InteractionSpecMapper.ToMessageContent(spec);
+
+        content.Text.ShouldBe("Review\nDeploy v1?");
+        content.Disposition.ShouldBe(MessageDisposition.Ephemeral);
+        content.Actions.ShouldHaveSingleItem().Kind.ShouldBe(ActionElementKind.Select);
+        content.Actions[0].Options.ShouldHaveSingleItem().Value.ShouldBe("canary");
+        content.Cards.ShouldHaveSingleItem().Fields.ShouldHaveSingleItem().IsShort.ShouldBeTrue();
     }
 }

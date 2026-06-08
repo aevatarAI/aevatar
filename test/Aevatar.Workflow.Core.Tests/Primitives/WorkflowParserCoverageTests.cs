@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Foundation.Abstractions.Interactions;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Core.Tests.Primitives;
@@ -122,6 +123,162 @@ public sealed class WorkflowParserCoverageTests
         workflow.Steps[0].Parameters["ratio"].Should().Be("1.5");
         workflow.Steps[0].Parameters["tags"].Should().Be("""["alpha","2"]""");
         workflow.Steps[0].Parameters["config"].Should().Be("""{"enabled":"false","retries":"3"}""");
+    }
+
+    [Fact]
+    public void Parse_WhenInteractionSpecIsPresent_ShouldLiftTypedPresentation()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: interaction
+            roles: []
+            steps:
+              - id: approve
+                type: human_approval
+                presentation:
+                  interaction_spec:
+                    title: "Approve ${input}"
+                    body: "Review release"
+                    disposition: ephemeral
+                    actions:
+                      - action_id: approve
+                        label: Approve
+                        style: primary
+                      - action_id: reject
+                        label: Reject
+                        style: danger
+                    fields:
+                      - title: Environment
+                        text: prod
+                        is_short: true
+            """);
+
+        var spec = workflow.Steps[0].Presentation?.InteractionSpec;
+
+        spec.Should().NotBeNull();
+        spec!.Title.Should().Be("Approve ${input}");
+        spec.Disposition.Should().Be(InteractionDisposition.Ephemeral);
+        spec.Actions.Should().HaveCount(2);
+        spec.Actions[0].Kind.Should().Be(InteractionActionKind.Button);
+        spec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
+        spec.Actions[1].Style.Should().Be(InteractionActionStyle.Danger);
+        spec.Fields.Should().ContainSingle(x => x.Title == "Environment" && x.IsShort);
+        workflow.Steps[0].Parameters.Should().NotContainKey("interaction_spec");
+    }
+
+    [Fact]
+    public void Parse_WhenInteractionSpecIsUnderParameters_ShouldPromoteAndRemoveBagEntry()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: interaction_parameter
+            roles: []
+            steps:
+              - id: approve
+                type: human_approval
+                parameters:
+                  prompt: "Approve?"
+                  interaction_spec:
+                    title: "Approval"
+                    actions:
+                      - action_id: approve
+                        label: Approve
+            """);
+
+        var step = workflow.Steps[0];
+
+        step.Presentation?.InteractionSpec.Should().NotBeNull();
+        step.Presentation!.InteractionSpec!.Title.Should().Be("Approval");
+        step.Presentation.InteractionSpec.Actions.Should().ContainSingle(x => x.ActionId == "approve");
+        step.Parameters.Should().ContainKey("prompt");
+        step.Parameters.Should().NotContainKey("interaction_spec");
+    }
+
+    [Fact]
+    public void Parse_WhenInteractionSpecIsAtStepRoot_ShouldLiftTypedPresentation()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: interaction_root
+            roles: []
+            steps:
+              - id: approve
+                type: human_approval
+                interaction_spec:
+                  title: "Root approval"
+                  body: "Choose a route"
+                  actions:
+                    - kind: select
+                      action_id: route
+                      label: Route
+                      options:
+                        - label: Canary
+                          value: canary
+                  cards:
+                    - block_id: summary
+                      title: Summary
+                      fields:
+                        - title: Release
+                          text: v1
+            """);
+
+        var step = workflow.Steps[0];
+        var spec = step.Presentation?.InteractionSpec;
+
+        spec.Should().NotBeNull();
+        spec!.Title.Should().Be("Root approval");
+        spec.Body.Should().Be("Choose a route");
+        spec.Actions.Should().ContainSingle();
+        spec.Actions[0].Kind.Should().Be(InteractionActionKind.Select);
+        spec.Actions[0].Options.Should().ContainSingle(x => x.Label == "Canary" && x.Value == "canary");
+        spec.Cards.Should().ContainSingle();
+        spec.Cards[0].BlockId.Should().Be("summary");
+        spec.Cards[0].Fields.Should().ContainSingle(x => x.Title == "Release" && x.Text == "v1");
+        step.Parameters.Should().NotContainKey("interaction_spec");
+    }
+
+    [Fact]
+    public void Parse_WhenPresentationContainsInlineSpec_ShouldLiftTypedPresentation()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: interaction_inline_presentation
+            roles: []
+            steps:
+              - id: approve
+                type: human_approval
+                presentation:
+                  title: Inline approval
+                  body: Pick an action
+                  disposition: pinned
+                  actions:
+                    - action_id: approve
+                      label: Approve
+                      style: primary
+                  fields:
+                    - title: Environment
+                      text: prod
+                      is_short: true
+                  cards:
+                    - kind: actions
+                      title: Escalation
+                      actions:
+                        - action_id: escalate
+                          label: Escalate
+                          style: danger
+            """);
+
+        var spec = workflow.Steps[0].Presentation?.InteractionSpec;
+
+        spec.Should().NotBeNull();
+        spec!.Title.Should().Be("Inline approval");
+        spec.Body.Should().Be("Pick an action");
+        spec.Disposition.Should().Be(InteractionDisposition.Pinned);
+        spec.Actions.Should().ContainSingle(x => x.ActionId == "approve" && x.Style == InteractionActionStyle.Primary);
+        spec.Fields.Should().ContainSingle(x => x.Title == "Environment" && x.IsShort);
+        spec.Cards.Should().ContainSingle();
+        spec.Cards[0].Kind.Should().Be(InteractionCardKind.Actions);
+        spec.Cards[0].Actions.Should().ContainSingle(x => x.ActionId == "escalate" && x.Style == InteractionActionStyle.Danger);
     }
 
     [Fact]

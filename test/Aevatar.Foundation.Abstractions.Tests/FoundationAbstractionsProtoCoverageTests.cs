@@ -1,5 +1,6 @@
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Shouldly;
 
 namespace Aevatar.Foundation.Abstractions.Tests;
@@ -131,6 +132,49 @@ public class FoundationAbstractionsProtoCoverageTests
         names.ShouldContain(nameof(ChildAddedEvent));
         names.ShouldContain(nameof(ChildRemovedEvent));
         names.ShouldContain(nameof(ParentChangedEvent));
+    }
+
+    [Fact]
+    public void InteractionSpec_ShouldRoundtripTypedContract()
+    {
+        var spec = new InteractionSpec
+        {
+            Title = "Deploy",
+            Body = "Choose a route",
+            Disposition = InteractionDisposition.Ephemeral,
+        };
+        spec.Actions.Add(new InteractionAction
+        {
+            Kind = InteractionActionKind.Button,
+            ActionId = "approve",
+            Label = "Approve",
+            Value = "yes",
+            Style = InteractionActionStyle.Primary,
+        });
+        spec.Fields.Add(new InteractionField
+        {
+            Title = "Run",
+            Text = "run-1",
+            IsShort = true,
+        });
+        spec.Cards.Add(new InteractionCard
+        {
+            Kind = InteractionCardKind.Section,
+            BlockId = "summary",
+            Title = "Summary",
+            Text = "Ready",
+        });
+
+        var parsed = InteractionSpec.Parser.ParseFrom(spec.ToByteArray());
+
+        parsed.ShouldBe(spec);
+        parsed.Actions[0].Style.ShouldBe(InteractionActionStyle.Primary);
+        parsed.Fields[0].IsShort.ShouldBeTrue();
+        parsed.Cards[0].BlockId.ShouldBe("summary");
+        InteractionSpecReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(InteractionSpec));
+        InteractionSpecReflection.Descriptor.EnumTypes.Select(x => x.Name)
+            .ShouldContain(nameof(InteractionActionKind));
     }
 
     [Fact]

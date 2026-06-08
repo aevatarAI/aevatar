@@ -26,6 +26,11 @@ public sealed class StepDefinition
     public Dictionary<string, string> Parameters { get; init; } = [];
 
     /// <summary>
+    /// Presentation contract rendered outside the workflow core boundary.
+    /// </summary>
+    public StepPresentation? Presentation { get; init; }
+
+    /// <summary>
     /// 下一步骤 ID，用于线性流程控制。
     /// </summary>
     public string? Next { get; init; }

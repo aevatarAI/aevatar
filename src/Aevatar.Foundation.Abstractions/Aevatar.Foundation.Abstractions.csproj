@@ -21,6 +21,7 @@
     <ItemGroup>
         <Protobuf Include="agent_messages.proto" GrpcServices="None" />
         <Protobuf Include="ExternalLinks/external_link_messages.proto" GrpcServices="None" />
+        <Protobuf Include="Interactions/interaction_spec.proto" GrpcServices="None" />
         <Protobuf Include="runtime_actor_identity.proto" GrpcServices="None" />
     </ItemGroup>
 
