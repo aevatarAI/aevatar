@@ -453,6 +453,14 @@ public sealed class AgentBuilderCardFlowTests
             action.Kind == ActionElementKind.Select &&
             action.ActionId == "output_format" &&
             action.Options.Any(option => option.Value == "markdown"));
+        var selectValues = decision.ReplyContent.Actions
+            .Where(action => action.Kind == ActionElementKind.Select)
+            .ToDictionary(action => action.ActionId, action => action.Value);
+        selectValues.Should().Contain(new KeyValuePair<string, string>("frequency", "daily"));
+        selectValues.Should().Contain(new KeyValuePair<string, string>("weekday", "1"));
+        selectValues.Should().Contain(new KeyValuePair<string, string>("schedule_timezone", "UTC"));
+        selectValues.Should().Contain(new KeyValuePair<string, string>("delivery_target", "current_chat"));
+        selectValues.Should().Contain(new KeyValuePair<string, string>("output_format", "plain_text"));
         decision.ReplyContent.Actions.Should().Contain(action =>
             action.Kind == ActionElementKind.FormSubmit &&
             action.ActionId == "submit_scheduled_agent" &&

@@ -817,6 +817,7 @@ public static class AgentBuilderCardFlow
             "frequency",
             "Frequency",
             "Daily",
+            "daily",
             ("Daily", "daily"),
             ("Weekly", "weekly"),
             ("Hourly", "hourly"),
@@ -830,6 +831,7 @@ public static class AgentBuilderCardFlow
             "weekday",
             "Weekday",
             "Monday",
+            "1",
             ("Monday", "1"),
             ("Tuesday", "2"),
             ("Wednesday", "3"),
@@ -846,6 +848,7 @@ public static class AgentBuilderCardFlow
             "schedule_timezone",
             "Timezone",
             "UTC",
+            "UTC",
             ("UTC", "UTC"),
             ("Asia/Shanghai", "Asia/Shanghai"),
             ("Asia/Singapore", "Asia/Singapore"),
@@ -856,11 +859,13 @@ public static class AgentBuilderCardFlow
             "delivery_target",
             "Delivery",
             "Current chat",
+            "current_chat",
             ("Current chat", "current_chat")));
         content.Actions.Add(BuildSelectInput(
             "output_format",
             "Output Format",
             "Plain text",
+            "plain_text",
             ("Plain text", "plain_text"),
             ("Markdown", "markdown"),
             ("JSON", "json")));
@@ -921,8 +926,13 @@ public static class AgentBuilderCardFlow
         string actionId,
         string label,
         string placeholder,
-        params (string Label, string Value)[] options) =>
-        FeishuCardHumanInteractionPort.BuildSelectInput(actionId, label, placeholder, options);
+        string? defaultValue = null,
+        params (string Label, string Value)[] options)
+    {
+        var select = FeishuCardHumanInteractionPort.BuildSelectInput(actionId, label, placeholder, options);
+        select.Value = defaultValue ?? string.Empty;
+        return select;
+    }
 
 }
 
