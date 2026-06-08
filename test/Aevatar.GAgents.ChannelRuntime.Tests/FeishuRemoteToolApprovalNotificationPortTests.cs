@@ -79,14 +79,8 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
         longMarkdown!.Length.Should().BeLessThan(longArguments.Length + 200);
     }
 
-    [Theory]
-    [MemberData(nameof(DeliveryTargetIdCases))]
-    public async Task NotifyAsync_ShouldUseDeliveryTargetIdPrecedence(
-        string? messageId,
-        string? platformMessageId,
-        string? callerResponseId,
-        IReadOnlyDictionary<string, string> externalMetadata,
-        string expectedDeliveryTargetId)
+    [Fact]
+    public async Task NotifyAsync_ShouldUseExplicitDeliveryTargetId()
     {
         var reader = new RecordingDeliveryTargetReader();
         var dispatcher = new RecordingLarkOutboundDispatcher();
@@ -94,13 +88,18 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
 
         await port.NotifyAsync(
             BuildNotification(
-                messageId: messageId,
-                platformMessageId: platformMessageId,
-                callerResponseId: callerResponseId,
-                externalMetadata: externalMetadata),
+                deliveryTargetId: "agent-delivery-1",
+                messageId: "transient-message-id",
+                platformMessageId: "transient-platform-message-id",
+                callerResponseId: "transient-response-id",
+                externalMetadata: new Dictionary<string, string>
+                {
+                    [ChannelMetadataKeys.MessageId] = "metadata-message-id",
+                    [ChannelMetadataKeys.PlatformMessageId] = "metadata-platform-message-id",
+                }),
             CancellationToken.None);
 
-        reader.RequestedIds.Should().ContainSingle().Which.Should().Be(expectedDeliveryTargetId);
+        reader.RequestedIds.Should().ContainSingle().Which.Should().Be("agent-delivery-1");
         dispatcher.Requests.Should().ContainSingle();
         var request = dispatcher.Requests[0];
         request.MessageType.Should().Be("interactive");
@@ -113,7 +112,7 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
     }
 
     [Fact]
-    public async Task NotifyAsync_ShouldFailBeforeLookup_WhenNoDeliveryTargetIdExists()
+    public async Task NotifyAsync_ShouldFailBeforeLookup_WhenDeliveryTargetIdIsMissing()
     {
         var reader = new RecordingDeliveryTargetReader();
         var dispatcher = new RecordingLarkOutboundDispatcher();
@@ -121,73 +120,17 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
 
         Func<Task> act = () => port.NotifyAsync(
             BuildNotification(
-                messageId: null,
-                platformMessageId: null,
-                callerResponseId: null,
+                deliveryTargetId: " ",
+                messageId: "transient-message-id",
+                platformMessageId: "transient-platform-message-id",
+                callerResponseId: "transient-response-id",
                 externalMetadata: new Dictionary<string, string>(StringComparer.Ordinal)),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*requires an actor/catalog-owned delivery target id*");
+            .WithMessage("*requires an explicit delivery target id*");
         reader.RequestedIds.Should().BeEmpty();
         dispatcher.Requests.Should().BeEmpty();
-    }
-
-    public static TheoryData<string?, string?, string?, IReadOnlyDictionary<string, string>, string> DeliveryTargetIdCases()
-    {
-        var cases = new TheoryData<string?, string?, string?, IReadOnlyDictionary<string, string>, string>();
-
-        cases.Add(
-            "msg-target",
-            "platform-target",
-            "response-target",
-            new Dictionary<string, string>
-            {
-                [ChannelMetadataKeys.MessageId] = "metadata-message-target",
-                [ChannelMetadataKeys.PlatformMessageId] = "metadata-platform-target",
-            },
-            "msg-target");
-        cases.Add(
-            null,
-            "platform-target",
-            "response-target",
-            new Dictionary<string, string>
-            {
-                [ChannelMetadataKeys.MessageId] = "metadata-message-target",
-                [ChannelMetadataKeys.PlatformMessageId] = "metadata-platform-target",
-            },
-            "platform-target");
-        cases.Add(
-            null,
-            null,
-            "response-target",
-            new Dictionary<string, string>
-            {
-                [ChannelMetadataKeys.MessageId] = "metadata-message-target",
-                [ChannelMetadataKeys.PlatformMessageId] = "metadata-platform-target",
-            },
-            "response-target");
-        cases.Add(
-            null,
-            null,
-            null,
-            new Dictionary<string, string>
-            {
-                [ChannelMetadataKeys.MessageId] = "metadata-message-target",
-                [ChannelMetadataKeys.PlatformMessageId] = "metadata-platform-target",
-            },
-            "metadata-message-target");
-        cases.Add(
-            null,
-            null,
-            null,
-            new Dictionary<string, string>
-            {
-                [ChannelMetadataKeys.PlatformMessageId] = "metadata-platform-target",
-            },
-            "metadata-platform-target");
-
-        return cases;
     }
 
     private static FeishuRemoteToolApprovalNotificationPort CreatePort(
@@ -201,6 +144,7 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
             dispatcher);
 
     private static RemoteToolApprovalNotification BuildNotification(
+        string deliveryTargetId = "agent-delivery-1",
         string argumentsJson = """{"name":"value"}""",
         string? messageId = "delivery-target-1",
         string? platformMessageId = null,
@@ -209,12 +153,10 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
         new(
             RequestId: "req-1",
             RemoteApprovalId: "remote-1",
+            DeliveryTargetId: deliveryTargetId,
             ToolName: "delete-file",
-            ToolCallId: "tool-call-1",
             ArgumentsJson: argumentsJson,
-            ApprovalMode: ToolApprovalMode.Auto,
             IsDestructive: true,
-            SessionId: "session-1",
             ExpiresAt: new DateTimeOffset(2026, 6, 9, 12, 0, 0, TimeSpan.Zero),
             ToolContext: AgentToolExecutionContext.Empty with
             {

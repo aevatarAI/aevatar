@@ -9,11 +9,9 @@ public interface IRemoteToolApprovalNotificationPort
 public sealed record RemoteToolApprovalNotification(
     string RequestId,
     string RemoteApprovalId,
+    string DeliveryTargetId,
     string ToolName,
-    string ToolCallId,
     string ArgumentsJson,
-    ToolApprovalMode ApprovalMode,
     bool IsDestructive,
-    string SessionId,
     DateTimeOffset? ExpiresAt,
     AgentToolExecutionContext ToolContext);

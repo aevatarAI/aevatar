@@ -157,6 +157,33 @@ public sealed class NyxIdRemoteToolApprovalPortTests
         body.RootElement.GetProperty("approved").GetBoolean().Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(true, "{}", RemoteToolApprovalStatus.Approved)]
+    [InlineData(false, """{"status":"unexpected"}""", RemoteToolApprovalStatus.Rejected)]
+    public async Task DecideAsync_ShouldFallbackToRequestedDecision_WhenStatusIsMissingOrUnknown(
+        bool approved,
+        string responseJson,
+        RemoteToolApprovalStatus expectedStatus)
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
+        });
+        var port = CreatePort(handler);
+
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
+        var result = await port.DecideAsync(
+            new RemoteToolApprovalDecision(
+                "req-1",
+                "approval-1",
+                Approved: approved,
+                Reason: "operator decision"),
+            CancellationToken.None);
+
+        result.Status.Should().Be(expectedStatus);
+        result.Reason.Should().Be("operator decision");
+    }
+
     [Fact]
     public async Task DecideAsync_ShouldRequireTypedCredential()
     {

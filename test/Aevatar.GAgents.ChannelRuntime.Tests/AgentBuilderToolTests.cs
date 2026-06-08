@@ -957,6 +957,8 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<ILogger<FeishuCardHumanInteractionPort>>(NullLogger<FeishuCardHumanInteractionPort>.Instance);
         services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);
+        services.TryAddSingleton<ILogger<FeishuRemoteToolApprovalNotificationPort>>(
+            NullLogger<FeishuRemoteToolApprovalNotificationPort>.Instance);
         services.AddSingleton(callerScopeResolver);
 
         services.AddLarkAgentAuthoring();
@@ -967,6 +969,8 @@ public sealed class AgentBuilderToolTests
         source.Should().BeOfType<AgentBuilderToolSource>();
         provider.GetRequiredService<IHumanInteractionPort>().Should().BeOfType<FeishuCardHumanInteractionPort>();
         provider.GetRequiredService<IChannelInteractionNotificationPort>().Should().BeOfType<FeishuCardNotificationPort>();
+        provider.GetRequiredService<IRemoteToolApprovalNotificationPort>().Should()
+            .BeOfType<FeishuRemoteToolApprovalNotificationPort>();
 
         var tools = await source.DiscoverToolsAsync();
 

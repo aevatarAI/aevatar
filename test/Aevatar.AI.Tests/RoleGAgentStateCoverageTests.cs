@@ -67,6 +67,10 @@ public sealed class RoleGAgentStateCoverageTests
         .GetMethod("ExtractStateConfigOverrides", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("ExtractStateConfigOverrides not found.");
 
+    private static readonly MethodInfo ResolvePendingApprovalDeliveryTargetIdMethod = typeof(RoleGAgent)
+        .GetMethod("ResolvePendingApprovalDeliveryTargetId", BindingFlags.NonPublic | BindingFlags.Instance)
+        ?? throw new InvalidOperationException("ResolvePendingApprovalDeliveryTargetId not found.");
+
     [Fact]
     public void ApplyClearPendingApproval_ShouldHandleMissingMismatchAndMatchBranches()
     {
@@ -120,6 +124,50 @@ public sealed class RoleGAgentStateCoverageTests
         next.PendingApproval.Should().NotBeNull();
         next.PendingApproval!.RequestId.Should().Be("req-1");
         next.PendingApproval.ToolName.Should().Be("dangerous_tool");
+    }
+
+    [Fact]
+    public void ResolvePendingApprovalDeliveryTargetId_ShouldUseExplicitStableTarget_AndFallbackToActorId()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-delivery-fallback");
+
+        var fromToolContext = InvokePrivateInstance<string>(
+            ResolvePendingApprovalDeliveryTargetIdMethod,
+            agent,
+            new ChatRequestEvent
+            {
+                ToolContext = (AgentToolExecutionContext.Empty with
+                {
+                    ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["delivery_target_id"] = "agent-from-tool-context",
+                    },
+                }).ToPayload(),
+                Metadata =
+                {
+                    ["agent_id"] = "agent-from-request-metadata",
+                },
+            });
+        fromToolContext.Should().Be("agent-from-tool-context");
+
+        var fromRequestMetadata = InvokePrivateInstance<string>(
+            ResolvePendingApprovalDeliveryTargetIdMethod,
+            agent,
+            new ChatRequestEvent
+            {
+                Metadata =
+                {
+                    ["agentId"] = "agent-from-request-metadata",
+                },
+            });
+        fromRequestMetadata.Should().Be("agent-from-request-metadata");
+
+        var fallback = InvokePrivateInstance<string>(
+            ResolvePendingApprovalDeliveryTargetIdMethod,
+            agent,
+            new ChatRequestEvent());
+        fallback.Should().Be("role-delivery-fallback");
     }
 
     [Fact]
@@ -661,6 +709,7 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
             IsDestructive = true,
+            DeliveryTargetId = "agent-delivery-1",
             ToolContext = (AgentToolExecutionContext.Empty with
             {
                 Credentials = new AgentToolCredentials("token-1", "org-1", "sender-token-1"),
@@ -680,6 +729,7 @@ public sealed class RoleGAgentStateCoverageTests
         var notification = notificationPort.Notifications[0];
         notification.RequestId.Should().Be("req-1");
         notification.RemoteApprovalId.Should().Be("remote-1");
+        notification.DeliveryTargetId.Should().Be("agent-delivery-1");
         notification.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
         notification.ToolContext.Channel.MessageId.Should().Be("msg-1");
         ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())

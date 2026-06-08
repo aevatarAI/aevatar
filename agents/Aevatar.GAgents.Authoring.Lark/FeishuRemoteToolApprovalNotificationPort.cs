@@ -37,7 +37,8 @@ public sealed class FeishuRemoteToolApprovalNotificationPort : IRemoteToolApprov
     {
         ArgumentNullException.ThrowIfNull(notification);
 
-        var deliveryTargetId = ResolveDeliveryTargetId(notification);
+        var deliveryTargetId = NormalizeOptional(notification.DeliveryTargetId) ??
+                               throw new InvalidOperationException("Remote tool approval notification requires an explicit delivery target id.");
         var target = await _sender.ResolveTargetAsync(
             deliveryTargetId,
             "remote tool approval",
@@ -150,29 +151,6 @@ public sealed class FeishuRemoteToolApprovalNotificationPort : IRemoteToolApprov
         return argumentsJson.Length <= maxLength
             ? $"```json\n{argumentsJson}\n```"
             : $"```json\n{argumentsJson[..maxLength]}\n...[truncated]\n```";
-    }
-
-    private static string ResolveDeliveryTargetId(RemoteToolApprovalNotification notification)
-    {
-        var context = notification.ToolContext;
-        var deliveryTargetId =
-            NormalizeOptional(context.Channel.MessageId) ??
-            NormalizeOptional(context.Channel.PlatformMessageId) ??
-            NormalizeOptional(context.Caller.ResponseId) ??
-            TryGetExternalMetadata(context, ChannelMetadataKeys.MessageId) ??
-            TryGetExternalMetadata(context, ChannelMetadataKeys.PlatformMessageId);
-
-        if (deliveryTargetId is null)
-            throw new InvalidOperationException("Remote tool approval notification requires an actor/catalog-owned delivery target id.");
-
-        return deliveryTargetId;
-    }
-
-    private static string? TryGetExternalMetadata(AgentToolExecutionContext context, string key)
-    {
-        return context.ExternalMetadata.TryGetValue(key, out var value)
-            ? NormalizeOptional(value)
-            : null;
     }
 
     private static ComposeContext BuildComposeContext() => new()

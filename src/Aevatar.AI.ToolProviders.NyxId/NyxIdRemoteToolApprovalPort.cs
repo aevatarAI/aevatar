@@ -82,10 +82,11 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
         });
 
         var response = await _apiClient.DecideApprovalAsync(token, decision.RemoteApprovalId, body, ct);
+        var status = MapStatus(ExtractString(response, "status"));
         return new RemoteToolApprovalStatusSnapshot(
-            MapStatus(ExtractString(response, "status")) == RemoteToolApprovalStatus.Unknown
+            status == RemoteToolApprovalStatus.Unknown
                 ? decision.Approved ? RemoteToolApprovalStatus.Approved : RemoteToolApprovalStatus.Rejected
-                : MapStatus(ExtractString(response, "status")),
+                : status,
             ExtractString(response, "reason") ?? decision.Reason,
             ExtractDateTimeOffset(response, "expires_at"));
     }

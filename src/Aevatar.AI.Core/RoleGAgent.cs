@@ -385,12 +385,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 new RemoteToolApprovalNotification(
                     pending.RequestId,
                     submission.RemoteApprovalId,
+                    pending.DeliveryTargetId,
                     pending.ToolName,
-                    pending.ToolCallId,
                     pending.ArgumentsJson,
-                    ToolApprovalMode.Auto,
                     pending.IsDestructive,
-                    pending.SessionId,
                     submission.ExpiresAt,
                     ResolvePendingToolContext(pending)),
                 CancellationToken.None);
@@ -430,6 +428,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         {
             RequestId = receipt.ApprovalRequestId,
             SessionId = request.SessionId ?? string.Empty,
+            DeliveryTargetId = ResolvePendingApprovalDeliveryTargetId(request),
             ToolName = receipt.ToolName ?? string.Empty,
             ToolCallId = receipt.CallId ?? string.Empty,
             ArgumentsJson = ResolveToolArguments(replayRecord.ToolCalls, receipt.CallId),
@@ -451,6 +450,28 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return string.IsNullOrWhiteSpace(toolCall?.ArgumentsJson)
             ? "{}"
             : toolCall.ArgumentsJson;
+    }
+
+    private string ResolvePendingApprovalDeliveryTargetId(ChatRequestEvent request)
+    {
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        return NormalizeToolContextValue(TryGetDeliveryTargetId(toolContext.ExternalMetadata)) ??
+               NormalizeToolContextValue(TryGetDeliveryTargetId(request.Metadata)) ??
+               Id;
+    }
+
+    private static string? TryGetDeliveryTargetId(IReadOnlyDictionary<string, string>? values)
+    {
+        if (values is null || values.Count == 0)
+            return null;
+
+        foreach (var key in new[] { "delivery_target_id", "deliveryTargetId", "agent_id", "agentId" })
+        {
+            if (values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
     }
 
     // Stored lease from the last scheduled timeout, kept in-memory for cancellation.

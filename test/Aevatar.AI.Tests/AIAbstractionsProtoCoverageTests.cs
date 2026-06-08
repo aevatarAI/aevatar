@@ -330,6 +330,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 RemoteApprovalId = "remote-1",
                 RemoteStatusCheckAttempt = 2,
                 RemoteApprovalExpiresAtUnixMs = 123456,
+                DeliveryTargetId = "agent-delivery-1",
                 ToolContext = new AgentToolExecutionContext(
                     new AgentToolRequestIdentity("req-1", "call-1"),
                     AgentToolCredentials.Empty,
@@ -408,6 +409,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.Sessions["session-1"].ToolReceipts.Should().ContainSingle(x => x.SubjectId == "skill-1");
         state.PendingApproval.Should().NotBeNull();
         state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
+        state.PendingApproval.DeliveryTargetId.Should().Be("agent-delivery-1");
         state.PendingApproval.ToolContext.Should().NotBeNull();
         state.PendingApproval.RemoteStatusCheckAttempt.Should().Be(2);
         state.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(123456);
@@ -498,6 +500,7 @@ public sealed class AIAbstractionsProtoCoverageTests
             RemoteApprovalId = "remote-typed",
             RemoteStatusCheckAttempt = 2,
             RemoteApprovalExpiresAtUnixMs = 123_456,
+            DeliveryTargetId = "agent-delivery-typed",
             ToolContext = (AgentToolExecutionContext.Empty with
             {
                 Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
@@ -525,6 +528,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pending.RemoteApprovalId.Should().Be("remote-typed");
         pending.RemoteStatusCheckAttempt.Should().Be(2);
         pending.RemoteApprovalExpiresAtUnixMs.Should().Be(123_456);
+        pending.DeliveryTargetId.Should().Be("agent-delivery-typed");
     }
 
     [Fact]
