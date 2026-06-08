@@ -99,6 +99,7 @@ message AgentToolExecutionContextPayload {
   AgentToolConnectedServicesContextPayload connected_services = 7;
   map<string, string> external_metadata = 8;
   AgentSkillRecoveryContextPayload skill_recovery = 9;
+  string delivery_target_id = 10;
 }
 
 message AgentSkillRecoveryContextPayload {

@@ -13,5 +13,4 @@ public sealed record RemoteToolApprovalNotification(
     string ToolName,
     string ArgumentsJson,
     bool IsDestructive,
-    DateTimeOffset? ExpiresAt,
-    AgentToolExecutionContext ToolContext);
+    DateTimeOffset? ExpiresAt);

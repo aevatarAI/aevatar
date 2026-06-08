@@ -1790,6 +1790,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             }).ToPayload();
         }
 
+        request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            DeliveryTargetId = registration.ScopeId,
+        }).ToPayload();
+
         request.LlmControl = (await BuildOwnerLlmControlAsync(
                 inboundEvent,
                 LLMControlContextMapper.FromPayload(request.LlmControl),

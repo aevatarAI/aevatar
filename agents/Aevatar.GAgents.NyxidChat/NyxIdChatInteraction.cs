@@ -317,6 +317,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
             Caller = new AgentToolCallerContext(command.ScopeId, command.ScopeId, command.SessionId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, command.ScopeId, null, null),
             SkillRecovery = skillRecovery,
+            DeliveryTargetId = command.ActorId,
         };
         return effectiveControl.ToToolContext(toolContext);
     }

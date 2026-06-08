@@ -340,6 +340,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
                     new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
                     AgentSkillRecoveryContext.Empty,
+                    "agent-delivery-1",
                     new Dictionary<string, string>(StringComparer.Ordinal)
                     {
                         ["trace-id"] = "trace-from-context",
@@ -424,6 +425,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pendingContext.Routing.ModelOverride.Should().Be("model-a");
         pendingContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         pendingContext.ConnectedServices.ContextJson.Should().Be("""{"service":"telegram"}""");
+        pendingContext.DeliveryTargetId.Should().Be("agent-delivery-1");
         pendingContext.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-from-context");
         state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
         state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
@@ -510,6 +512,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 SenderBinding = new AgentToolSenderBindingContext("binding-1"),
                 Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
                 ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
+                DeliveryTargetId = "agent-delivery-typed",
                 ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["trace-id"] = "trace-typed",
@@ -524,6 +527,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pending.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
         pending.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         pending.ToolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
+        pending.ToolContext.DeliveryTargetId.Should().Be("agent-delivery-typed");
         pending.ToolContext.ExternalMetadata["trace-id"].Should().Be("trace-typed");
         pending.RemoteApprovalId.Should().Be("remote-typed");
         pending.RemoteStatusCheckAttempt.Should().Be(2);

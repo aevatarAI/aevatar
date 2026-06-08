@@ -378,6 +378,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         context.Routing.MaxToolRoundsOverride.HasValue ||
         !string.IsNullOrWhiteSpace(context.Routing.UserMemoryPrompt) ||
         !string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson) ||
+        !string.IsNullOrWhiteSpace(context.DeliveryTargetId) ||
         context.ExternalMetadata.Count > 0 ||
         context.SkillRecovery.RequireInitialOrnnSearch ||
         context.SkillRecovery.RequireOrnnSearchOnBlocker ||

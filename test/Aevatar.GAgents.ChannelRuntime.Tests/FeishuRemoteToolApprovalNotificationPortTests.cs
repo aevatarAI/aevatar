@@ -88,15 +88,7 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
 
         await port.NotifyAsync(
             BuildNotification(
-                deliveryTargetId: "agent-delivery-1",
-                messageId: "transient-message-id",
-                platformMessageId: "transient-platform-message-id",
-                callerResponseId: "transient-response-id",
-                externalMetadata: new Dictionary<string, string>
-                {
-                    [ChannelMetadataKeys.MessageId] = "metadata-message-id",
-                    [ChannelMetadataKeys.PlatformMessageId] = "metadata-platform-message-id",
-                }),
+                deliveryTargetId: "agent-delivery-1"),
             CancellationToken.None);
 
         reader.RequestedIds.Should().ContainSingle().Which.Should().Be("agent-delivery-1");
@@ -119,12 +111,7 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
         var port = CreatePort(reader, dispatcher);
 
         Func<Task> act = () => port.NotifyAsync(
-            BuildNotification(
-                deliveryTargetId: " ",
-                messageId: "transient-message-id",
-                platformMessageId: "transient-platform-message-id",
-                callerResponseId: "transient-response-id",
-                externalMetadata: new Dictionary<string, string>(StringComparer.Ordinal)),
+            BuildNotification(deliveryTargetId: " "),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -145,11 +132,7 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
 
     private static RemoteToolApprovalNotification BuildNotification(
         string deliveryTargetId = "agent-delivery-1",
-        string argumentsJson = """{"name":"value"}""",
-        string? messageId = "delivery-target-1",
-        string? platformMessageId = null,
-        string? callerResponseId = null,
-        IReadOnlyDictionary<string, string>? externalMetadata = null) =>
+        string argumentsJson = """{"name":"value"}""") =>
         new(
             RequestId: "req-1",
             RemoteApprovalId: "remote-1",
@@ -157,25 +140,7 @@ public sealed class FeishuRemoteToolApprovalNotificationPortTests
             ToolName: "delete-file",
             ArgumentsJson: argumentsJson,
             IsDestructive: true,
-            ExpiresAt: new DateTimeOffset(2026, 6, 9, 12, 0, 0, TimeSpan.Zero),
-            ToolContext: AgentToolExecutionContext.Empty with
-            {
-                Credentials = new AgentToolCredentials(
-                    NyxIdAccessToken: "nyx-access-token-secret",
-                    NyxIdOrgToken: "nyx-org-token-secret",
-                    SenderNyxIdAccessToken: "sender-token-secret"),
-                Caller = new AgentToolCallerContext(
-                    ScopeId: "scope-1",
-                    OwnerSubject: "owner-1",
-                    ResponseId: callerResponseId),
-                Channel = new AgentToolChannelContext(
-                    Platform: "lark",
-                    SenderId: "sender-1",
-                    RegistrationScopeId: "registration-1",
-                    MessageId: messageId,
-                    PlatformMessageId: platformMessageId),
-                ExternalMetadata = externalMetadata ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            });
+            ExpiresAt: new DateTimeOffset(2026, 6, 9, 12, 0, 0, TimeSpan.Zero));
 
     private static JsonElement FindButton(JsonElement bodyElements, string label) =>
         bodyElements

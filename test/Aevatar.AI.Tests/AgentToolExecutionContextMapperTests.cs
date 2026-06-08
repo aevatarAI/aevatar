@@ -264,10 +264,12 @@ public sealed class AgentToolExecutionContextMapperTests
                 MaxOrnnSearchAttempts: 2,
                 CommandArguments: " ship ",
                 DiscoveryRequested: true),
+            " delivery-target-1 ",
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external-trace"] = "trace-1",
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "legacy-token",
+                ["delivery_target_id"] = "legacy-delivery-target",
                 ["telegram.chat_id"] = "10001",
             });
 
@@ -302,6 +304,7 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.SkillRecovery.MaxOrnnSearchAttempts.Should().Be(2);
         copy.SkillRecovery.CommandArguments.Should().Be("ship");
         copy.SkillRecovery.DiscoveryRequested.Should().BeTrue();
+        copy.DeliveryTargetId.Should().Be("delivery-target-1");
         copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
     }
 

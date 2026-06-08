@@ -24,6 +24,10 @@ public static class AgentToolExecutionContextMapper
         LLMRequestMetadataKeys.ConnectedServicesContext,
         LLMRequestMetadataKeys.SenderBindingId,
         LLMRequestMetadataKeys.SenderNyxIdAccessToken,
+        "delivery_target_id",
+        "deliveryTargetId",
+        "agent_id",
+        "agentId",
         "platform",
         "channel.platform",
         "sender_id",
@@ -135,6 +139,7 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Routing?.UserMemoryPrompt)),
             new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
             FromSkillRecoveryPayload(payload.SkillRecovery),
+            AgentToolExecutionContext.Normalize(payload.DeliveryTargetId),
             StripOwnedControlKeys(payload.ExternalMetadata));
     }
 
@@ -184,6 +189,7 @@ public static class AgentToolExecutionContextMapper
                 ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
             },
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
+            DeliveryTargetId = context.DeliveryTargetId ?? string.Empty,
         };
 
         if (context.Routing.MaxToolRoundsOverride.HasValue)

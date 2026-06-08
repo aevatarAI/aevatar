@@ -127,7 +127,7 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
-    public void ResolvePendingApprovalDeliveryTargetId_ShouldUseExplicitStableTarget_AndFallbackToActorId()
+    public void ResolvePendingApprovalDeliveryTargetId_ShouldUseTypedTargetOnly_AndFallbackToActorId()
     {
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-delivery-fallback");
@@ -139,10 +139,8 @@ public sealed class RoleGAgentStateCoverageTests
             {
                 ToolContext = (AgentToolExecutionContext.Empty with
                 {
-                    ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["delivery_target_id"] = "agent-from-tool-context",
-                    },
+                    DeliveryTargetId = "agent-from-tool-context",
+                    ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal),
                 }).ToPayload(),
                 Metadata =
                 {
@@ -161,7 +159,7 @@ public sealed class RoleGAgentStateCoverageTests
                     ["agentId"] = "agent-from-request-metadata",
                 },
             });
-        fromRequestMetadata.Should().Be("agent-from-request-metadata");
+        fromRequestMetadata.Should().Be("role-delivery-fallback");
 
         var fallback = InvokePrivateInstance<string>(
             ResolvePendingApprovalDeliveryTargetIdMethod,
@@ -730,8 +728,6 @@ public sealed class RoleGAgentStateCoverageTests
         notification.RequestId.Should().Be("req-1");
         notification.RemoteApprovalId.Should().Be("remote-1");
         notification.DeliveryTargetId.Should().Be("agent-delivery-1");
-        notification.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
-        notification.ToolContext.Channel.MessageId.Should().Be("msg-1");
         ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
             .TimeoutRequests.Should().ContainSingle(x =>
                 x.CallbackId == "tool-approval-remote-status-req-1-remote-1-1" &&

@@ -14,6 +14,7 @@ public sealed record AgentToolExecutionContext(
     LLMRequestRoutingContext Routing,
     AgentToolConnectedServicesContext ConnectedServices,
     AgentSkillRecoveryContext SkillRecovery,
+    string? DeliveryTargetId,
     IReadOnlyDictionary<string, string> ExternalMetadata)
 {
     public static AgentToolExecutionContext Empty { get; } = new(
@@ -25,7 +26,32 @@ public sealed record AgentToolExecutionContext(
         LLMRequestRoutingContext.Empty,
         AgentToolConnectedServicesContext.Empty,
         AgentSkillRecoveryContext.Empty,
+        null,
         new Dictionary<string, string>(StringComparer.Ordinal));
+
+    public AgentToolExecutionContext(
+        AgentToolRequestIdentity request,
+        AgentToolCredentials credentials,
+        AgentToolCallerContext caller,
+        AgentToolChannelContext channel,
+        AgentToolSenderBindingContext senderBinding,
+        LLMRequestRoutingContext routing,
+        AgentToolConnectedServicesContext connectedServices,
+        AgentSkillRecoveryContext skillRecovery,
+        IReadOnlyDictionary<string, string> externalMetadata)
+        : this(
+            request,
+            credentials,
+            caller,
+            channel,
+            senderBinding,
+            routing,
+            connectedServices,
+            skillRecovery,
+            null,
+            externalMetadata)
+    {
+    }
 
     public AgentToolExecutionContext WithCallId(string? callId) =>
         this with { Request = Request with { CallId = Normalize(callId) } };

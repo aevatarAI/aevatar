@@ -389,8 +389,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     pending.ToolName,
                     pending.ArgumentsJson,
                     pending.IsDestructive,
-                    submission.ExpiresAt,
-                    ResolvePendingToolContext(pending)),
+                    submission.ExpiresAt),
                 CancellationToken.None);
         }
         catch (Exception ex)
@@ -452,27 +451,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             : toolCall.ArgumentsJson;
     }
 
-    private string ResolvePendingApprovalDeliveryTargetId(ChatRequestEvent request)
-    {
-        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
-        return NormalizeToolContextValue(TryGetDeliveryTargetId(toolContext.ExternalMetadata)) ??
-               NormalizeToolContextValue(TryGetDeliveryTargetId(request.Metadata)) ??
-               Id;
-    }
-
-    private static string? TryGetDeliveryTargetId(IReadOnlyDictionary<string, string>? values)
-    {
-        if (values is null || values.Count == 0)
-            return null;
-
-        foreach (var key in new[] { "delivery_target_id", "deliveryTargetId", "agent_id", "agentId" })
-        {
-            if (values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
-                return value;
-        }
-
-        return null;
-    }
+    private string ResolvePendingApprovalDeliveryTargetId(ChatRequestEvent request) =>
+        NormalizeToolContextValue(AgentToolExecutionContextMapper.FromPayload(request.ToolContext).DeliveryTargetId) ??
+        Id;
 
     // Stored lease from the last scheduled timeout, kept in-memory for cancellation.
     // Not persisted — if the actor deactivates, the durable callback runtime handles
