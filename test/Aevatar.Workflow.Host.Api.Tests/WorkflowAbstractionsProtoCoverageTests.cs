@@ -13,8 +13,14 @@ public class WorkflowAbstractionsProtoCoverageTests
         {
             WorkflowName = "wf",
             Input = "{\"a\":1}",
+            ResumeSeed = new WorkflowRunResumeSeed
+            {
+                SourceRunId = "run-source",
+                StartAtStepId = "step-b",
+            },
         };
         evt.Parameters["k"] = "v";
+        evt.ResumeSeed.Variables["step-a"] = "alpha";
 
         var clone = evt.Clone();
         clone.Should().BeEquivalentTo(evt);
@@ -23,6 +29,35 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.WorkflowName.Should().Be("wf");
         parsed.Input.Should().Contain("a");
         parsed.Parameters["k"].Should().Be("v");
+        parsed.ResumeSeed.SourceRunId.Should().Be("run-source");
+        parsed.ResumeSeed.StartAtStepId.Should().Be("step-b");
+        parsed.ResumeSeed.Variables["step-a"].Should().Be("alpha");
+    }
+
+    [Fact]
+    public void WorkflowRunResumeSeedAndForkRequestedEvent_ShouldRoundtrip()
+    {
+        var seed = new WorkflowRunResumeSeed
+        {
+            SourceRunId = "run-source",
+            StartAtStepId = "step-b",
+        };
+        seed.Variables["step-a"] = "alpha";
+
+        var parsedSeed = WorkflowRunResumeSeed.Parser.ParseFrom(seed.ToByteArray());
+        parsedSeed.Should().BeEquivalentTo(seed);
+
+        var requested = new WorkflowRunForkRequestedEvent
+        {
+            SourceRunId = "run-source",
+            StartAtStepId = "step-b",
+            Attempt = 2,
+            ScopeId = "scope-1",
+        };
+        var parsedRequested = WorkflowRunForkRequestedEvent.Parser.ParseFrom(requested.ToByteArray());
+        parsedRequested.Should().BeEquivalentTo(requested);
+        ((IMessage)parsedSeed).Descriptor.Name.Should().Be(nameof(WorkflowRunResumeSeed));
+        ((IMessage)parsedRequested).Descriptor.Name.Should().Be(nameof(WorkflowRunForkRequestedEvent));
     }
 
     [Fact]
@@ -275,6 +310,8 @@ public class WorkflowAbstractionsProtoCoverageTests
     {
         WorkflowExecutionMessagesReflection.Descriptor.Should().NotBeNull();
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(StartWorkflowEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowRunResumeSeed));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowRunForkRequestedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowCompletedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(StepRequestEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(StepCompletedEvent));
