@@ -229,9 +229,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             if (action.Kind != ActionElementKind.FormSubmit)
                 continue;
 
-            action.WorkflowResume = BuildWorkflowResumePayload(
-                request,
-                ResolveApprovedValue(request, action.ActionId));
+            action.WorkflowResume = BuildWorkflowResumePayload(request, ResolveTypedApprovalDecision(action));
         }
 
         return intent;
@@ -248,21 +246,10 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         }
     }
 
-    private static bool? ResolveApprovedValue(
-        HumanInteractionRequest request,
-        string? actionId)
-    {
-        if (!SupportsApproveReject(request))
-            return null;
-
-        var normalized = (actionId ?? string.Empty).Trim();
-        if (string.Equals(normalized, "reject", StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (string.Equals(normalized, "approve", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        return null;
-    }
+    private static bool? ResolveTypedApprovalDecision(ActionElement action) =>
+        action.WorkflowResume?.HasApproved == true
+            ? action.WorkflowResume.Approved
+            : null;
 
     private static ActionElement BuildTextInput(string actionId, string label, string placeholder) =>
         new()

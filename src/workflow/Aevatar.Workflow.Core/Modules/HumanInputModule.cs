@@ -5,7 +5,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
@@ -43,7 +42,7 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "human_input") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-            if (HasInteractionTemplateSpec(request.StepParameters?.InteractionTemplateSpec))
+            if (StepPresentation.HasInteractionTemplateSpec(request.StepParameters?.InteractionTemplateSpec))
             {
                 await PublishUnsupportedInteractionTemplateAsync(request, runId, ctx, ct);
                 return;
@@ -176,7 +175,7 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
         StepRequestEvent request)
     {
         var interaction = request.StepParameters?.InteractionSpec;
-        if (!HasInteractionSpec(interaction))
+        if (!StepPresentation.HasInteractionSpec(interaction))
             return;
 
         suspended.Interaction = interaction!.Clone();
@@ -190,20 +189,6 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
         if (!string.IsNullOrWhiteSpace(deliveryTargetId))
             suspended.DeliveryTargetId = deliveryTargetId;
     }
-
-    private static bool HasInteractionSpec(InteractionSpec? spec) =>
-        spec is not null &&
-        (!string.IsNullOrWhiteSpace(spec.Title) ||
-         !string.IsNullOrWhiteSpace(spec.Body) ||
-         spec.Actions.Count > 0 ||
-         spec.Fields.Count > 0 ||
-         spec.Cards.Count > 0 ||
-         spec.Disposition != InteractionDisposition.Unspecified);
-
-    private static bool HasInteractionTemplateSpec(InteractionTemplateSpec? spec) =>
-        spec is not null &&
-        (!string.IsNullOrWhiteSpace(spec.TemplateId) ||
-         spec.TemplateVariable.Count > 0);
 
     private static Task PublishUnsupportedInteractionTemplateAsync(
         StepRequestEvent request,

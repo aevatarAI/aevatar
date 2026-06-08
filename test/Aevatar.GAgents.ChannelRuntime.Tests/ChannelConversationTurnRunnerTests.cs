@@ -625,6 +625,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter, services);
 
         var activity = BuildCardActionActivity("evt-card-1");
+        activity.Content.CardAction.ActionKind = ActionElementKind.FormSubmit;
         activity.Content.CardAction.WorkflowResume = new WorkflowResumeActionPayload
         {
             ActorId = "actor-1",

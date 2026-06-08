@@ -219,6 +219,7 @@ public sealed class ChannelAbstractionsProtoTests
             ActionId = "route",
             Label = "Route",
             Style = InteractionActionStyle.Primary,
+            ApprovalDecision = InteractionApprovalDecision.Approve,
             Options =
             {
                 new InteractionOption { Label = "Canary", Value = "canary" },
@@ -236,6 +237,7 @@ public sealed class ChannelAbstractionsProtoTests
         content.Text.ShouldBe("Review\nDeploy v1?");
         content.Disposition.ShouldBe(MessageDisposition.Ephemeral);
         content.Actions.ShouldHaveSingleItem().Kind.ShouldBe(ActionElementKind.Select);
+        content.Actions[0].WorkflowResume.Approved.ShouldBeTrue();
         content.Actions[0].Options.ShouldHaveSingleItem().Value.ShouldBe("canary");
         content.Cards.ShouldHaveSingleItem().Fields.ShouldHaveSingleItem().IsShort.ShouldBeTrue();
     }

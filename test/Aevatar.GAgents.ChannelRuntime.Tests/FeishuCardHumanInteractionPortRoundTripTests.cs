@@ -162,16 +162,18 @@ public sealed class FeishuCardHumanInteractionPortRoundTripTests
                     new InteractionAction
                     {
                         Kind = InteractionActionKind.FormSubmit,
-                        ActionId = "approve",
+                        ActionId = "primary-review-action",
                         Label = "Approve",
                         Style = InteractionActionStyle.Primary,
+                        ApprovalDecision = InteractionApprovalDecision.Approve,
                     },
                     new InteractionAction
                     {
                         Kind = InteractionActionKind.FormSubmit,
-                        ActionId = "reject",
+                        ActionId = "danger-review-action",
                         Label = "Reject",
                         Style = InteractionActionStyle.Danger,
+                        ApprovalDecision = InteractionApprovalDecision.Reject,
                     },
                 },
             },
@@ -216,6 +218,7 @@ public sealed class FeishuCardHumanInteractionPortRoundTripTests
         cardAction.WorkflowResume.ActorId.Should().Be("actor-T");
         cardAction.WorkflowResume.RunId.Should().Be("run-T");
         cardAction.WorkflowResume.StepId.Should().Be("approval-T");
+        cardAction.Arguments["action_id"].Should().Be("danger-review-action");
         cardAction.WorkflowResume.Approved.Should().BeFalse();
         cardAction.WorkflowResume.UserInput.Should().Be("Needs edits");
 

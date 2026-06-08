@@ -100,6 +100,7 @@ public static class InteractionSpecMapper
             IsDanger = action.Style == InteractionActionStyle.Danger,
             IsDisabled = action.Disabled,
         };
+        ApplyApprovalDecision(action, element);
 
         foreach (var option in action.Options)
         {
@@ -114,6 +115,23 @@ public static class InteractionSpecMapper
         }
 
         return element;
+    }
+
+    private static void ApplyApprovalDecision(InteractionAction action, ActionElement element)
+    {
+        var approved = action.ApprovalDecision switch
+        {
+            InteractionApprovalDecision.Approve => true,
+            InteractionApprovalDecision.Reject => false,
+            _ => (bool?)null,
+        };
+        if (!approved.HasValue)
+            return;
+
+        element.WorkflowResume = new WorkflowResumeActionPayload
+        {
+            Approved = approved.Value,
+        };
     }
 
     private static ActionElementKind MapActionKind(InteractionActionKind kind, int optionCount) =>

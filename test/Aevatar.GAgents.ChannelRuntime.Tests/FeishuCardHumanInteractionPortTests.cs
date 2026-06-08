@@ -270,16 +270,18 @@ public sealed class FeishuCardHumanInteractionPortTests
                     new InteractionAction
                     {
                         Kind = InteractionActionKind.FormSubmit,
-                        ActionId = "approve",
+                        ActionId = "primary-review-action",
                         Label = "Approve typed",
                         Style = InteractionActionStyle.Primary,
+                        ApprovalDecision = InteractionApprovalDecision.Approve,
                     },
                     new InteractionAction
                     {
                         Kind = InteractionActionKind.FormSubmit,
-                        ActionId = "reject",
+                        ActionId = "danger-review-action",
                         Label = "Reject typed",
                         Style = InteractionActionStyle.Danger,
+                        ApprovalDecision = InteractionApprovalDecision.Reject,
                     },
                 },
             },
@@ -297,10 +299,18 @@ public sealed class FeishuCardHumanInteractionPortTests
                          e.GetProperty("text").GetProperty("content").GetString() == "Approve typed");
         var approveValue = approveButton.GetProperty("behaviors")[0].GetProperty("value");
         approveValue.GetProperty("action_kind").GetString().Should().Be("form_submit");
+        approveValue.GetProperty("action_id").GetString().Should().Be("primary-review-action");
         approveValue.GetProperty("actor_id").GetString().Should().Be("workflow-actor-typed");
         approveValue.GetProperty("run_id").GetString().Should().Be("run-typed");
         approveValue.GetProperty("step_id").GetString().Should().Be("approval-typed");
         approveValue.GetProperty("approved").GetBoolean().Should().BeTrue();
+        var rejectButton = formElements
+            .EnumerateArray()
+            .Single(e => e.GetProperty("tag").GetString() == "button" &&
+                         e.GetProperty("text").GetProperty("content").GetString() == "Reject typed");
+        var rejectValue = rejectButton.GetProperty("behaviors")[0].GetProperty("value");
+        rejectValue.GetProperty("action_id").GetString().Should().Be("danger-review-action");
+        rejectValue.GetProperty("approved").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

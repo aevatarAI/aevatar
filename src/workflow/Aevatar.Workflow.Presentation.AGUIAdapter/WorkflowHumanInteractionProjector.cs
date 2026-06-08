@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection;
 
 namespace Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -53,7 +54,7 @@ public sealed class WorkflowHumanInteractionProjector
             Prompt = ResolvePrompt(evt),
             Content = string.IsNullOrWhiteSpace(evt.Content) ? null : evt.Content,
             Options = ResolveOptions(evt),
-            InteractionSpec = HasInteractionSpec(evt.Interaction) ? evt.Interaction.Clone() : null,
+            InteractionSpec = StepPresentation.HasInteractionSpec(evt.Interaction) ? evt.Interaction.Clone() : null,
             TimeoutSeconds = evt.TimeoutSeconds,
             Annotations = annotations,
         };
@@ -77,7 +78,7 @@ public sealed class WorkflowHumanInteractionProjector
 
     private static IReadOnlyList<string> ResolveOptions(WorkflowSuspendedEvent evt)
     {
-        if (HasInteractionSpec(evt.Interaction))
+        if (StepPresentation.HasInteractionSpec(evt.Interaction))
         {
             var formActions = evt.Interaction.Actions
                 .Where(action => action.Kind == InteractionActionKind.FormSubmit)
@@ -113,13 +114,4 @@ public sealed class WorkflowHumanInteractionProjector
 
         return annotations;
     }
-
-    private static bool HasInteractionSpec(InteractionSpec? spec) =>
-        spec is not null &&
-        (!string.IsNullOrWhiteSpace(spec.Title) ||
-         !string.IsNullOrWhiteSpace(spec.Body) ||
-         spec.Actions.Count > 0 ||
-         spec.Fields.Count > 0 ||
-         spec.Cards.Count > 0 ||
-         spec.Disposition != InteractionDisposition.Unspecified);
 }

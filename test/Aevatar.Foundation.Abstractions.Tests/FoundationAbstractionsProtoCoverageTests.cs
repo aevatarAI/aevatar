@@ -150,6 +150,7 @@ public class FoundationAbstractionsProtoCoverageTests
             Label = "Approve",
             Value = "yes",
             Style = InteractionActionStyle.Primary,
+            ApprovalDecision = InteractionApprovalDecision.Approve,
         });
         spec.Fields.Add(new InteractionField
         {
@@ -169,12 +170,15 @@ public class FoundationAbstractionsProtoCoverageTests
 
         parsed.ShouldBe(spec);
         parsed.Actions[0].Style.ShouldBe(InteractionActionStyle.Primary);
+        parsed.Actions[0].ApprovalDecision.ShouldBe(InteractionApprovalDecision.Approve);
         parsed.Fields[0].IsShort.ShouldBeTrue();
         parsed.Cards[0].BlockId.ShouldBe("summary");
         InteractionSpecReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(InteractionSpec));
         InteractionSpecReflection.Descriptor.EnumTypes.Select(x => x.Name)
             .ShouldContain(nameof(InteractionActionKind));
+        InteractionSpecReflection.Descriptor.EnumTypes.Select(x => x.Name)
+            .ShouldContain(nameof(InteractionApprovalDecision));
     }
 
     [Fact]
