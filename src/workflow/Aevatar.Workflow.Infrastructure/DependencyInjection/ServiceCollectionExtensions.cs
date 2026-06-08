@@ -1,9 +1,12 @@
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Schedules;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
+using Aevatar.Workflow.Infrastructure.Schedules;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection.Workflows;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +35,26 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowDefinitionParser>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
+        return services;
+    }
+
+    public static IServiceCollection AddWorkflowScheduleInfrastructure(
+        this IServiceCollection services,
+        Action<WorkflowScheduleStoreOptions>? configureStore = null)
+    {
+        services.AddOptions<WorkflowScheduleStoreOptions>();
+        if (configureStore != null)
+            services.Configure(configureStore);
+
+        services.TryAddSingleton<IWorkflowScheduleStore, FileWorkflowScheduleStore>();
+        services.Replace(ServiceDescriptor.Singleton<IWorkflowScheduleCredentialExchangePort>(sp =>
+        {
+            var broker = sp.GetService<INyxIdCapabilityBroker>();
+            return broker == null
+                ? new NoopWorkflowScheduleCredentialExchangePort()
+                : ActivatorUtilities.CreateInstance<NyxIdWorkflowScheduleCredentialExchangePort>(sp, broker);
+        }));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowScheduleDispatcherHostedService>());
         return services;
     }
 
