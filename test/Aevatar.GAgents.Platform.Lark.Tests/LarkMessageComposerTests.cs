@@ -452,6 +452,62 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenRenderingDisabledSelectAndFormSubmit_EmitsLarkDisabledFlags()
+    {
+        var intent = new MessageContent { Text = "Configure deployment" };
+        var select = new ActionElement
+        {
+            Kind = ActionElementKind.Select,
+            ActionId = "environment",
+            Label = "Environment",
+            Placeholder = "Choose environment",
+            IsDisabled = true,
+        };
+        select.Options.Add(new ActionOption { Label = "Production", Value = "prod" });
+        intent.Actions.Add(select);
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = "submit_deploy",
+            Label = "Submit",
+            IsDisabled = true,
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var formChildren = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "form")
+            .GetProperty("elements");
+        var selectElement = formChildren
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "select_static");
+        selectElement.GetProperty("name").GetString().ShouldBe("environment");
+        selectElement.GetProperty("disabled").GetBoolean().ShouldBeTrue();
+
+        var submitButton = formChildren
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) &&
+                        tag.GetString() == "button" &&
+                        e.GetProperty("name").GetString() == "submit_deploy");
+        submitButton.GetProperty("disabled").GetBoolean().ShouldBeTrue();
+    }
+
+    [Fact]
     public void Compose_WhenCardContainsActions_RendersThoseActions()
     {
         var intent = new MessageContent();
