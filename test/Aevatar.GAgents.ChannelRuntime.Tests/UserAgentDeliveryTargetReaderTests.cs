@@ -20,6 +20,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 Id = "agent-1",
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
+                OutputFormat = SkillRunnerOutputFormat.Text,
             });
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
@@ -35,6 +36,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
         target.Should().NotBeNull();
         target!.NyxApiKey.Should().Be("live-key");
         target.ConversationId.Should().Be("oc_chat_1");
+        target.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
     }
 
     [Fact]

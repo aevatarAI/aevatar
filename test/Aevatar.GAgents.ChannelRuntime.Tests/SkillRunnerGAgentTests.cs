@@ -104,6 +104,20 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_ShouldPersistOutputFormatIntoOutboundConfig()
+    {
+        var command = CreateInitializeCommand();
+        command.OutputFormat = SkillRunnerOutputFormat.FeishuDoc;
+
+        await _agent.HandleInitializeAsync(command);
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
+        initialized.OutboundConfig.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+        _agent.State.OutboundConfig.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_WithSkillRefOnly_ShouldPersistTypedReferenceAndNoInlineContent()
     {
         var command = CreateInitializeCommand();
@@ -823,6 +837,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         var ownerScope = OwnerScope.ForNyxIdNative("user-1");
         var initialize = CreateInitializeCommand();
+        initialize.OutputFormat = SkillRunnerOutputFormat.Text;
         initialize.OutboundConfig.OwnerScope = ownerScope;
 #pragma warning disable CS0612 // stale legacy fields must not be emitted when owner_scope exists
         initialize.OutboundConfig.Platform = "nyxid";
@@ -836,6 +851,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var command = captured[0].Payload.Unpack<UserAgentCatalogUpsertCommand>();
         command.OwnerScope.Should().NotBeNull();
         command.OwnerScope!.MatchesStrictly(ownerScope).Should().BeTrue();
+        command.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
 #pragma warning disable CS0612
         command.Platform.Should().BeEmpty();
         command.OwnerNyxUserId.Should().BeEmpty();
@@ -1858,7 +1874,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ExecuteSkillAsync_OverLimitOutput_ShouldUseDocxDecisionReply_WhenLinkReturned()
+    public async Task ExecuteSkillAsync_AutoOverLimitOutput_ShouldUseDocxDecisionReply_WhenLinkReturned()
     {
         var output = new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength + 100);
         var provider = new StubStreamingProviderFactory(
@@ -1907,6 +1923,89 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .Should().BeTrue();
         handler.Requests.Should().ContainSingle();
         ExtractLarkText(handler.Bodies[0]!).Should().Be("Full output moved to https://example.feishu.cn/docx/doccn_123");
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_FeishuDocOutputFormat_ShouldUseDocxDecisionReply_EvenWhenOutputFitsText()
+    {
+        var output = "short scheduled report";
+        var provider = new StubStreamingProviderFactory(
+            new StubStreamingTurn([output]),
+            new StubStreamingTurn(
+                [],
+                [
+                    new ToolCall
+                    {
+                        Id = "call-docx",
+                        Name = "lark_docx_create",
+                        ArgumentsJson = "{}",
+                    },
+                ]),
+            new StubStreamingTurn(["Full output moved to https://example.feishu.cn/docx/doccn_forced"]));
+        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_doc_link"}}""");
+        var docxTool = new FixedResultTool(
+            "lark_docx_create",
+            """{"success":true,"document_token":"doccn_forced","document_url":"https://example.feishu.cn/docx/doccn_forced","visibility_applied":true}""");
+        var agent = CreateAgent(
+            "skill-runner-docx-forced",
+            providerFactory: provider,
+            toolSources: [new SingleToolSource(docxTool)]);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutputFormat = SkillRunnerOutputFormat.FeishuDoc;
+        initialize.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.FeishuDoc;
+        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        await agent.HandleInitializeAsync(initialize);
+        AttachNyxIdApiClient(agent, handler);
+
+        var result = await InvokeExecuteSkillAsync(agent);
+
+        result.Should().Be(output);
+        provider.Requests.Should().ContainSingle("FEISHU_DOC mode should create the document by direct tool execution, not by a second LLM decision round");
+        docxTool.LastArgumentsJson.Should().NotBeNull();
+        using (var arguments = JsonDocument.Parse(docxTool.LastArgumentsJson!))
+        {
+            arguments.RootElement.GetProperty("title").GetString().Should().Be("summary");
+            arguments.RootElement.GetProperty("markdown_text").GetString().Should().Be(output);
+            arguments.RootElement.GetProperty("visibility").GetString().Should().Be("readable");
+        }
+        docxTool.LastContext.Should().NotBeNull();
+        docxTool.LastContext!.Request.RequestId.Should().EndWith(":lark-docx");
+        docxTool.LastContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveId, "oc_chat_1");
+        docxTool.LastContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveIdType, "chat_id");
+        handler.Requests.Should().ContainSingle();
+        ExtractLarkText(handler.Bodies[0]!).Should().Be("Full output moved to https://example.feishu.cn/docx/doccn_forced");
+    }
+
+    [Fact]
+    public async Task ExecuteSkillAsync_TextOutputFormat_ShouldChunkLongOutput_AndSkipDocDecision()
+    {
+        var output = string.Join("\n\n", Enumerable.Repeat(
+            new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength - 1_000),
+            2));
+        var expectedChunks = SkillRunnerOutputChunker.Split(output);
+        var provider = new StubStreamingProviderFactory(new StubStreamingTurn([output]));
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"message_id":"om_part_1"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_part_2"}}""");
+        var agent = CreateAgent("skill-runner-text-forced", providerFactory: provider);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutputFormat = SkillRunnerOutputFormat.Text;
+        initialize.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.Text;
+        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        await agent.HandleInitializeAsync(initialize);
+        AttachNyxIdApiClient(agent, handler);
+
+        var result = await InvokeExecuteSkillAsync(agent);
+
+        result.Should().Be(output);
+        provider.Requests.Should().ContainSingle("text mode must not spend a second LLM/tool round deciding doc creation");
+        handler.Requests.Should().HaveCount(expectedChunks.Count);
+        ExtractLarkText(handler.Bodies[0]!).Should().Be(expectedChunks[0]);
+        ExtractLarkText(handler.Bodies[1]!).Should().Be(expectedChunks[1]);
     }
 
     [Fact]
@@ -2502,8 +2601,15 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         public string Description => "Fixed result test tool";
         public string ParametersSchema => "{}";
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult(result);
+        public string? LastArgumentsJson { get; private set; }
+        public AgentToolExecutionContext? LastContext { get; private set; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            LastArgumentsJson = argumentsJson;
+            LastContext = AgentToolRequestContext.Current;
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class SequencedRemoteSkillFetcher(params SkillDefinition?[] skills) : IRemoteSkillFetcher

@@ -89,6 +89,11 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
               "type": "boolean",
               "description": "When true, the run must observe a successful NyxID proxy call."
             },
+            "output_format": {
+              "type": "string",
+              "enum": ["auto", "text", "feishu_doc"],
+              "description": "Optional scheduled-run output format. auto keeps length-based delivery, text forces chat text chunks, feishu_doc forces Feishu cloud document delivery."
+            },
             "external_trigger_sources": {
               "type": "array",
               "description": "Optional external trigger source declarations. For channel run_agent, use source_id channel:<platform>:<registration_scope_id> and kind channel_inbound.",

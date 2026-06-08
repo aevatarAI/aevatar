@@ -30,6 +30,7 @@ public sealed class UserAgentCatalogReadModelEntry
     public string LarkReceiveIdType { get; init; } = string.Empty;
     public string LarkReceiveIdFallback { get; init; } = string.Empty;
     public string LarkReceiveIdTypeFallback { get; init; } = string.Empty;
+    public SkillRunnerOutputFormat OutputFormat { get; init; } = SkillRunnerOutputFormat.Auto;
     public OwnerScope? OwnerScope { get; init; }
     public long CatalogAuthorityStateVersion { get; init; }
     public string CatalogLastEventId { get; init; } = string.Empty;

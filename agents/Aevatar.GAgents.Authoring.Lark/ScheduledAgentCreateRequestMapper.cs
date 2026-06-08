@@ -23,6 +23,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
         "max_tool_rounds",
         "max_history_messages",
         "requires_nyxid_proxy_success",
+        "output_format",
         "external_trigger_sources",
         "run_immediately",
     };
@@ -56,6 +57,9 @@ internal sealed class ScheduledAgentCreateRequestMapper
         var scopeId = Normalize(AgentToolRequestContext.ScopeId ?? AgentToolRequestContext.ChannelRegistrationScopeId);
         if (scopeId is null)
             return ScheduledAgentCreatePlanResult.Failed("scope_id_unavailable");
+
+        if (!TryParseOutputFormat(args.Str("output_format"), out var outputFormat, out var outputFormatError))
+            return ScheduledAgentCreatePlanResult.Failed(outputFormatError);
 
         var conversationId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.ConversationId));
         if (conversationId is null)
@@ -98,6 +102,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 MaxToolRounds: args.TryInt("max_tool_rounds", out var maxToolRounds) ? maxToolRounds : null,
                 MaxHistoryMessages: args.TryInt("max_history_messages", out var maxHistoryMessages) ? maxHistoryMessages : null,
                 RequiresNyxidProxySuccess: args.Bool("requires_nyxid_proxy_success") ?? false,
+                OutputFormat: outputFormat,
                 ExternalTriggerSources: args.ExternalTriggerSources("external_trigger_sources"),
                 RunImmediately: args.Bool("run_immediately") ?? false,
                 ConversationId: conversationId,
@@ -137,6 +142,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ProviderName = request.ProviderName ?? string.Empty,
             Model = request.Model ?? string.Empty,
             RequiresNyxidProxySuccess = request.RequiresNyxidProxySuccess,
+            OutputFormat = request.OutputFormat,
             OutboundConfig = new SkillRunnerOutboundConfig
             {
                 ConversationId = request.ConversationId,
@@ -149,6 +155,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 LarkReceiveIdTypeFallback = request.ReceiveTarget.Fallback?.ReceiveIdType ?? string.Empty,
                 OwnerScope = request.Caller.Clone(),
                 FailureNotificationProviderSlug = request.FailureNotificationSlug ?? string.Empty,
+                OutputFormat = request.OutputFormat,
             },
         };
 
@@ -173,6 +180,35 @@ internal sealed class ScheduledAgentCreateRequestMapper
     {
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    private static bool TryParseOutputFormat(
+        string? value,
+        out SkillRunnerOutputFormat outputFormat,
+        out string error)
+    {
+        outputFormat = SkillRunnerOutputFormat.Auto;
+        error = string.Empty;
+        var normalized = Normalize(value);
+        if (normalized is null)
+            return true;
+
+        switch (normalized.ToLowerInvariant())
+        {
+            case "auto":
+                outputFormat = SkillRunnerOutputFormat.Auto;
+                return true;
+            case "text":
+                outputFormat = SkillRunnerOutputFormat.Text;
+                return true;
+            case "feishu_doc":
+            case "feishu-doc":
+                outputFormat = SkillRunnerOutputFormat.FeishuDoc;
+                return true;
+            default:
+                error = "output_format must be one of: auto, text, feishu_doc";
+                return false;
+        }
     }
 
     private sealed class CreatorArgs
@@ -374,6 +410,7 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     int? MaxToolRounds,
     int? MaxHistoryMessages,
     bool RequiresNyxidProxySuccess,
+    SkillRunnerOutputFormat OutputFormat,
     IReadOnlyList<ExternalTriggerSource> ExternalTriggerSources,
     bool RunImmediately,
     string ConversationId,

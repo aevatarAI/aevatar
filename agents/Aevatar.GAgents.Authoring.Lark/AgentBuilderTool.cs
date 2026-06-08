@@ -314,6 +314,7 @@ public sealed class AgentBuilderTool : IAgentTool
             scope_id = entry.ScopeId,
             schedule_cron = entry.ScheduleCron,
             schedule_timezone = entry.ScheduleTimezone,
+            output_format = ToOutputFormatJsonValue(entry.OutputFormat),
             last_run_at = entry.LastRunAt,
             next_scheduled_run = entry.NextRunAt,
             error_count = entry.ErrorCount,
@@ -343,6 +344,7 @@ public sealed class AgentBuilderTool : IAgentTool
                 status = x.Status,
                 schedule_cron = x.ScheduleCron,
                 schedule_timezone = x.ScheduleTimezone,
+                output_format = ToOutputFormatJsonValue(x.OutputFormat),
                 last_run_at = x.LastRunAt,
                 next_scheduled_run = x.NextRunAt,
                 error_count = x.ErrorCount,
@@ -432,6 +434,7 @@ public sealed class AgentBuilderTool : IAgentTool
             LarkReceiveIdType = catalog.LarkReceiveIdType,
             LarkReceiveIdFallback = catalog.LarkReceiveIdFallback,
             LarkReceiveIdTypeFallback = catalog.LarkReceiveIdTypeFallback,
+            OutputFormat = catalog.OutputFormat,
             OwnerScope = catalog.OwnerScope,
             CatalogAuthorityStateVersion = catalog.CatalogAuthorityStateVersion,
             CatalogLastEventId = catalog.CatalogLastEventId,
@@ -439,6 +442,14 @@ public sealed class AgentBuilderTool : IAgentTool
             RunnerLastEventId = execution.LastEventId ?? string.Empty,
         };
     }
+
+    private static string ToOutputFormatJsonValue(SkillRunnerOutputFormat outputFormat) =>
+        outputFormat switch
+        {
+            SkillRunnerOutputFormat.Text => "text",
+            SkillRunnerOutputFormat.FeishuDoc => "feishu_doc",
+            _ => "auto",
+        };
 
     private static async Task<(bool success, string? error)> TryDispatchLifecycleAsync(
         UserAgentCatalogReadModelEntry entry,

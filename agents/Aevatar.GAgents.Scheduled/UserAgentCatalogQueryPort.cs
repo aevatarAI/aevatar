@@ -201,6 +201,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             LarkReceiveIdType = document.LarkReceiveIdType ?? string.Empty,
             LarkReceiveIdFallback = document.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = document.LarkReceiveIdTypeFallback ?? string.Empty,
+            OutputFormat = document.OutputFormat,
             OwnerScope = documentScope,
             CatalogAuthorityStateVersion = document.StateVersion,
             CatalogLastEventId = document.LastEventId ?? string.Empty,

@@ -75,12 +75,14 @@ public static class AgentBuilderCardContent
             var status = TryReadString(agent, "status") ?? "unknown";
             var nextRun = TryReadString(agent, "next_scheduled_run") ?? "pending";
             var lastRun = TryReadOptional(agent, "last_run_at");
+            var outputFormat = TryReadString(agent, "output_format") ?? "auto";
 
             if (index > 1)
                 bodyBuilder.Append("\n\n");
 
             bodyBuilder.Append($"**{index}. `{template}`** · {status}\n");
             bodyBuilder.Append($"- Agent ID: `{agentId}`\n");
+            bodyBuilder.Append($"- Output: `{outputFormat}`\n");
             bodyBuilder.Append($"- Next run: `{nextRun}`");
             if (lastRun is not null)
             {
