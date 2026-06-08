@@ -49,17 +49,6 @@ public static class InteractionSpecMapper
         return content;
     }
 
-    /// <summary>
-    /// Returns true when the interaction contract contains visible text or controls.
-    /// </summary>
-    public static bool HasVisibleContent(InteractionSpec? spec) =>
-        spec is not null &&
-        (!string.IsNullOrWhiteSpace(spec.Title) ||
-         !string.IsNullOrWhiteSpace(spec.Body) ||
-         spec.Actions.Count > 0 ||
-         spec.Fields.Count > 0 ||
-         spec.Cards.Count > 0);
-
     private static bool ShouldBuildTopLevelCard(InteractionSpec spec) =>
         !string.IsNullOrWhiteSpace(spec.Title) &&
         spec.Cards.Count == 0 &&

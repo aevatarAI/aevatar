@@ -195,6 +195,93 @@ public sealed class WorkflowParserCoverageTests
     }
 
     [Fact]
+    public void Parse_WhenInteractionSpecIsAtStepRoot_ShouldLiftTypedPresentation()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: interaction_root
+            roles: []
+            steps:
+              - id: approve
+                type: human_approval
+                interaction_spec:
+                  title: "Root approval"
+                  body: "Choose a route"
+                  actions:
+                    - kind: select
+                      action_id: route
+                      label: Route
+                      options:
+                        - label: Canary
+                          value: canary
+                  cards:
+                    - block_id: summary
+                      title: Summary
+                      fields:
+                        - title: Release
+                          text: v1
+            """);
+
+        var step = workflow.Steps[0];
+        var spec = step.Presentation?.InteractionSpec;
+
+        spec.Should().NotBeNull();
+        spec!.Title.Should().Be("Root approval");
+        spec.Body.Should().Be("Choose a route");
+        spec.Actions.Should().ContainSingle();
+        spec.Actions[0].Kind.Should().Be(InteractionActionKind.Select);
+        spec.Actions[0].Options.Should().ContainSingle(x => x.Label == "Canary" && x.Value == "canary");
+        spec.Cards.Should().ContainSingle();
+        spec.Cards[0].BlockId.Should().Be("summary");
+        spec.Cards[0].Fields.Should().ContainSingle(x => x.Title == "Release" && x.Text == "v1");
+        step.Parameters.Should().NotContainKey("interaction_spec");
+    }
+
+    [Fact]
+    public void Parse_WhenPresentationContainsInlineSpec_ShouldLiftTypedPresentation()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: interaction_inline_presentation
+            roles: []
+            steps:
+              - id: approve
+                type: human_approval
+                presentation:
+                  title: Inline approval
+                  body: Pick an action
+                  disposition: pinned
+                  actions:
+                    - action_id: approve
+                      label: Approve
+                      style: primary
+                  fields:
+                    - title: Environment
+                      text: prod
+                      is_short: true
+                  cards:
+                    - kind: actions
+                      title: Escalation
+                      actions:
+                        - action_id: escalate
+                          label: Escalate
+                          style: danger
+            """);
+
+        var spec = workflow.Steps[0].Presentation?.InteractionSpec;
+
+        spec.Should().NotBeNull();
+        spec!.Title.Should().Be("Inline approval");
+        spec.Body.Should().Be("Pick an action");
+        spec.Disposition.Should().Be(InteractionDisposition.Pinned);
+        spec.Actions.Should().ContainSingle(x => x.ActionId == "approve" && x.Style == InteractionActionStyle.Primary);
+        spec.Fields.Should().ContainSingle(x => x.Title == "Environment" && x.IsShort);
+        spec.Cards.Should().ContainSingle();
+        spec.Cards[0].Kind.Should().Be(InteractionCardKind.Actions);
+        spec.Cards[0].Actions.Should().ContainSingle(x => x.ActionId == "escalate" && x.Style == InteractionActionStyle.Danger);
+    }
+
+    [Fact]
     public void Parse_WhenRoleAgentKindIsPresent_ShouldMapTrimmedAgentKind()
     {
         var workflow = new WorkflowParser().Parse(
