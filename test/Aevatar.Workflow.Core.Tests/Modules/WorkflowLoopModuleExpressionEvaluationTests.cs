@@ -1,9 +1,12 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
@@ -110,6 +113,67 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         request.TargetRole.Should().Be("assistant");
     }
 
+    [Fact]
+    public async Task DispatchStep_WhenNotifyTemplateUsesExpressions_ShouldEvaluateBeforeNotifyModulePublishesNotification()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "notify",
+                    Type = "notify",
+                    Presentation = new StepPresentation
+                    {
+                        DeliveryTargetId = "agent-${input}",
+                        InteractionTemplateSpec = new InteractionTemplateSpec
+                        {
+                            TemplateId = "tpl-${input}",
+                            TemplateVariable =
+                            {
+                                ["title"] = "Deploy ${input}",
+                                ["run"] = "${run}",
+                            },
+                        },
+                    },
+                },
+            ],
+        };
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+        var start = new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-template",
+            Input = "prod",
+        };
+        start.Parameters["run"] = "run-template";
+
+        await module.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event
+            .Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters.Should().NotContainKey("delivery_target_id");
+        request.StepParameters.DeliveryTargetId.Should().Be("agent-prod");
+        request.StepParameters.InteractionTemplateSpec.TemplateId.Should().Be("tpl-prod");
+        request.StepParameters.InteractionTemplateSpec.TemplateVariable["title"].Should().Be("Deploy prod");
+        request.StepParameters.InteractionTemplateSpec.TemplateVariable["run"].Should().Be("run-template");
+
+        var notifyCtx = new RecordingWorkflowContext();
+        await new NotifyModule().HandleAsync(Wrap(request), notifyCtx, CancellationToken.None);
+
+        var notification = notifyCtx.Published.Select(x => x.Event)
+            .OfType<WorkflowInteractionNotificationEvent>()
+            .Should().ContainSingle().Subject;
+        notification.DeliveryTargetId.Should().Be("agent-prod");
+        notification.InteractionTemplate.TemplateId.Should().Be("tpl-prod");
+        notification.InteractionTemplate.TemplateVariable["title"].Should().Be("Deploy prod");
+        notification.InteractionTemplate.TemplateVariable["run"].Should().Be("run-template");
+    }
+
     private static EventEnvelope Wrap(IMessage evt) => new()
     {
         Id = Guid.NewGuid().ToString("N"),
@@ -176,6 +240,58 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }
+    }
+
+    private sealed class RecordingWorkflowContext : IWorkflowExecutionContext
+    {
+        public EventEnvelope InboundEnvelope { get; } = new();
+
+        public string AgentId => "agent-1";
+
+        public string RunId => "run-template";
+
+        public IServiceProvider Services { get; } = new NullServiceProvider();
+
+        public ILogger Logger { get; } = NullLogger.Instance;
+
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
+
+        public TState LoadState<TState>(string scopeKey)
+            where TState : class, IMessage<TState>, new() =>
+            new();
+
+        public IReadOnlyList<KeyValuePair<string, TState>> LoadStates<TState>(string scopeKeyPrefix = "")
+            where TState : class, IMessage<TState>, new() =>
+            [];
+
+        public Task SaveStateAsync<TState>(string scopeKey, TState state, CancellationToken ct = default)
+            where TState : class, IMessage<TState> =>
+            Task.CompletedTask;
+
+        public Task ClearStateAsync(string scopeKey, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            Published.Add((evt, direction));
+            return Task.CompletedTask;
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("This test context does not support scheduling.");
+
+        public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            throw new NotSupportedException("This test context does not support scheduling.");
     }
 
     private sealed class StubWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost

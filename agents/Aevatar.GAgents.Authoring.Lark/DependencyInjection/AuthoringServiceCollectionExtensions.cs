@@ -33,6 +33,7 @@ public static class AuthoringServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
+        services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, FeishuCardNotificationPort>());
         services.TryAddSingleton<ScheduledAgentCreatorOptions>();
         services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
