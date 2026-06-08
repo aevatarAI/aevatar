@@ -41,6 +41,11 @@ public sealed class WorkflowDefinition
     public WorkflowRuntimeConfiguration Configuration { get; init; } = new();
 
     /// <summary>
+    /// Run-level failure policy. Null means terminal failure is not auto-driven.
+    /// </summary>
+    public WorkflowRunFailurePolicy? OnFailure { get; init; }
+
+    /// <summary>
     /// 入口步骤 ID，即第一个步骤的 ID；若无步骤则为 null。
     /// </summary>
     public string? EntryStepId => Steps.Count > 0 ? Steps[0].Id : null;
@@ -93,6 +98,18 @@ public sealed class WorkflowRuntimeConfiguration
     /// Compatibility flag preserved in workflow YAML.
     /// </summary>
     public bool ClosedWorldMode { get; init; }
+}
+
+public sealed class WorkflowRunFailurePolicy
+{
+    public string Action { get; init; } = string.Empty;
+
+    public int MaxAttempts { get; init; }
+}
+
+public static class WorkflowRunFailureActions
+{
+    public const string ForkFromFailedStep = "fork_from_failed_step";
 }
 
 /// <summary>

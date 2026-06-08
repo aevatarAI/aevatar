@@ -5,6 +5,7 @@
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Core.Agreement;
 using System.Collections;
 using System.Globalization;
@@ -93,6 +94,7 @@ public sealed class WorkflowParser
             {
                 ClosedWorldMode = raw.Configuration?.ClosedWorldMode ?? false,
             },
+            OnFailure = MapOnFailure(raw.OnFailure),
         };
     }
 
@@ -142,7 +144,11 @@ public sealed class WorkflowParser
         var rawType = s.Type ?? "llm_call";
         var normalizedRawType = rawType.Trim().ToLowerInvariant();
         var canonicalType = WorkflowPrimitiveCatalog.ToCanonicalType(rawType);
-        var parameters = NormalizeParameters(s.Parameters);
+        var rawParameters = s.Parameters is null
+            ? null
+            : new Dictionary<string, object?>(s.Parameters, StringComparer.Ordinal);
+        var presentation = MapPresentation(canonicalType, s, rawParameters);
+        var parameters = NormalizeParameters(rawParameters);
 
         ApplyErgonomicDefaults(normalizedRawType, parameters);
         LiftRootPrimitiveParameters(canonicalType, s, parameters);
@@ -153,6 +159,7 @@ public sealed class WorkflowParser
             Type = canonicalType,
             TargetRole = s.TargetRole ?? s.Role,
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
+            Presentation = presentation,
             Next = s.Next,
             Children = s.Children?.Select(MapStep).ToList(),
             Branches = NormalizeBranches(s.Branches),
@@ -161,6 +168,564 @@ public sealed class WorkflowParser
             TimeoutMs = s.TimeoutMs,
         };
     }
+
+    private static StepPresentation? MapPresentation(
+        string canonicalStepType,
+        RawStep step,
+        IDictionary<string, object?>? rawParameters)
+    {
+        var interactionSpec = MapInteractionSpec(ResolveInteractionSpecSource(step, rawParameters));
+        var interactionTemplateSpec = MapInteractionTemplateSpec(ResolveInteractionTemplateSpecSource(step, rawParameters));
+        var deliveryTargetId = string.Equals(canonicalStepType, "notify", StringComparison.Ordinal)
+            ? ResolveDeliveryTargetId(step, rawParameters)
+            : null;
+        var presentation = new StepPresentation
+        {
+            InteractionSpec = interactionSpec,
+            InteractionTemplateSpec = interactionTemplateSpec,
+            DeliveryTargetId = deliveryTargetId,
+        };
+        return StepPresentation.HasPresentation(presentation)
+            ? presentation
+            : null;
+    }
+
+    private static object? ResolveInteractionSpecSource(
+        RawStep step,
+        IDictionary<string, object?>? rawParameters)
+    {
+        if (step.InteractionSpec is not null)
+            return step.InteractionSpec;
+
+        if (step.Presentation?.InteractionSpec is not null)
+            return step.Presentation.InteractionSpec;
+
+        if (step.Presentation?.HasInlineSpec() == true)
+            return step.Presentation;
+
+        if (rawParameters is null)
+            return null;
+
+        foreach (var key in new[] { "interaction_spec", "interactionSpec" })
+        {
+            if (!rawParameters.TryGetValue(key, out var source))
+                continue;
+
+            rawParameters.Remove(key);
+            return source;
+        }
+
+        return null;
+    }
+
+    private static object? ResolveInteractionTemplateSpecSource(
+        RawStep step,
+        IDictionary<string, object?>? rawParameters)
+    {
+        if (step.InteractionTemplateSpec is not null)
+            return step.InteractionTemplateSpec;
+
+        if (step.Presentation?.InteractionTemplateSpec is not null)
+            return step.Presentation.InteractionTemplateSpec;
+
+        if (rawParameters is null)
+            return null;
+
+        foreach (var key in new[] { "interaction_template_spec", "interactionTemplateSpec" })
+        {
+            if (!rawParameters.TryGetValue(key, out var source))
+                continue;
+
+            rawParameters.Remove(key);
+            return source;
+        }
+
+        return null;
+    }
+
+    private static string? ResolveDeliveryTargetId(
+        RawStep step,
+        IDictionary<string, object?>? rawParameters)
+    {
+        if (!string.IsNullOrWhiteSpace(step.DeliveryTargetId))
+            return step.DeliveryTargetId.Trim();
+
+        if (rawParameters is null)
+            return null;
+
+        if (!rawParameters.TryGetValue("delivery_target_id", out var source))
+            return null;
+
+        rawParameters.Remove("delivery_target_id");
+        var deliveryTargetId = ConvertValueToString(source).Trim();
+        return string.IsNullOrWhiteSpace(deliveryTargetId) ? null : deliveryTargetId;
+    }
+
+    private static InteractionSpec? MapInteractionSpec(object? source)
+    {
+        if (source is null)
+            return null;
+
+        if (source is InteractionSpec spec)
+            return spec.Clone();
+
+        if (source is RawStepPresentation presentation)
+            return MapInteractionSpecFromAccessor(
+                key => key switch
+                {
+                    "title" => presentation.Title,
+                    "body" => presentation.Body,
+                    "actions" => presentation.Actions,
+                    "fields" => presentation.Fields,
+                    "cards" => presentation.Cards,
+                    "disposition" => presentation.Disposition,
+                    _ => null,
+                });
+
+        if (source is string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            using var document = JsonDocument.Parse(text);
+            return MapInteractionSpec(document.RootElement);
+        }
+
+        if (source is JsonElement element)
+            return MapInteractionSpecFromJson(element);
+
+        if (source is IDictionary mapping)
+            return MapInteractionSpecFromAccessor(key => TryReadMappingObject(mapping, KeyCandidates(key)));
+
+        return null;
+    }
+
+    private static InteractionSpec? MapInteractionSpecFromJson(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return MapInteractionSpecFromAccessor(key => TryReadJsonProperty(element, KeyCandidates(key)));
+    }
+
+    private static InteractionSpec? MapInteractionSpecFromAccessor(Func<string, object?> read)
+    {
+        var spec = new InteractionSpec
+        {
+            Title = ConvertValueToString(read("title")).Trim(),
+            Body = ConvertValueToString(read("body")).Trim(),
+            Disposition = ParseDisposition(ConvertValueToString(read("disposition"))),
+        };
+
+        foreach (var action in MapActions(read("actions")))
+            spec.Actions.Add(action);
+        foreach (var field in MapFields(read("fields")))
+            spec.Fields.Add(field);
+        foreach (var card in MapCards(read("cards")))
+            spec.Cards.Add(card);
+
+        return StepPresentation.HasInteractionSpec(spec) ? spec : null;
+    }
+
+    private static InteractionTemplateSpec? MapInteractionTemplateSpec(object? source)
+    {
+        if (source is null)
+            return null;
+
+        if (source is InteractionTemplateSpec spec)
+            return spec.Clone();
+
+        if (source is string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            using var document = JsonDocument.Parse(text);
+            return MapInteractionTemplateSpec(document.RootElement);
+        }
+
+        if (source is JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+                return null;
+
+            return MapInteractionTemplateSpecFromAccessor(
+                key => TryReadJsonProperty(element, KeyCandidates(key)));
+        }
+
+        if (source is IDictionary mapping)
+            return MapInteractionTemplateSpecFromAccessor(
+                key => TryReadMappingObject(mapping, KeyCandidates(key)));
+
+        return null;
+    }
+
+    private static InteractionTemplateSpec? MapInteractionTemplateSpecFromAccessor(Func<string, object?> read)
+    {
+        var spec = new InteractionTemplateSpec
+        {
+            TemplateId = ConvertValueToString(read("template_id")).Trim(),
+        };
+
+        foreach (var (key, value) in MapStringMap(read("template_variable")))
+            spec.TemplateVariable[key] = value;
+
+        return StepPresentation.HasInteractionTemplateSpec(spec) ? spec : null;
+    }
+
+    private static IEnumerable<KeyValuePair<string, string>> MapStringMap(object? source)
+    {
+        if (source is null)
+            yield break;
+
+        if (source is string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                yield break;
+
+            using var document = JsonDocument.Parse(text);
+            foreach (var item in MapStringMap(document.RootElement.Clone()))
+                yield return item;
+            yield break;
+        }
+
+        if (source is JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+                yield break;
+
+            foreach (var property in element.EnumerateObject())
+            {
+                var key = property.Name.Trim();
+                var value = ConvertValueToString(property.Value).Trim();
+                if (!string.IsNullOrWhiteSpace(key))
+                    yield return new KeyValuePair<string, string>(key, value);
+            }
+
+            yield break;
+        }
+
+        if (source is IDictionary mapping)
+        {
+            foreach (DictionaryEntry entry in mapping)
+            {
+                var key = ConvertValueToString(entry.Key).Trim();
+                var value = ConvertValueToString(entry.Value).Trim();
+                if (!string.IsNullOrWhiteSpace(key))
+                    yield return new KeyValuePair<string, string>(key, value);
+            }
+        }
+    }
+
+    private static IEnumerable<InteractionAction> MapActions(object? source)
+    {
+        foreach (var item in EnumerateItems(source))
+        {
+            var action = MapAction(item);
+            if (action is not null)
+                yield return action;
+        }
+    }
+
+    private static InteractionAction? MapAction(object? source)
+    {
+        var action = MapFromObject(
+            source,
+            read =>
+            {
+                var mapped = new InteractionAction
+                {
+                    ActionId = ConvertValueToString(read("action_id")).Trim(),
+                    Label = ConvertValueToString(read("label")).Trim(),
+                    Value = ConvertValueToString(read("value")).Trim(),
+                    Placeholder = ConvertValueToString(read("placeholder")).Trim(),
+                    Kind = ParseActionKind(ConvertValueToString(read("kind"))),
+                    Style = ParseActionStyle(ConvertValueToString(read("style"))),
+                    ApprovalDecision = ParseApprovalDecision(ConvertValueToString(read("approval_decision"))),
+                    Disabled = ParseBool(read("disabled")) || ParseBool(read("is_disabled")),
+                };
+
+                foreach (var option in MapOptions(read("options")))
+                    mapped.Options.Add(option);
+
+                if (mapped.Kind == InteractionActionKind.Unspecified &&
+                    (!string.IsNullOrWhiteSpace(mapped.ActionId) ||
+                     !string.IsNullOrWhiteSpace(mapped.Label)))
+                {
+                    mapped.Kind = mapped.Options.Count > 0
+                        ? InteractionActionKind.Select
+                        : InteractionActionKind.Button;
+                }
+
+                return mapped;
+            });
+
+        return action is not null &&
+               (!string.IsNullOrWhiteSpace(action.ActionId) ||
+                !string.IsNullOrWhiteSpace(action.Label) ||
+                !string.IsNullOrWhiteSpace(action.Value) ||
+                action.Options.Count > 0)
+            ? action
+            : null;
+    }
+
+    private static IEnumerable<InteractionOption> MapOptions(object? source)
+    {
+        foreach (var item in EnumerateItems(source))
+        {
+            var option = MapFromObject(
+                item,
+                read => new InteractionOption
+                {
+                    Label = ConvertValueToString(read("label")).Trim(),
+                    Value = ConvertValueToString(read("value")).Trim(),
+                });
+
+            if (option is not null &&
+                (!string.IsNullOrWhiteSpace(option.Label) ||
+                 !string.IsNullOrWhiteSpace(option.Value)))
+            {
+                yield return option;
+            }
+        }
+    }
+
+    private static IEnumerable<InteractionField> MapFields(object? source)
+    {
+        foreach (var item in EnumerateItems(source))
+        {
+            var field = MapField(item);
+            if (field is not null)
+                yield return field;
+        }
+    }
+
+    private static InteractionField? MapField(object? source)
+    {
+        var field = MapFromObject(
+            source,
+            read => new InteractionField
+            {
+                Title = ConvertValueToString(read("title")).Trim(),
+                Text = ConvertValueToString(read("text")).Trim(),
+                IsShort = ParseBool(read("is_short")),
+            });
+
+        return field is not null &&
+               (!string.IsNullOrWhiteSpace(field.Title) ||
+                !string.IsNullOrWhiteSpace(field.Text))
+            ? field
+            : null;
+    }
+
+    private static IEnumerable<InteractionCard> MapCards(object? source)
+    {
+        foreach (var item in EnumerateItems(source))
+        {
+            var card = MapCard(item);
+            if (card is not null)
+                yield return card;
+        }
+    }
+
+    private static InteractionCard? MapCard(object? source)
+    {
+        var card = MapFromObject(
+            source,
+            read =>
+            {
+                var mapped = new InteractionCard
+                {
+                    BlockId = ConvertValueToString(read("block_id")).Trim(),
+                    Title = ConvertValueToString(read("title")).Trim(),
+                    Text = ConvertValueToString(read("text")).Trim(),
+                    ImageUrl = ConvertValueToString(read("image_url")).Trim(),
+                    Kind = ParseCardKind(ConvertValueToString(read("kind"))),
+                };
+
+                foreach (var field in MapFields(read("fields")))
+                    mapped.Fields.Add(field);
+                foreach (var action in MapActions(read("actions")))
+                    mapped.Actions.Add(action);
+
+                if (mapped.Kind == InteractionCardKind.Unspecified &&
+                    (!string.IsNullOrWhiteSpace(mapped.Title) ||
+                     !string.IsNullOrWhiteSpace(mapped.Text) ||
+                     mapped.Fields.Count > 0 ||
+                     mapped.Actions.Count > 0))
+                {
+                    mapped.Kind = InteractionCardKind.Section;
+                }
+
+                return mapped;
+            });
+
+        return card is not null &&
+               (!string.IsNullOrWhiteSpace(card.BlockId) ||
+                !string.IsNullOrWhiteSpace(card.Title) ||
+                !string.IsNullOrWhiteSpace(card.Text) ||
+                !string.IsNullOrWhiteSpace(card.ImageUrl) ||
+                card.Fields.Count > 0 ||
+                card.Actions.Count > 0)
+            ? card
+            : null;
+    }
+
+    private static T? MapFromObject<T>(object? source, Func<Func<string, object?>, T> map)
+        where T : class
+    {
+        if (source is null)
+            return null;
+
+        if (source is JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+                return null;
+
+            return map(key => TryReadJsonProperty(element, KeyCandidates(key)));
+        }
+
+        if (source is IDictionary mapping)
+            return map(key => TryReadMappingObject(mapping, KeyCandidates(key)));
+
+        if (source is string text && !string.IsNullOrWhiteSpace(text))
+        {
+            using var document = JsonDocument.Parse(text);
+            return MapFromObject(document.RootElement.Clone(), map);
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<object?> EnumerateItems(object? source)
+    {
+        if (source is null)
+            yield break;
+
+        if (source is JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Array)
+                yield break;
+
+            foreach (var item in element.EnumerateArray())
+                yield return item.Clone();
+            yield break;
+        }
+
+        if (source is string text && !string.IsNullOrWhiteSpace(text))
+        {
+            using var document = JsonDocument.Parse(text);
+            foreach (var item in EnumerateItems(document.RootElement.Clone()))
+                yield return item;
+            yield break;
+        }
+
+        if (source is IEnumerable sequence && source is not string)
+        {
+            foreach (var item in sequence)
+                yield return item;
+        }
+    }
+
+    private static object? TryReadMappingObject(IDictionary mapping, params string[] candidates)
+    {
+        foreach (DictionaryEntry entry in mapping)
+        {
+            var key = ConvertValueToString(entry.Key);
+            if (candidates.Any(candidate => string.Equals(candidate, key, StringComparison.OrdinalIgnoreCase)))
+                return entry.Value;
+        }
+
+        return null;
+    }
+
+    private static object? TryReadJsonProperty(JsonElement element, params string[] candidates)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (candidates.Any(candidate => string.Equals(candidate, property.Name, StringComparison.OrdinalIgnoreCase)))
+                return property.Value.Clone();
+        }
+
+        return null;
+    }
+
+    private static string[] KeyCandidates(string key) =>
+        key switch
+        {
+            "action_id" => ["action_id", "actionId", "id"],
+            "block_id" => ["block_id", "blockId", "id"],
+            "image_url" => ["image_url", "imageUrl"],
+            "is_short" => ["is_short", "isShort", "short"],
+            "is_disabled" => ["is_disabled", "isDisabled"],
+            "approval_decision" => ["approval_decision", "approvalDecision"],
+            "template_id" => ["template_id", "templateId"],
+            "template_variable" => ["template_variable", "templateVariable", "template_variables", "templateVariables", "variables"],
+            _ => [key],
+        };
+
+    private static InteractionDisposition ParseDisposition(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "normal" => InteractionDisposition.Normal,
+            "ephemeral" => InteractionDisposition.Ephemeral,
+            "silent" => InteractionDisposition.Silent,
+            "pinned" => InteractionDisposition.Pinned,
+            _ => InteractionDisposition.Unspecified,
+        };
+
+    private static InteractionActionKind ParseActionKind(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "button" => InteractionActionKind.Button,
+            "select" => InteractionActionKind.Select,
+            "formsubmit" => InteractionActionKind.FormSubmit,
+            "link" => InteractionActionKind.Link,
+            "textinput" => InteractionActionKind.TextInput,
+            _ => InteractionActionKind.Unspecified,
+        };
+
+    private static InteractionActionStyle ParseActionStyle(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "default" => InteractionActionStyle.Default,
+            "primary" => InteractionActionStyle.Primary,
+            "danger" => InteractionActionStyle.Danger,
+            _ => InteractionActionStyle.Unspecified,
+        };
+
+    private static InteractionApprovalDecision ParseApprovalDecision(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "approve" or "approved" => InteractionApprovalDecision.Approve,
+            "reject" or "rejected" => InteractionApprovalDecision.Reject,
+            _ => InteractionApprovalDecision.Unspecified,
+        };
+
+    private static InteractionCardKind ParseCardKind(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "section" => InteractionCardKind.Section,
+            "actions" => InteractionCardKind.Actions,
+            "image" => InteractionCardKind.Image,
+            "context" => InteractionCardKind.Context,
+            "divider" => InteractionCardKind.Divider,
+            _ => InteractionCardKind.Unspecified,
+        };
+
+    private static string NormalizeEnumToken(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+
+    private static bool ParseBool(object? value) =>
+        value switch
+        {
+            bool flag => flag,
+            JsonElement { ValueKind: JsonValueKind.True } => true,
+            JsonElement { ValueKind: JsonValueKind.False } => false,
+            _ => bool.TryParse(ConvertValueToString(value), out var parsed) && parsed,
+        };
 
     private static void ApplyErgonomicDefaults(string normalizedRawType, IDictionary<string, string> parameters)
     {
@@ -401,7 +966,23 @@ public sealed class WorkflowParser
             DefaultOutput = e.DefaultOutput,
         };
 
-    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public string? WhenToUse { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
+    private static WorkflowRunFailurePolicy? MapOnFailure(RawOnFailure? policy)
+    {
+        if (policy == null)
+            return null;
+
+        var action = NormalizeText(policy.Action);
+        if (action == null)
+            return null;
+
+        return new WorkflowRunFailurePolicy
+        {
+            Action = action,
+            MaxAttempts = policy.MaxAttempts ?? 0,
+        };
+    }
+
+    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public string? WhenToUse { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } public RawOnFailure? OnFailure { get; set; } }
     private sealed class RawRole
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
@@ -478,6 +1059,10 @@ public sealed class WorkflowParser
         public string? HolderToken { get; set; }
         public object? Generation { get; set; }
         public string? HolderTokenVariable { get; set; }
+        public object? InteractionSpec { get; set; }
+        public object? InteractionTemplateSpec { get; set; }
+        public string? DeliveryTargetId { get; set; }
+        public RawStepPresentation? Presentation { get; set; }
         public Dictionary<string, object?>? Parameters { get; set; }
         public string? Next { get; set; }
         public List<RawStep>? Children { get; set; }
@@ -485,6 +1070,25 @@ public sealed class WorkflowParser
         public RawRetry? Retry { get; set; }
         public RawOnError? OnError { get; set; }
         public int? TimeoutMs { get; set; }
+    }
+    private sealed class RawStepPresentation
+    {
+        public object? InteractionSpec { get; set; }
+        public object? InteractionTemplateSpec { get; set; }
+        public string? Title { get; set; }
+        public string? Body { get; set; }
+        public object? Actions { get; set; }
+        public object? Fields { get; set; }
+        public object? Cards { get; set; }
+        public string? Disposition { get; set; }
+
+        public bool HasInlineSpec() =>
+            !string.IsNullOrWhiteSpace(Title) ||
+            !string.IsNullOrWhiteSpace(Body) ||
+            Actions is not null ||
+            Fields is not null ||
+            Cards is not null ||
+            !string.IsNullOrWhiteSpace(Disposition);
     }
     private sealed class RawRetry { public int? MaxAttempts { get; set; } public string? Backoff { get; set; } public int? DelayMs { get; set; } }
     private sealed class RawOnError
@@ -496,5 +1100,6 @@ public sealed class WorkflowParser
         public string? DefaultOutput { get; set; }
     }
     private sealed class RawConfiguration { public bool? ClosedWorldMode { get; set; } }
+    private sealed class RawOnFailure { public string? Action { get; set; } public int? MaxAttempts { get; set; } }
     private sealed class RawRoleExtensions { public string? EventModules { get; set; } public string? EventRoutes { get; set; } }
 }

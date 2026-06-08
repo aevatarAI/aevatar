@@ -23,6 +23,7 @@ public sealed class ChannelCardActionRoutingTests
             ChatType = "card_action",
             CardAction = new CardActionSubmission
             {
+                ActionKind = ActionElementKind.FormSubmit,
                 WorkflowResume = new WorkflowResumeActionPayload
                 {
                     ActorId = "run-actor-1",
@@ -52,7 +53,7 @@ public sealed class ChannelCardActionRoutingTests
     }
 
     [Fact]
-    public void TryBuildWorkflowResumeCommand_should_keep_deprecated_literal_key_fallback()
+    public void TryBuildWorkflowResumeCommand_should_reject_deprecated_literal_key_fallback()
     {
         var inbound = new InboundMessage
         {
@@ -75,16 +76,8 @@ public sealed class ChannelCardActionRoutingTests
 
         var matched = ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var command);
 
-        matched.Should().BeTrue();
-        command.Should().NotBeNull();
-        command!.ActorId.Should().Be("run-actor-1");
-        command.RunId.Should().Be("run-1");
-        command.StepId.Should().Be("approval-1");
-        command.CommandId.Should().Be("evt_card_legacy_1");
-        command.Approved.Should().BeFalse();
-        command.UserInput.Should().Be("need edits");
-        command.EditedContent.Should().BeNull();
-        command.Feedback.Should().Be("need edits");
+        matched.Should().BeFalse();
+        command.Should().BeNull();
     }
 
     [Fact]
@@ -101,6 +94,7 @@ public sealed class ChannelCardActionRoutingTests
             ChatType = "card_action",
             CardAction = new CardActionSubmission
             {
+                ActionKind = ActionElementKind.FormSubmit,
                 WorkflowResume = new WorkflowResumeActionPayload
                 {
                     ActorId = "run-actor-1",
@@ -137,6 +131,7 @@ public sealed class ChannelCardActionRoutingTests
             ChatType = "card_action",
             CardAction = new CardActionSubmission
             {
+                ActionKind = ActionElementKind.FormSubmit,
                 WorkflowResume = new WorkflowResumeActionPayload
                 {
                     ActorId = "run-actor-1",
@@ -157,6 +152,73 @@ public sealed class ChannelCardActionRoutingTests
         command.UserInput.Should().Be("Need stronger hook");
         command.EditedContent.Should().Be("Edited but not accepted");
         command.Feedback.Should().Be("Need stronger hook");
+    }
+
+    [Fact]
+    public void TryBuildWorkflowResumeCommand_should_ignore_unowned_form_fields_for_typed_workflow_payload()
+    {
+        var cardAction = new CardActionSubmission
+        {
+            ActionKind = ActionElementKind.FormSubmit,
+            WorkflowResume = new WorkflowResumeActionPayload
+            {
+                ActorId = "run-actor-1",
+                RunId = "run-1",
+                StepId = "approval-1",
+                Approved = true,
+            },
+        };
+        cardAction.FormFields["environment"] = "prod";
+        cardAction.FormFields["feedback"] = "looks good";
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_1",
+            SenderId = "ou_user_1",
+            SenderName = string.Empty,
+            Text = "{}",
+            MessageId = "evt-card-owned-fields-1",
+            ChatType = "card_action",
+            CardAction = cardAction,
+        };
+
+        var matched = ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var command);
+
+        matched.Should().BeTrue();
+        command.Should().NotBeNull();
+        command!.Feedback.Should().Be("looks good");
+        command.UserInput.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryBuildWorkflowResumeCommand_should_require_typed_form_submit_action_kind()
+    {
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_1",
+            SenderId = "ou_user_1",
+            SenderName = string.Empty,
+            Text = "{}",
+            MessageId = "evt_card_select_1",
+            ChatType = "card_action",
+            CardAction = new CardActionSubmission
+            {
+                ActionKind = ActionElementKind.Select,
+                WorkflowResume = new WorkflowResumeActionPayload
+                {
+                    ActorId = "run-actor-1",
+                    RunId = "run-1",
+                    StepId = "approval-1",
+                    Approved = true,
+                },
+            },
+        };
+
+        var matched = ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var command);
+
+        matched.Should().BeFalse();
+        command.Should().BeNull();
     }
 
     [Fact]

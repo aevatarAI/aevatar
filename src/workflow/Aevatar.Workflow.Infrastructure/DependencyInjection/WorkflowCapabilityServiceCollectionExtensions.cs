@@ -28,6 +28,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
         services.AddWorkflowExecutionAGUIAdapter();
         services.TryAddSingleton<IHumanInteractionPort, NullHumanInteractionPort>();
+        services.TryAddSingleton<IChannelInteractionNotificationPort, NullChannelInteractionNotificationPort>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<WorkflowExecutionProjectionContext>,
             WorkflowExecutionRunEventProjector>());
@@ -37,6 +38,9 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<WorkflowExecutionProjectionContext>,
             WorkflowHumanApprovalResolutionProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowExecutionProjectionContext>,
+            WorkflowInteractionNotificationProjector>());
         services.AddWorkflowApplication();
         services.AddWorkflowScheduleExtensions();
         services.AddWorkflowDefinitionFileSource(options =>

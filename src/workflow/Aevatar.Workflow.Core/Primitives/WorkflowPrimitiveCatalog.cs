@@ -53,6 +53,7 @@ public static class WorkflowPrimitiveCatalog
         "evaluate", "reflect", "human_input", "secure_input",
         "human_approval", "wait_signal", "emit", "parallel", "race",
         "map_reduce", "vote", "foreach", "dynamic_workflow", "lease",
+        "notify",
     ];
 
     public static IReadOnlySet<string> BuiltInCanonicalTypes { get; } = DeriveBuiltInCanonicalTypes();

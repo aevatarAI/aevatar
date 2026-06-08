@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Foundation.Abstractions.Interactions;
 using FluentAssertions;
 using Google.Protobuf;
 
@@ -13,8 +14,15 @@ public class WorkflowAbstractionsProtoCoverageTests
         {
             WorkflowName = "wf",
             Input = "{\"a\":1}",
+            ResumeSeed = new WorkflowRunResumeSeed
+            {
+                SourceRunId = "run-source",
+                StartAtStepId = "step-b",
+                Attempt = 1,
+            },
         };
         evt.Parameters["k"] = "v";
+        evt.ResumeSeed.Variables["step-a"] = "alpha";
 
         var clone = evt.Clone();
         clone.Should().BeEquivalentTo(evt);
@@ -23,6 +31,37 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.WorkflowName.Should().Be("wf");
         parsed.Input.Should().Contain("a");
         parsed.Parameters["k"].Should().Be("v");
+        parsed.ResumeSeed.SourceRunId.Should().Be("run-source");
+        parsed.ResumeSeed.StartAtStepId.Should().Be("step-b");
+        parsed.ResumeSeed.Attempt.Should().Be(1);
+        parsed.ResumeSeed.Variables["step-a"].Should().Be("alpha");
+    }
+
+    [Fact]
+    public void WorkflowRunResumeSeedAndForkRequestedEvent_ShouldRoundtrip()
+    {
+        var seed = new WorkflowRunResumeSeed
+        {
+            SourceRunId = "run-source",
+            StartAtStepId = "step-b",
+            Attempt = 2,
+        };
+        seed.Variables["step-a"] = "alpha";
+
+        var parsedSeed = WorkflowRunResumeSeed.Parser.ParseFrom(seed.ToByteArray());
+        parsedSeed.Should().BeEquivalentTo(seed);
+
+        var requested = new WorkflowRunForkRequestedEvent
+        {
+            SourceRunId = "run-source",
+            StartAtStepId = "step-b",
+            Attempt = 2,
+            ScopeId = "scope-1",
+        };
+        var parsedRequested = WorkflowRunForkRequestedEvent.Parser.ParseFrom(requested.ToByteArray());
+        parsedRequested.Should().BeEquivalentTo(requested);
+        ((IMessage)parsedSeed).Descriptor.Name.Should().Be(nameof(WorkflowRunResumeSeed));
+        ((IMessage)parsedRequested).Descriptor.Name.Should().Be(nameof(WorkflowRunForkRequestedEvent));
     }
 
     [Fact]
@@ -54,6 +93,24 @@ public class WorkflowAbstractionsProtoCoverageTests
             TargetRole = "assistant",
         };
         request.Parameters["temperature"] = "0.1";
+        request.StepParameters.InteractionSpec = new InteractionSpec
+        {
+            Title = "Review",
+            Body = "Approve?",
+        };
+        request.StepParameters.InteractionSpec.Actions.Add(new InteractionAction
+        {
+            Kind = InteractionActionKind.Button,
+            ActionId = "approve",
+            Label = "Approve",
+            Style = InteractionActionStyle.Primary,
+        });
+        request.StepParameters.InteractionTemplateSpec = new InteractionTemplateSpec
+        {
+            TemplateId = "tpl-review",
+        };
+        request.StepParameters.InteractionTemplateSpec.TemplateVariable["run"] = "run-1";
+        request.StepParameters.DeliveryTargetId = "agent-1";
 
         var completed = new StepCompletedEvent
         {
@@ -69,6 +126,11 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsedRequest.StepType.Should().Be("llm_call");
         parsedRequest.Parameters["temperature"].Should().Be("0.1");
         parsedRequest.StepParameters.Parameters["temperature"].Should().Be("0.1");
+        parsedRequest.StepParameters.InteractionSpec.Title.Should().Be("Review");
+        parsedRequest.StepParameters.InteractionSpec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
+        parsedRequest.StepParameters.InteractionTemplateSpec.TemplateId.Should().Be("tpl-review");
+        parsedRequest.StepParameters.InteractionTemplateSpec.TemplateVariable["run"].Should().Be("run-1");
+        parsedRequest.StepParameters.DeliveryTargetId.Should().Be("agent-1");
 
         var parsedCompleted = StepCompletedEvent.Parser.ParseFrom(completed.ToByteArray());
         parsedCompleted.WorkerId.Should().Be("worker-1");
@@ -82,6 +144,8 @@ public class WorkflowAbstractionsProtoCoverageTests
     {
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
             .Should().Contain(field => field.FieldNumber == 8 && field.Name == "step_parameters");
+        WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 6 && field.Name == "delivery_target_id");
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
             .Should().NotContain(field => field.FieldNumber == 5);
 
@@ -92,13 +156,92 @@ public class WorkflowAbstractionsProtoCoverageTests
             StepParameters = new WorkflowStepParameters(),
         };
         request.StepParameters.Parameters["op"] = "trim";
+        request.StepParameters.DeliveryTargetId = "agent-typed";
         request.Parameters["target"] = "result";
+        request.StepParameters.InteractionSpec = new InteractionSpec { Body = "Continue?" };
 
         var parsed = StepRequestEvent.Parser.ParseFrom(request.ToByteArray());
         parsed.StepParameters.Parameters.Should().Contain(new KeyValuePair<string, string>("op", "trim"));
         parsed.Parameters.Should().Contain(new KeyValuePair<string, string>("target", "result"));
+        parsed.StepParameters.DeliveryTargetId.Should().Be("agent-typed");
+        parsed.StepParameters.InteractionSpec.Body.Should().Be("Continue?");
         parsed.ToString().Should().Contain("stepParameters");
         ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));
+    }
+
+    [Fact]
+    public void WorkflowInteractionNotificationEvent_ShouldRoundtripTypedPayloads()
+    {
+        var interactionEvent = new WorkflowInteractionNotificationEvent
+        {
+            RunId = "run-1",
+            StepId = "notify-1",
+            DeliveryTargetId = "agent-1",
+            Interaction = new InteractionSpec
+            {
+                Title = "Status",
+                Body = "Accepted",
+            },
+        };
+        var templateEvent = new WorkflowInteractionNotificationEvent
+        {
+            RunId = "run-2",
+            StepId = "notify-2",
+            DeliveryTargetId = "agent-2",
+            InteractionTemplate = new InteractionTemplateSpec
+            {
+                TemplateId = "tpl-1",
+            },
+        };
+        templateEvent.InteractionTemplate.TemplateVariable["title"] = "Deploy";
+
+        var parsedInteraction = WorkflowInteractionNotificationEvent.Parser.ParseFrom(interactionEvent.ToByteArray());
+        var parsedTemplate = WorkflowInteractionNotificationEvent.Parser.ParseFrom(templateEvent.ToByteArray());
+
+        parsedInteraction.PayloadCase.Should().Be(WorkflowInteractionNotificationEvent.PayloadOneofCase.Interaction);
+        parsedInteraction.Interaction.Title.Should().Be("Status");
+        parsedTemplate.PayloadCase.Should().Be(WorkflowInteractionNotificationEvent.PayloadOneofCase.InteractionTemplate);
+        parsedTemplate.InteractionTemplate.TemplateId.Should().Be("tpl-1");
+        parsedTemplate.InteractionTemplate.TemplateVariable["title"].Should().Be("Deploy");
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .Should().Contain(nameof(WorkflowInteractionNotificationEvent));
+    }
+
+    [Fact]
+    public void WorkflowSuspendedEvent_ShouldRoundtripTypedInteractionOnFieldThirteen()
+    {
+        WorkflowSuspendedEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 13 && field.Name == "interaction");
+
+        var suspended = new WorkflowSuspendedEvent
+        {
+            RunId = "run-hitl",
+            StepId = "approval-hitl",
+            SuspensionType = "human_approval",
+            DeliveryTargetId = "agent-hitl",
+            Interaction = new InteractionSpec
+            {
+                Title = "Approve release",
+                Body = "Release v2",
+                Disposition = InteractionDisposition.Ephemeral,
+            },
+        };
+        suspended.Interaction.Actions.Add(new InteractionAction
+        {
+            Kind = InteractionActionKind.FormSubmit,
+            ActionId = "approve",
+            Label = "Approve",
+            Style = InteractionActionStyle.Primary,
+        });
+
+        var parsed = WorkflowSuspendedEvent.Parser.ParseFrom(suspended.ToByteArray());
+
+        parsed.Interaction.Title.Should().Be("Approve release");
+        parsed.Interaction.Body.Should().Be("Release v2");
+        parsed.Interaction.Disposition.Should().Be(InteractionDisposition.Ephemeral);
+        parsed.Interaction.Actions.Should().ContainSingle();
+        parsed.Interaction.Actions[0].Kind.Should().Be(InteractionActionKind.FormSubmit);
+        parsed.Interaction.Actions[0].ActionId.Should().Be("approve");
     }
 
     [Fact]
@@ -275,6 +418,8 @@ public class WorkflowAbstractionsProtoCoverageTests
     {
         WorkflowExecutionMessagesReflection.Descriptor.Should().NotBeNull();
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(StartWorkflowEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowRunResumeSeed));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowRunForkRequestedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowCompletedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(StepRequestEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(StepCompletedEvent));

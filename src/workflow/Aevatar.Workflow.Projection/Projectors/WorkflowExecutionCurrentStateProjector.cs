@@ -10,6 +10,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
         WorkflowRunState,
         WorkflowExecutionCurrentStateDocument>
 {
+    private readonly WorkflowRunResumeSeedReadModelMapper _resumeSeedMapper = new();
+
     public WorkflowExecutionCurrentStateProjector(
         IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> writeDispatcher,
         IProjectionClock clock)
@@ -31,6 +33,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
 
         var stateEvent = input.StateEvent;
         var state = input.State;
+        var seedSnapshot = _resumeSeedMapper.ToProjectionSnapshot(state);
 
         // Refactor (iter97/cluster-591): Old/New
         //   Old: every current-state projector hand-rolled committed-state unpack, timestamp resolution, and upsert.
@@ -54,6 +57,17 @@ public sealed class WorkflowExecutionCurrentStateProjector
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = input.ObservedAt,
+            WorkflowYaml = seedSnapshot.WorkflowYaml,
+            InlineWorkflowYamls = seedSnapshot.InlineWorkflowYamls.ToDictionary(
+                x => x.Key,
+                x => x.Value,
+                StringComparer.Ordinal),
+            ResumeSeedVariables = seedSnapshot.Variables.ToDictionary(
+                x => x.Key,
+                x => x.Value,
+                StringComparer.Ordinal),
+            ResumeSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
+            ResumeSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
         };
     }
 

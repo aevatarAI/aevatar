@@ -3,6 +3,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
@@ -26,6 +27,8 @@ public static class WorkflowCapabilityEndpoints
     {
         var group = app.MapGroup("/api").WithTags("Chat");
         ChatQueryEndpoints.Map(group);
+        group.MapPost("/workflow/runs/fork", HandleForkRun)
+            .WithName("ForkWorkflowRun");
         if (HasWorkflowScheduleDependencies(app.ServiceProvider))
             WorkflowScheduleEndpoints.Map(group);
 
@@ -371,6 +374,64 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
+    public static async Task<IResult> HandleForkRun(
+        WorkflowForkRunInput input,
+        [FromServices] IWorkflowForkRunService forkRunService,
+        CancellationToken ct = default)
+    {
+        using var scope = ApiRequestScope.BeginHttp();
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(forkRunService);
+
+        try
+        {
+            var sourceRunId = (input.SourceRunId ?? string.Empty).Trim();
+            var startAtStepId = (input.StartAtStepId ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(sourceRunId) ||
+                string.IsNullOrWhiteSpace(startAtStepId))
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new { error = "sourceRunId and startAtStepId are required." });
+            }
+
+            var result = await forkRunService.ForkAsync(
+                new WorkflowForkRunCommand(
+                    sourceRunId,
+                    startAtStepId,
+                    input.InlineYaml,
+                    NormalizeStringMap(input.InlineSubYamls),
+                    NormalizeStringMap(input.VariableOverrides),
+                    input.Input,
+                    NormalizeOptional(input.CommandId),
+                    NormalizeOptional(input.CorrelationId)),
+                ct);
+
+            if (!result.Succeeded || result.Receipt == null)
+                return MapForkRunFailure(result.Error, scope);
+
+            var statusUrl = BuildWorkflowRunStatusUrl(result.Receipt.NewRunActorId);
+            return Results.Accepted(statusUrl, new
+            {
+                accepted = true,
+                sourceRunId = result.Receipt.SourceRunId,
+                newRunId = result.Receipt.NewRunActorId,
+                workflowName = result.Receipt.WorkflowName,
+                acceptedCommandId = result.Receipt.CommandId,
+                correlationId = result.Receipt.CorrelationId,
+                statusUrl,
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            scope.MarkError();
+            throw;
+        }
+    }
+
     private static string BuildWorkflowRunStatusUrl(WorkflowRunControlAcceptedReceipt receipt) =>
         BuildWorkflowRunStatusUrl(receipt.ActorId);
 
@@ -434,6 +495,40 @@ public static class WorkflowCapabilityEndpoints
         return Results.Json(new { error = message }, statusCode: statusCode);
     }
 
+    private static IResult MapForkRunFailure(
+        WorkflowForkRunStartError? error,
+        ApiRequestScope scope)
+    {
+        if (error == null)
+        {
+            scope.MarkResult(StatusCodes.Status500InternalServerError);
+            return Results.Json(
+                new { error = "Workflow fork failed." },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        var statusCode = error.Code switch
+        {
+            WorkflowForkRunStartErrorCode.SourceRunNotFound => StatusCodes.Status404NotFound,
+            WorkflowForkRunStartErrorCode.SourceRunNotTerminal => StatusCodes.Status409Conflict,
+            WorkflowForkRunStartErrorCode.InvalidWorkflowYaml => StatusCodes.Status422UnprocessableEntity,
+            WorkflowForkRunStartErrorCode.StartStepNotFound => StatusCodes.Status422UnprocessableEntity,
+            WorkflowForkRunStartErrorCode.RunCreationFailed => StatusCodes.Status502BadGateway,
+            WorkflowForkRunStartErrorCode.DispatchFailed => StatusCodes.Status502BadGateway,
+            _ => StatusCodes.Status500InternalServerError,
+        };
+        scope.MarkResult(statusCode);
+        return Results.Json(
+            new
+            {
+                error = error.Reason,
+                code = error.Code.ToString(),
+                sourceRunId = error.SourceRunId,
+                startAtStepId = error.StartAtStepId,
+            },
+            statusCode: statusCode);
+    }
+
     private static string? NormalizeOptional(string? value)
     {
         var normalized = (value ?? string.Empty).Trim();
@@ -456,6 +551,26 @@ public static class WorkflowCapabilityEndpoints
                 continue;
 
             normalized[normalizedKey] = normalizedValue;
+        }
+
+        return normalized.Count == 0
+            ? null
+            : normalized;
+    }
+
+    private static IReadOnlyDictionary<string, string>? NormalizeStringMap(IDictionary<string, string>? values)
+    {
+        if (values == null || values.Count == 0)
+            return null;
+
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in values)
+        {
+            var normalizedKey = NormalizeOptional(key);
+            if (normalizedKey == null)
+                continue;
+
+            normalized[normalizedKey] = value ?? string.Empty;
         }
 
         return normalized.Count == 0

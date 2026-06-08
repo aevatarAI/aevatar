@@ -121,6 +121,61 @@ check_channel_inbound_no_runtime_credential() {
 
 check_channel_inbound_no_runtime_credential
 
+check_workflow_core_interaction_boundary() {
+  local workflow_core_dir="src/workflow/Aevatar.Workflow.Core"
+  local report
+
+  set +e
+  report="$(
+    rg -n "Aevatar\.GAgents\.Channel\.Abstractions|MessageContent|LarkMessageComposer|open-apis/im/v1/messages|interactive_card|raw Lark|raw card JSON|\"type\"[[:space:]]*:[[:space:]]*\"template\"" "${workflow_core_dir}" \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs'
+  )"
+  local status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "Workflow Core interaction boundary guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "Workflow Core must carry typed InteractionSpec only; channel content and raw card payloads belong at the channel boundary."
+    exit 1
+  fi
+
+  set +e
+  report="$(
+    rg -n "Metadata[[:space:]]*\[[[:space:]]*\"interaction\"|metadata[[:space:]]*\[[[:space:]]*\"interaction\"" \
+      src/workflow agents \
+      -g '*Human*Interaction*.cs' \
+      -g '*Notify*.cs' \
+      -g '*Notification*.cs' \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs'
+  )"
+  status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "HITL/notify metadata interaction guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "HITL/notify control must consume typed interaction contracts, not Metadata[\"interaction\"] bags."
+    exit 1
+  fi
+}
+
+check_workflow_core_interaction_boundary
+
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
 

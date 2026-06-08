@@ -288,6 +288,8 @@ message CardActionSubmission {
   WorkflowResumeActionPayload workflow_resume = 6;
   // Repository-owned LLM selection payload submitted by this action.
   LlmSelectionActionPayload llm_selection = 7;
+  // The kind of action element that produced this callback.
+  ActionElementKind action_kind = 8;
 }
 
 // Carries the channel-agnostic message content used for send, update, and reply operations.
