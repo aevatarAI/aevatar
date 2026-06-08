@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -1036,6 +1037,115 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleForkRun_ShouldReturnAcceptedLocationAndDispatchMappedCommand()
+    {
+        var service = new RecordingForkRunService
+        {
+            Result = WorkflowForkRunResult.Accepted(
+                new WorkflowForkRunAcceptedReceipt(
+                    "source-run",
+                    "new-run-actor",
+                    "workflow-1",
+                    true,
+                    "cmd-1",
+                    "corr-1",
+                    new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero))),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = " source-run ",
+                StartAtStepId = " step-b ",
+                InlineYaml = "name: workflow-1\nsteps: []",
+                InlineSubYamls = new Dictionary<string, string>
+                {
+                    [" helper "] = "name: helper",
+                },
+                VariableOverrides = new Dictionary<string, string>
+                {
+                    [" topic "] = "recovered",
+                },
+                Input = "resume input",
+                CommandId = " cmd-1 ",
+                CorrelationId = " corr-1 ",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/new-run-actor/current-state");
+        var body = await ReadBodyAsync(http.Response);
+        body.Should().Contain("\"newRunId\":\"new-run-actor\"");
+        body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
+        body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/new-run-actor/current-state\"");
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().SourceRunId.Should().Be("source-run");
+        service.Commands.Single().StartAtStepId.Should().Be("step-b");
+        service.Commands.Single().InlineYaml.Should().Be("name: workflow-1\nsteps: []");
+        service.Commands.Single().InlineSubYamls.Should().ContainKey("helper").WhoseValue.Should().Be("name: helper");
+        service.Commands.Single().VariableOverrides.Should().ContainKey("topic").WhoseValue.Should().Be("recovered");
+        service.Commands.Single().Input.Should().Be("resume input");
+        service.Commands.Single().CommandId.Should().Be("cmd-1");
+        service.Commands.Single().CorrelationId.Should().Be("corr-1");
+    }
+
+    [Theory]
+    [InlineData("", "step-b")]
+    [InlineData("source-run", "   ")]
+    public async Task HandleForkRun_ShouldRejectMissingRequiredFields(string sourceRunId, string startAtStepId)
+    {
+        var service = new RecordingForkRunService();
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = sourceRunId,
+                StartAtStepId = startAtStepId,
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("sourceRunId and startAtStepId are required");
+        service.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldMapStartErrorWithReason()
+    {
+        var service = new RecordingForkRunService
+        {
+            Result = WorkflowForkRunResult.Failure(
+                WorkflowForkRunStartError.StartStepNotFound("source-run", "missing-step")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "missing-step",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status422UnprocessableEntity);
+        body.Should().Contain("Start step 'missing-step' was not found");
+        body.Should().Contain("StartStepNotFound");
+        service.Commands.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task HandleChatWebSocket_ShouldRejectNonWebSocketRequests()
     {
         var http = CreateHttpContext();
@@ -1236,6 +1346,24 @@ public sealed class ChatEndpointsInternalTests
             Commands.Add(command);
             if (DispatchException != null)
                 throw DispatchException;
+            return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingForkRunService : IWorkflowForkRunService
+    {
+        public List<WorkflowForkRunCommand> Commands { get; } = [];
+
+        public WorkflowForkRunResult Result { get; set; } =
+            WorkflowForkRunResult.Failure(
+                WorkflowForkRunStartError.SourceRunNotFound("source-run"));
+
+        public Task<WorkflowForkRunResult> ForkAsync(
+            WorkflowForkRunCommand command,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Commands.Add(command);
             return Task.FromResult(Result);
         }
     }

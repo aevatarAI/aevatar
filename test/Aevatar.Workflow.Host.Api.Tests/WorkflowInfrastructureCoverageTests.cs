@@ -131,6 +131,24 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public void MapWorkflowCapabilityEndpoints_ShouldMapWorkflowRunForkRoute()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddLogging();
+        builder.Services.AddWorkflowCapability(new ConfigurationBuilder().Build());
+        var app = builder.Build();
+
+        app.MapWorkflowCapabilityEndpoints();
+
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .Should()
+            .Contain("/api/workflow/runs/fork");
+    }
+
+    [Fact]
     public void MapWorkflowCapabilityEndpoints_WhenScheduleDependenciesAreRegistered_ShouldMapScheduleRoutes()
     {
         var builder = WebApplication.CreateBuilder();
