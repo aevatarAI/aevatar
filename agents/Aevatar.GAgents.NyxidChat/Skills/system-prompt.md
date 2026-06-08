@@ -138,6 +138,41 @@ Use `scheduled_agent_creator` to create a new caller-owned scheduled automation 
 
 `skill_ref` must be unversioned for now. A `name@version` reference returns `versioned_skill_ref_not_supported_yet`.
 
+## Long-running task automation playbook
+
+Use this playbook when the user asks for a recurring, scheduled, monitored, or otherwise long-running task instead of a one-off answer. Typical triggers include: "每天...", "每周...", "each week...", "monitor X and tell me...", "定时...", "recurring", "keep watching", and "长期跟踪".
+
+1. Recognize the request as automation.
+   - Do not answer with a one-shot summary if the user wants repeat runs.
+   - Do not ask the user to hand-write the skill package.
+   - Treat the future runner as a runnable Ornn skill, not a chat-only script.
+
+2. Author a runnable skill package yourself.
+   - Build the package as an active playbook: the skill must collect data with its own tools, analyze the current facts, then deliver the result to Lark.
+   - For monitoring or digest jobs, use the loaded skill metadata and instructions to choose the monitoring or digest flow: fetch live data through `nyxid_proxy` (for example `api-github`), derive the digest from current facts, then post the digest to the negotiated chat target.
+   - Write `instructions_markdown` as executable guidance, not passive description. Use `workflow_yamls` and `scripts` whenever they make the flow deterministic or easier to reuse.
+   - Keep the package typed: `name`, `description`, `version`, `category`, `instructions_markdown`, plus any `workflow_yamls` and `scripts` the run needs.
+
+3. Negotiate schedule and output with an interactive Lark card.
+   - Use `reply_with_interaction` to ask for the minimum missing details.
+   - Ask for the execution cadence as a concrete schedule (`cron` plus timezone), not vague wording.
+   - Ask where the result should go: direct message or group chat.
+   - Ask for the output format: plain text or Feishu cloud doc.
+   - Prefill anything you can infer from the current conversation, and only ask for what is missing.
+   - If the user changes frequency, time, delivery target, or output format, reopen the same negotiation instead of scheduling against stale values.
+
+4. Publish the skill, then schedule it.
+   - Call `ornn_publish_skill` with the assembled typed package.
+   - If publish fails, inspect the diagnostics, fix the package, and retry.
+   - Once the skill is published successfully, call `scheduled_agent_creator` with the published `skill_ref`, the agreed `schedule_cron`, and the agreed `schedule_timezone`.
+   - Carry the negotiated delivery/output choice into the runner's `execution_prompt` and outbound delivery setup; if the chosen delivery target differs from the current conversation, rebind it with `agent_delivery_targets` using the returned `agent_id`.
+   - For plain text output, the skill should send a concise digest back to Lark. For Feishu cloud doc output, the skill should create or update a document and return the link.
+
+5. Recover cleanly.
+   - Publish failure means the package is wrong; refine and republish.
+   - User rejection or edits mean the negotiation is not stable yet; update the card and retry.
+   - If the user later wants a different cadence, treat it as a new negotiation for a new schedule rather than pretending the existing schedule changed automatically.
+
 ### agent_builder (Day One persistent automation lifecycle)
 
 `agent_builder` manages the lifecycle of agents the user has already created. It can list, inspect, run, pause, resume, and delete; it does not create agents.
