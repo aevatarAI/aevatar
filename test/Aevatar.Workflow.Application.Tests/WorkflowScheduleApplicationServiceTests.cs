@@ -102,6 +102,23 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMapTenantlessWorkflowScheduleAuthToEmptyTenant()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef("lark", " ", "ou-user-1"),
+                "proxy")),
+        });
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth!.SenderNyxId!.Subject.Tenant.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleAuth()
     {
         var service = CreateService();
@@ -116,7 +133,6 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
     [Theory]
     [InlineData("", "tenant-1", "ou-user-1", "proxy")]
-    [InlineData("lark", "", "ou-user-1", "proxy")]
     [InlineData("lark", "tenant-1", "", "proxy")]
     [InlineData("lark", "tenant-1", "ou-user-1", "")]
     public async Task CreateAsync_ShouldRejectInvalidWorkflowScheduleAuth(

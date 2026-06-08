@@ -6,7 +6,7 @@ namespace Aevatar.Workflow.Core;
 
 internal static class WorkflowRoleAgentEnvelopeFactory
 {
-    public static EventEnvelope CreateInitializeEnvelope(RoleDefinition role, string actorId)
+    public static EventEnvelope CreateInitializeEnvelope(RoleDefinition role, string publisherActorId, string targetActorId)
     {
         var initialize = new WorkflowRoleInitializeEvent
         {
@@ -33,7 +33,7 @@ internal static class WorkflowRoleAgentEnvelopeFactory
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(initialize),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(actorId, TopologyAudience.Self),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, targetActorId),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),

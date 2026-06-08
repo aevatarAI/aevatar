@@ -173,7 +173,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             new ScheduledServiceInvocationNyxIdSubjectRef(
                 NormalizeRequired(senderNyxId.Subject.Platform, nameof(senderNyxId.Subject.Platform)),
-                NormalizeRequired(senderNyxId.Subject.Tenant, nameof(senderNyxId.Subject.Tenant)),
+                NormalizeOptional(senderNyxId.Subject.Tenant, string.Empty),
                 NormalizeRequired(senderNyxId.Subject.ExternalUserId, nameof(senderNyxId.Subject.ExternalUserId))),
             NormalizeRequired(senderNyxId.Scope, nameof(senderNyxId.Scope))));
     }

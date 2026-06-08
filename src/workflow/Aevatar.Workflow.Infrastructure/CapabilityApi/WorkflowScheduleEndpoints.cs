@@ -266,13 +266,13 @@ public sealed record WorkflowScheduleNyxIdCredentialSourceHttpRequest
 public sealed record WorkflowScheduleNyxIdSubjectRefHttpRequest
 {
     public required string Platform { get; init; }
-    public required string Tenant { get; init; }
+    public string? Tenant { get; init; }
     public required string ExternalUserId { get; init; }
 
     public WorkflowScheduleNyxIdSubjectRef ToSubject() =>
         new(
             NormalizeRequired(Platform, nameof(Platform)).ToLowerInvariant(),
-            NormalizeRequired(Tenant, nameof(Tenant)),
+            NormalizeOptional(Tenant),
             NormalizeRequired(ExternalUserId, nameof(ExternalUserId)));
 
     private static string NormalizeRequired(string? value, string name)
@@ -282,6 +282,9 @@ public sealed record WorkflowScheduleNyxIdSubjectRefHttpRequest
 
         return value.Trim();
     }
+
+    private static string NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
 
 public sealed record WorkflowSchedulePreviewHttpRequest

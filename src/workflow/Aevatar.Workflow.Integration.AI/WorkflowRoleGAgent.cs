@@ -35,7 +35,7 @@ public class WorkflowRoleGAgent(
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);

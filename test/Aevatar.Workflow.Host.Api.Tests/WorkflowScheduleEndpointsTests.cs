@@ -136,6 +136,42 @@ public sealed class WorkflowScheduleEndpointsTests
     }
 
     [Fact]
+    public async Task Create_ShouldAcceptTenantlessWorkflowScheduleAuth()
+    {
+        var service = new RecordingScheduleService();
+
+        var result = await WorkflowScheduleEndpoints.Create(
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                ScheduleId = "schedule-1",
+                WorkflowName = "daily",
+                Prompt = "hello",
+                CronExpression = "0 9 * * *",
+                Auth = new WorkflowScheduleAuthHttpRequest
+                {
+                    SenderNyxId = new WorkflowScheduleNyxIdCredentialSourceHttpRequest
+                    {
+                        Subject = new WorkflowScheduleNyxIdSubjectRefHttpRequest
+                        {
+                            Platform = "lark",
+                            Tenant = " ",
+                            ExternalUserId = "ou-user-1",
+                        },
+                        Scope = "proxy",
+                    },
+                },
+            },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Created.Should().ContainSingle()
+            .Which.Auth!.SenderNyxId!.Subject.Tenant.Should().BeEmpty();
+    }
+
+    [Fact]
     public void WorkflowScheduleModels_ShouldNotExposeDeadSourceActorIdField()
     {
         typeof(WorkflowScheduleConfigurationHttpRequest)

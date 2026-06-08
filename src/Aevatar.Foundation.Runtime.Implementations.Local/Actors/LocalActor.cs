@@ -114,6 +114,9 @@ public sealed class LocalActor : IActor
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
         EnqueueAsync(envelope, propagateFailure: true);
 
+    internal Task AcceptDispatchedEnvelopeAsync(EventEnvelope envelope) =>
+        EnqueueAsync(envelope);
+
     public Task<string?> GetParentIdAsync() => Task.FromResult(_parentId);
     public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
         Task.FromResult<IReadOnlyList<string>>([.. _childrenIds]);
