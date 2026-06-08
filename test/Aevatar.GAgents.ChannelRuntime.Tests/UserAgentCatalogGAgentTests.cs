@@ -133,6 +133,26 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleUpsertAsync_PartialUpsertWithDefaultOutputFormat_PreservesExistingFormat()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "format-agent",
+            ConversationId = "oc_chat_1",
+            OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
+        });
+
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "format-agent",
+            ScheduleCron = "0 9 * * *",
+        });
+
+        _agent.State.Entries.Should().ContainSingle();
+        _agent.State.Entries[0].OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+    }
+
+    [Fact]
     public async Task HandleCompactTombstonesAsync_RemovesOnlyWatermarkSafeEntries()
     {
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand

@@ -37,6 +37,9 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
         properties.TryGetProperty("skill_content", out _).Should().BeFalse();
         properties.TryGetProperty("provider_base_url", out _).Should().BeFalse();
+        properties.TryGetProperty("output_format", out var outputFormat).Should().BeTrue();
+        outputFormat.GetProperty("enum").EnumerateArray().Select(static x => x.GetString())
+            .Should().BeEquivalentTo("auto", "text", "feishu_doc");
         properties.TryGetProperty("external_trigger_sources", out var externalSources).Should().BeTrue();
         externalSources.GetProperty("items").GetProperty("properties")
             .GetProperty("kind")
@@ -95,6 +98,34 @@ public sealed class ScheduledAgentCreatorToolTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
+            harness.Handler.Requests.Should().BeEmpty();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InvalidOutputFormat_ShouldFailBeforeKeyCreation()
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "skill_ref": "daily",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "output_format": "pdf"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
+            document.RootElement.GetProperty("detail").GetString().Should().Contain("output_format");
             harness.Handler.Requests.Should().BeEmpty();
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
@@ -328,6 +359,7 @@ public sealed class ScheduledAgentCreatorToolTests
                   "max_tool_rounds": 6,
                   "max_history_messages": 12,
                   "requires_nyxid_proxy_success": true,
+                  "output_format": "feishu_doc",
                   "external_trigger_sources": [
                     {
                       "source_id": " webhook-main ",
@@ -374,6 +406,7 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.MaxToolRounds.Should().Be(6);
             captured.MaxHistoryMessages.Should().Be(12);
             captured.RequiresNyxidProxySuccess.Should().BeTrue();
+            captured.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
             captured.ExternalTriggerSources.Should().HaveCount(2);
             captured.ExternalTriggerSources[0].SourceId.Should().Be("webhook-main");
             captured.ExternalTriggerSources[0].Kind.Should().Be(ExternalTriggerSourceKind.Webhook);
@@ -391,6 +424,7 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.OutboundConfig.LarkReceiveIdType.Should().Be("chat_id");
             captured.OutboundConfig.LarkReceiveIdFallback.Should().Be("on_union");
             captured.OutboundConfig.LarkReceiveIdTypeFallback.Should().Be("union_id");
+            captured.OutboundConfig.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
             captured.OutboundConfig.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
             captured.OutboundConfig.OwnerNyxUserId.Should().BeEmpty();
             captured.OutboundConfig.Platform.Should().BeEmpty();

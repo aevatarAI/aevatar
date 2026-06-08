@@ -362,6 +362,7 @@ public sealed class AgentBuilderToolTests
                 AgentId = "skill-runner-join",
                 AgentType = SkillRunnerDefaults.AgentType,
                 TemplateName = "summary",
+                OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
                 Status = string.Empty,
                 ErrorCount = 0,
                 CatalogAuthorityStateVersion = 7,
@@ -408,6 +409,7 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-join");
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusError);
+            doc.RootElement.GetProperty("output_format").GetString().Should().Be("feishu_doc");
             doc.RootElement.GetProperty("error_count").GetInt32().Should().Be(2);
             doc.RootElement.GetProperty("last_error").GetString().Should().Be("tool failed");
 
@@ -437,6 +439,7 @@ public sealed class AgentBuilderToolTests
                     AgentId = "skill-runner-list",
                     AgentType = SkillRunnerDefaults.AgentType,
                     TemplateName = "summary",
+                    OutputFormat = SkillRunnerOutputFormat.Text,
                 },
             ]));
 
@@ -481,6 +484,7 @@ public sealed class AgentBuilderToolTests
             var agent = doc.RootElement.GetProperty("agents").EnumerateArray().Should().ContainSingle().Subject;
             agent.GetProperty("agent_id").GetString().Should().Be("skill-runner-list");
             agent.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
+            agent.GetProperty("output_format").GetString().Should().Be("text");
             agent.GetProperty("error_count").GetInt32().Should().Be(1);
 
             await queryPort.Received(1).QueryByCallerAsync(

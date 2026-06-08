@@ -30,6 +30,7 @@ public sealed class FeishuCardHumanInteractionPortTests
                 LarkReceiveIdType: string.Empty,
                 LarkReceiveIdFallback: string.Empty,
                 LarkReceiveIdTypeFallback: string.Empty,
+                OutputFormat: SkillRunnerOutputFormat.Auto,
                 TemplateName: "social_media",
                 AgentType: string.Empty)));
 
@@ -98,6 +99,7 @@ public sealed class FeishuCardHumanInteractionPortTests
                 LarkReceiveIdType: "chat_id",
                 LarkReceiveIdFallback: "on_user_1",
                 LarkReceiveIdTypeFallback: "union_id",
+                OutputFormat: SkillRunnerOutputFormat.Auto,
                 TemplateName: "social_media",
                 AgentType: string.Empty)));
 
@@ -157,6 +159,7 @@ public sealed class FeishuCardHumanInteractionPortTests
                 LarkReceiveIdType: string.Empty,
                 LarkReceiveIdFallback: string.Empty,
                 LarkReceiveIdTypeFallback: string.Empty,
+                OutputFormat: SkillRunnerOutputFormat.Auto,
                 TemplateName: string.Empty,
                 AgentType: string.Empty)));
 

@@ -31,6 +31,7 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private static readonly TimeSpan LongOutputDocumentDecisionTimeout = TimeSpan.FromSeconds(45);
+    private const string LarkDocxCreateToolName = "lark_docx_create";
 
     private readonly NyxIdApiClient? _nyxIdApiClient;
     private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
@@ -281,6 +282,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
+        var outboundConfig = command.OutboundConfig?.Clone() ?? new SkillRunnerOutboundConfig();
+        if (command.OutputFormat != SkillRunnerOutputFormat.Auto || outboundConfig.OutputFormat == SkillRunnerOutputFormat.Auto)
+            outboundConfig.OutputFormat = command.OutputFormat;
+
         var initialized = new SkillRunnerInitializedEvent
         {
             SkillName = command.SkillName?.Trim() ?? string.Empty,
@@ -292,7 +297,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ExecutionPrompt = command.ExecutionPrompt?.Trim() ?? string.Empty,
             ScheduleCron = command.ScheduleCron?.Trim() ?? string.Empty,
             ScheduleTimezone = NormalizeTimezone(command.ScheduleTimezone),
-            OutboundConfig = command.OutboundConfig?.Clone() ?? new SkillRunnerOutboundConfig(),
+            OutboundConfig = outboundConfig,
             Enabled = command.Enabled,
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
             ProviderName = NormalizeProviderName(command.ProviderName),
@@ -648,16 +653,13 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 _toolFailureCounter.SuccessCount,
                 State.RequiresNyxidProxySuccess);
 
-            var docReply = await TryCreateLongOutputDocumentReplyAsync(
+            var chunks = await BuildOutputChunksAsync(
                 output,
                 requestId,
                 llmControl,
                 toolContext,
                 metadata,
                 ct);
-            var chunks = docReply is not null
-                ? [docReply]
-                : SkillRunnerOutputChunker.Split(output);
             await DispatchOutputChunksAsync(streamingState, chunks, ct);
 
             return output;
@@ -757,10 +759,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             // No streaming sink (no NyxID client, missing outbound config, or tests injecting
             // a null client). Fall back to a one-shot send so the user still receives the
             // report and tests that don't construct a sink keep working.
-            await SendOutputAsync(chunks[0], ct);
+            await SendTextOutputAsync(chunks[0], ct);
 
         for (var i = 1; i < chunks.Count; i++)
-            await SendOutputAsync(chunks[i], ct);
+            await SendTextOutputAsync(chunks[i], ct);
     }
 
     /// <summary>
@@ -785,6 +787,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // user no longer sees the report grow live, but output integrity wins over the
         // streaming-edit UX for fetch-and-summarize skills.
         if (State.RequiresNyxidProxySuccess)
+            return null;
+
+        if (State.OutboundConfig?.OutputFormat == SkillRunnerOutputFormat.FeishuDoc)
             return null;
 
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
@@ -1198,6 +1203,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IReadOnlyDictionary<string, string> metadata,
         CancellationToken ct)
     {
+        var outputFormat = State.OutboundConfig?.OutputFormat ?? SkillRunnerOutputFormat.Auto;
+        if (outputFormat == SkillRunnerOutputFormat.Text)
+            return null;
+        if (outputFormat == SkillRunnerOutputFormat.FeishuDoc)
+            return await CreateRequiredFeishuDocumentReplyAsync(output, requestId, toolContext, ct);
         if (output.Length <= SkillRunnerStreamingReplySink.MaxLarkTextLength)
             return null;
 
@@ -1252,7 +1262,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         The scheduled skill output below is too long for one Lark message.
 
         Decide whether the full content should be delivered as a Lark cloud document.
-        If yes, call the lark_docx_create tool exactly once with:
+        If yes, call the {LarkDocxCreateToolName} tool exactly once with:
         - title: a concise title for this report
         - markdown_text: the complete output exactly as provided
         - visibility: readable
@@ -1264,6 +1274,101 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         Output:
         {output}
         """;
+
+    private async Task<IReadOnlyList<string>> BuildOutputChunksAsync(
+        string output,
+        string requestId,
+        LLMControlContext llmControl,
+        AgentToolExecutionContext toolContext,
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken ct)
+    {
+        var docReply = await TryCreateLongOutputDocumentReplyAsync(
+            output,
+            requestId,
+            llmControl,
+            toolContext,
+            metadata,
+            ct);
+        if (docReply is not null)
+            return [docReply];
+
+        return SkillRunnerOutputChunker.Split(output);
+    }
+
+    private async Task<string> CreateRequiredFeishuDocumentReplyAsync(
+        string output,
+        string requestId,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        var title = string.IsNullOrWhiteSpace(State.TemplateName)
+            ? "Scheduled run output"
+            : State.TemplateName.Trim();
+        var arguments = JsonSerializer.Serialize(new
+        {
+            title,
+            markdown_text = output,
+            visibility = "readable",
+        });
+        var scopedToolContext = toolContext with
+        {
+            Request = toolContext.Request with { RequestId = $"{requestId}:lark-docx", CallId = "required-lark-docx" },
+        };
+
+        using var _ = AgentToolContextScope.Push(scopedToolContext);
+        var result = await Tools.ExecuteToolCallAsync(
+            new ToolCall
+            {
+                Id = "required-lark-docx",
+                Name = LarkDocxCreateToolName,
+                ArgumentsJson = arguments,
+            },
+            ct);
+
+        if (!TryExtractSuccessfulDocumentUrl(result.Content, out var documentUrl))
+        {
+            throw new InvalidOperationException(
+                "Feishu document output was requested, but document creation did not return a usable link.");
+        }
+
+        return $"Full output moved to {documentUrl}";
+    }
+
+    private static bool TryExtractSuccessfulDocumentUrl(string? resultJson, out string documentUrl)
+    {
+        documentUrl = string.Empty;
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("success", out var success) ||
+                success.ValueKind != JsonValueKind.True)
+            {
+                return false;
+            }
+
+            if (!root.TryGetProperty("document_url", out var urlElement) ||
+                urlElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var url = urlElement.GetString()?.Trim();
+            if (string.IsNullOrWhiteSpace(url) || !ContainsDocumentLink(url))
+                return false;
+
+            documentUrl = url;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     private static bool TryAcceptLongOutputDocumentReply(string reply, out string accepted)
     {
@@ -1285,8 +1390,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         reply.Contains("http://", StringComparison.OrdinalIgnoreCase) ||
         reply.Contains("https://", StringComparison.OrdinalIgnoreCase);
 
-    private Task SendOutputAsync(string output, CancellationToken ct) =>
-        SendOutputAsync(output, providerSlugOverride: null, ct);
+    private async Task SendOutputAsync(string output, CancellationToken ct)
+    {
+        var requestId = Guid.NewGuid().ToString("N");
+        var metadata = await BuildExecutionMetadataAsync(ct);
+        var llmControl = await BuildExecutionLlmControlAsync(ct);
+        var toolContext = llmControl.ToToolContext(BuildExecutionToolContext(requestId, metadata));
+        var chunks = await BuildOutputChunksAsync(output, requestId, llmControl, toolContext, metadata, ct);
+        await DispatchOutputChunksAsync(streamingState: null, chunks, ct);
+    }
+
+    private Task SendTextOutputAsync(string output, CancellationToken ct) =>
+        SendTextOutputAsync(output, providerSlugOverride: null, ct);
 
     /// <summary>
     /// Posts <paramref name="output"/> as a Lark text message. <paramref name="providerSlugOverride"/>
@@ -1296,7 +1411,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// rejected (e.g. cross-tenant <c>99992364</c>). All other call sites — main report send,
     /// chunked overflow continuations — pass <c>null</c> and stay on the primary slug.
     /// </summary>
-    private async Task SendOutputAsync(string output, string? providerSlugOverride, CancellationToken ct)
+    private async Task SendTextOutputAsync(string output, string? providerSlugOverride, CancellationToken ct)
     {
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
         if (client is null)
@@ -1433,7 +1548,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             try
             {
-                await SendOutputAsync(message, providerSlugOverride: failureSlug, ct);
+                await SendTextOutputAsync(message, providerSlugOverride: failureSlug, ct);
                 return;
             }
             catch (Exception ex)
@@ -1447,7 +1562,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         try
         {
-            await SendOutputAsync(message, providerSlugOverride: null, ct);
+            await SendTextOutputAsync(message, providerSlugOverride: null, ct);
         }
         catch (Exception ex)
         {
@@ -1533,6 +1648,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             LarkReceiveIdType = State.OutboundConfig?.LarkReceiveIdType ?? string.Empty,
             LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
+            OutputFormat = State.OutboundConfig?.OutputFormat ?? SkillRunnerOutputFormat.Auto,
         };
 
         // Refactor (iter92/cluster-092):

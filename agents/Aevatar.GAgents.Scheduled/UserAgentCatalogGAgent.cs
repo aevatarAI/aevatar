@@ -56,6 +56,9 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
             LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
             LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
+            OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
+                ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
+                : command.OutputFormat,
         };
 
         // Issue #466 critical: copy OwnerScope from the command (or inherit existing on

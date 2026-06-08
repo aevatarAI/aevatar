@@ -20,6 +20,12 @@ enum SkillRunnerExecutionKind {
   SKILL_RUNNER_EXECUTION_KIND_WORKFLOW = 2;
 }
 
+enum SkillRunnerOutputFormat {
+  SKILL_RUNNER_OUTPUT_FORMAT_AUTO = 0;
+  SKILL_RUNNER_OUTPUT_FORMAT_TEXT = 1;
+  SKILL_RUNNER_OUTPUT_FORMAT_FEISHU_DOC = 2;
+}
+
 enum SkillRunnerExecutionErrorCode {
   SKILL_RUNNER_EXECUTION_ERROR_CODE_UNSPECIFIED = 0;
   SKILL_RUNNER_EXECUTION_ERROR_CODE_SKILL_REFERENCE_REQUIRED = 1;
@@ -121,6 +127,7 @@ message SkillRunnerOutboundConfig {
   // SkillRunnerGAgent.TrySendFailureAsync attempts the failure-notification
   // slug FIRST when set, then falls back to the primary slug.
   string failure_notification_provider_slug = 12;
+  SkillRunnerOutputFormat output_format = 13;
 }
 
 message SkillRunnerState {
@@ -194,6 +201,7 @@ message InitializeSkillRunnerCommand {
   bool requires_nyxid_proxy_success = 16;
   SkillRunnerSkillReference skill_ref = 17;
   repeated ExternalTriggerSource external_trigger_sources = 18;
+  SkillRunnerOutputFormat output_format = 19;
 }
 
 message SkillRunnerInitializedEvent {
