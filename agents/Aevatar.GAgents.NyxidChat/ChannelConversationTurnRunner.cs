@@ -145,7 +145,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
 
-        if (await TryHandleSlashCommandAsync(activity, inbound, registration, runtimeContext, ct) is { } slashResult)
+        if (activity.Type != ActivityType.CardAction &&
+            await TryHandleSlashCommandAsync(activity, inbound, registration, runtimeContext, ct) is { } slashResult)
             return slashResult;
 
         // Normal LLM messages do not force /init. If the sender is bound we
@@ -164,6 +165,24 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         if (activity.Type == ActivityType.CardAction)
         {
+            if (TryBuildGenericFormSubmitLlmText(activity.Content?.CardAction, out var formSubmitText))
+            {
+                var formInbound = WithText(inbound, formSubmitText);
+                var formSubmitInboundEvent = ToInboundEvent(
+                    activity,
+                    registration,
+                    formInbound);
+                return ConversationTurnResult.LlmReplyRequested(
+                    await BuildLlmReplyRequestAsync(
+                            activity,
+                            registration,
+                            formSubmitInboundEvent,
+                            runtimeContext,
+                            senderBinding,
+                            ct)
+                        .ConfigureAwait(false));
+            }
+
             // A card_action that survived both routers has no actionable meaning for this
             // bot: promoting it into an LLM turn would send a blank user message and waste
             // a model call. Return a no-reply completion instead of falling through.
@@ -1521,6 +1540,44 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         };
     }
 
+    private static bool TryBuildGenericFormSubmitLlmText(CardActionSubmission? cardAction, out string text)
+    {
+        text = string.Empty;
+        if (cardAction is null ||
+            cardAction.ActionKind != ActionElementKind.FormSubmit ||
+            cardAction.FormFields.Count == 0)
+        {
+            return false;
+        }
+
+        var lines = cardAction.FormFields
+            .Where(static pair => !string.IsNullOrWhiteSpace(pair.Key))
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Select(static pair => $"{pair.Key}: {pair.Value}")
+            .ToArray();
+        if (lines.Length == 0)
+            return false;
+
+        text = string.Join("\n", lines);
+        return true;
+    }
+
+    private static InboundMessage WithText(InboundMessage inbound, string text) =>
+        new()
+        {
+            Platform = inbound.Platform,
+            ConversationId = inbound.ConversationId,
+            SenderId = inbound.SenderId,
+            SenderName = inbound.SenderName,
+            Text = text,
+            MessageId = inbound.MessageId,
+            ChatType = inbound.ChatType,
+            OutboundDelivery = inbound.OutboundDelivery?.Clone(),
+            TransportExtras = inbound.TransportExtras?.Clone(),
+            CardAction = inbound.CardAction?.Clone(),
+            Extra = inbound.Extra,
+        };
+
     private static ChannelInboundEvent ToInboundEvent(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
@@ -1692,6 +1749,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (requestActivity.Content is null)
             return requestActivity;
 
+        requestActivity.Content.Text = inboundText ?? string.Empty;
         if (allowSkillInvocationPrompt && TryBuildSkillInvocationPrompt(inboundText, platform, out var prompt))
             requestActivity.Content.Text = prompt;
 

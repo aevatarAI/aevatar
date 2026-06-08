@@ -69,6 +69,20 @@ public static class ReplyWithInteractionIntentMapper
         return $"{title}\n{body}";
     }
 
+    private static ActionElementKind MapActionKind(string? kind)
+    {
+        var normalized = (kind ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "" or "button" => ActionElementKind.Button,
+            "select" => ActionElementKind.Select,
+            "text_input" or "text-input" or "input" => ActionElementKind.TextInput,
+            "form_submit" or "form-submit" or "submit" => ActionElementKind.FormSubmit,
+            "link" => ActionElementKind.Link,
+            _ => ActionElementKind.Button,
+        };
+    }
+
     private static ActionElement? MapAction(ReplyActionArgument? action)
     {
         if (action is null)
@@ -76,15 +90,35 @@ public static class ReplyWithInteractionIntentMapper
         if (string.IsNullOrWhiteSpace(action.ActionId))
             return null;
 
-        return new ActionElement
+        var mapped = new ActionElement
         {
-            Kind = ActionElementKind.Button,
+            Kind = MapActionKind(action.Kind),
             ActionId = action.ActionId!,
             Label = action.Label ?? action.ActionId!,
             Value = action.Value ?? string.Empty,
+            Placeholder = action.Placeholder ?? string.Empty,
             IsPrimary = string.Equals(action.Style, "primary", StringComparison.OrdinalIgnoreCase),
             IsDanger = string.Equals(action.Style, "danger", StringComparison.OrdinalIgnoreCase),
         };
+
+        if (action.Options is { Count: > 0 })
+        {
+            foreach (var option in action.Options)
+            {
+                if (option is null)
+                    continue;
+                if (string.IsNullOrWhiteSpace(option.Label) && string.IsNullOrWhiteSpace(option.Value))
+                    continue;
+
+                mapped.Options.Add(new ActionOption
+                {
+                    Label = option.Label ?? option.Value ?? string.Empty,
+                    Value = option.Value ?? option.Label ?? string.Empty,
+                });
+            }
+        }
+
+        return mapped;
     }
 
     private static CardBlock? MapCard(ReplyCardArgument? card)

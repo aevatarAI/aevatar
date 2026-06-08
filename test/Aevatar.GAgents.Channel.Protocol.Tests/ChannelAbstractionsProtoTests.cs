@@ -63,6 +63,7 @@ public sealed class ChannelAbstractionsProtoTests
                     ActionId = "approve",
                     SubmittedValue = "true",
                     SourceMessageId = "om_123",
+                    ActionKind = ActionElementKind.FormSubmit,
                 },
             },
             ReplyToActivityId = "orig-1",
@@ -116,6 +117,7 @@ public sealed class ChannelAbstractionsProtoTests
 
         parsed.ShouldBe(activity);
         parsed.Content.CardAction.ActionId.ShouldBe("approve");
+        parsed.Content.CardAction.ActionKind.ShouldBe(ActionElementKind.FormSubmit);
         parsed.Content.Actions[0].Kind.ShouldBe(ActionElementKind.Button);
         parsed.Conversation.Scope.ShouldBe(ConversationScope.Thread);
         parsed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");

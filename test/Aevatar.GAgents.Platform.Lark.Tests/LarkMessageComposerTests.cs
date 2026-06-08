@@ -178,6 +178,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var behavior = button.GetProperty("behaviors")[0];
         behavior.GetProperty("type").GetString().ShouldBe("callback");
         behavior.GetProperty("value").GetProperty("action_id").GetString().ShouldBe("status");
+        behavior.GetProperty("value").GetProperty("action_kind").GetString().ShouldBe("button");
     }
 
     [Fact]
@@ -373,6 +374,123 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         behavior.GetProperty("type").GetString().ShouldBe("callback");
         var value = behavior.GetProperty("value");
         value.GetProperty("action_id").GetString().ShouldBe("submit_daily");
+        value.GetProperty("action_kind").GetString().ShouldBe("form_submit");
         value.GetProperty("agent_builder_action").GetString().ShouldBe("create_daily");
+    }
+
+    [Fact]
+    public void Compose_WhenRenderingSelectAndFormSubmit_UsesLarkFormCardPrimitives()
+    {
+        var intent = new MessageContent { Text = "Configure deployment" };
+        var select = new ActionElement
+        {
+            Kind = ActionElementKind.Select,
+            ActionId = "environment",
+            Label = "Environment",
+            Placeholder = "Choose environment",
+            Value = "prod",
+        };
+        select.Options.Add(new ActionOption { Label = "Production", Value = "prod" });
+        select.Options.Add(new ActionOption { Label = "Staging", Value = "stage" });
+        intent.Actions.Add(select);
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = "reason",
+            Label = "Reason",
+            Placeholder = "Why now?",
+        });
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = "submit_deploy",
+            Label = "Submit",
+            IsPrimary = true,
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        payload.MessageType.ShouldBe("interactive");
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var formElement = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "form");
+        var formChildren = formElement.GetProperty("elements");
+        var selectElement = formChildren
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "select_static");
+        selectElement.GetProperty("name").GetString().ShouldBe("environment");
+        selectElement.GetProperty("placeholder").GetProperty("content").GetString().ShouldBe("Choose environment");
+        selectElement.GetProperty("initial_option").GetString().ShouldBe("prod");
+        selectElement.GetProperty("options").GetArrayLength().ShouldBe(2);
+        selectElement.GetProperty("value").GetProperty("action_kind").GetString().ShouldBe("select");
+
+        var submitButton = formChildren
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) &&
+                        tag.GetString() == "button" &&
+                        e.GetProperty("name").GetString() == "submit_deploy");
+        submitButton.GetProperty("form_action_type").GetString().ShouldBe("submit");
+        submitButton.GetProperty("behaviors")[0]
+            .GetProperty("value")
+            .GetProperty("action_kind")
+            .GetString()
+            .ShouldBe("form_submit");
+    }
+
+    [Fact]
+    public void Compose_WhenCardContainsActions_RendersThoseActions()
+    {
+        var intent = new MessageContent();
+        var card = new CardBlock
+        {
+            Title = "Report",
+            Text = "Ready",
+        };
+        card.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "open_report",
+            Label = "Open",
+        });
+        intent.Cards.Add(card);
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var button = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "button");
+        button.GetProperty("behaviors")[0]
+            .GetProperty("value")
+            .GetProperty("action_id")
+            .GetString()
+            .ShouldBe("open_report");
     }
 }

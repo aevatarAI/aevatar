@@ -28,7 +28,10 @@ public static class ChannelCardActionRouting
         {
             CopyWorkflowResumePayload(payload, values);
             foreach (var pair in inbound.CardAction!.FormFields)
-                values[pair.Key] = pair.Value;
+            {
+                if (IsWorkflowFormField(pair.Key))
+                    values[pair.Key] = pair.Value;
+            }
         }
         else if (TryBuildDeprecatedWorkflowResumeValues(inbound.Extra, values))
         {
@@ -74,6 +77,9 @@ public static class ChannelCardActionRouting
         !string.IsNullOrWhiteSpace(payload.ActorId) &&
         !string.IsNullOrWhiteSpace(payload.RunId) &&
         !string.IsNullOrWhiteSpace(payload.StepId);
+
+    private static bool IsWorkflowFormField(string key) =>
+        key is "user_input" or "edited_content" or "feedback" or "comment" or "input";
 
     private static void CopyWorkflowResumePayload(
         WorkflowResumeActionPayload payload,
@@ -179,6 +185,9 @@ public static class ChannelCardActionRouting
     {
         if (approved)
         {
+            if (values.TryGetValue("feedback", out var approvedFeedback))
+                return NormalizeOptional(approvedFeedback);
+
             if (values.TryGetValue("user_input", out var approvedRaw))
                 return NormalizeOptional(approvedRaw);
 

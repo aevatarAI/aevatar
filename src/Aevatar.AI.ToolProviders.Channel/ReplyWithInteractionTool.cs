@@ -32,7 +32,7 @@ public sealed class ReplyWithInteractionTool : IAgentTool
     public string Name => "reply_with_interaction";
 
     public string Description =>
-        "Reply to the current user turn with an interactive message (title, body, buttons, cards). " +
+        "Reply to the current user turn with an interactive message (title, body, actions, cards). " +
         "Use this when the user would benefit from a rich card with selectable actions. " +
         "Returns a short confirmation; the reply is delivered when the turn completes. " +
         "If the channel does not support cards the runtime automatically degrades to plain text.";
@@ -88,16 +88,34 @@ public sealed class ReplyWithInteractionTool : IAgentTool
             },
             "actions": {
               "type": "array",
-              "description": "Optional top-level interactive actions (buttons).",
+              "description": "Optional top-level interactive actions.",
               "items": {
                 "type": "object",
                 "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["button", "select", "text_input", "form_submit", "link"],
+                    "description": "Action element kind. Defaults to button."
+                  },
                   "action_id": { "type": "string" },
                   "label": { "type": "string" },
                   "value": { "type": "string" },
+                  "placeholder": { "type": "string" },
                   "style": {
                     "type": "string",
                     "enum": ["default", "primary", "danger"]
+                  },
+                  "options": {
+                    "type": "array",
+                    "description": "Selectable options for select actions.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "label": { "type": "string" },
+                        "value": { "type": "string" }
+                      },
+                      "required": ["label", "value"]
+                    }
                   }
                 },
                 "required": ["action_id", "label"]
@@ -137,12 +155,29 @@ public sealed class ReplyWithInteractionTool : IAgentTool
                     "items": {
                       "type": "object",
                       "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["button", "select", "text_input", "form_submit", "link"],
+                          "description": "Action element kind. Defaults to button."
+                        },
                         "action_id": { "type": "string" },
                         "label": { "type": "string" },
                         "value": { "type": "string" },
+                        "placeholder": { "type": "string" },
                         "style": {
                           "type": "string",
                           "enum": ["default", "primary", "danger"]
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": { "type": "string" },
+                              "value": { "type": "string" }
+                            },
+                            "required": ["label", "value"]
+                          }
                         }
                       },
                       "required": ["action_id", "label"]
@@ -178,6 +213,9 @@ public sealed class ReplyWithInteractionArguments
 /// <summary>Card-level action parameter.</summary>
 public sealed class ReplyActionArgument
 {
+    [JsonPropertyName("kind")]
+    public string? Kind { get; set; }
+
     [JsonPropertyName("action_id")]
     public string? ActionId { get; set; }
 
@@ -189,6 +227,22 @@ public sealed class ReplyActionArgument
 
     [JsonPropertyName("style")]
     public string? Style { get; set; }
+
+    [JsonPropertyName("placeholder")]
+    public string? Placeholder { get; set; }
+
+    [JsonPropertyName("options")]
+    public List<ReplyActionOptionArgument>? Options { get; set; }
+}
+
+/// <summary>Selectable action option parameter.</summary>
+public sealed class ReplyActionOptionArgument
+{
+    [JsonPropertyName("label")]
+    public string? Label { get; set; }
+
+    [JsonPropertyName("value")]
+    public string? Value { get; set; }
 }
 
 /// <summary>Card field parameter (title/text pair).</summary>
