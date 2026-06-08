@@ -160,6 +160,41 @@ public sealed class ChannelCardActionRoutingTests
     }
 
     [Fact]
+    public void TryBuildWorkflowResumeCommand_should_ignore_unowned_form_fields_for_typed_workflow_payload()
+    {
+        var cardAction = new CardActionSubmission
+        {
+            WorkflowResume = new WorkflowResumeActionPayload
+            {
+                ActorId = "run-actor-1",
+                RunId = "run-1",
+                StepId = "approval-1",
+                Approved = true,
+            },
+        };
+        cardAction.FormFields["environment"] = "prod";
+        cardAction.FormFields["feedback"] = "looks good";
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_1",
+            SenderId = "ou_user_1",
+            SenderName = string.Empty,
+            Text = "{}",
+            MessageId = "evt-card-owned-fields-1",
+            ChatType = "card_action",
+            CardAction = cardAction,
+        };
+
+        var matched = ChannelCardActionRouting.TryBuildWorkflowResumeCommand(inbound, out var command);
+
+        matched.Should().BeTrue();
+        command.Should().NotBeNull();
+        command!.Feedback.Should().Be("looks good");
+        command.UserInput.Should().BeNull();
+    }
+
+    [Fact]
     public void TryBuildWorkflowResumeCommand_should_require_actor_run_and_step_ids()
     {
         var inbound = new InboundMessage

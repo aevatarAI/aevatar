@@ -708,6 +708,47 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldContinueGenericFormSubmitToLlm_WhenTypedFormSubmitCarriesFields()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+        var activity = BuildCardActionActivity(
+            "evt-card-form-submit-1",
+            ("environment", "prod"),
+            ("reason", "deploy ready"));
+        activity.Content.CardAction.ActionKind = ActionElementKind.FormSubmit;
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.SentActivityId.Should().BeEmpty();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Be("environment: prod\nreason: deploy ready");
+        result.LlmReplyRequest.Activity.Content.CardAction.ActionKind.Should().Be(ActionElementKind.FormSubmit);
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldIgnoreCardAction_WhenFormFieldsExistButActionKindIsNotFormSubmit()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+        var activity = BuildCardActionActivity(
+            "evt-card-select-fields-1",
+            ("environment", "prod"));
+        activity.Content.CardAction.ActionKind = ActionElementKind.Select;
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("ignored:unrecognized_card_action:evt-card-select-fields-1");
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldRouteLlmSelectionCardAction_WhenPayloadCarriesLlmAction()
     {
         var subject = new ExternalSubjectRef

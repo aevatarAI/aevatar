@@ -359,7 +359,7 @@ public sealed class NyxIdRelayTransportTests
               "sender": { "platform_id": "ou_1", "display_name": "User One" },
               "content": {
                 "content_type": "card_action",
-                "text": "{\"value\":{\"agent_builder_action\":\"create_daily\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
+                "text": "{\"value\":{\"agent_builder_action\":\"create_daily\",\"action_kind\":\"form_submit\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
               }
             }
             """;
@@ -373,11 +373,40 @@ public sealed class NyxIdRelayTransportTests
         cardAction.Should().NotBeNull();
         cardAction!.Arguments.Should().ContainKey("agent_builder_action")
             .WhoseValue.Should().Be("create_daily");
+        cardAction.Arguments.Should().NotContainKey("action_kind");
+        cardAction.ActionKind.Should().Be(ActionElementKind.FormSubmit);
         cardAction.FormFields.Should().ContainKey("github_username")
             .WhoseValue.Should().Be("eanzhao");
         cardAction.FormFields.Should().ContainKey("schedule_time")
             .WhoseValue.Should().Be("09:00");
         cardAction.ActionId.Should().Be("create_daily");
+    }
+
+    [Fact]
+    public void Parse_ShouldMapLarkBoundaryTagToTypedActionKind_WhenValueDoesNotCarryActionKind()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-select-kind",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"tag\":\"select_static\",\"value\":{\"action_id\":\"environment\"},\"form_value\":{\"environment\":\"prod\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionKind.Should().Be(ActionElementKind.Select);
+        cardAction.FormFields.Should().ContainKey("environment")
+            .WhoseValue.Should().Be("prod");
     }
 
     [Fact]

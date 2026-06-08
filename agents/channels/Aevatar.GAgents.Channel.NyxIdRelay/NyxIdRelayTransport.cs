@@ -234,6 +234,9 @@ public sealed class NyxIdRelayTransport
         if (root.TryGetProperty("form_fields", out var formFieldsElement))
             CopyScalarMap(formFieldsElement, submission.FormFields);
 
+        submission.ActionKind = ResolveActionKind(root, submission.Arguments);
+        submission.Arguments.Remove("action_kind");
+
         MapKnownPayloads(submission);
 
         if (string.IsNullOrEmpty(submission.ActionId) &&
@@ -272,6 +275,59 @@ public sealed class NyxIdRelayTransport
                 "service_id",
                 "preset_id");
         }
+    }
+
+    private static ActionElementKind ResolveActionKind(
+        JsonElement root,
+        Google.Protobuf.Collections.MapField<string, string> arguments)
+    {
+        if (arguments.TryGetValue("action_kind", out var actionKind) &&
+            TryMapActionKind(actionKind, out var mappedFromValue))
+        {
+            return mappedFromValue;
+        }
+
+        if (TryReadString(root, "action_kind", out var rootActionKind) &&
+            TryMapActionKind(rootActionKind, out var mappedFromRoot))
+        {
+            return mappedFromRoot;
+        }
+
+        if (TryReadString(root, "tag", out var tag) &&
+            TryMapLarkActionTag(tag, out var mappedFromTag))
+        {
+            return mappedFromTag;
+        }
+
+        return ActionElementKind.Unspecified;
+    }
+
+    private static bool TryMapActionKind(string? value, out ActionElementKind kind)
+    {
+        var normalized = (value ?? string.Empty).Trim().ToLowerInvariant();
+        kind = normalized switch
+        {
+            "button" => ActionElementKind.Button,
+            "select" or "select_static" => ActionElementKind.Select,
+            "text_input" or "input" => ActionElementKind.TextInput,
+            "form_submit" or "submit" => ActionElementKind.FormSubmit,
+            "link" => ActionElementKind.Link,
+            _ => ActionElementKind.Unspecified,
+        };
+        return kind != ActionElementKind.Unspecified;
+    }
+
+    private static bool TryMapLarkActionTag(string? value, out ActionElementKind kind)
+    {
+        var normalized = (value ?? string.Empty).Trim().ToLowerInvariant();
+        kind = normalized switch
+        {
+            "button" => ActionElementKind.Button,
+            "select_static" => ActionElementKind.Select,
+            "input" => ActionElementKind.TextInput,
+            _ => ActionElementKind.Unspecified,
+        };
+        return kind != ActionElementKind.Unspecified;
     }
 
     private static bool TryBuildWorkflowResumePayload(
