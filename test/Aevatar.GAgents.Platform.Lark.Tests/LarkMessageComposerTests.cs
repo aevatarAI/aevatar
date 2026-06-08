@@ -322,6 +322,58 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenFormSelectIsPresent_RendersLarkSelectStatic()
+    {
+        var intent = new MessageContent();
+        var select = new ActionElement
+        {
+            Kind = ActionElementKind.Select,
+            ActionId = "frequency",
+            Label = "Frequency",
+            Placeholder = "Daily",
+            Value = "weekly",
+        };
+        select.Options.Add(new ActionOption { Label = "Daily", Value = "daily" });
+        select.Options.Add(new ActionOption { Label = "Weekly", Value = "weekly" });
+        intent.Actions.Add(select);
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = "submit",
+            Label = "Submit",
+            IsPrimary = true,
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var formElement = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "form");
+        var selectElement = formElement
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "select_static");
+
+        selectElement.GetProperty("name").GetString().ShouldBe("frequency");
+        selectElement.GetProperty("options").GetArrayLength().ShouldBe(2);
+        selectElement.GetProperty("initial_option").GetProperty("value").GetString().ShouldBe("weekly");
+    }
+
+    [Fact]
     public void Compose_WhenRenderingFormSubmit_UsesLarkV2CallbackBehavior()
     {
         var intent = new MessageContent();

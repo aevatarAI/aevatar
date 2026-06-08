@@ -23,6 +23,17 @@ public sealed class AgentBuilderCardFlowTests
         };
     }
 
+    public static TheoryData<string, string, string?> CronMappingCases()
+    {
+        return new TheoryData<string, string, string?>
+        {
+            { "daily", "5 8 * * *", null },
+            { "weekly", "30 21 * * 5", "5" },
+            { "hourly", "45 * * * *", null },
+            { "custom", "15 7 * * 1-5", null },
+        };
+    }
+
     public static TheoryData<string, string, string> KnownTextCommandCases()
     {
         return new TheoryData<string, string, string>
@@ -34,6 +45,7 @@ public sealed class AgentBuilderCardFlowTests
             { "/enable-agent skill-runner-4", "enable_agent", "{}" },
             { "/delete-agent skill-runner-5", string.Empty, "{}" },
             { "/delete-agent skill-runner-5 confirm", "delete_agent", "{}" },
+            { "/create-scheduled-agent daily-report", string.Empty, "{}" },
         };
     }
 
@@ -275,7 +287,11 @@ public sealed class AgentBuilderCardFlowTests
 
         result.Actions.Should().NotContain(a => a.ActionId == "agent_status");
         result.Actions.Should().NotContain(a => a.Arguments.ContainsKey("agent_id"));
-        result.Actions.Select(a => a.ActionId).Should().BeEquivalentTo(new[] { "list_agents" });
+        result.Actions.Select(a => a.ActionId).Should().BeEquivalentTo(new[]
+        {
+            "list_agents",
+            "create_scheduled_agent",
+        });
     }
 
     [Theory]
@@ -411,6 +427,135 @@ public sealed class AgentBuilderCardFlowTests
             .Contain(a => a.ActionId == "agent_status").Subject;
         refreshButton.Arguments.Should().Contain(new KeyValuePair<string, string>(
             "agent_id", "skill-runner-1"));
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_CreateScheduledAgentTextCommand_ReturnsMultiFieldCard()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            RegistrationScopeId = "scope-1",
+            Text = "/create-scheduled-agent daily-report",
+        };
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyContent.Should().NotBeNull();
+        decision.ReplyContent!.Cards.Should().ContainSingle(card => card.BlockId == "scheduled_agent_create");
+        decision.ReplyContent.Actions.Should().Contain(action =>
+            action.Kind == ActionElementKind.Select &&
+            action.ActionId == "frequency" &&
+            action.Options.Any(option => option.Value == "custom"));
+        decision.ReplyContent.Actions.Should().Contain(action =>
+            action.Kind == ActionElementKind.Select &&
+            action.ActionId == "output_format" &&
+            action.Options.Any(option => option.Value == "markdown"));
+        decision.ReplyContent.Actions.Should().Contain(action =>
+            action.Kind == ActionElementKind.FormSubmit &&
+            action.ActionId == "submit_scheduled_agent" &&
+            action.Arguments["agent_builder_action"] == "submit_scheduled_agent");
+        decision.ReplyContent.Actions.Single(action => action.ActionId == "skill_ref").Value.Should().Be("daily-report");
+    }
+
+    [Theory]
+    [MemberData(nameof(CronMappingCases))]
+    public void TryMapScheduleToCron_ShouldMapPresetAndCustomFrequencies(
+        string frequency,
+        string expectedCron,
+        string? weekday)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["frequency"] = frequency,
+            ["schedule_time"] = frequency == "weekly" ? "21:30" : "08:05",
+            ["custom_cron"] = "15 7 * * 1-5",
+        };
+        if (frequency == "hourly")
+            fields["schedule_time"] = "08:45";
+        if (weekday is not null)
+            fields["weekday"] = weekday;
+
+        var mapped = AgentBuilderCardFlow.TryMapScheduleToCron(fields, out var cron, out var error);
+
+        mapped.Should().BeTrue(error);
+        cron.Should().Be(expectedCron);
+        error.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_SubmitScheduledAgentCardAction_MapsToScheduledCreatorArguments()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "card_action",
+            RegistrationScopeId = "scope-1",
+        };
+        inbound.Extra["agent_builder_action"] = "submit_scheduled_agent";
+        inbound.Extra["skill_ref"] = "daily-report";
+        inbound.Extra["frequency"] = "weekly";
+        inbound.Extra["schedule_time"] = "10:30";
+        inbound.Extra["weekday"] = "2";
+        inbound.Extra["schedule_timezone"] = "Asia/Shanghai";
+        inbound.Extra["delivery_target"] = "current_chat";
+        inbound.Extra["output_format"] = "markdown";
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeTrue();
+        decision.ToolAction.Should().Be("scheduled_agent_creator");
+        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
+        body.RootElement.GetProperty("skill_ref").GetString().Should().Be("daily-report");
+        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("30 10 * * 2");
+        body.RootElement.GetProperty("schedule_timezone").GetString().Should().Be("Asia/Shanghai");
+        body.RootElement.GetProperty("output_format").GetString().Should().Be("markdown");
+    }
+
+    [Fact]
+    public async Task TryResolveAsync_SubmitScheduledAgentCardAction_RejectsInvalidCustomCron()
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "card_action",
+            RegistrationScopeId = "scope-1",
+        };
+        inbound.Extra["agent_builder_action"] = "submit_scheduled_agent";
+        inbound.Extra["skill_ref"] = "daily-report";
+        inbound.Extra["frequency"] = "custom";
+        inbound.Extra["custom_cron"] = "0 9 * *";
+
+        var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
+
+        decision.Should().NotBeNull();
+        decision!.RequiresToolExecution.Should().BeFalse();
+        decision.ReplyPayload.Should().Contain("five-field cron");
+    }
+
+    [Fact]
+    public void FormatToolResult_ScheduledCreator_ReturnsStructuredAcceptedCard()
+    {
+        var decision = AgentBuilderFlowDecision.ToolCall(
+            "scheduled_agent_creator",
+            """{"skill_ref":"daily-report","schedule_cron":"0 9 * * *","schedule_timezone":"UTC"}""");
+
+        var result = AgentBuilderCardFlow.FormatToolResult(
+            decision,
+            """
+            {
+              "status": "accepted",
+              "agent_id": "skill-runner-created-1",
+              "note": "Scheduled agent create accepted for dispatch."
+            }
+            """);
+
+        result.Text.Should().BeNullOrEmpty();
+        result.Cards.Should().ContainSingle(card => card.BlockId == "scheduled_agent_created:skill-runner-created-1");
+        result.Actions.Should().Contain(action =>
+            action.ActionId == "agent_status" &&
+            action.Arguments["agent_id"] == "skill-runner-created-1");
     }
 
     [Fact]

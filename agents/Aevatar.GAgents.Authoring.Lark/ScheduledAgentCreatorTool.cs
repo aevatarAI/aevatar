@@ -3,12 +3,15 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Scheduled;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
 
 public sealed class ScheduledAgentCreatorTool : IAgentTool
 {
+    public const string ToolName = "scheduled_agent_creator";
+
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _mapper;
@@ -29,7 +32,19 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         _logger = logger;
     }
 
-    public string Name => "scheduled_agent_creator";
+    public static ScheduledAgentCreatorTool CreateForRuntime(IServiceProvider services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        return new ScheduledAgentCreatorTool(
+            services.GetRequiredService<ISkillRunnerCommandPort>(),
+            services.GetRequiredService<ICallerScopeResolver>(),
+            services.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
+            services.GetRequiredService<ScheduledAgentApiKeyIssuer>(),
+            services.GetService<ILogger<ScheduledAgentCreatorTool>>());
+    }
+
+    public string Name => ToolName;
 
     public string Description =>
         "Create a caller-owned scheduled automation agent from an Ornn skill reference. " +
@@ -60,6 +75,11 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             "execution_prompt": {
               "type": "string",
               "description": "Optional extra execution instruction for the runner."
+            },
+            "output_format": {
+              "type": "string",
+              "enum": ["plain_text", "markdown", "json"],
+              "description": "Preferred output format for each scheduled run."
             },
             "provider_name": {
               "type": "string",

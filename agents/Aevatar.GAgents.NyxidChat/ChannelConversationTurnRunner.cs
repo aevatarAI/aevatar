@@ -45,6 +45,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         "disable-agent",
         "enable-agent",
         "delete-agent",
+        "create-scheduled-agent",
     };
 
     private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
@@ -1012,7 +1013,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                        ResolveUserAccessToken(activity, runtimeContext),
                        metadata)))
             {
-                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
+                var tool = string.Equals(
+                    decision.ToolAction,
+                    ScheduledAgentCreatorTool.ToolName,
+                    StringComparison.Ordinal)
+                    ? ScheduledAgentCreatorTool.CreateForRuntime(_toolServiceProvider)
+                    : (IAgentTool)ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
                 replyContent = AgentBuilderCardFlow.FormatToolResult(decision, toolResult);
             }
@@ -1474,6 +1480,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
+
+        var outboundProxySlug = NormalizeOptional(inboundEvent.NyxProviderSlug);
+        if (string.Equals(inboundEvent.Platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(outboundProxySlug))
+        {
+            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = outboundProxySlug;
+        }
+
         return metadata;
     }
 

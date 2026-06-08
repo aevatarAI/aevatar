@@ -65,19 +65,6 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
             return await SendTextFallbackAsync(relayToken, messageId, BuildTextFallback(intent), capability, cancellationToken);
         }
 
-        if (ShouldUseTextOnlyFallback(channel, intent))
-        {
-            _logger.LogInformation(
-                "Interactive reply dispatcher is degrading action card intent to text for channel {Channel}.",
-                channel.Value);
-            return await SendTextFallbackAsync(
-                relayToken,
-                messageId,
-                BuildTextFallback(intent),
-                capability,
-                cancellationToken);
-        }
-
         var native = producer.Produce(intent, context);
         var body = new ChannelRelayReplyBody(
             Text: native.Text,
@@ -92,20 +79,6 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
             FellBackToText: !native.IsInteractive,
             Detail: delivery.Detail);
     }
-
-    private static bool ShouldUseTextOnlyFallback(
-        ChannelId channel,
-        MessageContent intent)
-    {
-        if (!string.Equals(channel.Value, "lark", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return HasUserVisibleActions(intent.Actions) ||
-               intent.Cards.Count > 0;
-    }
-
-    private static bool HasUserVisibleActions(IEnumerable<ActionElement> actions) =>
-        actions.Any(action => action.Kind != ActionElementKind.TextInput || action.Options.Count > 0);
 
     private async Task<InteractiveReplyDispatchResult> SendTextFallbackAsync(
         string relayToken,

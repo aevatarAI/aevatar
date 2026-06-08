@@ -16,6 +16,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
         "schedule_timezone",
         "display_name",
         "execution_prompt",
+        "output_format",
         "provider_name",
         "model",
         "temperature",
@@ -88,6 +89,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 Reference: reference,
                 DisplayName: Normalize(args.Str("display_name")),
                 ExecutionPrompt: Normalize(args.Str("execution_prompt")),
+                OutputFormat: NormalizeOutputFormat(args.Str("output_format")),
                 ScheduleCron: cron,
                 ScheduleTimezone: timezone,
                 ScopeId: scopeId,
@@ -129,7 +131,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 Source = SkillRunnerSkillSource.Ornn,
             },
             ExecutionPrompt = request.ExecutionPrompt ??
-                              "Execute the configured Ornn skill and return plain text only.",
+                              BuildDefaultExecutionPrompt(request.OutputFormat),
             ScheduleCron = request.ScheduleCron,
             ScheduleTimezone = request.ScheduleTimezone,
             Enabled = true,
@@ -174,6 +176,25 @@ internal sealed class ScheduledAgentCreateRequestMapper
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
+
+    private static string NormalizeOutputFormat(string? value)
+    {
+        var normalized = Normalize(value)?.Replace('-', '_').ToLowerInvariant();
+        return normalized switch
+        {
+            "markdown" => "markdown",
+            "json" => "json",
+            _ => "plain_text",
+        };
+    }
+
+    private static string BuildDefaultExecutionPrompt(string outputFormat) =>
+        outputFormat switch
+        {
+            "markdown" => "Execute the configured Ornn skill and return concise Markdown.",
+            "json" => "Execute the configured Ornn skill and return a valid JSON object only.",
+            _ => "Execute the configured Ornn skill and return plain text only.",
+        };
 
     private sealed class CreatorArgs
     {
@@ -364,6 +385,7 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     ScheduledSkillReference Reference,
     string? DisplayName,
     string? ExecutionPrompt,
+    string OutputFormat,
     string ScheduleCron,
     string ScheduleTimezone,
     string ScopeId,

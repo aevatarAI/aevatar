@@ -18,12 +18,16 @@ public static class AgentBuilderCardFlow
     private const string EnableAgentAction = AgentBuilderActionIds.EnableAgent;
     private const string ConfirmDeleteAgentAction = AgentBuilderActionIds.ConfirmDeleteAgent;
     private const string DeleteAgentAction = AgentBuilderActionIds.DeleteAgent;
+    private const string CreateScheduledAgentAction = AgentBuilderActionIds.CreateScheduledAgent;
+    private const string SubmitScheduledAgentAction = AgentBuilderActionIds.SubmitScheduledAgent;
+    private const string ScheduledAgentCreatorToolName = ScheduledAgentCreatorTool.ToolName;
     private const string ListAgentsCommand = "/agents";
     private const string AgentStatusCommand = "/agent-status";
     private const string RunAgentCommand = "/run-agent";
     private const string DisableAgentCommand = "/disable-agent";
     private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
+    private const string CreateScheduledAgentCommand = "/create-scheduled-agent";
 
     private sealed record AgentBuilderCommandSpec(
         string TextCommand,
@@ -91,6 +95,15 @@ public static class AgentBuilderCardFlow
             BuildDeleteAgentTextDecision,
             BuildDeleteAgentCardDecision,
             FormatDeleteAgentResultAsList),
+        new(
+            CreateScheduledAgentCommand,
+            CreateScheduledAgentAction,
+            CreateScheduledAgentAction,
+            $"Usage: {CreateScheduledAgentCommand} [skill_ref]",
+            RequiresAgentId: false,
+            BuildCreateScheduledAgentTextDecision,
+            BuildCreateScheduledAgentCardDecision,
+            FormatResult: null),
     ];
 
     private static readonly AgentBuilderCommandSpec ConfirmDeleteSpec = new(
@@ -103,16 +116,28 @@ public static class AgentBuilderCardFlow
         BuildFromCard: BuildConfirmDeleteCardDecision,
         FormatResult: null);
 
+    private static readonly AgentBuilderCommandSpec SubmitScheduledAgentSpec = new(
+        TextCommand: string.Empty,
+        CardAction: SubmitScheduledAgentAction,
+        ToolAction: ScheduledAgentCreatorToolName,
+        Usage: string.Empty,
+        RequiresAgentId: false,
+        BuildFromText: static (_, _) => throw new InvalidOperationException("submit_scheduled_agent has no text command."),
+        BuildFromCard: BuildSubmitScheduledAgentCardDecision,
+        FormatResult: FormatScheduledAgentCreateResult);
+
     private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByTextCommand =
         CommandSpecs.ToDictionary(static spec => spec.TextCommand, StringComparer.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByCardAction =
         CommandSpecs
             .Append(ConfirmDeleteSpec)
+            .Append(SubmitScheduledAgentSpec)
             .ToDictionary(static spec => spec.CardAction, StringComparer.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyDictionary<string, AgentBuilderCommandSpec> SpecsByToolAction =
         CommandSpecs
+            .Append(SubmitScheduledAgentSpec)
             .Where(static spec => spec.FormatResult is not null)
             .ToDictionary(static spec => spec.ToolAction, StringComparer.OrdinalIgnoreCase);
 
@@ -295,6 +320,74 @@ public static class AgentBuilderCardFlow
         return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, argumentsJson!);
     }
 
+    private static AgentBuilderFlowDecision BuildCreateScheduledAgentTextDecision(
+        IReadOnlyList<string> tokens,
+        AgentBuilderCommandSpec spec)
+    {
+        _ = spec;
+        var skillRef = tokens.Count > 1 ? NormalizeOptional(tokens[1]) : null;
+        return AgentBuilderFlowDecision.DirectReply(BuildScheduledAgentCreateCard(skillRef));
+    }
+
+    private static AgentBuilderFlowDecision BuildCreateScheduledAgentCardDecision(
+        ChannelInboundEvent evt,
+        AgentBuilderCommandSpec spec)
+    {
+        _ = spec;
+        var skillRef = evt.Extra.TryGetValue("skill_ref", out var rawSkillRef)
+            ? NormalizeOptional(rawSkillRef)
+            : null;
+        return AgentBuilderFlowDecision.DirectReply(BuildScheduledAgentCreateCard(skillRef));
+    }
+
+    private static AgentBuilderFlowDecision BuildSubmitScheduledAgentCardDecision(
+        ChannelInboundEvent evt,
+        AgentBuilderCommandSpec spec)
+    {
+        if (!TryResolveScheduledAgentSubmit(evt, out var argumentsJson, out var validationError))
+            return AgentBuilderFlowDecision.DirectReply(validationError!);
+
+        return AgentBuilderFlowDecision.ToolCall(spec.ToolAction, argumentsJson!);
+    }
+
+    private static bool TryResolveScheduledAgentSubmit(
+        ChannelInboundEvent evt,
+        out string? argumentsJson,
+        out string? validationError)
+    {
+        argumentsJson = null;
+        validationError = null;
+
+        var skillRef = ResolveScheduledAgentSkillRef(evt);
+        if (skillRef is null)
+        {
+            validationError = "skill_ref is required. Enter an Ornn skill name and submit again.";
+            return false;
+        }
+
+        if (!TryMapScheduleToCron(evt.Extra, out var cron, out validationError))
+            return false;
+
+        if (!TryResolveScheduleTimezone(evt.Extra, out var timezone, out validationError))
+            return false;
+
+        if (!TryResolveDeliveryTarget(evt.Extra, out validationError))
+            return false;
+
+        var outputFormat = ResolveOutputFormat(evt.Extra.TryGetValue("output_format", out var rawOutputFormat)
+            ? rawOutputFormat
+            : null);
+
+        argumentsJson = JsonSerializer.Serialize(new
+        {
+            skill_ref = skillRef,
+            schedule_cron = cron,
+            schedule_timezone = timezone,
+            output_format = outputFormat,
+        });
+        return true;
+    }
+
     private static bool TryBuildAgentActionArguments(
         ChannelInboundEvent evt,
         AgentBuilderCommandSpec spec,
@@ -357,6 +450,156 @@ public static class AgentBuilderCardFlow
 
         return AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId, null));
     }
+
+    internal static bool TryMapScheduleToCron(
+        IReadOnlyDictionary<string, string> fields,
+        out string cron,
+        out string? validationError)
+    {
+        cron = string.Empty;
+        validationError = null;
+        var frequency = NormalizeOptional(ReadField(fields, "frequency"))?.Replace('-', '_').ToLowerInvariant()
+                        ?? "daily";
+
+        if (frequency == "custom")
+        {
+            var customCron = NormalizeOptional(ReadField(fields, "custom_cron"));
+            if (customCron is null)
+            {
+                validationError = "custom_cron is required when frequency is custom.";
+                return false;
+            }
+
+            if (!LooksLikeFiveFieldCron(customCron))
+            {
+                validationError = "custom_cron must be a five-field cron expression.";
+                return false;
+            }
+
+            cron = customCron;
+            return true;
+        }
+
+        if (!TryParseScheduleTime(
+                ReadField(fields, "schedule_time") ?? ReadField(fields, "time"),
+                out var hour,
+                out var minute,
+                out validationError))
+            return false;
+
+        cron = frequency switch
+        {
+            "hourly" => $"{minute} * * * *",
+            "weekly" => $"{minute} {hour} * * {ResolveWeekday(ReadField(fields, "weekday"))}",
+            "daily" => $"{minute} {hour} * * *",
+            _ => string.Empty,
+        };
+
+        if (!string.IsNullOrWhiteSpace(cron))
+            return true;
+
+        validationError = "frequency must be daily, weekly, hourly, or custom.";
+        return false;
+    }
+
+    internal static bool TryResolveScheduleTimezone(
+        IReadOnlyDictionary<string, string> fields,
+        out string timezone,
+        out string? validationError)
+    {
+        validationError = null;
+        timezone = NormalizeOptional(ReadField(fields, "schedule_timezone")) ??
+                   NormalizeOptional(ReadField(fields, "timezone")) ??
+                   "UTC";
+        timezone = timezone switch
+        {
+            "utc" or "UTC" => "UTC",
+            "shanghai" or "beijing" or "china" => "Asia/Shanghai",
+            "singapore" => "Asia/Singapore",
+            "new_york" or "new-york" => "America/New_York",
+            "los_angeles" or "los-angeles" => "America/Los_Angeles",
+            "london" => "Europe/London",
+            _ => timezone,
+        };
+
+        if (timezone.Contains('/') || string.Equals(timezone, "UTC", StringComparison.Ordinal))
+            return true;
+
+        validationError = "schedule_timezone must be UTC or an IANA timezone such as Asia/Shanghai.";
+        return false;
+    }
+
+    private static string? ResolveScheduledAgentSkillRef(ChannelInboundEvent evt) =>
+        NormalizeOptional(ReadField(evt.Extra, "skill_ref"));
+
+    private static bool TryResolveDeliveryTarget(
+        IReadOnlyDictionary<string, string> fields,
+        out string? validationError)
+    {
+        validationError = null;
+        var deliveryTarget = NormalizeOptional(ReadField(fields, "delivery_target")) ?? "current_chat";
+        if (string.Equals(deliveryTarget, "current_chat", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        validationError = "delivery_target currently supports current_chat only.";
+        return false;
+    }
+
+    private static string ResolveOutputFormat(string? value)
+    {
+        var normalized = NormalizeOptional(value)?.Replace('-', '_').ToLowerInvariant();
+        return normalized switch
+        {
+            "markdown" => "markdown",
+            "json" => "json",
+            _ => "plain_text",
+        };
+    }
+
+    private static string ResolveWeekday(string? value)
+    {
+        var normalized = NormalizeOptional(value)?.ToLowerInvariant();
+        return normalized switch
+        {
+            "sun" or "sunday" or "0" => "0",
+            "tue" or "tuesday" or "2" => "2",
+            "wed" or "wednesday" or "3" => "3",
+            "thu" or "thursday" or "4" => "4",
+            "fri" or "friday" or "5" => "5",
+            "sat" or "saturday" or "6" => "6",
+            _ => "1",
+        };
+    }
+
+    private static bool TryParseScheduleTime(
+        string? value,
+        out int hour,
+        out int minute,
+        out string? validationError)
+    {
+        hour = 9;
+        minute = 0;
+        validationError = null;
+        var normalized = NormalizeOptional(value) ?? "09:00";
+        var parts = normalized.Split(':', StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 ||
+            !int.TryParse(parts[0], out hour) ||
+            !int.TryParse(parts[1], out minute) ||
+            hour is < 0 or > 23 ||
+            minute is < 0 or > 59)
+        {
+            validationError = "schedule_time must use HH:mm, for example 09:00.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool LooksLikeFiveFieldCron(string cron) =>
+        cron.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length == 5;
+
+    private static string? ReadField(IReadOnlyDictionary<string, string> fields, string key) =>
+        fields.TryGetValue(key, out var value) ? value : null;
 
     private static bool TryGetRequiredExtra(ChannelInboundEvent evt, string key, out string value)
     {
@@ -505,6 +748,29 @@ public static class AgentBuilderCardFlow
         return AgentBuilderCardContent.FormatListAgentsResult(root, string.Join("\n", lines));
     }
 
+    private static MessageContent FormatScheduledAgentCreateResult(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return ToTextContent($"Create scheduled agent failed: {error}");
+
+        var status = ReadString(root, "status") ?? "accepted";
+        var agentId = ReadString(root, "agent_id") ?? "pending";
+        var note = ReadString(root, "note") ??
+                   "Scheduled agent creation accepted. Use agent status after projection catches up.";
+
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = $"scheduled_agent_created:{agentId}",
+            Title = "Scheduled Agent Submitted",
+            Text = $"Status: `{status}`\nAgent ID: `{agentId}`\n\n{note}",
+        });
+        content.Actions.Add(BuildAgentScopedCardAction("Refresh Status", AgentStatusAction, agentId, isPrimary: true));
+        content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
+        return content;
+    }
+
     private static bool TryReadError(JsonElement root, out string error) =>
         AgentBuilderJson.TryReadError(root, out error);
 
@@ -527,6 +793,88 @@ public static class AgentBuilderCardFlow
         var confirmButton = BuildAgentScopedCardAction("Confirm Delete", DeleteAgentAction, agentId, isPrimary: false);
         confirmButton.IsDanger = true;
         content.Actions.Add(confirmButton);
+        content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
+        return content;
+    }
+
+    private static MessageContent BuildScheduledAgentCreateCard(string? skillRef)
+    {
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = "scheduled_agent_create",
+            Title = "Create Scheduled Agent",
+            Text = "Pick a schedule and output shape. Delivery uses this Lark chat.",
+        });
+
+        content.Actions.Add(BuildFormTextInput(
+            "skill_ref",
+            "Skill",
+            "Ornn skill name",
+            skillRef));
+        content.Actions.Add(BuildSelectInput(
+            "frequency",
+            "Frequency",
+            "Daily",
+            ("Daily", "daily"),
+            ("Weekly", "weekly"),
+            ("Hourly", "hourly"),
+            ("Custom cron", "custom")));
+        content.Actions.Add(BuildFormTextInput(
+            "schedule_time",
+            "Time",
+            "09:00",
+            "09:00"));
+        content.Actions.Add(BuildSelectInput(
+            "weekday",
+            "Weekday",
+            "Monday",
+            ("Monday", "1"),
+            ("Tuesday", "2"),
+            ("Wednesday", "3"),
+            ("Thursday", "4"),
+            ("Friday", "5"),
+            ("Saturday", "6"),
+            ("Sunday", "0")));
+        content.Actions.Add(BuildFormTextInput(
+            "custom_cron",
+            "Custom Cron",
+            "0 9 * * *",
+            null));
+        content.Actions.Add(BuildSelectInput(
+            "schedule_timezone",
+            "Timezone",
+            "UTC",
+            ("UTC", "UTC"),
+            ("Asia/Shanghai", "Asia/Shanghai"),
+            ("Asia/Singapore", "Asia/Singapore"),
+            ("America/New_York", "America/New_York"),
+            ("America/Los_Angeles", "America/Los_Angeles"),
+            ("Europe/London", "Europe/London")));
+        content.Actions.Add(BuildSelectInput(
+            "delivery_target",
+            "Delivery",
+            "Current chat",
+            ("Current chat", "current_chat")));
+        content.Actions.Add(BuildSelectInput(
+            "output_format",
+            "Output Format",
+            "Plain text",
+            ("Plain text", "plain_text"),
+            ("Markdown", "markdown"),
+            ("JSON", "json")));
+
+        var submit = new ActionElement
+        {
+            Kind = ActionElementKind.FormSubmit,
+            ActionId = SubmitScheduledAgentAction,
+            Label = "Create",
+            IsPrimary = true,
+        };
+        submit.Arguments["agent_builder_action"] = SubmitScheduledAgentAction;
+        content.Actions.Add(submit);
+
         content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
         return content;
     }
@@ -554,6 +902,27 @@ public static class AgentBuilderCardFlow
         button.Arguments["agent_id"] = agentId;
         return button;
     }
+
+    private static ActionElement BuildFormTextInput(
+        string actionId,
+        string label,
+        string placeholder,
+        string? value) =>
+        new()
+        {
+            Kind = ActionElementKind.TextInput,
+            ActionId = actionId,
+            Label = label,
+            Placeholder = placeholder,
+            Value = value ?? string.Empty,
+        };
+
+    private static ActionElement BuildSelectInput(
+        string actionId,
+        string label,
+        string placeholder,
+        params (string Label, string Value)[] options) =>
+        FeishuCardHumanInteractionPort.BuildSelectInput(actionId, label, placeholder, options);
 
 }
 

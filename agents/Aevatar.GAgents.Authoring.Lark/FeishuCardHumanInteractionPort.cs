@@ -218,6 +218,32 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             Placeholder = placeholder,
         };
 
+    internal static ActionElement BuildSelectInput(
+        string actionId,
+        string label,
+        string placeholder,
+        params (string Label, string Value)[] options)
+    {
+        var select = new ActionElement
+        {
+            Kind = ActionElementKind.Select,
+            ActionId = actionId,
+            Label = label,
+            Placeholder = placeholder,
+        };
+
+        foreach (var (optionLabel, optionValue) in options)
+        {
+            select.Options.Add(new ActionOption
+            {
+                Label = optionLabel,
+                Value = optionValue,
+            });
+        }
+
+        return select;
+    }
+
     private static ActionElement BuildFormButton(
         string actionId,
         string label,

@@ -186,7 +186,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
     private const string DefaultFormName = "card_form";
 
     private static bool RequiresFormWrapping(MessageContent intent) =>
-        intent.Actions.Any(a => a.Kind == ActionElementKind.TextInput);
+        intent.Actions.Any(a => a.Kind is ActionElementKind.TextInput or ActionElementKind.Select);
 
     private static string ResolveHeaderTitle(MessageContent intent, string effectiveText)
     {
@@ -232,23 +232,43 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
 
     private static IEnumerable<object> BuildFormChildElements(ActionElement action)
     {
+        if (action.Kind == ActionElementKind.TextInput)
+        {
+            var inputLabel = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label;
+            if (!string.IsNullOrWhiteSpace(inputLabel))
+            {
+                yield return new
+                {
+                    tag = "markdown",
+                    content = $"**{inputLabel}**",
+                };
+            }
+
+            yield return BuildFormInput(action);
+            yield break;
+        }
+
+        if (action.Kind == ActionElementKind.Select)
+        {
+            var selectLabel = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label;
+            if (!string.IsNullOrWhiteSpace(selectLabel))
+            {
+                yield return new
+                {
+                    tag = "markdown",
+                    content = $"**{selectLabel}**",
+                };
+            }
+
+            yield return BuildFormSelect(action);
+            yield break;
+        }
+
         if (action.Kind != ActionElementKind.TextInput)
         {
             yield return BuildFormButton(action);
             yield break;
         }
-
-        var label = string.IsNullOrWhiteSpace(action.Label) ? action.ActionId : action.Label;
-        if (!string.IsNullOrWhiteSpace(label))
-        {
-            yield return new
-            {
-                tag = "markdown",
-                content = $"**{label}**",
-            };
-        }
-
-        yield return BuildFormInput(action);
     }
 
     private static object BuildFormInput(ActionElement action)
@@ -271,6 +291,47 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         if (!string.IsNullOrEmpty(action.Value))
             input["default_value"] = action.Value;
         return input;
+    }
+
+    private static object BuildFormSelect(ActionElement action)
+    {
+        var select = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["tag"] = "select_static",
+            ["name"] = action.ActionId,
+            ["width"] = "fill",
+            ["placeholder"] = new
+            {
+                tag = "plain_text",
+                content = action.Placeholder ?? string.Empty,
+            },
+            ["options"] = action.Options.Select(static option => new
+            {
+                text = new
+                {
+                    tag = "plain_text",
+                    content = string.IsNullOrWhiteSpace(option.Label) ? option.Value : option.Label,
+                },
+                value = option.Value,
+            }).ToArray(),
+        };
+
+        var selected = action.Options.FirstOrDefault(option =>
+            string.Equals(option.Value, action.Value, StringComparison.Ordinal));
+        if (!string.IsNullOrWhiteSpace(selected?.Value))
+        {
+            select["initial_option"] = new
+            {
+                text = new
+                {
+                    tag = "plain_text",
+                    content = string.IsNullOrWhiteSpace(selected.Label) ? selected.Value : selected.Label,
+                },
+                value = selected.Value,
+            };
+        }
+
+        return select;
     }
 
     private static object BuildFormButton(ActionElement action) => new

@@ -20,4 +20,6 @@ internal static class AgentBuilderActionIds
     public const string EnableAgent = "enable_agent";
     public const string ConfirmDeleteAgent = "confirm_delete_agent";
     public const string DeleteAgent = "delete_agent";
+    public const string CreateScheduledAgent = "create_scheduled_agent";
+    public const string SubmitScheduledAgent = "submit_scheduled_agent";
 }

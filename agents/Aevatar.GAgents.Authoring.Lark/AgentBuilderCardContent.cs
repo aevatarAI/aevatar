@@ -12,6 +12,7 @@ namespace Aevatar.GAgents.Authoring.Lark;
 public static class AgentBuilderCardContent
 {
     private const string ListAgentsAction = AgentBuilderActionIds.ListAgents;
+    private const string CreateScheduledAgentAction = AgentBuilderActionIds.CreateScheduledAgent;
 
     /// <summary>
     /// Renders <c>/agents</c> as a single consolidated card. The earlier design produced one
@@ -55,6 +56,7 @@ public static class AgentBuilderCardContent
                 Text = emptyBody.ToString(),
             });
             content.Actions.Add(BuildAction("Refresh", ListAgentsAction, isPrimary: false));
+            content.Actions.Add(BuildAction("Create Scheduled Agent", CreateScheduledAgentAction, isPrimary: true));
             return content;
         }
 
@@ -104,6 +106,7 @@ public static class AgentBuilderCardContent
         });
 
         content.Actions.Add(BuildAction("Refresh", ListAgentsAction, isPrimary: false));
+        content.Actions.Add(BuildAction("Create Scheduled Agent", CreateScheduledAgentAction, isPrimary: true));
         return content;
     }
 

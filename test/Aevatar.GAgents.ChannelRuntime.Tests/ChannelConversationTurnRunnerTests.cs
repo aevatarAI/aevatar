@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -684,6 +685,86 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].Inbound.Extra.Should().ContainKey("agent_builder_action")
             .WhoseValue.Should().Be("list_agents");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRouteScheduledAgentSubmit_ToScheduledCreatorTool()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RoutingJsonHandler();
+        nyxHandler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "user_services": [
+                {"id":"svc-ornn","slug":"ornn-api"},
+                {"id":"svc-lark","slug":"api-lark-bot"}
+              ]
+            }
+            """);
+        nyxHandler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-created","full_key":"full-secret-key"}""");
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://example.com" },
+            new HttpClient(nyxHandler) { BaseAddress = new Uri("https://example.com") });
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        InitializeSkillRunnerCommand? captured = null;
+        skillRunnerPort.InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Do<InitializeSkillRunnerCommand>(command => captured = command),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForChannel(
+                "nyx-user-1",
+                "lark",
+                "scope-1",
+                "ou_user_1")));
+        var services = new ServiceCollection()
+            .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
+            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
+            .AddSingleton(skillRunnerPort)
+            .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
+            .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
+            .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient))
+            .AddSingleton(new ScheduledAgentCreatorOptions())
+            .AddSingleton<ScheduledAgentCreateRequestMapper>()
+            .AddSingleton<ScheduledAgentApiKeyIssuer>()
+            .BuildServiceProvider();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var activity = BuildCardActionActivity("evt-scheduled-create-1");
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "reply-1",
+            CorrelationId = "corr-1",
+        };
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxPlatform = "lark",
+            NyxConversationId = "oc_chat_1",
+            NyxLarkChatId = "oc_chat_1",
+        };
+        activity.Content.CardAction!.Arguments["agent_builder_action"] = "submit_scheduled_agent";
+        activity.Content.CardAction.FormFields["skill_ref"] = "daily-report";
+        activity.Content.CardAction.FormFields["frequency"] = "daily";
+        activity.Content.CardAction.FormFields["schedule_time"] = "09:15";
+        activity.Content.CardAction.FormFields["schedule_timezone"] = "UTC";
+        activity.Content.CardAction.FormFields["delivery_target"] = "current_chat";
+        activity.Content.CardAction.FormFields["output_format"] = "json";
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            RelayRuntimeContext("corr-1", replyMessageId: "reply-1", nyxUserAccessToken: "user-token"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue(result.ErrorCode + ": " + result.ErrorSummary);
+        captured.Should().NotBeNull();
+        captured!.SkillName.Should().Be("daily-report");
+        captured.ScheduleCron.Should().Be("15 9 * * *");
+        captured.ScheduleTimezone.Should().Be("UTC");
+        captured.ExecutionPrompt.Should().Contain("JSON");
+        adapter.Replies.Should().BeEmpty("relay card actions use the relay reply path");
     }
 
     [Fact]
@@ -2928,6 +3009,9 @@ public sealed class ChannelConversationTurnRunnerTests
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory())
+            .AddSingleton(new ScheduledAgentCreatorOptions())
+            .AddSingleton<ScheduledAgentCreateRequestMapper>()
+            .AddSingleton<ScheduledAgentApiKeyIssuer>()
             .BuildServiceProvider();
     }
 
@@ -3218,6 +3302,38 @@ public sealed class ChannelConversationTurnRunnerTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(ResolveBody(), Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
+    private sealed class RoutingJsonHandler : RecordingJsonHandler
+    {
+        private readonly Dictionary<(string Method, string Path), string> _routes = new();
+
+        public RoutingJsonHandler() : base("""{"ok":true}""")
+        {
+        }
+
+        public void Add(HttpMethod method, string path, string body) =>
+            _routes[(method.Method, path)] = body;
+
+        protected override string ResolveBody() => """{"ok":true}""";
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add((
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Method.Method,
+                request.Headers.Authorization?.ToString(),
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+            var path = request.RequestUri?.PathAndQuery ?? string.Empty;
+            var body = _routes.TryGetValue((request.Method.Method, path), out var resolved)
+                ? resolved
+                : """{"ok":true}""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         }
     }

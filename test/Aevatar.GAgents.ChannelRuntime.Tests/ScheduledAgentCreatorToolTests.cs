@@ -37,6 +37,11 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
         properties.TryGetProperty("skill_content", out _).Should().BeFalse();
         properties.TryGetProperty("provider_base_url", out _).Should().BeFalse();
+        properties.TryGetProperty("output_format", out var outputFormat).Should().BeTrue();
+        outputFormat.GetProperty("enum")
+            .EnumerateArray()
+            .Select(static x => x.GetString())
+            .Should().BeEquivalentTo("plain_text", "markdown", "json");
         properties.TryGetProperty("external_trigger_sources", out var externalSources).Should().BeTrue();
         externalSources.GetProperty("items").GetProperty("properties")
             .GetProperty("kind")
@@ -320,7 +325,7 @@ public sealed class ScheduledAgentCreatorToolTests
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "Asia/Singapore",
                   "display_name": "Daily Report",
-                  "execution_prompt": "Send concise bullets.",
+                  "output_format": "markdown",
                   "provider_name": "nyxid",
                   "model": "gpt-5.1",
                   "temperature": 0.2,
@@ -357,12 +362,13 @@ public sealed class ScheduledAgentCreatorToolTests
             captured!.SkillName.Should().Be("daily-report");
             captured.TemplateName.Should().Be("Daily Report");
             captured.SkillContent.Should().BeEmpty();
+            captured.ExecutionPrompt.Should().Contain("Markdown");
             captured.SkillRef.Should().NotBeNull();
             captured.SkillRef.Name.Should().Be("daily-report");
             captured.SkillRef.Source.Should().Be(SkillRunnerSkillSource.Ornn);
             captured.SkillRef.Version.Should().BeEmpty();
             captured.SkillRef.AllowInlineFallback.Should().BeFalse();
-            captured.ExecutionPrompt.Should().Be("Send concise bullets.");
+            captured.ExecutionPrompt.Should().Be("Execute the configured Ornn skill and return concise Markdown.");
             captured.ScheduleCron.Should().Be("0 9 * * *");
             captured.ScheduleTimezone.Should().Be("Asia/Singapore");
             captured.Enabled.Should().BeTrue();
