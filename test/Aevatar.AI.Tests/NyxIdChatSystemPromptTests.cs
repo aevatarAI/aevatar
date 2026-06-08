@@ -17,7 +17,11 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("ornn_publish_skill");
         prompt.Should().Contain("scheduled_agent_creator");
         prompt.Should().Contain("agent_delivery_targets");
+        prompt.Should().Contain("loaded skill metadata and instructions");
+        prompt.Should().Contain("fetch live data through `nyxid_proxy`");
+        prompt.Should().Contain("derive the digest from current facts");
+        prompt.Should().Contain("post the digest to the negotiated chat target");
         prompt.Should().Contain("api-github");
-        prompt.Should().Contain("deadline-monitor");
+        prompt.Should().NotContain("deadline-monitor");
     }
 }

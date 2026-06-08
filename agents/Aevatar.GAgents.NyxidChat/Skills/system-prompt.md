@@ -149,7 +149,7 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
 
 2. Author a runnable skill package yourself.
    - Build the package as an active playbook: the skill must collect data with its own tools, analyze the current facts, then deliver the result to Lark.
-   - For monitoring or digest jobs, mirror the deadline-monitor pattern: fetch live data through `nyxid_proxy` (for example `api-github`), derive the digest from current facts, then post the digest to the negotiated chat target.
+   - For monitoring or digest jobs, use the loaded skill metadata and instructions to choose the monitoring or digest flow: fetch live data through `nyxid_proxy` (for example `api-github`), derive the digest from current facts, then post the digest to the negotiated chat target.
    - Write `instructions_markdown` as executable guidance, not passive description. Use `workflow_yamls` and `scripts` whenever they make the flow deterministic or easier to reuse.
    - Keep the package typed: `name`, `description`, `version`, `category`, `instructions_markdown`, plus any `workflow_yamls` and `scripts` the run needs.
 
