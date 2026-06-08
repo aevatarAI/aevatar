@@ -101,6 +101,19 @@ public sealed class WorkflowScheduleApplicationServiceTests
         invocation.Auth.SenderNyxId.Scope.Should().Be("proxy");
     }
 
+    [Fact]
+    public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleAuth()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
     [Theory]
     [InlineData("", "tenant-1", "ou-user-1", "proxy")]
     [InlineData("lark", "", "ou-user-1", "proxy")]

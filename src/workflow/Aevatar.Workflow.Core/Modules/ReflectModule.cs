@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -212,6 +213,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             RunId = state.RunId,
             StepId = state.StepId,
         };
+        ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
@@ -248,6 +250,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             RunId = state.RunId,
             StepId = state.StepId,
         };
+        ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
@@ -285,6 +288,14 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             TopologyAudience.Self,
             ct);
 
+    private static void ApplySenderNyxIdAccessToken(
+        IWorkflowExecutionContext ctx,
+        WorkflowLlmExecutionIntent intent)
+    {
+        if (ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
+            intent.SenderNyxIdAccessToken = Normalize(runtimeAccessor.RuntimeContext.SenderNyxIdAccessToken) ?? string.Empty;
+    }
+
     private static void CopyParametersToIntent(
         MapField<string, string> source,
         WorkflowLlmExecutionIntent intent)
@@ -318,6 +329,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             destination[key.Trim()] = value.Trim();
         }
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventContext ctx)
     {

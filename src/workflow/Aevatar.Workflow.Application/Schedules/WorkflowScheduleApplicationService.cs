@@ -161,8 +161,10 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
     private static ScheduledServiceInvocationAuth? BuildWorkflowServiceInvocationAuth(
         WorkflowScheduleConfiguration configuration)
     {
-        if (configuration.Auth?.SenderNyxId == null)
+        if (configuration.Auth == null)
             return null;
+        if (configuration.Auth.SenderNyxId == null)
+            throw new ArgumentException("Sender NyxID credential source is required.", nameof(configuration.Auth));
 
         var senderNyxId = configuration.Auth.SenderNyxId;
         if (senderNyxId.Subject == null)

@@ -252,8 +252,10 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private static ScheduledServiceInvocationAuth? NormalizeServiceInvocationAuth(
         ScheduledServiceInvocationAuth? auth)
     {
-        if (auth?.SenderNyxId == null)
+        if (auth == null)
             return null;
+        if (auth.SenderNyxId == null)
+            throw new ArgumentException("Service invocation sender NyxID credential source is required.", nameof(auth));
 
         var source = auth.SenderNyxId;
         if (source.Subject == null)

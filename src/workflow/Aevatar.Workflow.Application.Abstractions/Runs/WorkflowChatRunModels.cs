@@ -25,7 +25,8 @@ public sealed record WorkflowChatInputPart
 public sealed record WorkflowLlmControl(
     string? ModelOverride = null,
     int? MaxToolRoundsOverride = null,
-    string? UserMemoryPrompt = null);
+    string? UserMemoryPrompt = null,
+    string? SenderNyxIdAccessToken = null);
 
 public enum WorkflowChatSourceKind
 {

@@ -25,6 +25,7 @@ message WorkflowLlmControlContext {
   string model_override = 1;
   optional int32 max_tool_rounds_override = 2;
   string user_memory_prompt = 3;
+  string sender_nyx_id_access_token = 4;
 }
 
 message WorkflowChatRequestEvent {
@@ -334,6 +335,7 @@ message WorkflowLlmExecutionIntent
   int32 timeout_ms = 8;
   map<string, string> headers = 9;
   map<string, string> annotations = 10;
+  string sender_nyx_id_access_token = 11;
 }
 
 message WorkflowLlmInvocationStartedEvent

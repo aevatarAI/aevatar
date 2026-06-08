@@ -270,8 +270,13 @@ public sealed record ScheduledServiceInvocationAuthHttpRequest
 {
     public ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
 
-    public ScheduledServiceInvocationAuth ToAuth() =>
-        new(SenderNyxId?.ToSource());
+    public ScheduledServiceInvocationAuth ToAuth()
+    {
+        if (SenderNyxId == null)
+            throw new ArgumentException("Sender NyxID credential source is required.", nameof(SenderNyxId));
+
+        return new ScheduledServiceInvocationAuth(SenderNyxId.ToSource());
+    }
 }
 
 public sealed record ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
@@ -280,7 +285,24 @@ public sealed record ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
     public required string Scope { get; init; }
 
     public ScheduledServiceInvocationNyxIdCredentialSource ToSource() =>
-        new(Subject.ToSubject(), Scope);
+        new(NormalizeSubject(Subject), NormalizeRequired(Scope, nameof(Scope)));
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRefHttpRequest? subject)
+    {
+        if (subject == null)
+            throw new ArgumentException("Subject is required.", nameof(Subject));
+
+        return subject.ToSubject();
+    }
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required.", name);
+
+        return value.Trim();
+    }
 }
 
 public sealed record ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
@@ -290,7 +312,18 @@ public sealed record ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
     public required string ExternalUserId { get; init; }
 
     public ScheduledServiceInvocationNyxIdSubjectRef ToSubject() =>
-        new(Platform.Trim().ToLowerInvariant(), Tenant.Trim(), ExternalUserId.Trim());
+        new(
+            NormalizeRequired(Platform, nameof(Platform)).ToLowerInvariant(),
+            NormalizeRequired(Tenant, nameof(Tenant)),
+            NormalizeRequired(ExternalUserId, nameof(ExternalUserId)));
+
+    private static string NormalizeRequired(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required.", name);
+
+        return value.Trim();
+    }
 }
 
 public sealed record ScheduledDispatchPreviewHttpRequest

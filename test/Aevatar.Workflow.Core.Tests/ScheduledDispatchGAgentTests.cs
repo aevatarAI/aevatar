@@ -10,7 +10,6 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Schedules;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
@@ -307,10 +306,12 @@ public sealed class ScheduledDispatchGAgentTests
         dispatched.Envelope.Id.Should().Be(idempotencyKey);
         dispatched.Envelope.Route.GetTargetActorId().Should().Be("target-actor-1");
         var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
-        chatRequest.SessionId.Should().Be(idempotencyKey);
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(firstScheduledFireAt.ToUniversalTime().ToString("O"));
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.SessionId.Should().Be("template-session");
+        chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
+        dispatched.Envelope.Propagation!.Baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.FireAtUtc]
+            .Should().Be(firstScheduledFireAt.ToUniversalTime().ToString("O"));
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
 
@@ -419,9 +420,11 @@ public sealed class ScheduledDispatchGAgentTests
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
         var chatRequest = dispatch.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Metadata["workflow.schedule_id"].Should().Be("schedule-1");
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
+        var baggage = dispatch.Dispatches.Single().Envelope.Propagation!.Baggage;
+        baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        baggage[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
+        baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
     }
 
@@ -454,9 +457,11 @@ public sealed class ScheduledDispatchGAgentTests
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
         dispatched.Envelope.Id.Should().Be(idempotencyKey);
         var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
+        dispatched.Envelope.Propagation!.Baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.FireAtUtc]
+            .Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
         agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("generic-agent-1");
@@ -583,23 +588,24 @@ public sealed class ScheduledDispatchGAgentTests
         var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Prompt.Should().Be("configured");
         chatRequest.Metadata.Should().Contain("caller", "kept");
-        chatRequest.Metadata.Should().Contain(ScheduledDispatchMetadataKeys.ScheduleId, "schedule-1");
-        chatRequest.Metadata.Should().ContainKey(ScheduledDispatchMetadataKeys.FireAtUtc);
-        chatRequest.Metadata.Should().Contain(ScheduledDispatchMetadataKeys.IdempotencyKey, request.CommandId);
+        chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
+        var headers = serviceInvocationDispatch.Headers.Should().ContainSingle().Which;
+        headers.Should().NotBeNull();
+        headers![ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        headers.Should().ContainKey(ScheduledDispatchMetadataKeys.FireAtUtc);
+        headers[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(request.CommandId);
     }
 
     [Fact]
-    public async Task HandleFireAsync_ForServiceInvocationAuth_ShouldExchangeSenderNyxIdTokenAtFireTime()
+    public async Task HandleFireAsync_ForServiceInvocationAuth_ShouldPassTypedAuthWithoutTokenExchange()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
         var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");
         var agent = CreateAgent(
             eventStore,
             dispatch,
-            serviceInvocationDispatch: serviceInvocationDispatch,
-            credentialExchange: credentialExchange);
+            serviceInvocationDispatch: serviceInvocationDispatch);
         await agent.ActivateAsync();
         await agent.HandleConfigureAsync(CreateConfigureCommand(
             enabled: false,
@@ -613,14 +619,10 @@ public sealed class ScheduledDispatchGAgentTests
                     Payload = Any.Pack(new ChatRequestEvent
                     {
                         Prompt = "configured",
-                        LlmControl = new LLMControlContext(
-                            NyxIdAccessToken: null,
-                            NyxIdOrgToken: null,
-                            SenderNyxIdAccessToken: null,
-                            ModelOverride: "sonnet",
-                            NyxIdRoutePreference: null,
-                            MaxToolRoundsOverride: null,
-                            UserMemoryPrompt: null).ToPayload(),
+                        LlmControl = new LLMControlContextPayload
+                        {
+                            ModelOverride = "sonnet",
+                        },
                     }),
                     Auth = new ScheduledServiceInvocationAuthState
                     {
@@ -645,29 +647,34 @@ public sealed class ScheduledDispatchGAgentTests
             Manual = true,
         });
 
-        credentialExchange.Sources.Should().ContainSingle()
-            .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().NotBeNull();
+        auth.SenderNyxId!.Subject.ExternalUserId.Should().Be("ou-user-1");
+        auth.SenderNyxId.Subject.Platform.Should().Be("lark");
+        auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
+        auth.SenderNyxId.Scope.Should().Be("proxy");
         var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
         var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
-        chatRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-1");
+        chatRequest.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         chatRequest.LlmControl.ModelOverride.Should().Be("sonnet");
-        chatRequest.Metadata.Should().NotContainValue("sender-token-1");
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task HandleFireAsync_ForServiceInvocationAuthFailure_ShouldRecordFailureBeforeDispatch()
+    public async Task HandleFireAsync_ForServiceInvocationAuthDispatchFailure_ShouldRecordFailure()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
-        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(error: "exchange failed");
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort
+        {
+            DispatchException = new InvalidOperationException("exchange failed"),
+        };
         var agent = CreateAgent(
             eventStore,
             dispatch,
-            serviceInvocationDispatch: serviceInvocationDispatch,
-            credentialExchange: credentialExchange);
+            serviceInvocationDispatch: serviceInvocationDispatch);
         await agent.ActivateAsync();
         await agent.HandleConfigureAsync(CreateConfigureCommand(
             enabled: false,
@@ -702,8 +709,8 @@ public sealed class ScheduledDispatchGAgentTests
             Manual = true,
         });
 
-        credentialExchange.Sources.Should().ContainSingle();
-        serviceInvocationDispatch.Requests.Should().BeEmpty();
+        serviceInvocationDispatch.Auths.Should().ContainSingle();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(1);
@@ -717,12 +724,10 @@ public sealed class ScheduledDispatchGAgentTests
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
         var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");
         var agent = CreateAgent(
             eventStore,
             dispatch,
-            serviceInvocationDispatch: serviceInvocationDispatch,
-            credentialExchange: credentialExchange);
+            serviceInvocationDispatch: serviceInvocationDispatch);
         await agent.ActivateAsync();
         await agent.HandleConfigureAsync(CreateConfigureCommand(
             enabled: false,
@@ -762,7 +767,7 @@ public sealed class ScheduledDispatchGAgentTests
             Manual = true,
         });
 
-        credentialExchange.Sources.Should().ContainSingle();
+        serviceInvocationDispatch.Auths.Should().ContainSingle();
         serviceInvocationDispatch.Requests.Should().ContainSingle();
     }
 
@@ -1077,13 +1082,11 @@ public sealed class ScheduledDispatchGAgentTests
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
         RecordingRuntimeCallbackScheduler? callbackScheduler = null,
-        RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null,
-        RecordingScheduledServiceInvocationCredentialExchangePort? credentialExchange = null)
+        RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null)
     {
         var agent = new ScheduledDispatchGAgent(
             dispatch,
-            serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort(),
-            credentialExchange ?? new RecordingScheduledServiceInvocationCredentialExchangePort())
+            serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort())
         {
             Services = new TestServiceProvider(callbackScheduler),
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(eventStore),
@@ -1213,44 +1216,32 @@ public sealed class ScheduledDispatchGAgentTests
     private sealed class RecordingScheduledServiceInvocationDispatchPort : IScheduledServiceInvocationDispatchPort
     {
         public List<ServiceInvocationRequest> Requests { get; } = [];
+        public List<ScheduledServiceInvocationAuth?> Auths { get; } = [];
+        public List<IReadOnlyDictionary<string, string>?> Headers { get; } = [];
 
-        public Func<ServiceInvocationRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
-            request => new ScheduledServiceInvocationDispatchReceipt(
+        public Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
+            dispatch => new ScheduledServiceInvocationDispatchReceipt(
                 true,
-                request.CommandId,
+                dispatch.Request.CommandId,
                 "service-run-actor",
-                request.CorrelationId);
+                dispatch.Request.CorrelationId);
 
         public Exception? DispatchException { get; set; }
 
         public Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
-            ServiceInvocationRequest request,
+            ScheduledServiceInvocationDispatchRequest dispatch,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Requests.Add(request.Clone());
+            Requests.Add(dispatch.Request.Clone());
+            Auths.Add(dispatch.Auth);
+            Headers.Add(dispatch.Headers == null
+                ? null
+                : new Dictionary<string, string>(dispatch.Headers, StringComparer.Ordinal));
             if (DispatchException != null)
                 throw DispatchException;
 
-            return Task.FromResult(ReceiptFactory(request));
-        }
-    }
-
-    private sealed class RecordingScheduledServiceInvocationCredentialExchangePort(
-        string? accessToken = null,
-        string? error = null) : IScheduledServiceInvocationCredentialExchangePort
-    {
-        public List<ScheduledServiceInvocationNyxIdCredentialSource> Sources { get; } = [];
-
-        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
-            ScheduledServiceInvocationNyxIdCredentialSource source,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Sources.Add(source);
-            return Task.FromResult(error == null
-                ? ScheduledServiceInvocationCredentialExchangeResult.Success(accessToken ?? "sender-token")
-                : ScheduledServiceInvocationCredentialExchangeResult.Failure(error));
+            return Task.FromResult(ReceiptFactory(dispatch));
         }
     }
 

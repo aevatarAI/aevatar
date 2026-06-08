@@ -211,10 +211,15 @@ public sealed record ScheduledServiceInvocationDispatchReceipt(
     string TargetActorId,
     string CorrelationId);
 
+public sealed record ScheduledServiceInvocationDispatchRequest(
+    ServiceInvocationRequest Request,
+    ScheduledServiceInvocationAuth? Auth = null,
+    IReadOnlyDictionary<string, string>? Headers = null);
+
 public interface IScheduledServiceInvocationDispatchPort
 {
     Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
-        ServiceInvocationRequest request,
+        ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct = default);
 }
 

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -58,22 +59,112 @@ public sealed class ScheduledDispatchServiceInvocationTests
     public async Task ScheduledServiceInvocationDispatchPort_ShouldInvokeExplicitServiceInvocationPort()
     {
         var invocationPort = new RecordingServiceInvocationPort();
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort);
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort();
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
 
         var receipt = await port.DispatchAsync(
+            new ScheduledServiceInvocationDispatchRequest(
+                new ServiceInvocationRequest
+                {
+                    CommandId = "cmd-invoke",
+                    CorrelationId = "corr-invoke",
+                    Payload = Any.Pack(new StringValue { Value = "invoke" }),
+                }));
+
+        invocationPort.Requests.Should().ContainSingle()
+            .Which.Payload.Unpack<StringValue>().Value.Should().Be("invoke");
+        credentialExchange.Sources.Should().BeEmpty();
+        receipt.Accepted.Should().BeTrue();
+        receipt.CommandId.Should().Be("cmd-invoke");
+        receipt.CorrelationId.Should().Be("corr-invoke");
+        receipt.TargetActorId.Should().Be("service-actor");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithAuth_ShouldExchangeAndInjectSenderTokenIntoClonedChatPayload()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-invoke",
+            CorrelationId = "corr-invoke",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                Metadata = { ["trace"] = "kept" },
+                LlmControl = new LLMControlContextPayload
+                {
+                    ModelOverride = "sonnet",
+                },
+            }),
+        };
+        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+            "proxy"));
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
+
+        credentialExchange.Sources.Should().ContainSingle()
+            .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
+        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
+        invoked.Should().NotBeSameAs(original);
+        var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-1");
+        invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
+        invokedChat.Metadata.Should().Contain("trace", "kept");
+        invokedChat.Metadata.Should().NotContainValue("sender-token-1");
+        original.Payload.Unpack<ChatRequestEvent>().LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithAuthAndNonChatPayload_ShouldExchangeWithoutInjectingToken()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+            "proxy"));
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             new ServiceInvocationRequest
             {
                 CommandId = "cmd-invoke",
                 CorrelationId = "corr-invoke",
                 Payload = Any.Pack(new StringValue { Value = "invoke" }),
-            });
+            },
+            auth));
 
+        credentialExchange.Sources.Should().ContainSingle();
         invocationPort.Requests.Should().ContainSingle()
             .Which.Payload.Unpack<StringValue>().Value.Should().Be("invoke");
-        receipt.Accepted.Should().BeTrue();
-        receipt.CommandId.Should().Be("cmd-invoke");
-        receipt.CorrelationId.Should().Be("corr-invoke");
-        receipt.TargetActorId.Should().Be("service-actor");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithAuthExchangeFailure_ShouldNotInvokeService()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(error: "exchange failed");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+            "proxy"));
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("exchange failed");
+        credentialExchange.Sources.Should().ContainSingle();
+        invocationPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -100,6 +191,24 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 CorrelationId = request.CorrelationId,
                 TargetActorId = "service-actor",
             });
+        }
+    }
+
+    private sealed class RecordingScheduledServiceInvocationCredentialExchangePort(
+        string? accessToken = null,
+        string? error = null) : IScheduledServiceInvocationCredentialExchangePort
+    {
+        public List<ScheduledServiceInvocationNyxIdCredentialSource> Sources { get; } = [];
+
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+            ScheduledServiceInvocationNyxIdCredentialSource source,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Sources.Add(source);
+            return Task.FromResult(error == null
+                ? ScheduledServiceInvocationCredentialExchangeResult.Success(accessToken ?? "sender-token")
+                : ScheduledServiceInvocationCredentialExchangeResult.Failure(error));
         }
     }
 }

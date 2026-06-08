@@ -19,7 +19,13 @@ internal sealed class WorkflowExecutionRuntimeContext
 {
     public WorkflowRequestPassthroughMetadata RequestPassthroughMetadata { get; } = new();
 
-    public void Clear() => RequestPassthroughMetadata.Clear();
+    public string? SenderNyxIdAccessToken { get; private set; }
+
+    public void Clear()
+    {
+        RequestPassthroughMetadata.Clear();
+        SenderNyxIdAccessToken = null;
+    }
 
     public void ApplyRequestMetadata(IReadOnlyDictionary<string, string>? metadata)
     {
@@ -37,6 +43,11 @@ internal sealed class WorkflowExecutionRuntimeContext
 
             RequestPassthroughMetadata.Set(key, value);
         }
+    }
+
+    public void ApplySenderNyxIdAccessToken(string? token)
+    {
+        SenderNyxIdAccessToken = Normalize(token);
     }
 
     private static string Normalize(string? value) =>
