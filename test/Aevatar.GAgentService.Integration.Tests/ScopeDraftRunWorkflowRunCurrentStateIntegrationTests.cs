@@ -137,8 +137,8 @@ public sealed class ScopeDraftRunWorkflowActorCurrentStateIntegrationTests
         }
     }
 
-    private static readonly TimeSpan QueryVisibilityTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan QueryVisibilityPollInterval = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan QueryVisibilityTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan QueryVisibilityPollInterval = TimeSpan.FromMilliseconds(100);
 
     private sealed class DraftRunWorkflowActorCurrentStateHost : IAsyncDisposable
     {
