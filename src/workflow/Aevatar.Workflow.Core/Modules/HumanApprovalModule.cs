@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
@@ -42,6 +43,11 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "human_approval") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+            if (HasInteractionTemplateSpec(request.StepParameters?.InteractionTemplateSpec))
+            {
+                await PublishUnsupportedInteractionTemplateAsync(request, runId, ctx, ct);
+                return;
+            }
 
             var prompt = WorkflowParameterValueParser.GetString(
                 request.Parameters,
@@ -51,7 +57,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
                 request.Parameters,
                 defaultSeconds: 3600);
-            var deliveryTargetId = WorkflowSuspensionRequestSupport.ResolveDeliveryTargetId(request);
+            var deliveryTargetId = request.StepParameters?.DeliveryTargetId?.Trim();
 
             var state = WorkflowExecutionStateAccess.Load<HumanApprovalModuleState>(ctx, ModuleStateKey);
             state.Pending[BuildPendingKey(runId, request.StepId)] = new PendingApprovalState
@@ -80,7 +86,8 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 TimeoutSeconds = timeoutSeconds,
             };
             WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
-            WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
+            ApplyTypedInteraction(suspended, request);
+            ApplyTypedDeliveryTarget(suspended, deliveryTargetId);
 
             await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
@@ -245,6 +252,56 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
 
     private static string BuildPendingKey(string runId, string stepId) =>
         $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
+
+    private static void ApplyTypedInteraction(
+        WorkflowSuspendedEvent suspended,
+        StepRequestEvent request)
+    {
+        var interaction = request.StepParameters?.InteractionSpec;
+        if (!HasInteractionSpec(interaction))
+            return;
+
+        suspended.Interaction = interaction!.Clone();
+    }
+
+    private static void ApplyTypedDeliveryTarget(
+        WorkflowSuspendedEvent suspended,
+        string? deliveryTargetId)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryTargetId))
+            suspended.DeliveryTargetId = deliveryTargetId;
+    }
+
+    private static bool HasInteractionSpec(InteractionSpec? spec) =>
+        spec is not null &&
+        (!string.IsNullOrWhiteSpace(spec.Title) ||
+         !string.IsNullOrWhiteSpace(spec.Body) ||
+         spec.Actions.Count > 0 ||
+         spec.Fields.Count > 0 ||
+         spec.Cards.Count > 0 ||
+         spec.Disposition != InteractionDisposition.Unspecified);
+
+    private static bool HasInteractionTemplateSpec(InteractionTemplateSpec? spec) =>
+        spec is not null &&
+        (!string.IsNullOrWhiteSpace(spec.TemplateId) ||
+         spec.TemplateVariable.Count > 0);
+
+    private static Task PublishUnsupportedInteractionTemplateAsync(
+        StepRequestEvent request,
+        string runId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
+        ctx.PublishAsync(
+            new StepCompletedEvent
+            {
+                StepId = request.StepId,
+                RunId = runId,
+                Success = false,
+                Error = "human_approval does not support interaction_template; use interaction_spec.",
+                ExecutionId = request.ExecutionId,
+            },
+            TopologyAudience.Self,
+            ct);
 
     private static Task SaveStateAsync(
         HumanApprovalModuleState state,

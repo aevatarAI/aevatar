@@ -393,6 +393,7 @@ message WorkflowSuspendedEvent
   bool secure = 10;
   string redacted_output = 11;
   WorkflowToolApprovalSuspension tool_approval = 12;
+  aevatar.foundation.interactions.InteractionSpec interaction = 13;
 }
 message WorkflowToolApprovalSuspension
 {

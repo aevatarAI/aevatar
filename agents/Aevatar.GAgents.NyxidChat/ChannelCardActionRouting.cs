@@ -24,7 +24,9 @@ public static class ChannelCardActionRouting
 
         var payload = inbound.CardAction?.WorkflowResume;
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (payload is not null && HasWorkflowResumeIdentity(payload))
+        if (payload is not null &&
+            inbound.CardAction?.ActionKind == ActionElementKind.FormSubmit &&
+            HasWorkflowResumeIdentity(payload))
         {
             CopyWorkflowResumePayload(payload, values);
             foreach (var pair in inbound.CardAction!.FormFields)
@@ -32,10 +34,6 @@ public static class ChannelCardActionRouting
                 if (IsWorkflowFormField(pair.Key))
                     values[pair.Key] = pair.Value;
             }
-        }
-        else if (TryBuildDeprecatedWorkflowResumeValues(inbound.Extra, values))
-        {
-            // Deprecated inbound compatibility only. New producers must use WorkflowResumeActionPayload.
         }
         else
         {
@@ -96,22 +94,6 @@ public static class ChannelCardActionRouting
             values["edited_content"] = payload.EditedContent;
         if (!string.IsNullOrWhiteSpace(payload.Feedback))
             values["feedback"] = payload.Feedback;
-    }
-
-    private static bool TryBuildDeprecatedWorkflowResumeValues(
-        IReadOnlyDictionary<string, string> extra,
-        IDictionary<string, string> values)
-    {
-        if (!TryGetRequiredValue(extra, "actor_id", out _) ||
-            !TryGetRequiredValue(extra, "run_id", out _) ||
-            !TryGetRequiredValue(extra, "step_id", out _))
-        {
-            return false;
-        }
-
-        foreach (var pair in extra)
-            values[pair.Key] = pair.Value;
-        return true;
     }
 
     private static bool TryGetRequiredValue(

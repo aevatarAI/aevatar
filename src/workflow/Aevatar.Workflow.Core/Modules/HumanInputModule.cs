@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
@@ -42,6 +43,11 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "human_input") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+            if (HasInteractionTemplateSpec(request.StepParameters?.InteractionTemplateSpec))
+            {
+                await PublishUnsupportedInteractionTemplateAsync(request, runId, ctx, ct);
+                return;
+            }
 
             var prompt = WorkflowParameterValueParser.GetString(
                 request.Parameters,
@@ -83,7 +89,8 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                 VariableName = variable,
             };
             WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
-            WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
+            ApplyTypedInteraction(suspended, request);
+            ApplyTypedDeliveryTarget(suspended, request);
 
             await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
@@ -163,6 +170,57 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
 
     private static string BuildPendingKey(string runId, string stepId) =>
         $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
+
+    private static void ApplyTypedInteraction(
+        WorkflowSuspendedEvent suspended,
+        StepRequestEvent request)
+    {
+        var interaction = request.StepParameters?.InteractionSpec;
+        if (!HasInteractionSpec(interaction))
+            return;
+
+        suspended.Interaction = interaction!.Clone();
+    }
+
+    private static void ApplyTypedDeliveryTarget(
+        WorkflowSuspendedEvent suspended,
+        StepRequestEvent request)
+    {
+        var deliveryTargetId = request.StepParameters?.DeliveryTargetId?.Trim();
+        if (!string.IsNullOrWhiteSpace(deliveryTargetId))
+            suspended.DeliveryTargetId = deliveryTargetId;
+    }
+
+    private static bool HasInteractionSpec(InteractionSpec? spec) =>
+        spec is not null &&
+        (!string.IsNullOrWhiteSpace(spec.Title) ||
+         !string.IsNullOrWhiteSpace(spec.Body) ||
+         spec.Actions.Count > 0 ||
+         spec.Fields.Count > 0 ||
+         spec.Cards.Count > 0 ||
+         spec.Disposition != InteractionDisposition.Unspecified);
+
+    private static bool HasInteractionTemplateSpec(InteractionTemplateSpec? spec) =>
+        spec is not null &&
+        (!string.IsNullOrWhiteSpace(spec.TemplateId) ||
+         spec.TemplateVariable.Count > 0);
+
+    private static Task PublishUnsupportedInteractionTemplateAsync(
+        StepRequestEvent request,
+        string runId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
+        ctx.PublishAsync(
+            new StepCompletedEvent
+            {
+                StepId = request.StepId,
+                RunId = runId,
+                Success = false,
+                Error = "human_input does not support interaction_template; use interaction_spec.",
+                ExecutionId = request.ExecutionId,
+            },
+            TopologyAudience.Self,
+            ct);
 
     private static Task SaveStateAsync(
         HumanInputModuleState state,

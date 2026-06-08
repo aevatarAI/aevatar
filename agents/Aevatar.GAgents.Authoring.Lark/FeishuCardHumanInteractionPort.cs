@@ -1,6 +1,7 @@
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
@@ -168,6 +169,9 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
     internal static MessageContent BuildSuspensionIntent(HumanInteractionRequest request)
     {
+        if (request.InteractionSpec is not null)
+            return BuildTypedSuspensionIntent(request);
+
         var intent = new MessageContent
         {
             Text = string.Empty,
@@ -214,6 +218,50 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         }
 
         return intent;
+    }
+
+    private static MessageContent BuildTypedSuspensionIntent(HumanInteractionRequest request)
+    {
+        var intent = InteractionSpecMapper.ToMessageContent(request.InteractionSpec!);
+        var actions = EnumerateActions(intent).ToArray();
+        foreach (var action in actions)
+        {
+            if (action.Kind != ActionElementKind.FormSubmit)
+                continue;
+
+            action.WorkflowResume = BuildWorkflowResumePayload(
+                request,
+                ResolveApprovedValue(request, action.ActionId));
+        }
+
+        return intent;
+    }
+
+    private static IEnumerable<ActionElement> EnumerateActions(MessageContent intent)
+    {
+        foreach (var action in intent.Actions)
+            yield return action;
+        foreach (var card in intent.Cards)
+        {
+            foreach (var action in card.Actions)
+                yield return action;
+        }
+    }
+
+    private static bool? ResolveApprovedValue(
+        HumanInteractionRequest request,
+        string? actionId)
+    {
+        if (!SupportsApproveReject(request))
+            return null;
+
+        var normalized = (actionId ?? string.Empty).Trim();
+        if (string.Equals(normalized, "reject", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (string.Equals(normalized, "approve", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return null;
     }
 
     private static ActionElement BuildTextInput(string actionId, string label, string placeholder) =>
