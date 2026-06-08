@@ -273,11 +273,12 @@ public sealed class WorkflowRunGAgent
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
         var executionContextDelta = MergeExecutionContextDeltas(callerCredentialDelta, llmControlDelta);
+        var executionInput = ResolveExecutionInput(request);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
             WorkflowName = _compiledWorkflow.Name,
-            Input = request.Prompt ?? string.Empty,
+            Input = executionInput,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
             ExecutionContextDelta = executionContextDelta,
@@ -286,8 +287,9 @@ public sealed class WorkflowRunGAgent
         await PublishAsync(new StartWorkflowEvent
         {
             WorkflowName = _compiledWorkflow.Name,
-            Input = request.Prompt,
+            Input = executionInput,
             RunId = runId,
+            ResumeSeed = request.ResumeSeed,
         }, TopologyAudience.Self);
     }
 
@@ -345,6 +347,17 @@ public sealed class WorkflowRunGAgent
             Input = request.Input ?? string.Empty,
             RunId = runId,
         }, TopologyAudience.Self);
+    }
+
+    private static string ResolveExecutionInput(WorkflowChatRequestEvent request)
+    {
+        if (request.ResumeSeed != null &&
+            request.ResumeSeed.Variables.TryGetValue("input", out var seedInput))
+        {
+            return seedInput ?? string.Empty;
+        }
+
+        return request.Prompt ?? string.Empty;
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
