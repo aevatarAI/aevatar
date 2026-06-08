@@ -21,6 +21,27 @@ public sealed class IdempotentStepExecutionTests
         Steps = [new StepDefinition { Id = stepId, Type = "llm_call", TargetRole = "worker" }],
     };
 
+    private static WorkflowDefinition ThreeStepWorkflow() => new()
+    {
+        Name = "test-resume-workflow",
+        Roles = [new RoleDefinition { Id = "worker", Name = "Worker" }],
+        Steps =
+        [
+            new StepDefinition { Id = "step-a", Type = "transform" },
+            new StepDefinition
+            {
+                Id = "step-b",
+                Type = "transform",
+                Parameters =
+                {
+                    ["summary"] = "${concat(step_a_output, ':', topic, ':', input)}",
+                    ["topic_value"] = "${topic}",
+                },
+            },
+            new StepDefinition { Id = "step-c", Type = "transform" },
+        ],
+    };
+
     private static EventEnvelope Wrap(IMessage msg) => new()
     {
         Id = Guid.NewGuid().ToString("N"),
@@ -363,7 +384,156 @@ public sealed class IdempotentStepExecutionTests
         state.Variables["steps.step-1.usage.model"].Should().Be("gpt-5.4");
     }
 
+    [Fact]
+    public async Task StartWorkflow_WithResumeSeed_ShouldDispatchSeedStartStepAndHydrateVariables()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-resume",
+            Input = "fresh-input",
+            ResumeSeed = new WorkflowRunResumeSeed
+            {
+                SourceRunId = "run-source",
+                StartAtStepId = "step-b",
+            },
+        };
+        start.ResumeSeed.Variables["input"] = "seed-input";
+        start.ResumeSeed.Variables["step_a_output"] = "alpha";
+        start.ResumeSeed.Variables["topic"] = "seed-topic";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var requests = StepRequests(ctx);
+        requests.Should().ContainSingle();
+        requests[0].StepId.Should().Be("step-b");
+        requests[0].Input.Should().Be("seed-input");
+        requests[0].Parameters["summary"].Should().Be("alpha:seed-topic:seed-input");
+        requests.Should().NotContain(x => x.StepId == "step-a");
+
+        var state = LoadKernelState(host);
+        state.CurrentStepId.Should().Be("step-b");
+        state.CurrentStepInput.Should().Be("seed-input");
+        state.Variables["step_a_output"].Should().Be("alpha");
+        state.Variables["topic"].Should().Be("seed-topic");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithResumeSeedMissingStartStep_ShouldPublishFailureWithoutDispatch()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-resume",
+            Input = "fresh-input",
+            ResumeSeed = new WorkflowRunResumeSeed
+            {
+                SourceRunId = "run-source",
+                StartAtStepId = "missing-step",
+            },
+        };
+        start.ResumeSeed.Variables["step_a_output"] = "alpha";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        StepRequests(ctx).Should().BeEmpty();
+        var completions = WorkflowCompletions(ctx);
+        completions.Should().HaveCount(2);
+        completions.Should().OnlyContain(x => !x.Success);
+        completions.Should().OnlyContain(
+            x => x.Error == "resume start step 'missing-step' not found in workflow");
+        host.GetExecutionState("workflow_execution_kernel").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithResumeSeed_ShouldLetStartParametersOverrideSeedVariables()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-resume",
+            Input = "fresh-input",
+            ResumeSeed = new WorkflowRunResumeSeed
+            {
+                SourceRunId = "run-source",
+                StartAtStepId = "step-b",
+            },
+        };
+        start.ResumeSeed.Variables["input"] = "seed-input";
+        start.ResumeSeed.Variables["step_a_output"] = "alpha";
+        start.ResumeSeed.Variables["topic"] = "seed-topic";
+        start.Parameters["topic"] = "parameter-topic";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var request = StepRequests(ctx).Single();
+        request.StepId.Should().Be("step-b");
+        request.Input.Should().Be("seed-input");
+        request.Parameters["topic_value"].Should().Be("parameter-topic");
+
+        var state = LoadKernelState(host);
+        state.Variables["topic"].Should().Be("parameter-topic");
+        state.Variables["step_a_output"].Should().Be("alpha");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithoutResumeSeed_ShouldDispatchFirstStepWithFreshVariables()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent { RunId = "run-plain", Input = "fresh-input" }),
+            ctx,
+            CancellationToken.None);
+
+        var requests = StepRequests(ctx);
+        requests.Should().ContainSingle();
+        requests[0].StepId.Should().Be("step-a");
+        requests[0].Input.Should().Be("fresh-input");
+
+        var state = LoadKernelState(host);
+        state.Variables["input"].Should().Be("fresh-input");
+        state.Variables.Should().NotContainKey("step_a_output");
+        state.Variables.Keys.Should().BeEquivalentTo(DefaultStartVariableKeys);
+    }
+
     // ──── Test infrastructure ────
+
+    private static readonly string[] DefaultStartVariableKeys =
+    [
+        "input",
+        "workflow.usage.prompt_tokens",
+        "workflow.usage.completion_tokens",
+        "workflow.usage.total_tokens",
+        "workflow.usage.model",
+        "workflow.usage.cost",
+        "workflow.usage.latency_ms",
+    ];
+
+    private static IReadOnlyList<StepRequestEvent> StepRequests(RecordingEventHandlerContext ctx) =>
+        ctx.Published
+            .Select(p => p.Event)
+            .Where(e => e.Is(StepRequestEvent.Descriptor))
+            .Select(e => e.Unpack<StepRequestEvent>())
+            .ToList();
+
+    private static IReadOnlyList<WorkflowCompletedEvent> WorkflowCompletions(RecordingEventHandlerContext ctx) =>
+        ctx.Published
+            .Select(p => p.Event)
+            .Where(e => e.Is(WorkflowCompletedEvent.Descriptor))
+            .Select(e => e.Unpack<WorkflowCompletedEvent>())
+            .ToList();
+
+    private static WorkflowExecutionKernelState LoadKernelState(RecordingStateHost host) =>
+        host.GetExecutionState("workflow_execution_kernel")!.Unpack<WorkflowExecutionKernelState>();
 
     private sealed class RecordingEventHandlerContext : IEventHandlerContext
     {

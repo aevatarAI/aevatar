@@ -122,15 +122,28 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.Usage = new WorkflowUsageMetricsState();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
+        var resumeSeed = evt.ResumeSeed;
+        var hasResumeSeedStart = resumeSeed != null && !string.IsNullOrWhiteSpace(resumeSeed.StartAtStepId);
+        if (hasResumeSeedStart)
+        {
+            foreach (var (key, value) in resumeSeed!.Variables)
+                state.Variables[key] = value ?? string.Empty;
+        }
+
         state.Variables["input"] = evt.Input ?? string.Empty;
         MirrorRunUsageVariables(state);
         MergeStartParametersIntoVariables(state.Variables, evt.Parameters);
         await SaveStateAsync(state, ctx, ct);
 
-        var entry = _workflow.Steps.FirstOrDefault();
+        var entry = hasResumeSeedStart
+            ? _workflow.Steps.FirstOrDefault(s => string.Equals(s.Id, resumeSeed!.StartAtStepId, StringComparison.Ordinal))
+            : _workflow.Steps.FirstOrDefault();
         if (entry == null)
         {
             await CleanupRunAsync(state, ctx, ct);
+            var error = hasResumeSeedStart
+                ? $"resume start step '{resumeSeed!.StartAtStepId}' not found in workflow"
+                : "无步骤";
             await PublishWorkflowCompletedAsync(
                 ctx,
                 new WorkflowCompletedEvent
@@ -138,13 +151,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     WorkflowName = _workflow.Name,
                     RunId = runId,
                     Success = false,
-                    Error = "无步骤",
+                    Error = error,
                 },
                 ct);
             return;
         }
 
-        await DispatchStepAsync(entry, evt.Input ?? string.Empty, state, ctx, ct);
+        var startInput = hasResumeSeedStart && resumeSeed!.Variables.TryGetValue("input", out var seedInput)
+            ? seedInput
+            : evt.Input ?? string.Empty;
+        await DispatchStepAsync(entry, startInput ?? string.Empty, state, ctx, ct);
     }
 
     private async Task HandleTimeoutFiredAsync(
