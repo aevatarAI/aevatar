@@ -131,6 +131,20 @@ public sealed class WorkflowScheduleApplicationServiceTests
         await act.Should().ThrowAsync<ArgumentException>();
     }
 
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithoutSubject()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(null!, "proxy")),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*subject is required*");
+    }
+
     [Theory]
     [InlineData("", "tenant-1", "ou-user-1", "proxy")]
     [InlineData("lark", "tenant-1", "", "proxy")]

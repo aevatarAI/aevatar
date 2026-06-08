@@ -219,7 +219,9 @@ public sealed class WorkflowArtifactCoverageTests
         withTemperaturePayload.SystemPrompt.Should().Be("You are helpful.");
         withTemperaturePayload.HasTemperature.Should().BeTrue();
         withTemperaturePayload.Temperature.Should().BeApproximately(0.25, 0.0001);
-        withTemperature.Route!.PublisherActorId.Should().Be("workflow-run");
+        withTemperature.Route!.IsDirect().Should().BeTrue();
+        withTemperature.Route.IsTopologyPublication().Should().BeFalse();
+        withTemperature.Route.PublisherActorId.Should().Be("workflow-run");
         withTemperature.Route.GetTargetActorId().Should().Be("workflow-run:planner");
         withTemperature.Propagation!.CorrelationId.Should().NotBeNullOrWhiteSpace();
 

@@ -40,7 +40,30 @@ public sealed class LocalActorDispatchAdmissionTests
         GateAgent.Handled.Task.IsCompleted.Should().BeFalse();
 
         GateAgent.Release.SetResult();
-        await GateAgent.Handled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var handled = await GateAgent.Handled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        handled.Id.Should().Be("cmd-admitted");
+        handled.Should().NotBeSameAs(envelope);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectMissingActor()
+    {
+        var streams = new InMemoryStreamProvider(
+            new InMemoryStreamOptions(),
+            NullLoggerFactory.Instance,
+            new InMemoryStreamForwardingRegistry());
+        var runtime = new LocalActorRuntime(streams, new ServiceCollection().BuildServiceProvider(), streams);
+        var dispatchPort = new LocalActorDispatchPort(runtime, streams);
+        var envelope = new EventEnvelope
+        {
+            Id = "cmd-missing",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        };
+
+        var act = () => dispatchPort.DispatchAsync("missing-actor", envelope, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Actor missing-actor not found.");
     }
 
     private sealed class GateAgent : IAgent
@@ -48,7 +71,7 @@ public sealed class LocalActorDispatchAdmissionTests
         public static TaskCompletionSource Release { get; private set; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public static TaskCompletionSource Handled { get; private set; } =
+        public static TaskCompletionSource<EventEnvelope> Handled { get; private set; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public string Id => "gate-agent";
@@ -56,7 +79,7 @@ public sealed class LocalActorDispatchAdmissionTests
         public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
             await Release.Task.WaitAsync(ct);
-            Handled.TrySetResult();
+            Handled.TrySetResult(envelope);
         }
 
         public Task<string> GetDescriptionAsync() => Task.FromResult("gate");
@@ -66,7 +89,7 @@ public sealed class LocalActorDispatchAdmissionTests
         public Task ActivateAsync(CancellationToken ct = default)
         {
             Release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            Handled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Handled = new TaskCompletionSource<EventEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
             return Task.CompletedTask;
         }
 
