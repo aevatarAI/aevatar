@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Foundation.Abstractions.Interactions;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Core.Tests.Primitives;
@@ -122,6 +123,75 @@ public sealed class WorkflowParserCoverageTests
         workflow.Steps[0].Parameters["ratio"].Should().Be("1.5");
         workflow.Steps[0].Parameters["tags"].Should().Be("""["alpha","2"]""");
         workflow.Steps[0].Parameters["config"].Should().Be("""{"enabled":"false","retries":"3"}""");
+    }
+
+    [Fact]
+    public void Parse_WhenInteractionSpecIsPresent_ShouldLiftTypedPresentation()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: interaction
+            roles: []
+            steps:
+              - id: approve
+                type: human_approval
+                presentation:
+                  interaction_spec:
+                    title: "Approve ${input}"
+                    body: "Review release"
+                    disposition: ephemeral
+                    actions:
+                      - action_id: approve
+                        label: Approve
+                        style: primary
+                      - action_id: reject
+                        label: Reject
+                        style: danger
+                    fields:
+                      - title: Environment
+                        text: prod
+                        is_short: true
+            """);
+
+        var spec = workflow.Steps[0].Presentation?.InteractionSpec;
+
+        spec.Should().NotBeNull();
+        spec!.Title.Should().Be("Approve ${input}");
+        spec.Disposition.Should().Be(InteractionDisposition.Ephemeral);
+        spec.Actions.Should().HaveCount(2);
+        spec.Actions[0].Kind.Should().Be(InteractionActionKind.Button);
+        spec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
+        spec.Actions[1].Style.Should().Be(InteractionActionStyle.Danger);
+        spec.Fields.Should().ContainSingle(x => x.Title == "Environment" && x.IsShort);
+        workflow.Steps[0].Parameters.Should().NotContainKey("interaction_spec");
+    }
+
+    [Fact]
+    public void Parse_WhenInteractionSpecIsUnderParameters_ShouldPromoteAndRemoveBagEntry()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: interaction_parameter
+            roles: []
+            steps:
+              - id: approve
+                type: human_approval
+                parameters:
+                  prompt: "Approve?"
+                  interaction_spec:
+                    title: "Approval"
+                    actions:
+                      - action_id: approve
+                        label: Approve
+            """);
+
+        var step = workflow.Steps[0];
+
+        step.Presentation?.InteractionSpec.Should().NotBeNull();
+        step.Presentation!.InteractionSpec!.Title.Should().Be("Approval");
+        step.Presentation.InteractionSpec.Actions.Should().ContainSingle(x => x.ActionId == "approve");
+        step.Parameters.Should().ContainKey("prompt");
+        step.Parameters.Should().NotContainKey("interaction_spec");
     }
 
     [Fact]

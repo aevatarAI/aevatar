@@ -1166,7 +1166,68 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 request.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
         }
 
+        ApplyInteractionSpec(request, step.Presentation, state);
+
         return request;
+    }
+
+    private void ApplyInteractionSpec(
+        StepRequestEvent request,
+        StepPresentation? presentation,
+        WorkflowExecutionKernelState state)
+    {
+        if (!StepPresentation.HasInteractionSpec(presentation?.InteractionSpec))
+            return;
+
+        var spec = presentation!.InteractionSpec!.Clone();
+        spec.Title = _expressionEvaluator.Evaluate(spec.Title, state.Variables);
+        spec.Body = _expressionEvaluator.Evaluate(spec.Body, state.Variables);
+        EvaluateActions(spec.Actions, state);
+        EvaluateFields(spec.Fields, state);
+        EvaluateCards(spec.Cards, state);
+        (request.StepParameters ??= new WorkflowStepParameters()).InteractionSpec = spec;
+    }
+
+    private void EvaluateActions(
+        IEnumerable<Aevatar.Foundation.Abstractions.Interactions.InteractionAction> actions,
+        WorkflowExecutionKernelState state)
+    {
+        foreach (var action in actions)
+        {
+            action.Label = _expressionEvaluator.Evaluate(action.Label, state.Variables);
+            action.Value = _expressionEvaluator.Evaluate(action.Value, state.Variables);
+            action.Placeholder = _expressionEvaluator.Evaluate(action.Placeholder, state.Variables);
+            foreach (var option in action.Options)
+            {
+                option.Label = _expressionEvaluator.Evaluate(option.Label, state.Variables);
+                option.Value = _expressionEvaluator.Evaluate(option.Value, state.Variables);
+            }
+        }
+    }
+
+    private void EvaluateFields(
+        IEnumerable<Aevatar.Foundation.Abstractions.Interactions.InteractionField> fields,
+        WorkflowExecutionKernelState state)
+    {
+        foreach (var field in fields)
+        {
+            field.Title = _expressionEvaluator.Evaluate(field.Title, state.Variables);
+            field.Text = _expressionEvaluator.Evaluate(field.Text, state.Variables);
+        }
+    }
+
+    private void EvaluateCards(
+        IEnumerable<Aevatar.Foundation.Abstractions.Interactions.InteractionCard> cards,
+        WorkflowExecutionKernelState state)
+    {
+        foreach (var card in cards)
+        {
+            card.Title = _expressionEvaluator.Evaluate(card.Title, state.Variables);
+            card.Text = _expressionEvaluator.Evaluate(card.Text, state.Variables);
+            card.ImageUrl = _expressionEvaluator.Evaluate(card.ImageUrl, state.Variables);
+            EvaluateFields(card.Fields, state);
+            EvaluateActions(card.Actions, state);
+        }
     }
 
     private async Task ResumePendingCurrentStepDispatchAsync(

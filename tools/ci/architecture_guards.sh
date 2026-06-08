@@ -121,6 +121,35 @@ check_channel_inbound_no_runtime_credential() {
 
 check_channel_inbound_no_runtime_credential
 
+check_workflow_core_interaction_boundary() {
+  local workflow_core_dir="src/workflow/Aevatar.Workflow.Core"
+  local report
+
+  set +e
+  report="$(
+    rg -n "MessageContent|LarkMessageComposer|interactive_card|card JSON|raw Lark" "${workflow_core_dir}" \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs'
+  )"
+  local status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "Workflow Core interaction boundary guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "Workflow Core must carry typed InteractionSpec only; channel content and raw card payloads belong at the channel boundary."
+    exit 1
+  fi
+}
+
+check_workflow_core_interaction_boundary
+
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
 

@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Foundation.Abstractions.Interactions;
 using FluentAssertions;
 using Google.Protobuf;
 
@@ -92,6 +93,18 @@ public class WorkflowAbstractionsProtoCoverageTests
             TargetRole = "assistant",
         };
         request.Parameters["temperature"] = "0.1";
+        request.StepParameters.InteractionSpec = new InteractionSpec
+        {
+            Title = "Review",
+            Body = "Approve?",
+        };
+        request.StepParameters.InteractionSpec.Actions.Add(new InteractionAction
+        {
+            Kind = InteractionActionKind.Button,
+            ActionId = "approve",
+            Label = "Approve",
+            Style = InteractionActionStyle.Primary,
+        });
 
         var completed = new StepCompletedEvent
         {
@@ -107,6 +120,8 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsedRequest.StepType.Should().Be("llm_call");
         parsedRequest.Parameters["temperature"].Should().Be("0.1");
         parsedRequest.StepParameters.Parameters["temperature"].Should().Be("0.1");
+        parsedRequest.StepParameters.InteractionSpec.Title.Should().Be("Review");
+        parsedRequest.StepParameters.InteractionSpec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
 
         var parsedCompleted = StepCompletedEvent.Parser.ParseFrom(completed.ToByteArray());
         parsedCompleted.WorkerId.Should().Be("worker-1");
@@ -131,10 +146,12 @@ public class WorkflowAbstractionsProtoCoverageTests
         };
         request.StepParameters.Parameters["op"] = "trim";
         request.Parameters["target"] = "result";
+        request.StepParameters.InteractionSpec = new InteractionSpec { Body = "Continue?" };
 
         var parsed = StepRequestEvent.Parser.ParseFrom(request.ToByteArray());
         parsed.StepParameters.Parameters.Should().Contain(new KeyValuePair<string, string>("op", "trim"));
         parsed.Parameters.Should().Contain(new KeyValuePair<string, string>("target", "result"));
+        parsed.StepParameters.InteractionSpec.Body.Should().Be("Continue?");
         parsed.ToString().Should().Contain("stepParameters");
         ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));
     }
