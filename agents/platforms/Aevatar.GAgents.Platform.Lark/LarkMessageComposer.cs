@@ -402,6 +402,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         };
         CopyWorkflowResumePayload(action.WorkflowResume, map);
         CopyLlmSelectionPayload(action.LlmSelection, map);
+        CopyNyxIdApprovalPayload(action.NyxidApproval, map);
 
         foreach (var argument in action.Arguments)
         {
@@ -471,6 +472,22 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             map["service_id"] = payload.ServiceId;
         if (!string.IsNullOrWhiteSpace(payload.PresetId))
             map["preset_id"] = payload.PresetId;
+    }
+
+    private static void CopyNyxIdApprovalPayload(
+        NyxIdApprovalActionPayload? payload,
+        IDictionary<string, object?> map)
+    {
+        if (payload is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(payload.RequestId))
+            map["nyxid_approval_request_id"] = payload.RequestId;
+        if (!string.IsNullOrWhiteSpace(payload.RemoteApprovalId))
+            map["nyxid_remote_approval_id"] = payload.RemoteApprovalId;
+        map["approved"] = payload.Approved;
+        if (!string.IsNullOrWhiteSpace(payload.Reason))
+            map["reason"] = payload.Reason;
     }
 
     private static object? CoerceArgumentValue(string raw)

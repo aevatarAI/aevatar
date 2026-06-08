@@ -68,6 +68,28 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
             ExtractDateTimeOffset(response, "expires_at"));
     }
 
+    public async Task<RemoteToolApprovalStatusSnapshot> DecideAsync(
+        RemoteToolApprovalDecision decision,
+        CancellationToken ct)
+    {
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("NyxID authentication required for remote approval.");
+
+        var body = JsonSerializer.Serialize(new
+        {
+            approved = decision.Approved,
+        });
+
+        var response = await _apiClient.DecideApprovalAsync(token, decision.RemoteApprovalId, body, ct);
+        return new RemoteToolApprovalStatusSnapshot(
+            MapStatus(ExtractString(response, "status")) == RemoteToolApprovalStatus.Unknown
+                ? decision.Approved ? RemoteToolApprovalStatus.Approved : RemoteToolApprovalStatus.Rejected
+                : MapStatus(ExtractString(response, "status")),
+            ExtractString(response, "reason") ?? decision.Reason,
+            ExtractDateTimeOffset(response, "expires_at"));
+    }
+
     private static RemoteToolApprovalStatus MapStatus(string? status)
     {
         return status?.Trim().ToLowerInvariant() switch

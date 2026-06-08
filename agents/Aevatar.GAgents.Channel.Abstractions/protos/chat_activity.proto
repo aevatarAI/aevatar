@@ -214,6 +214,18 @@ message LlmSelectionActionPayload {
   string preset_id = 3;
 }
 
+// Carries repository-owned NyxID remote tool approval callback semantics.
+message NyxIdApprovalActionPayload {
+  // The local tool approval request id owned by the RoleGAgent continuation.
+  string request_id = 1;
+  // The NyxID remote approval request id.
+  string remote_approval_id = 2;
+  // The approval decision submitted by the card action.
+  bool approved = 3;
+  // Optional operator-facing reason attached to the decision.
+  string reason = 4;
+}
+
 // Declares one interactive card element.
 message ActionElement {
   // The element kind.
@@ -242,6 +254,8 @@ message ActionElement {
   WorkflowResumeActionPayload workflow_resume = 11;
   // Repository-owned LLM selection payload for this action.
   LlmSelectionActionPayload llm_selection = 12;
+  // Repository-owned NyxID remote tool approval payload for this action.
+  NyxIdApprovalActionPayload nyxid_approval = 13;
 }
 
 // Declares one title-text pair rendered inside a card.
@@ -290,6 +304,8 @@ message CardActionSubmission {
   LlmSelectionActionPayload llm_selection = 7;
   // The kind of action element that produced this callback.
   ActionElementKind action_kind = 8;
+  // Repository-owned NyxID remote tool approval payload submitted by this action.
+  NyxIdApprovalActionPayload nyxid_approval = 9;
 }
 
 // Carries the channel-agnostic message content used for send, update, and reply operations.

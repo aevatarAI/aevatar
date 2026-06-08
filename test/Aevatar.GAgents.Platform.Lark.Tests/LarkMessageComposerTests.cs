@@ -182,6 +182,60 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenActionCarriesNyxIdApprovalPayload_RendersTypedCallbackValueWithoutCredentials()
+    {
+        var intent = new MessageContent
+        {
+            Text = "Approval required",
+        };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "nyxid_approval_approve",
+            Label = "Approve",
+            IsPrimary = true,
+            NyxidApproval = new NyxIdApprovalActionPayload
+            {
+                RequestId = "req-1",
+                RemoteApprovalId = "remote-1",
+                Approved = true,
+                Reason = "ship it",
+            },
+        });
+
+        var payload = CreateComposer().Compose(
+            intent,
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        payload.MessageType.ShouldBe("interactive");
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var button = document.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "button");
+        var value = button.GetProperty("behaviors")[0].GetProperty("value");
+        value.GetProperty("action_id").GetString().ShouldBe("nyxid_approval_approve");
+        value.GetProperty("action_kind").GetString().ShouldBe("button");
+        value.GetProperty("nyxid_approval_request_id").GetString().ShouldBe("req-1");
+        value.GetProperty("nyxid_remote_approval_id").GetString().ShouldBe("remote-1");
+        value.GetProperty("approved").GetBoolean().ShouldBeTrue();
+        value.GetProperty("reason").GetString().ShouldBe("ship it");
+        value.TryGetProperty("token", out _).ShouldBeFalse();
+        value.TryGetProperty("api_key", out _).ShouldBeFalse();
+        value.TryGetProperty("nyx_api_key", out _).ShouldBeFalse();
+    }
+
+    [Fact]
     public void Compose_WhenSingleCardSuppliesTitle_DoesNotDuplicateInBody()
     {
         // The first card's Title is consumed by the Lark card header (see ResolveHeaderTitle).

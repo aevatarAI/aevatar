@@ -46,10 +46,12 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<IAgentToolSource>? toolSources = null,
         LocalSkillCatalog? localSkillCatalog = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         NyxIdRelayOptions? relayOptions = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
                approvalHandler: new YieldApprovalHandler(),
-               remoteToolApprovalPort: remoteToolApprovalPort)
+               remoteToolApprovalPort: remoteToolApprovalPort,
+               remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {
         _localSkillCatalog = localSkillCatalog;
         _relayOptions = relayOptions;

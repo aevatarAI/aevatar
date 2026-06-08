@@ -127,6 +127,55 @@ public sealed class NyxIdRemoteToolApprovalPortTests
         handler.Requests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task DecideAsync_ShouldSendApprovedBooleanOnly()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"status":"approved"}""", Encoding.UTF8, "application/json"),
+        });
+        var port = CreatePort(handler);
+
+        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
+        var result = await port.DecideAsync(
+            new RemoteToolApprovalDecision(
+                "req-1",
+                "approval-1",
+                Approved: true,
+                Reason: "ship it"),
+            CancellationToken.None);
+
+        result.Status.Should().Be(RemoteToolApprovalStatus.Approved);
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Method.Should().Be(HttpMethod.Post);
+        handler.Requests[0].RequestUri!.AbsolutePath.Should().Be("/api/v1/approvals/requests/approval-1/decide");
+        handler.Requests[0].Headers.Authorization!.ToString().Should().Be("Bearer token-1");
+
+        using var body = JsonDocument.Parse(handler.Bodies[0]!);
+        body.RootElement.EnumerateObject().Should().ContainSingle()
+            .Which.Name.Should().Be("approved");
+        body.RootElement.GetProperty("approved").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DecideAsync_ShouldRequireTypedCredential()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"status":"approved"}""", Encoding.UTF8, "application/json"),
+        });
+        var port = CreatePort(handler);
+
+        using var _ = AgentToolContextScope.Push(null);
+        var act = () => port.DecideAsync(
+            new RemoteToolApprovalDecision("req-1", "approval-1", true),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("NyxID authentication required for remote approval.");
+        handler.Requests.Should().BeEmpty();
+    }
+
     private static AgentToolExecutionContext WithNyxIdAccessToken(string token) =>
         AgentToolExecutionContext.Empty with
         {

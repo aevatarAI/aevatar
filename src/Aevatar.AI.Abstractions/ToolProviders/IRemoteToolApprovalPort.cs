@@ -9,6 +9,8 @@ public interface IRemoteToolApprovalPort
     Task<RemoteToolApprovalSubmission> SubmitAsync(RemoteToolApprovalRequest request, CancellationToken ct);
 
     Task<RemoteToolApprovalStatusSnapshot> GetStatusAsync(RemoteToolApprovalStatusQuery query, CancellationToken ct);
+
+    Task<RemoteToolApprovalStatusSnapshot> DecideAsync(RemoteToolApprovalDecision decision, CancellationToken ct);
 }
 
 public sealed record RemoteToolApprovalRequest(
@@ -26,6 +28,12 @@ public sealed record RemoteToolApprovalSubmission(
 public sealed record RemoteToolApprovalStatusQuery(
     string RequestId,
     string RemoteApprovalId);
+
+public sealed record RemoteToolApprovalDecision(
+    string RequestId,
+    string RemoteApprovalId,
+    bool Approved,
+    string? Reason = null);
 
 public sealed record RemoteToolApprovalStatusSnapshot(
     RemoteToolApprovalStatus Status,

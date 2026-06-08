@@ -512,6 +512,38 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldMapKnownNyxIdApprovalCallbackFields_ToTypedPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-nyxid-approval",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "oc_chat_1", "type": "private" },
+              "sender": { "platform_id": "ou_1", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"value\":{\"nyxid_approval_request_id\":\"req-1\",\"nyxid_remote_approval_id\":\"remote-1\",\"approved\":true,\"reason\":\"ship it\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.NyxidApproval.RequestId.Should().Be("req-1");
+        cardAction.NyxidApproval.RemoteApprovalId.Should().Be("remote-1");
+        cardAction.NyxidApproval.Approved.Should().BeTrue();
+        cardAction.NyxidApproval.Reason.Should().Be("ship it");
+        cardAction.Arguments.Should().NotContainKey("nyxid_approval_request_id");
+        cardAction.Arguments.Should().NotContainKey("nyxid_remote_approval_id");
+        cardAction.Arguments.Should().NotContainKey("approved");
+        cardAction.Arguments.Should().NotContainKey("reason");
+    }
+
+    [Fact]
     public void Parse_ShouldAcceptEmptyCardActionText_AsEmptySubmission()
     {
         var body = """

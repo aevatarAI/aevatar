@@ -709,6 +709,75 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteNyxIdApprovalCardAction_UsingCallbackCredential()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var remoteApprovalPort = new RecordingRemoteApprovalPort
+        {
+            DecisionSnapshot = new RemoteToolApprovalStatusSnapshot(RemoteToolApprovalStatus.Approved),
+        };
+        var services = new ServiceCollection()
+            .AddSingleton<IRemoteToolApprovalPort>(remoteApprovalPort)
+            .BuildServiceProvider();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+        var activity = BuildCardActionActivity("evt-nyxid-approval-1");
+        activity.Content.CardAction.NyxidApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "req-1",
+            RemoteApprovalId = "remote-1",
+            Approved = true,
+            Reason = "ship it",
+        };
+
+        var result = await runner.RunInboundAsync(
+            activity,
+            RelayRuntimeContext("corr-1", nyxUserAccessToken: "callback-user-token"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.SentActivityId.Should().Be("direct-reply:evt-nyxid-approval-1");
+        remoteApprovalPort.Decisions.Should().ContainSingle();
+        remoteApprovalPort.Decisions[0].RequestId.Should().Be("req-1");
+        remoteApprovalPort.Decisions[0].RemoteApprovalId.Should().Be("remote-1");
+        remoteApprovalPort.Decisions[0].Approved.Should().BeTrue();
+        remoteApprovalPort.Decisions[0].Reason.Should().Be("ship it");
+        remoteApprovalPort.Contexts.Should().ContainSingle();
+        remoteApprovalPort.Contexts[0].Credentials.NyxIdAccessToken.Should().Be("callback-user-token");
+        remoteApprovalPort.Contexts[0].Channel.MessageId.Should().Be("evt-nyxid-approval-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("已批准");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRejectNyxIdApprovalCardAction_WhenCallbackCredentialMissing()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var remoteApprovalPort = new RecordingRemoteApprovalPort();
+        var services = new ServiceCollection()
+            .AddSingleton<IRemoteToolApprovalPort>(remoteApprovalPort)
+            .BuildServiceProvider();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+        var activity = BuildCardActionActivity("evt-nyxid-approval-no-token");
+        activity.Content.CardAction.NyxidApproval = new NyxIdApprovalActionPayload
+        {
+            RequestId = "req-1",
+            RemoteApprovalId = "remote-1",
+            Approved = false,
+        };
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        remoteApprovalPort.Decisions.Should().BeEmpty();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("NyxID 审批需要当前用户授权");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldContinueGenericFormSubmitToLlm_WhenTypedFormSubmitCarriesFields()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -2947,7 +3016,8 @@ public sealed class ChannelConversationTurnRunnerTests
             userLlmOptionsRenderer: services.GetService<IUserLlmOptionsRenderer<MessageContent>>(),
             userConfigQueryPort: services.GetService<IUserConfigQueryPort>(),
             replyService: services.GetService<ChannelPlatformReplyService>(),
-            workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>());
+            workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
+            remoteToolApprovalPort: services.GetService<IRemoteToolApprovalPort>());
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices()
@@ -3146,6 +3216,28 @@ public sealed class ChannelConversationTurnRunnerTests
         {
             Commands.Add(command);
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingRemoteApprovalPort : IRemoteToolApprovalPort
+    {
+        public RemoteToolApprovalStatusSnapshot DecisionSnapshot { get; init; } =
+            new(RemoteToolApprovalStatus.Unknown);
+
+        public List<RemoteToolApprovalDecision> Decisions { get; } = [];
+        public List<AgentToolExecutionContext> Contexts { get; } = [];
+
+        public Task<RemoteToolApprovalSubmission> SubmitAsync(RemoteToolApprovalRequest request, CancellationToken ct) =>
+            throw new InvalidOperationException("submit should not be called");
+
+        public Task<RemoteToolApprovalStatusSnapshot> GetStatusAsync(RemoteToolApprovalStatusQuery query, CancellationToken ct) =>
+            throw new InvalidOperationException("status should not be called");
+
+        public Task<RemoteToolApprovalStatusSnapshot> DecideAsync(RemoteToolApprovalDecision decision, CancellationToken ct)
+        {
+            Decisions.Add(decision);
+            Contexts.Add(AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty);
+            return Task.FromResult(DecisionSnapshot);
         }
     }
 

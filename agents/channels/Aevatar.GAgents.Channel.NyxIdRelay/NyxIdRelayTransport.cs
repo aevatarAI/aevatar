@@ -275,6 +275,17 @@ public sealed class NyxIdRelayTransport
                 "service_id",
                 "preset_id");
         }
+
+        if (TryBuildNyxIdApprovalPayload(submission, out var nyxIdApproval))
+        {
+            submission.NyxidApproval = nyxIdApproval;
+            RemoveKeys(
+                submission.Arguments,
+                "nyxid_approval_request_id",
+                "nyxid_remote_approval_id",
+                "approved",
+                "reason");
+        }
     }
 
     private static ActionElementKind ResolveActionKind(
@@ -401,6 +412,28 @@ public sealed class NyxIdRelayTransport
         {
             payload.PresetId = submission.SubmittedValue.Trim();
         }
+
+        return true;
+    }
+
+    private static bool TryBuildNyxIdApprovalPayload(
+        CardActionSubmission submission,
+        out NyxIdApprovalActionPayload payload)
+    {
+        payload = new NyxIdApprovalActionPayload();
+        if (!TryGetRequiredValue(submission.Arguments, "nyxid_approval_request_id", out var requestId) ||
+            !TryGetRequiredValue(submission.Arguments, "nyxid_remote_approval_id", out var remoteApprovalId) ||
+            !submission.Arguments.TryGetValue("approved", out var rawApproved) ||
+            !bool.TryParse(rawApproved, out var approved))
+        {
+            return false;
+        }
+
+        payload.RequestId = requestId;
+        payload.RemoteApprovalId = remoteApprovalId;
+        payload.Approved = approved;
+        if (submission.Arguments.TryGetValue("reason", out var reason) && !string.IsNullOrWhiteSpace(reason))
+            payload.Reason = reason.Trim();
 
         return true;
     }

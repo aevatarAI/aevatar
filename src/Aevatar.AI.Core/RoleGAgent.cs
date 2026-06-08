@@ -46,7 +46,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         IToolApprovalHandler? approvalHandler = null,
-        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -57,6 +58,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             approvalHandler)
     {
         RemoteToolApprovalPort = remoteToolApprovalPort;
+        RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;
     }
 
     /// <summary>Role name.</summary>
@@ -68,6 +70,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     public string RoleId { get; private set; } = "";
 
     protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
+    protected IRemoteToolApprovalNotificationPort? RemoteToolApprovalNotificationPort { get; }
 
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
     //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
@@ -250,6 +253,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 ExpiresAtUnixMs = ResolveRemoteApprovalDeadlineUnixMs(submission.ExpiresAt),
             });
 
+            await TryNotifyRemoteApprovalSubmittedAsync(pending, submission);
+
             await ScheduleRemoteApprovalStatusCheckAsync(
                 pending.RequestId,
                 pending.SessionId,
@@ -364,6 +369,39 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     nextAttempt,
                     callbackId);
                 return;
+        }
+    }
+
+    private async Task TryNotifyRemoteApprovalSubmittedAsync(
+        PendingToolApprovalState pending,
+        RemoteToolApprovalSubmission submission)
+    {
+        if (RemoteToolApprovalNotificationPort == null)
+            return;
+
+        try
+        {
+            await RemoteToolApprovalNotificationPort.NotifyAsync(
+                new RemoteToolApprovalNotification(
+                    pending.RequestId,
+                    submission.RemoteApprovalId,
+                    pending.ToolName,
+                    pending.ToolCallId,
+                    pending.ArgumentsJson,
+                    ToolApprovalMode.Auto,
+                    pending.IsDestructive,
+                    pending.SessionId,
+                    submission.ExpiresAt,
+                    ResolvePendingToolContext(pending)),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "[{Role}] Remote approval notification failed. request={RequestId}, remote={RemoteApprovalId}",
+                RoleName,
+                pending.RequestId,
+                submission.RemoteApprovalId);
         }
     }
 

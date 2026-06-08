@@ -76,6 +76,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly ChannelPlatformReplyService? _replyService;
     private readonly ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _workflowResumeService;
+    private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -96,7 +97,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IUserLlmOptionsRenderer<MessageContent>? userLlmOptionsRenderer = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
         ChannelPlatformReplyService? replyService = null,
-        ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null)
+        ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -115,6 +117,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _userConfigQueryPort = userConfigQueryPort;
         _replyService = replyService;
         _workflowResumeService = workflowResumeService;
+        _remoteToolApprovalPort = remoteToolApprovalPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -157,6 +160,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
+
+        if (await TryHandleNyxIdApprovalCardActionAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false) is { } approvalResult)
+            return approvalResult;
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound);
 
@@ -668,6 +674,136 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             return new MessageContent { Text = ex.Message };
         }
+    }
+
+    private async Task<ConversationTurnResult?> TryHandleNyxIdApprovalCardActionAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (activity.Type != ActivityType.CardAction)
+            return null;
+
+        var payload = activity.Content?.CardAction?.NyxidApproval;
+        if (payload is null || string.IsNullOrWhiteSpace(payload.RequestId) || string.IsNullOrWhiteSpace(payload.RemoteApprovalId))
+            return null;
+
+        var reply = await ExecuteNyxIdApprovalDecisionAsync(
+                activity,
+                inbound,
+                registration,
+                runtimeContext,
+                payload,
+                ct)
+            .ConfigureAwait(false);
+
+        return await SendReplyAsync(
+            reply,
+            string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id,
+            activity.Conversation,
+            inbound,
+            registration,
+            runtimeContext,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<MessageContent> ExecuteNyxIdApprovalDecisionAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        NyxIdApprovalActionPayload payload,
+        CancellationToken ct)
+    {
+        var port = _remoteToolApprovalPort;
+        if (port is null)
+            return new MessageContent { Text = "当前部署未启用 NyxID 审批,请稍后重试。" };
+
+        var token = ResolveUserAccessToken(activity, runtimeContext);
+        if (string.IsNullOrWhiteSpace(token))
+            return new MessageContent { Text = "NyxID 审批需要当前用户授权,请重新打开审批卡片或发送 /init 重新绑定。" };
+
+        var toolContext = BuildNyxIdApprovalToolContext(
+            activity,
+            inbound,
+            registration,
+            token);
+        try
+        {
+            using var _ = AgentToolContextScope.Push(toolContext);
+            var snapshot = await port.DecideAsync(
+                    new RemoteToolApprovalDecision(
+                        payload.RequestId.Trim(),
+                        payload.RemoteApprovalId.Trim(),
+                        payload.Approved,
+                        NormalizeOptional(payload.Reason)),
+                    ct)
+                .ConfigureAwait(false);
+
+            var decisionText = payload.Approved ? "已批准" : "已拒绝";
+            var statusText = snapshot.Status switch
+            {
+                RemoteToolApprovalStatus.Approved => "NyxID 已确认批准。",
+                RemoteToolApprovalStatus.Rejected => "NyxID 已确认拒绝。",
+                RemoteToolApprovalStatus.Pending => "NyxID 已收到审批结果,状态仍在处理中。",
+                RemoteToolApprovalStatus.Expired => "审批请求已过期。",
+                _ => "NyxID 已收到审批结果。",
+            };
+            return new MessageContent { Text = $"{decisionText}: {statusText}" };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "NyxID remote approval decision failed: request={RequestId}, remote={RemoteApprovalId}",
+                payload.RequestId,
+                payload.RemoteApprovalId);
+            return new MessageContent { Text = $"提交 NyxID 审批结果失败: {ex.Message}" };
+        }
+    }
+
+    private static AgentToolExecutionContext BuildNyxIdApprovalToolContext(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        string token)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [ChannelMetadataKeys.Platform] = inbound.Platform,
+            [ChannelMetadataKeys.SenderId] = inbound.SenderId,
+            [ChannelMetadataKeys.SenderName] = inbound.SenderName,
+            [ChannelMetadataKeys.ConversationId] = inbound.ConversationId,
+            [ChannelMetadataKeys.MessageId] = inbound.MessageId ?? string.Empty,
+            [ChannelMetadataKeys.ChatType] = inbound.ChatType ?? string.Empty,
+        };
+
+        var platformMessageId = NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId);
+        if (platformMessageId is not null)
+            metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
+
+        return AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(inbound.MessageId, null),
+            Credentials = new AgentToolCredentials(token, null, null),
+            Caller = new AgentToolCallerContext(
+                registration.ScopeId,
+                null,
+                inbound.MessageId),
+            Channel = new AgentToolChannelContext(
+                inbound.Platform,
+                inbound.SenderId,
+                registration.ScopeId,
+                inbound.MessageId,
+                platformMessageId),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
     }
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
