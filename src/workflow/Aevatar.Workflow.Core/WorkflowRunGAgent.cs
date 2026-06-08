@@ -282,6 +282,7 @@ public sealed class WorkflowRunGAgent
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, State.ScopeId),
             ExecutionContextDelta = executionContextDelta,
+            Attempt = Math.Max(0, request.ResumeSeed?.Attempt ?? 0),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -339,6 +340,7 @@ public sealed class WorkflowRunGAgent
             Input = request.Input ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
+            Attempt = State.ForkAttempt,
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -479,6 +481,7 @@ public sealed class WorkflowRunGAgent
     {
         var stateBeforeCompletion = State.Clone();
         await PersistDomainEventAsync(evt);
+        await PersistForkRequestOnTerminalFailureAsync(evt, stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeCompletion, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, stateBeforeCompletion, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
@@ -510,6 +513,50 @@ public sealed class WorkflowRunGAgent
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
             Error = evt.Success ? string.Empty : evt.Error,
         }, TopologyAudience.Parent);
+    }
+
+    private async Task PersistForkRequestOnTerminalFailureAsync(
+        WorkflowCompletedEvent evt,
+        WorkflowRunState stateBeforeCompletion,
+        CancellationToken ct)
+    {
+        if (evt.Success || _compiledWorkflow?.OnFailure == null)
+            return;
+
+        var policy = _compiledWorkflow.OnFailure;
+        if (!string.Equals(
+                policy.Action,
+                WorkflowRunFailureActions.ForkFromFailedStep,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var maxAttempts = Math.Max(0, policy.MaxAttempts);
+        var currentAttempt = Math.Max(0, State.ForkAttempt);
+        if (currentAttempt >= maxAttempts)
+            return;
+
+        var failedStepId = ResolveLastFailedStepId(State);
+        if (string.IsNullOrWhiteSpace(failedStepId))
+            failedStepId = ResolveLastFailedStepId(stateBeforeCompletion);
+        if (string.IsNullOrWhiteSpace(failedStepId))
+        {
+            Logger.LogWarning(
+                "Workflow run {RunId} failed with on_failure fork policy but no failed step id was available.",
+                evt.RunId);
+            return;
+        }
+
+        await PersistDomainEventAsync(
+            new WorkflowRunForkRequestedEvent
+            {
+                SourceRunId = string.IsNullOrWhiteSpace(evt.RunId) ? RunId : WorkflowRunIdNormalizer.Normalize(evt.RunId),
+                StartAtStepId = failedStepId,
+                Attempt = currentAttempt + 1,
+                ScopeId = State.ScopeId ?? string.Empty,
+            },
+            ct);
     }
 
     [EventHandler]
@@ -767,6 +814,7 @@ public sealed class WorkflowRunGAgent
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.ForkAttempt = 0;
         next.ExecutionStates.Clear();
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.SubWorkflowBindings.Clear();
@@ -804,6 +852,7 @@ public sealed class WorkflowRunGAgent
         next.Status = RunningStatus;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
+        next.ForkAttempt = Math.Max(0, evt.Attempt);
         next.ExecutionContext ??= new WorkflowRunExecutionContextState();
         ApplyExecutionContextDelta(next.ExecutionContext, evt.ExecutionContextDelta);
         if (string.IsNullOrWhiteSpace(next.DefinitionActorId) && !string.IsNullOrWhiteSpace(evt.DefinitionActorId))
@@ -970,6 +1019,17 @@ public sealed class WorkflowRunGAgent
         string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, StoppedStatus, StringComparison.OrdinalIgnoreCase);
+
+    private static string ResolveLastFailedStepId(WorkflowRunState state)
+    {
+        foreach (var packedState in state.ExecutionStates.Values)
+        {
+            if (packedState?.Is(WorkflowExecutionKernelState.Descriptor) == true)
+                return packedState.Unpack<WorkflowExecutionKernelState>().CurrentStepId?.Trim() ?? string.Empty;
+        }
+
+        return string.Empty;
+    }
 
     private static string BuildStoppedMessage(string? reason) =>
         string.IsNullOrWhiteSpace(reason)

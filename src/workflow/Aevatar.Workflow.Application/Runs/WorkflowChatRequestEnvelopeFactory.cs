@@ -107,6 +107,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             SourceRunId = source.SourceRunId ?? string.Empty,
             StartAtStepId = source.StartAtStepId ?? string.Empty,
+            Attempt = source.Attempt,
         };
         AppendVariables(payload.Variables, source.Variables);
         return payload;

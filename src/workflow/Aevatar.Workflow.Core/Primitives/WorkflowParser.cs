@@ -93,6 +93,7 @@ public sealed class WorkflowParser
             {
                 ClosedWorldMode = raw.Configuration?.ClosedWorldMode ?? false,
             },
+            OnFailure = MapOnFailure(raw.OnFailure),
         };
     }
 
@@ -401,7 +402,23 @@ public sealed class WorkflowParser
             DefaultOutput = e.DefaultOutput,
         };
 
-    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public string? WhenToUse { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
+    private static WorkflowRunFailurePolicy? MapOnFailure(RawOnFailure? policy)
+    {
+        if (policy == null)
+            return null;
+
+        var action = NormalizeText(policy.Action);
+        if (action == null)
+            return null;
+
+        return new WorkflowRunFailurePolicy
+        {
+            Action = action,
+            MaxAttempts = policy.MaxAttempts ?? 0,
+        };
+    }
+
+    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public string? WhenToUse { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } public RawOnFailure? OnFailure { get; set; } }
     private sealed class RawRole
     {
         // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
@@ -496,5 +513,6 @@ public sealed class WorkflowParser
         public string? DefaultOutput { get; set; }
     }
     private sealed class RawConfiguration { public bool? ClosedWorldMode { get; set; } }
+    private sealed class RawOnFailure { public string? Action { get; set; } public int? MaxAttempts { get; set; } }
     private sealed class RawRoleExtensions { public string? EventModules { get; set; } public string? EventRoutes { get; set; } }
 }

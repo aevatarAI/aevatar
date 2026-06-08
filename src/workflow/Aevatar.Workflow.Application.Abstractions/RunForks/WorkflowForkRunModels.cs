@@ -8,7 +8,8 @@ public sealed record WorkflowForkRunCommand(
     IReadOnlyDictionary<string, string>? VariableOverrides = null,
     string? Input = null,
     string? CommandId = null,
-    string? CorrelationId = null);
+    string? CorrelationId = null,
+    int Attempt = 0);
 
 public enum WorkflowForkRunStartErrorCode
 {

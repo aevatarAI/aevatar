@@ -33,7 +33,8 @@ public sealed record WorkflowCallerCredential(string? BearerToken = null);
 public sealed record WorkflowChatRunResumeSeed(
     string SourceRunId,
     string StartAtStepId,
-    IReadOnlyDictionary<string, string> Variables);
+    IReadOnlyDictionary<string, string> Variables,
+    int Attempt = 0);
 
 public enum WorkflowChatSourceKind
 {

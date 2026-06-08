@@ -142,6 +142,7 @@ message WorkflowRunState
   repeated PendingSubWorkflowDefinitionResolution pending_sub_workflow_definition_resolutions = 19;
   map<string, int32> pending_sub_workflow_definition_resolution_index_by_invocation_id = 20;
   WorkflowRunExecutionContextState execution_context = 21;
+  int32 fork_attempt = 22;
 }
 
 message WorkflowRunExecutionContextState
