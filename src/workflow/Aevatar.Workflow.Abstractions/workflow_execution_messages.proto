@@ -44,6 +44,7 @@ message WorkflowChatRequestEvent {
   map<string, string> metadata = 7;
   WorkflowLlmControlContext llm_control = 8;
   WorkflowCallerCredential caller_credential = 10;
+  WorkflowRunResumeSeed resume_seed = 11;
 }
 
 message WorkflowRunResumeSeed

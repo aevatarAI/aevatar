@@ -8,9 +8,11 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
+using Aevatar.Workflow.Application.RunForks;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
 using FluentAssertions;
@@ -189,6 +191,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(IWorkflowChatRunInteractionPort) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowForkRunService) &&
+            x.ImplementationType == typeof(WorkflowForkRunService));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x =>
@@ -361,6 +366,39 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
         request.LlmControl.UserMemoryPrompt.Should().Be(" memory ");
         request.LlmControl.RoutePreference.Should().Be(" route-a ");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldCarryResumeSeed()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "resume-input",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ResumeSeed: new WorkflowChatRunResumeSeed(
+                "source-run",
+                "step-b",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["input"] = "seed-input",
+                    ["step-a"] = "alpha",
+                }));
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        request.Prompt.Should().Be("resume-input");
+        request.ResumeSeed.SourceRunId.Should().Be("source-run");
+        request.ResumeSeed.StartAtStepId.Should().Be("step-b");
+        request.ResumeSeed.Variables.Should().Contain("input", "seed-input");
+        request.ResumeSeed.Variables.Should().Contain("step-a", "alpha");
     }
 
     [Fact]

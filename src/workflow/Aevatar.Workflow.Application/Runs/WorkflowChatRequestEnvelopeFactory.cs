@@ -30,6 +30,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         if (command.LlmControl != null)
             chatRequest.LlmControl = ToProto(command.LlmControl);
         chatRequest.CallerCredential = ToProto(command.CallerCredential);
+        if (command.ResumeSeed != null)
+            chatRequest.ResumeSeed = ToProto(command.ResumeSeed);
 
         var envelope = new EventEnvelope
         {
@@ -96,6 +98,35 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
         };
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowRunResumeSeed ToProto(
+        WorkflowChatRunResumeSeed source)
+    {
+        var payload = new Aevatar.Workflow.Abstractions.WorkflowRunResumeSeed
+        {
+            SourceRunId = source.SourceRunId ?? string.Empty,
+            StartAtStepId = source.StartAtStepId ?? string.Empty,
+        };
+        AppendVariables(payload.Variables, source.Variables);
+        return payload;
+    }
+
+    private static void AppendVariables(
+        Google.Protobuf.Collections.MapField<string, string> destination,
+        IReadOnlyDictionary<string, string>? source)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            if (normalizedKey.Length == 0)
+                continue;
+
+            destination[normalizedKey] = value ?? string.Empty;
+        }
     }
 
     private static void AppendMetadata(

@@ -30,6 +30,11 @@ public sealed record WorkflowLlmControl(
 
 public sealed record WorkflowCallerCredential(string? BearerToken = null);
 
+public sealed record WorkflowChatRunResumeSeed(
+    string SourceRunId,
+    string StartAtStepId,
+    IReadOnlyDictionary<string, string> Variables);
+
 public enum WorkflowChatSourceKind
 {
     Unspecified = 0,
@@ -139,6 +144,7 @@ public sealed record WorkflowChatRunRequest(
     IReadOnlyDictionary<string, string>? Headers = null,
     string? CommandIdSeed = null,
     string? CorrelationIdSeed = null,
+    WorkflowChatRunResumeSeed? ResumeSeed = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
