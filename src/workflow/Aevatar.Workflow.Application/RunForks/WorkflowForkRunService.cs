@@ -93,7 +93,8 @@ public sealed class WorkflowForkRunService : IWorkflowForkRunService
             ResumeSeed: new WorkflowChatRunResumeSeed(
                 sourceRunId,
                 startAtStepId,
-                variables),
+                variables,
+                Math.Max(0, command.Attempt)),
             TargetSeed: new WorkflowRunTargetSeed(
                 creationReceipt.ActorId,
                 validation.WorkflowName,

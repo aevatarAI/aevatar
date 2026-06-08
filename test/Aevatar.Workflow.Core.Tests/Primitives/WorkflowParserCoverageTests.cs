@@ -200,6 +200,43 @@ public sealed class WorkflowParserCoverageTests
     }
 
     [Fact]
+    public void Parse_WhenRunOnFailureIsPresent_ShouldMapRunLevelPolicy()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: run_on_failure
+            on_failure:
+              action: fork_from_failed_step
+              max_attempts: 3
+            roles: []
+            steps:
+              - id: step_1
+                type: transform
+            """);
+
+        workflow.OnFailure.Should().NotBeNull();
+        workflow.OnFailure!.Action.Should().Be(WorkflowRunFailureActions.ForkFromFailedStep);
+        workflow.OnFailure.MaxAttempts.Should().Be(3);
+        workflow.Steps[0].Retry.Should().BeNull();
+        workflow.Steps[0].OnError.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_WhenRunOnFailureIsAbsent_ShouldLeavePolicyNull()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: no_run_on_failure
+            roles: []
+            steps:
+              - id: step_1
+                type: transform
+            """);
+
+        workflow.OnFailure.Should().BeNull();
+    }
+
+    [Fact]
     public void Parse_WhenStepIdIsMissing_ShouldThrow()
     {
         Action act = () => new WorkflowParser().Parse(

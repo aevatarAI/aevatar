@@ -343,7 +343,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     runId,
                     evt.StepId,
                     evt.Error);
-                await CleanupRunAsync(state, ctx, ct);
+                await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true, preserveCurrentStepInputVariable: true);
                 await PublishWorkflowCompletedAsync(
                     ctx,
                     new WorkflowCompletedEvent
@@ -367,7 +367,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 runId,
                 evt.StepId,
                 evt.Error);
-            await CleanupRunAsync(state, ctx, ct);
+            await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true, preserveCurrentStepInputVariable: true);
             await PublishWorkflowCompletedAsync(
                 ctx,
                 new WorkflowCompletedEvent
@@ -397,7 +397,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     runId,
                     current.Id,
                     directNextStepId);
-                await CleanupRunAsync(state, ctx, ct);
+                await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true, preserveCurrentStepInputVariable: true);
                 await PublishWorkflowCompletedAsync(
                     ctx,
                     new WorkflowCompletedEvent
@@ -418,7 +418,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         if (next == null)
         {
-            await CleanupRunAsync(state, ctx, ct);
+            await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
             await PublishWorkflowCompletedAsync(
                 ctx,
                 new WorkflowCompletedEvent
@@ -692,7 +692,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 var next = _workflow.GetNextStep(step.Id);
                 if (next == null)
                 {
-                    await CleanupRunAsync(state, ctx, ct);
+                    await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
                     await PublishWorkflowCompletedAsync(
                         ctx,
                         new WorkflowCompletedEvent
@@ -884,23 +884,41 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     private async Task CleanupRunAsync(
         WorkflowExecutionKernelState state,
         IWorkflowExecutionContext ctx,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool preserveTerminalFacts = false,
+        bool preserveCurrentStepInputVariable = false)
     {
         var timeoutLeases = state.TimeoutsByStepId.Values.ToList();
         var retryLeases = state.RetryBackoffsByStepId.Values.Select(x => x.Lease).ToList();
+        var terminalStepId = preserveTerminalFacts
+            ? state.CurrentStepId
+            : string.Empty;
+        var terminalStepInput = preserveTerminalFacts
+            ? state.CurrentStepInput
+            : string.Empty;
+        var terminalVariables = preserveTerminalFacts
+            ? state.Variables.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal)
+            : [];
+        var terminalUsage = preserveTerminalFacts
+            ? state.Usage?.Clone() ?? new WorkflowUsageMetricsState()
+            : new WorkflowUsageMetricsState();
 
         state.Active = false;
         state.RunId = string.Empty;
-        state.CurrentStepId = string.Empty;
-        state.CurrentStepInput = string.Empty;
+        state.CurrentStepId = terminalStepId;
+        state.CurrentStepInput = terminalStepInput;
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
         state.Variables.Clear();
+        foreach (var (key, value) in terminalVariables)
+            state.Variables[key] = value ?? string.Empty;
+        if (preserveCurrentStepInputVariable && !string.IsNullOrWhiteSpace(terminalStepInput))
+            state.Variables["input"] = terminalStepInput;
         state.RetryAttemptsByStepId.Clear();
         state.TimeoutsByStepId.Clear();
         state.RetryBackoffsByStepId.Clear();
         state.ExecutionIdsByStepId.Clear();
-        state.Usage = new WorkflowUsageMetricsState();
+        state.Usage = terminalUsage;
         await SaveStateAsync(state, ctx, ct);
 
         foreach (var lease in timeoutLeases)
