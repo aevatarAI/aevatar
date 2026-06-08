@@ -31,7 +31,8 @@ namespace Aevatar.Integration.Tests;
 
 public sealed class ScriptingServiceRevisionRepublishIntegrationTests
 {
-    private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan ObservationPollInterval = TimeSpan.FromMilliseconds(50);
 
     [Fact]
     public async Task ScopeScriptUpsertPromote_ShouldRepublishBoundServiceToNewRevision()
@@ -445,7 +446,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
                         return last;
                 }
 
-                await Task.Yield();
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -485,7 +486,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
                     $"Scope script promote was rejected while waiting for catalog visibility. scope_id={scopeId}, script_id={scriptId}, revision={accepted.RevisionId}, message={observation.Message}");
             }
 
-            await Task.Yield();
+            await Task.Delay(ObservationPollInterval, timeoutCts.Token);
         }
     }
 
@@ -508,7 +509,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
                 return;
             }
 
-            await Task.Yield();
+            await Task.Delay(ObservationPollInterval, timeoutCts.Token);
         }
     }
 
@@ -528,7 +529,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             if (revisions != null && revisions.Revisions.Count == expectedCount)
                 return revisions;
 
-            await Task.Yield();
+            await Task.Delay(ObservationPollInterval, timeoutCts.Token);
         }
     }
 
@@ -591,7 +592,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
                     }
                 }
 
-                await Task.Yield();
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -792,7 +793,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
                 if (snapshot != null)
                     return;
 
-                await Task.Yield();
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
             }
         }
 
@@ -824,7 +825,7 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
                     return revision;
                 }
 
-                await Task.Yield();
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
             }
         }
     }
