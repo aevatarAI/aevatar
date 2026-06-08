@@ -175,6 +175,24 @@ public sealed partial class WorkflowExecutionCurrentStateDocument : IProjectionR
         get => SuccessWrapper;
         set => SuccessWrapper = value;
     }
+
+    public IDictionary<string, string> InlineWorkflowYamls
+    {
+        get => InlineWorkflowYamlEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(InlineWorkflowYamlEntries, value);
+    }
+
+    public IDictionary<string, string> ResumeSeedVariables
+    {
+        get => ResumeSeedVariableEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(ResumeSeedVariableEntries, value);
+    }
+
+    public IList<string> ResumeSeedCompletedStepIds
+    {
+        get => ResumeSeedCompletedStepIdEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(ResumeSeedCompletedStepIdEntries, value);
+    }
 }
 
 public sealed partial class WorkflowExecutionSummary

@@ -46,7 +46,29 @@ message WorkflowChatRequestEvent {
   WorkflowCallerCredential caller_credential = 10;
 }
 
-message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
+message WorkflowRunResumeSeed
+{
+  string source_run_id = 1;
+  string start_at_step_id = 2;
+  map<string, string> variables = 3;
+}
+
+message WorkflowRunForkRequestedEvent
+{
+  string source_run_id = 1;
+  string start_at_step_id = 2;
+  int32 attempt = 3;
+  string scope_id = 4;
+}
+
+message StartWorkflowEvent
+{
+  string workflow_name = 1;
+  string input = 2;
+  map<string, string> parameters = 3;
+  string run_id = 4;
+  WorkflowRunResumeSeed resume_seed = 5;
+}
 message BindWorkflowRunDefinitionEvent
 {
   string definition_actor_id = 1;

@@ -51,6 +51,11 @@ message WorkflowExecutionCurrentStateDocument {
   string final_error = 15;
   int32 execution_state_count = 16;
   google.protobuf.BoolValue success_wrapper = 17;
+  string workflow_yaml = 18;
+  map<string, string> inline_workflow_yaml_entries = 19;
+  map<string, string> resume_seed_variable_entries = 20;
+  repeated string resume_seed_completed_step_id_entries = 21;
+  string resume_seed_last_failed_step_id = 22;
 }
 
 message WorkflowExecutionTopologyEdge {
