@@ -2,7 +2,9 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection;
 
 namespace Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -49,9 +51,10 @@ public sealed class WorkflowHumanInteractionProjector
             RunId = evt.RunId,
             StepId = evt.StepId,
             SuspensionType = evt.SuspensionType,
-            Prompt = evt.Prompt,
+            Prompt = ResolvePrompt(evt),
             Content = string.IsNullOrWhiteSpace(evt.Content) ? null : evt.Content,
-            Options = ResolveOptions(evt.SuspensionType),
+            Options = ResolveOptions(evt),
+            InteractionSpec = StepPresentation.HasInteractionSpec(evt.Interaction) ? evt.Interaction.Clone() : null,
             TimeoutSeconds = evt.TimeoutSeconds,
             Annotations = annotations,
         };
@@ -62,14 +65,38 @@ public sealed class WorkflowHumanInteractionProjector
             ct);
     }
 
-    private static IReadOnlyList<string> ResolveOptions(string suspensionType) =>
-        suspensionType switch
+    private static string ResolvePrompt(WorkflowSuspendedEvent evt)
+    {
+        if (!string.IsNullOrWhiteSpace(evt.Prompt))
+            return evt.Prompt;
+
+        if (!string.IsNullOrWhiteSpace(evt.Interaction?.Body))
+            return evt.Interaction.Body;
+
+        return evt.Interaction?.Title ?? string.Empty;
+    }
+
+    private static IReadOnlyList<string> ResolveOptions(WorkflowSuspendedEvent evt)
+    {
+        if (StepPresentation.HasInteractionSpec(evt.Interaction))
+        {
+            var formActions = evt.Interaction.Actions
+                .Where(action => action.Kind == InteractionActionKind.FormSubmit)
+                .Select(action => action.ActionId)
+                .Where(actionId => !string.IsNullOrWhiteSpace(actionId))
+                .ToArray();
+            if (formActions.Length > 0)
+                return formActions;
+        }
+
+        return evt.SuspensionType switch
         {
             "human_approval" => ["approve", "reject"],
             "human_input" => ["submit"],
             "secure_input" => ["submit"],
             _ => Array.Empty<string>(),
         };
+    }
 
     private static Dictionary<string, string> BuildAnnotations(WorkflowSuspendedEvent evt)
     {

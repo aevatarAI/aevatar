@@ -441,6 +441,7 @@ public sealed class WorkflowParser
                     Placeholder = ConvertValueToString(read("placeholder")).Trim(),
                     Kind = ParseActionKind(ConvertValueToString(read("kind"))),
                     Style = ParseActionStyle(ConvertValueToString(read("style"))),
+                    ApprovalDecision = ParseApprovalDecision(ConvertValueToString(read("approval_decision"))),
                     Disabled = ParseBool(read("disabled")) || ParseBool(read("is_disabled")),
                 };
 
@@ -657,6 +658,7 @@ public sealed class WorkflowParser
             "image_url" => ["image_url", "imageUrl"],
             "is_short" => ["is_short", "isShort", "short"],
             "is_disabled" => ["is_disabled", "isDisabled"],
+            "approval_decision" => ["approval_decision", "approvalDecision"],
             "template_id" => ["template_id", "templateId"],
             "template_variable" => ["template_variable", "templateVariable", "template_variables", "templateVariables", "variables"],
             _ => [key],
@@ -690,6 +692,14 @@ public sealed class WorkflowParser
             "primary" => InteractionActionStyle.Primary,
             "danger" => InteractionActionStyle.Danger,
             _ => InteractionActionStyle.Unspecified,
+        };
+
+    private static InteractionApprovalDecision ParseApprovalDecision(string? value) =>
+        NormalizeEnumToken(value) switch
+        {
+            "approve" or "approved" => InteractionApprovalDecision.Approve,
+            "reject" or "rejected" => InteractionApprovalDecision.Reject,
+            _ => InteractionApprovalDecision.Unspecified,
         };
 
     private static InteractionCardKind ParseCardKind(string? value) =>

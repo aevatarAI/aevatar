@@ -208,6 +208,43 @@ public class WorkflowAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void WorkflowSuspendedEvent_ShouldRoundtripTypedInteractionOnFieldThirteen()
+    {
+        WorkflowSuspendedEvent.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 13 && field.Name == "interaction");
+
+        var suspended = new WorkflowSuspendedEvent
+        {
+            RunId = "run-hitl",
+            StepId = "approval-hitl",
+            SuspensionType = "human_approval",
+            DeliveryTargetId = "agent-hitl",
+            Interaction = new InteractionSpec
+            {
+                Title = "Approve release",
+                Body = "Release v2",
+                Disposition = InteractionDisposition.Ephemeral,
+            },
+        };
+        suspended.Interaction.Actions.Add(new InteractionAction
+        {
+            Kind = InteractionActionKind.FormSubmit,
+            ActionId = "approve",
+            Label = "Approve",
+            Style = InteractionActionStyle.Primary,
+        });
+
+        var parsed = WorkflowSuspendedEvent.Parser.ParseFrom(suspended.ToByteArray());
+
+        parsed.Interaction.Title.Should().Be("Approve release");
+        parsed.Interaction.Body.Should().Be("Release v2");
+        parsed.Interaction.Disposition.Should().Be(InteractionDisposition.Ephemeral);
+        parsed.Interaction.Actions.Should().ContainSingle();
+        parsed.Interaction.Actions[0].Kind.Should().Be(InteractionActionKind.FormSubmit);
+        parsed.Interaction.Actions[0].ActionId.Should().Be("approve");
+    }
+
+    [Fact]
     public void WorkflowEvents_ShouldSupportMergeHashToStringAndDescriptor()
     {
         var start = new StartWorkflowEvent

@@ -144,9 +144,11 @@ public sealed class WorkflowParserCoverageTests
                       - action_id: approve
                         label: Approve
                         style: primary
+                        approval_decision: approve
                       - action_id: reject
                         label: Reject
                         style: danger
+                        approval_decision: reject
                     fields:
                       - title: Environment
                         text: prod
@@ -161,7 +163,9 @@ public sealed class WorkflowParserCoverageTests
         spec.Actions.Should().HaveCount(2);
         spec.Actions[0].Kind.Should().Be(InteractionActionKind.Button);
         spec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
+        spec.Actions[0].ApprovalDecision.Should().Be(InteractionApprovalDecision.Approve);
         spec.Actions[1].Style.Should().Be(InteractionActionStyle.Danger);
+        spec.Actions[1].ApprovalDecision.Should().Be(InteractionApprovalDecision.Reject);
         spec.Fields.Should().ContainSingle(x => x.Title == "Environment" && x.IsShort);
         workflow.Steps[0].Parameters.Should().NotContainKey("interaction_spec");
     }

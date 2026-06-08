@@ -26,6 +26,12 @@ enum InteractionActionStyle {
   INTERACTION_ACTION_STYLE_DANGER = 3;
 }
 
+enum InteractionApprovalDecision {
+  INTERACTION_APPROVAL_DECISION_UNSPECIFIED = 0;
+  INTERACTION_APPROVAL_DECISION_APPROVE = 1;
+  INTERACTION_APPROVAL_DECISION_REJECT = 2;
+}
+
 enum InteractionCardKind {
   INTERACTION_CARD_KIND_UNSPECIFIED = 0;
   INTERACTION_CARD_KIND_SECTION = 1;
@@ -49,6 +55,7 @@ message InteractionAction {
   repeated InteractionOption options = 6;
   InteractionActionStyle style = 7;
   bool disabled = 8;
+  InteractionApprovalDecision approval_decision = 9;
 }
 
 message InteractionField {
