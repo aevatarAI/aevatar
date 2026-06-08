@@ -1,6 +1,15 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { message } from "antd";
+import { AGUIEventType } from "@aevatar-react-sdk/types";
 import React from "react";
+import {
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
+  type RuntimeEvent,
+  type RuntimeEventAccumulator,
+} from "@/shared/agui/runtimeEventSemantics";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { history } from "@/shared/navigation/history";
 import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import {
@@ -19,6 +28,7 @@ import {
 import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
 import type {
   StudioExecutionDetail,
+  StudioExecutionFrame,
   StudioExecutionSummary,
   StudioMemberBindingRunStatusResponse,
   StudioMemberDetail,
@@ -45,9 +55,11 @@ type SavedWorkflowDraft = {
 };
 
 type ExecuteWorkflowDraftVariables = {
-  readonly document: StudioWorkflowDocument;
-  readonly prompt: string;
+  readonly memberId: string;
+  readonly runInput: string;
+  readonly serviceId: string;
   readonly title: string;
+  readonly workflowId?: string;
 };
 
 type ActivateWorkflowVariables = {
@@ -84,7 +96,7 @@ type TeamMemberWorkflowStudioState = {
   readonly executePlaceholderReason: string;
   readonly executionDetail: StudioExecutionDetail | null;
   readonly executionError: string;
-  readonly executionPrompt: string;
+  readonly executionRunInput: string;
   readonly executionStatus: WorkflowExecutionStatus;
   readonly executions: readonly StudioExecutionSummary[];
   readonly executionsEmptyReason: string;
@@ -111,7 +123,7 @@ type TeamMemberWorkflowStudioState = {
   readonly updateSelectedStepParameters: (parametersText: string) => void;
   readonly selectCanvas: () => void;
   readonly selectNode: (nodeId: string) => void;
-  readonly setExecutionPrompt: (prompt: string) => void;
+  readonly setExecutionRunInput: (input: string) => void;
   readonly setTeamEntry: () => void;
   readonly setWorkflowTitle: (title: string) => void;
   readonly teamEntryNotice: string;
@@ -260,6 +272,158 @@ function resolveWorkflowExecutionStatus(
   return "running";
 }
 
+function readRuntimeEventString(
+  event: RuntimeEvent,
+  ...keys: string[]
+): string {
+  const record = event as unknown as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function readRuntimeEventTimestamp(event: RuntimeEvent): number {
+  const value = (event as unknown as { timestamp?: unknown }).timestamp;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Date.now();
+}
+
+function formatRuntimeEventTimestamp(event: RuntimeEvent): string {
+  const date = new Date(readRuntimeEventTimestamp(event));
+  return Number.isFinite(date.getTime())
+    ? date.toISOString()
+    : new Date().toISOString();
+}
+
+function serializeRuntimeEventFrame(event: RuntimeEvent): string {
+  const record = event as unknown as Record<string, unknown>;
+  const timestamp = readRuntimeEventTimestamp(event);
+
+  switch (event.type) {
+    case AGUIEventType.CUSTOM:
+      return JSON.stringify({
+        timestamp,
+        custom: {
+          name: readRuntimeEventString(event, "name"),
+          payload: record.payload ?? record.value,
+        },
+      });
+    case AGUIEventType.RUN_STARTED:
+      return JSON.stringify({
+        timestamp,
+        runStarted: {
+          actorId: readRuntimeEventString(event, "actorId", "threadId"),
+          commandId: readRuntimeEventString(event, "commandId", "command_id"),
+          correlationId: readRuntimeEventString(
+            event,
+            "correlationId",
+            "correlation_id",
+          ),
+          runId: readRuntimeEventString(event, "runId"),
+          threadId: readRuntimeEventString(event, "threadId", "actorId"),
+        },
+      });
+    case AGUIEventType.RUN_FINISHED:
+      return JSON.stringify({
+        timestamp,
+        runFinished: {
+          commandId: readRuntimeEventString(event, "commandId", "command_id"),
+          correlationId: readRuntimeEventString(
+            event,
+            "correlationId",
+            "correlation_id",
+          ),
+          result: record.result,
+          runId: readRuntimeEventString(event, "runId"),
+          threadId: readRuntimeEventString(event, "threadId", "actorId"),
+        },
+      });
+    case AGUIEventType.RUN_ERROR:
+      return JSON.stringify({
+        timestamp,
+        runError: {
+          code: readRuntimeEventString(event, "code", "errorCode", "error_code"),
+          commandId: readRuntimeEventString(event, "commandId", "command_id"),
+          correlationId: readRuntimeEventString(
+            event,
+            "correlationId",
+            "correlation_id",
+          ),
+          message: readRuntimeEventString(event, "message"),
+          runId: readRuntimeEventString(event, "runId"),
+        },
+      });
+    case AGUIEventType.STEP_STARTED:
+      return JSON.stringify({
+        timestamp,
+        stepStarted: {
+          stepName: readRuntimeEventString(event, "stepName"),
+        },
+      });
+    case AGUIEventType.STEP_FINISHED:
+      return JSON.stringify({
+        timestamp,
+        stepFinished: {
+          stepName: readRuntimeEventString(event, "stepName"),
+        },
+      });
+    default:
+      return JSON.stringify({
+        ...record,
+        timestamp,
+      });
+  }
+}
+
+function createWorkflowInvokeExecutionDetail(input: {
+  readonly accumulator: RuntimeEventAccumulator;
+  readonly completedAtUtc?: string | null;
+  readonly error?: string | null;
+  readonly executionId: string;
+  readonly frames: readonly StudioExecutionFrame[];
+  readonly prompt: string;
+  readonly serviceId: string;
+  readonly startedAtUtc: string;
+  readonly status: string;
+  readonly workflowName: string;
+}): StudioExecutionDetail {
+  const output =
+    input.error ||
+    input.accumulator.finalOutput ||
+    input.accumulator.assistantText ||
+    "";
+
+  return {
+    auditSource: "invoke-session",
+    actorId: input.accumulator.actorId || null,
+    completedAtUtc: input.completedAtUtc ?? null,
+    error: input.error ?? null,
+    executionId: input.accumulator.runId || input.executionId,
+    frames: [...input.frames],
+    output,
+    prompt: input.prompt,
+    serviceId: input.serviceId || null,
+    startedAtUtc: input.startedAtUtc,
+    status: input.status,
+    workflowName: input.workflowName,
+  };
+}
+
 function readExecutionWorkflowId(execution: StudioExecutionSummary): string {
   return trimOptional(
     (execution as StudioExecutionSummary & { workflowId?: string | null })
@@ -331,7 +495,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [executionDetail, setExecutionDetail] =
     React.useState<StudioExecutionDetail | null>(null);
   const [executionError, setExecutionError] = React.useState("");
-  const [executionPrompt, setExecutionPrompt] = React.useState("");
+  const [executionRunInput, setExecutionRunInput] = React.useState("");
   const [activationRun, setActivationRun] =
     React.useState<StudioMemberBindingRunStatusResponse | null>(null);
   const [activationError, setActivationError] = React.useState("");
@@ -512,29 +676,85 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   });
   const executeMutation = useMutation({
     mutationFn: async ({
-      document,
-      prompt,
+      memberId,
+      runInput,
+      serviceId,
       title,
+      workflowId,
     }: ExecuteWorkflowDraftVariables): Promise<StudioExecutionDetail> => {
-      const normalizedTitle =
-        trimOptional(title) || trimOptional(document.name) || "draft";
-      const documentWithTitle: StudioWorkflowDocument = {
-        ...document,
-        name: normalizedTitle,
-      };
-      const serialized = await studioApi.serializeYaml({
-        document: documentWithTitle,
-        availableStepTypes: AVAILABLE_STEP_TYPES,
-      });
+      if (!route.scopeId || !memberId) {
+        throw new Error("Resolve an active workflow member before executing.");
+      }
 
-      return studioApi.startExecution({
-        workflowName: normalizedTitle,
-        prompt,
-        workflowYamls: [serialized.yaml],
-        runtimeBaseUrl: workspaceSettingsQuery.data?.runtimeBaseUrl,
-        scopeId: route.scopeId,
-        workflowId: stableWorkflowId || workflowQuery.data?.workflowId,
-      });
+      const normalizedTitle = trimOptional(title) || "Workflow run";
+      const normalizedPrompt = trimOptional(runInput) || `Execute ${normalizedTitle}`;
+      const startedAtUtc = new Date().toISOString();
+      const executionId = `invoke:${memberId}:${Date.now().toString(36)}`;
+      const frames: StudioExecutionFrame[] = [];
+      const accumulator = createRuntimeEventAccumulator();
+      const controller = new AbortController();
+      const buildDetail = (
+        status: string,
+        completedAtUtc: string | null = null,
+        error: string | null = null,
+      ) =>
+        createWorkflowInvokeExecutionDetail({
+          accumulator,
+          completedAtUtc,
+          error,
+          executionId,
+          frames,
+          prompt: normalizedPrompt,
+          serviceId,
+          startedAtUtc,
+          status,
+          workflowName: normalizedTitle,
+        });
+
+      setExecutionDetail(buildDetail("running"));
+
+      try {
+        const response = await runtimeRunsApi.streamChat(
+          route.scopeId,
+          {
+            metadata: workflowId
+              ? {
+                  workflowId,
+                }
+              : undefined,
+            prompt: normalizedPrompt,
+          },
+          controller.signal,
+          {
+            memberId,
+          },
+        );
+
+        for await (const event of parseBackendSSEStream(response, {
+          signal: controller.signal,
+        })) {
+          applyRuntimeEvent(accumulator, event);
+          frames.push({
+            payload: serializeRuntimeEventFrame(event),
+            receivedAtUtc: formatRuntimeEventTimestamp(event),
+          });
+          setExecutionDetail(
+            buildDetail(accumulator.errorText ? "failed" : "running"),
+          );
+        }
+
+        const completedAtUtc = new Date().toISOString();
+        return buildDetail(
+          accumulator.errorText ? "failed" : "succeeded",
+          completedAtUtc,
+          accumulator.errorText || null,
+        );
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Workflow invoke failed.";
+        const completedAtUtc = new Date().toISOString();
+        return buildDetail("failed", completedAtUtc, errorMessage);
+      }
     },
     onError: (error) => {
       setExecutionError(
@@ -549,7 +769,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     onSuccess: (detail) => {
       setExecutionDetail(detail);
       setExecutionError("");
-      void message.success("Workflow execution started.");
+      if (detail.error) {
+        void message.error("Workflow execution failed.");
+      } else {
+        void message.success("Workflow executed successfully.");
+      }
     },
   });
   const activateMutation = useMutation({
@@ -790,23 +1014,28 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     ? "running"
     : resolveWorkflowExecutionStatus(executionDetail);
   const canExecute = Boolean(
-    route.scopeId &&
-      editableDocument &&
-      workflowHasSteps &&
-      trimOptional(executionPrompt) &&
+    route.mode === "existing" &&
+      route.scopeId &&
+      route.memberId &&
+      memberPublishedServiceId &&
       !executeMutation.isPending,
   );
-  const executePlaceholderReason = !editableDocument
-    ? "Load or create a workflow draft before executing."
-    : !workflowHasSteps
-      ? "Add at least one step before executing the workflow."
-      : !trimOptional(executionPrompt)
-        ? "Enter an execution prompt before running the workflow."
-        : !route.scopeId
+  const executePlaceholderReason =
+    route.mode === "new"
+        ? "Create and activate a workflow member before executing."
+        : !route.memberId
+          ? "Resolve the workflow member before executing."
+          : !memberPublishedServiceId
+            ? "Activate this workflow member before executing it."
+            : !route.scopeId
           ? "Resolve the current workspace before running the workflow."
           : executeMutation.isPending
             ? "Workflow execution is already starting."
-            : "Execute the current draft workflow.";
+            : linkedWorkflowMissing
+              ? "Execute the active published member. Editing remains limited until a stable workflow draft is linked."
+              : !workflowHasSteps
+                ? "Execute the active published member. Add steps before saving editor changes."
+                : "Execute the active workflow member.";
   const savePlaceholderReason =
     route.mode === "new"
       ? "New workflow-member creation is intentionally not wired in Phase 1 to avoid orphan backend data."
@@ -834,6 +1063,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     const executionId = trimOptional(executionDetail?.executionId);
     if (
       !executionId ||
+      executionDetail?.auditSource === "invoke-session" ||
       resolveWorkflowExecutionStatus(executionDetail) !== "running"
     ) {
       return;
@@ -1029,11 +1259,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? "No workflow draft is linked to this member yet. You can sketch locally, but saving requires a stable workflow reference."
           : "Start this workflow by adding the first step.",
     execute: () => {
-      if (editableDocument) {
+      if (route.memberId && memberPublishedServiceId) {
         executeMutation.mutate({
-          document: editableDocument,
-          prompt: trimOptional(executionPrompt),
+          memberId: route.memberId,
+          runInput: trimOptional(executionRunInput),
+          serviceId: memberPublishedServiceId,
           title: workflowTitle,
+          workflowId: stableWorkflowId || undefined,
         });
       }
     },
@@ -1041,7 +1273,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     executePlaceholderReason,
     executionDetail,
     executionError,
-    executionPrompt,
+    executionRunInput,
     executionStatus,
     executions: scopedExecutions,
     executionsEmptyReason,
@@ -1100,7 +1332,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     selectedTab,
     selectCanvas: () => setSelectedNodeId(""),
     selectNode: (nodeId: string) => setSelectedNodeId(nodeId),
-    setExecutionPrompt,
+    setExecutionRunInput,
     setSelectedTab,
     setTeamEntry: () => {
       if (canSetTeamEntry) {

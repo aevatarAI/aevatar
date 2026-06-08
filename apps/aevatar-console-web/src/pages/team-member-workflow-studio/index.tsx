@@ -34,17 +34,21 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         canSave={studio.canSave}
         canSetTeamEntry={studio.canSetTeamEntry}
         dirty={studio.dirty}
+        executionRunId={studio.executionDetail?.executionId ?? ""}
+        executionStartedAt={studio.executionDetail?.startedAtUtc ?? ""}
+        executionStatus={studio.executionStatus}
         executePending={studio.executePending}
         executePlaceholderReason={studio.executePlaceholderReason}
-        mode={studio.mode}
         onActivate={studio.activate}
         onAddNode={studio.openNodeLibrary}
         onDeleteNode={studio.deleteSelectedNode}
         onExecute={studio.execute}
         onNavigateBack={studio.navigateBack}
+        onRunInputChange={studio.setExecutionRunInput}
         onSave={studio.save}
         onSetTeamEntry={studio.setTeamEntry}
         onTitleChange={studio.setWorkflowTitle}
+        runInput={studio.executionRunInput}
         savePending={studio.savePending}
         savePlaceholderReason={studio.savePlaceholderReason}
         selectedNodeId={studio.selectedNodeId}
@@ -64,7 +68,15 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         />
       ) : null}
       {studio.selectedTab === "editor" ? (
-        <section style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <section
+          style={{
+            display: "flex",
+            flex: 1,
+            minHeight: 0,
+            overflow: "hidden",
+            position: "relative",
+          }}
+        >
           {studio.loading ? (
             <div
               style={{
@@ -94,6 +106,11 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
               selectedNodeId={studio.selectedNodeId}
             />
           )}
+          <WorkflowStudioNodeLibrary
+            onClose={studio.closeNodeLibrary}
+            onInsertNode={studio.insertNode}
+            open={studio.nodeLibraryOpen}
+          />
           <WorkflowStudioNodeDetailPanel
             error={studio.selectedStepParameterError}
             onClose={studio.selectCanvas}
@@ -113,14 +130,6 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
       <WorkflowStudioExecutionPanel
         detail={studio.executionDetail}
         error={studio.executionError}
-        onPromptChange={studio.setExecutionPrompt}
-        prompt={studio.executionPrompt}
-        status={studio.executionStatus}
-      />
-      <WorkflowStudioNodeLibrary
-        onClose={studio.closeNodeLibrary}
-        onInsertNode={studio.insertNode}
-        open={studio.nodeLibraryOpen}
       />
     </main>
   );

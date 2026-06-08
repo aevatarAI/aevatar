@@ -51,108 +51,141 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
   }
 
   return (
-    <aside
-      aria-label="Node library"
+    <div
+      data-testid="node-library-layer"
       style={{
-        background: "#ffffff",
-        borderRight: "1px solid #e5e7eb",
+        background: "rgba(17, 24, 39, 0.16)",
         bottom: 0,
-        boxShadow: "10px 0 30px rgba(15, 23, 42, 0.08)",
         left: 0,
-        overflow: "auto",
-        padding: 20,
-        position: "fixed",
+        position: "absolute",
+        right: 0,
         top: 0,
-        width: 380,
-        zIndex: 40,
+        zIndex: 30,
       }}
     >
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
-        <Space
-          align="center"
-          style={{ justifyContent: "space-between", width: "100%" }}
-        >
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Node library
-          </Typography.Title>
-          <Button onClick={onClose} size="small">
-            Close
-          </Button>
-        </Space>
-        <Input
-          allowClear
-          aria-label="Search nodes"
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search nodes"
-          prefix={<SearchOutlined />}
-          value={query}
-        />
-        {filteredCategories.length === 0 ? (
-          <Empty description="No nodes match this search." image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : (
-          filteredCategories.map((category) => (
-            <section key={category.key}>
-              <Space
-                align="center"
-                style={{ justifyContent: "space-between", width: "100%" }}
-              >
-                <Typography.Text strong>{category.label}</Typography.Text>
-                <Tag color={category.color}>{category.items.length}</Tag>
-              </Space>
-              <div
-                style={{
-                  display: "grid",
-                  gap: 8,
-                  marginTop: 10,
-                }}
-              >
-                {category.items.map((stepType) => {
-                  const itemCategory = getStudioGraphCategory(stepType);
-                  return (
-                    <button
-                      aria-label={`Insert ${formatStepType(stepType)} node`}
-                      key={stepType}
-                      onClick={() => onInsertNode(stepType)}
-                      style={{
-                        alignItems: "center",
-                        background: "#ffffff",
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 8,
-                        cursor: "pointer",
-                        display: "flex",
-                        gap: 10,
-                        padding: "10px 12px",
-                        textAlign: "left",
-                      }}
-                      type="button"
-                    >
-                      <span
-                        aria-hidden
+      <button
+        aria-label="Close node library"
+        onClick={onClose}
+        style={{
+          background: "transparent",
+          border: 0,
+          bottom: 0,
+          cursor: "default",
+          left: 0,
+          position: "absolute",
+          right: 0,
+          top: 0,
+        }}
+        type="button"
+      />
+      <aside
+        aria-label="Node library"
+        style={{
+          background: "#ffffff",
+          borderRight: "1px solid #e5e7eb",
+          bottom: 0,
+          boxShadow: "10px 0 30px rgba(15, 23, 42, 0.08)",
+          left: 0,
+          maxWidth: "calc(100% - 48px)",
+          overflow: "auto",
+          padding: 20,
+          position: "absolute",
+          top: 0,
+          width: 380,
+        }}
+      >
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Space
+            align="center"
+            style={{ justifyContent: "space-between", width: "100%" }}
+          >
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              Node library
+            </Typography.Title>
+            <Button onClick={onClose} size="small">
+              Close
+            </Button>
+          </Space>
+          <Input
+            allowClear
+            aria-label="Search nodes"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search nodes"
+            prefix={<SearchOutlined />}
+            value={query}
+          />
+          {filteredCategories.length === 0 ? (
+            <Empty
+              description="No nodes match this search."
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          ) : (
+            filteredCategories.map((category) => (
+              <section key={category.key}>
+                <Space
+                  align="center"
+                  style={{ justifyContent: "space-between", width: "100%" }}
+                >
+                  <Typography.Text strong>{category.label}</Typography.Text>
+                  <Tag color={category.color}>{category.items.length}</Tag>
+                </Space>
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 8,
+                    marginTop: 10,
+                  }}
+                >
+                  {category.items.map((stepType) => {
+                    const itemCategory = getStudioGraphCategory(stepType);
+                    return (
+                      <button
+                        aria-label={`Insert ${formatStepType(stepType)} node`}
+                        key={stepType}
+                        onClick={() => onInsertNode(stepType)}
                         style={{
-                          background: itemCategory.color,
-                          borderRadius: 999,
-                          display: "inline-block",
-                          height: 10,
-                          width: 10,
+                          alignItems: "center",
+                          background: "#ffffff",
+                          border: "1px solid #e5e7eb",
+                          borderRadius: 8,
+                          cursor: "pointer",
+                          display: "flex",
+                          gap: 10,
+                          padding: "10px 12px",
+                          textAlign: "left",
                         }}
-                      />
-                      <span style={{ display: "grid", gap: 2 }}>
-                        <Typography.Text strong>
-                          {formatStepType(stepType)}
-                        </Typography.Text>
-                        <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
-                          {stepType}
-                        </Typography.Text>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          ))
-        )}
-      </Space>
-    </aside>
+                        type="button"
+                      >
+                        <span
+                          aria-hidden
+                          style={{
+                            background: itemCategory.color,
+                            borderRadius: 999,
+                            display: "inline-block",
+                            height: 10,
+                            width: 10,
+                          }}
+                        />
+                        <span style={{ display: "grid", gap: 2 }}>
+                          <Typography.Text strong>
+                            {formatStepType(stepType)}
+                          </Typography.Text>
+                          <Typography.Text
+                            style={{ color: "#6b7280", fontSize: 12 }}
+                          >
+                            {stepType}
+                          </Typography.Text>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            ))
+          )}
+        </Space>
+      </aside>
+    </div>
   );
 };
 
