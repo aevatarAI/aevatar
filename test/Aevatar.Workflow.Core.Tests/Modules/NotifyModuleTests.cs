@@ -57,12 +57,13 @@ public sealed class NotifyModuleTests
     }
 
     [Fact]
-    public async Task HandleAsync_WhenDeliveryTargetMissing_ShouldFailWithoutSuspension()
+    public async Task HandleAsync_WhenTypedDeliveryTargetMissing_ShouldIgnoreParameterBagAndFailWithoutSuspension()
     {
         var ctx = new RecordingWorkflowContext();
         var module = new NotifyModule();
         var request = BuildRequest(interaction: BuildInteractionSpec());
-        request.Parameters.Clear();
+        request.StepParameters.DeliveryTargetId = string.Empty;
+        request.Parameters["delivery_target_id"] = "bag-delivery-target";
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
@@ -120,9 +121,11 @@ public sealed class NotifyModuleTests
             StepType = "notify",
             RunId = "run-1",
             ExecutionId = "exec-1",
-            StepParameters = new WorkflowStepParameters(),
+            StepParameters = new WorkflowStepParameters
+            {
+                DeliveryTargetId = "agent-delivery-1",
+            },
         };
-        request.Parameters["delivery_target_id"] = "agent-delivery-1";
         if (interaction is not null)
             request.StepParameters.InteractionSpec = interaction;
         if (template is not null)

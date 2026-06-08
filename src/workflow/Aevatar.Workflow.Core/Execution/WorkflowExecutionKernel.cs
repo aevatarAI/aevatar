@@ -1176,8 +1176,21 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         StepPresentation? presentation,
         WorkflowExecutionKernelState state)
     {
+        ApplyDeliveryTargetId(request, presentation, state);
         ApplyInteractionSpec(request, presentation, state);
         ApplyInteractionTemplateSpec(request, presentation, state);
+    }
+
+    private void ApplyDeliveryTargetId(
+        StepRequestEvent request,
+        StepPresentation? presentation,
+        WorkflowExecutionKernelState state)
+    {
+        if (string.IsNullOrWhiteSpace(presentation?.DeliveryTargetId))
+            return;
+
+        (request.StepParameters ??= new WorkflowStepParameters()).DeliveryTargetId =
+            _expressionEvaluator.Evaluate(presentation.DeliveryTargetId.Trim(), state.Variables);
     }
 
     private void ApplyInteractionSpec(

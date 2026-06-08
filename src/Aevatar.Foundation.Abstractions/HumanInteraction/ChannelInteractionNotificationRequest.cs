@@ -15,6 +15,4 @@ public sealed record ChannelInteractionNotificationRequest
     public InteractionSpec? InteractionSpec { get; init; }
 
     public InteractionTemplateSpec? InteractionTemplateSpec { get; init; }
-
-    public IReadOnlyDictionary<string, string> Annotations { get; init; } = new Dictionary<string, string>();
 }

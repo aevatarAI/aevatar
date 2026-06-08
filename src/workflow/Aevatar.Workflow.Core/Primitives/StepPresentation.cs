@@ -8,6 +8,8 @@ public sealed class StepPresentation
 
     public InteractionTemplateSpec? InteractionTemplateSpec { get; init; }
 
+    public string? DeliveryTargetId { get; init; }
+
     public static bool HasInteractionSpec(InteractionSpec? spec) =>
         spec is not null &&
         (!string.IsNullOrWhiteSpace(spec.Title) ||
@@ -25,5 +27,6 @@ public sealed class StepPresentation
     public static bool HasPresentation(StepPresentation? presentation) =>
         presentation is not null &&
         (HasInteractionSpec(presentation.InteractionSpec) ||
-         HasInteractionTemplateSpec(presentation.InteractionTemplateSpec));
+         HasInteractionTemplateSpec(presentation.InteractionTemplateSpec) ||
+         !string.IsNullOrWhiteSpace(presentation.DeliveryTargetId));
 }

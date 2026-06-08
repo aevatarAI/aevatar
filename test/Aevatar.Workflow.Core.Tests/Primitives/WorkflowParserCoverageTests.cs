@@ -263,8 +263,32 @@ public sealed class WorkflowParserCoverageTests
         spec!.TemplateId.Should().Be("tpl-${input}");
         spec.TemplateVariable["title"].Should().Be("Deploy");
         spec.TemplateVariable["run"].Should().Be("run-1");
-        step.Parameters.Should().ContainKey("delivery_target_id");
+        step.Presentation!.DeliveryTargetId.Should().Be("agent-1");
+        step.Parameters.Should().NotContainKey("delivery_target_id");
         step.Parameters.Should().NotContainKey("interaction_template_spec");
+    }
+
+    [Fact]
+    public void Parse_WhenNotifyUsesCamelCaseDeliveryTargetAlias_ShouldLeaveItAsOrdinaryParameter()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: notify_template
+            roles: []
+            steps:
+              - id: notify
+                type: notify
+                parameters:
+                  deliveryTargetId: agent-1
+                  interaction_template_spec:
+                    template_id: tpl-1
+            """);
+
+        var step = workflow.Steps[0];
+
+        step.Presentation?.DeliveryTargetId.Should().BeNull();
+        step.Parameters.Should().ContainKey("deliveryTargetId");
+        step.Parameters.Should().NotContainKey("delivery_target_id");
     }
 
     [Fact]

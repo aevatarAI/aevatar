@@ -110,6 +110,7 @@ public class WorkflowAbstractionsProtoCoverageTests
             TemplateId = "tpl-review",
         };
         request.StepParameters.InteractionTemplateSpec.TemplateVariable["run"] = "run-1";
+        request.StepParameters.DeliveryTargetId = "agent-1";
 
         var completed = new StepCompletedEvent
         {
@@ -129,6 +130,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsedRequest.StepParameters.InteractionSpec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
         parsedRequest.StepParameters.InteractionTemplateSpec.TemplateId.Should().Be("tpl-review");
         parsedRequest.StepParameters.InteractionTemplateSpec.TemplateVariable["run"].Should().Be("run-1");
+        parsedRequest.StepParameters.DeliveryTargetId.Should().Be("agent-1");
 
         var parsedCompleted = StepCompletedEvent.Parser.ParseFrom(completed.ToByteArray());
         parsedCompleted.WorkerId.Should().Be("worker-1");
@@ -142,6 +144,8 @@ public class WorkflowAbstractionsProtoCoverageTests
     {
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
             .Should().Contain(field => field.FieldNumber == 8 && field.Name == "step_parameters");
+        WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
+            .Should().Contain(field => field.FieldNumber == 6 && field.Name == "delivery_target_id");
         StepRequestEvent.Descriptor.Fields.InDeclarationOrder()
             .Should().NotContain(field => field.FieldNumber == 5);
 
@@ -152,12 +156,14 @@ public class WorkflowAbstractionsProtoCoverageTests
             StepParameters = new WorkflowStepParameters(),
         };
         request.StepParameters.Parameters["op"] = "trim";
+        request.StepParameters.DeliveryTargetId = "agent-typed";
         request.Parameters["target"] = "result";
         request.StepParameters.InteractionSpec = new InteractionSpec { Body = "Continue?" };
 
         var parsed = StepRequestEvent.Parser.ParseFrom(request.ToByteArray());
         parsed.StepParameters.Parameters.Should().Contain(new KeyValuePair<string, string>("op", "trim"));
         parsed.Parameters.Should().Contain(new KeyValuePair<string, string>("target", "result"));
+        parsed.StepParameters.DeliveryTargetId.Should().Be("agent-typed");
         parsed.StepParameters.InteractionSpec.Body.Should().Be("Continue?");
         parsed.ToString().Should().Contain("stepParameters");
         ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));

@@ -62,6 +62,52 @@ public sealed class ChannelRuntimeSourceRegressionTests
     }
 
     [Fact]
+    public void Workflow_core_notify_boundary_must_not_reintroduce_channel_or_raw_lark_tokens()
+    {
+        var repositoryRoot = GetRepositoryRoot();
+        var guardSource = File.ReadAllText(
+            Path.Combine(repositoryRoot, "tools/ci/architecture_guards.sh"),
+            Encoding.UTF8);
+        foreach (var token in new[]
+                 {
+                     "Aevatar\\.GAgents\\.Channel\\.Abstractions",
+                     "MessageContent",
+                     "LarkMessageComposer",
+                     "open-apis/im/v1/messages",
+                     "raw card JSON",
+                 })
+        {
+            guardSource.Should().Contain(token, "FI-006 architecture guard must keep the Workflow Core/Lark boundary token '{0}'", token);
+        }
+
+        var forbiddenPatterns = new[]
+        {
+            "Aevatar.GAgents.Channel.Abstractions",
+            "MessageContent",
+            "LarkMessageComposer",
+            "open-apis/im/v1/messages",
+            "interactive_card",
+            "raw Lark",
+            "raw card JSON",
+        };
+        var workflowCoreRoot = Path.Combine(repositoryRoot, "src/workflow/Aevatar.Workflow.Core");
+        var hits = Directory.EnumerateFiles(workflowCoreRoot, "*.*", SearchOption.AllDirectories)
+            .Where(static file =>
+                (file.EndsWith(".cs", StringComparison.Ordinal) ||
+                 file.EndsWith(".proto", StringComparison.Ordinal)) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: ReadPolicySurface(file)))
+            .SelectMany(item => forbiddenPatterns
+                .Where(token => item.Source.Contains(token, StringComparison.Ordinal))
+                .Select(token => $"{item.File}: {token}"))
+            .ToArray();
+
+        hits.Should().BeEmpty(
+            "Workflow Core may publish typed notification events, but channel rendering and raw Lark card payloads belong at the channel boundary");
+    }
+
+    [Fact]
     public void Retired_nyx_relay_agent_builder_flow_must_not_reappear_in_source_or_tests()
     {
         var repositoryRoot = GetRepositoryRoot();

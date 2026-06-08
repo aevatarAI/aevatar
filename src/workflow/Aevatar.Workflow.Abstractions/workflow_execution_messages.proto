@@ -233,6 +233,7 @@ message WorkflowStepParameters
   VoteAgreementRule vote_agreement_rule = 3;
   aevatar.foundation.interactions.InteractionSpec interaction_spec = 4;
   aevatar.foundation.interactions.InteractionTemplateSpec interaction_template_spec = 5;
+  string delivery_target_id = 6;
 }
 message StepRequestEvent
 {

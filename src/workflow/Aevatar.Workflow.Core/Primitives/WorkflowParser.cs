@@ -147,7 +147,7 @@ public sealed class WorkflowParser
         var rawParameters = s.Parameters is null
             ? null
             : new Dictionary<string, object?>(s.Parameters, StringComparer.Ordinal);
-        var presentation = MapPresentation(s, rawParameters);
+        var presentation = MapPresentation(canonicalType, s, rawParameters);
         var parameters = NormalizeParameters(rawParameters);
 
         ApplyErgonomicDefaults(normalizedRawType, parameters);
@@ -170,15 +170,20 @@ public sealed class WorkflowParser
     }
 
     private static StepPresentation? MapPresentation(
+        string canonicalStepType,
         RawStep step,
         IDictionary<string, object?>? rawParameters)
     {
         var interactionSpec = MapInteractionSpec(ResolveInteractionSpecSource(step, rawParameters));
         var interactionTemplateSpec = MapInteractionTemplateSpec(ResolveInteractionTemplateSpecSource(step, rawParameters));
+        var deliveryTargetId = string.Equals(canonicalStepType, "notify", StringComparison.Ordinal)
+            ? ResolveDeliveryTargetId(step, rawParameters)
+            : null;
         var presentation = new StepPresentation
         {
             InteractionSpec = interactionSpec,
             InteractionTemplateSpec = interactionTemplateSpec,
+            DeliveryTargetId = deliveryTargetId,
         };
         return StepPresentation.HasPresentation(presentation)
             ? presentation
@@ -236,6 +241,24 @@ public sealed class WorkflowParser
         }
 
         return null;
+    }
+
+    private static string? ResolveDeliveryTargetId(
+        RawStep step,
+        IDictionary<string, object?>? rawParameters)
+    {
+        if (!string.IsNullOrWhiteSpace(step.DeliveryTargetId))
+            return step.DeliveryTargetId.Trim();
+
+        if (rawParameters is null)
+            return null;
+
+        if (!rawParameters.TryGetValue("delivery_target_id", out var source))
+            return null;
+
+        rawParameters.Remove("delivery_target_id");
+        var deliveryTargetId = ConvertValueToString(source).Trim();
+        return string.IsNullOrWhiteSpace(deliveryTargetId) ? null : deliveryTargetId;
     }
 
     private static InteractionSpec? MapInteractionSpec(object? source)
@@ -1028,6 +1051,7 @@ public sealed class WorkflowParser
         public string? HolderTokenVariable { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
+        public string? DeliveryTargetId { get; set; }
         public RawStepPresentation? Presentation { get; set; }
         public Dictionary<string, object?>? Parameters { get; set; }
         public string? Next { get; set; }

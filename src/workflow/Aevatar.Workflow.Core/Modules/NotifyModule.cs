@@ -56,13 +56,7 @@ public sealed class NotifyModule : IEventModule<IWorkflowExecutionContext>
 
     private static string? ResolveDeliveryTargetId(StepRequestEvent request)
     {
-        if (request.Parameters.TryGetValue("delivery_target_id", out var deliveryTargetId))
-            return Normalize(deliveryTargetId);
-
-        if (request.Parameters.TryGetValue("deliveryTargetId", out deliveryTargetId))
-            return Normalize(deliveryTargetId);
-
-        return null;
+        return Normalize(request.StepParameters?.DeliveryTargetId);
     }
 
     private static string? Validate(StepRequestEvent request, string? deliveryTargetId)
