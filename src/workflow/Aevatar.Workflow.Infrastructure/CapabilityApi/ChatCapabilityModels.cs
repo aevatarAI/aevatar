@@ -162,6 +162,18 @@ public sealed record WorkflowStopInput
     public string? Reason { get; init; }
 }
 
+public sealed record WorkflowForkRunInput
+{
+    public required string SourceRunId { get; init; }
+    public required string StartAtStepId { get; init; }
+    public string? InlineYaml { get; init; }
+    public IDictionary<string, string>? InlineSubYamls { get; init; }
+    public IDictionary<string, string>? VariableOverrides { get; init; }
+    public string? Input { get; init; }
+    public string? CommandId { get; init; }
+    public string? CorrelationId { get; init; }
+}
+
 internal sealed record ChatWsCommand
 {
     public string Type { get; init; } = ChatCapabilityMessageTypes.ChatCommand;
