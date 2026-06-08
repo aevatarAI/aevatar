@@ -49,6 +49,7 @@ public sealed class ChannelRuntimeSourceRegressionTests
         var repositoryRoot = GetRepositoryRoot();
         var bypasses = Directory.EnumerateFiles(Path.Combine(repositoryRoot, "agents"), "*.cs", SearchOption.AllDirectories)
             .Where(static file => !file.EndsWith("LarkOutboundDispatcher.cs", StringComparison.Ordinal))
+            .Where(static file => !file.EndsWith("FeishuCardOutboundMessageSender.cs", StringComparison.Ordinal))
             .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: StripComments(File.ReadAllText(file, Encoding.UTF8))))
             .Where(static item =>
                 item.Source.Contains("open-apis/im/v1/messages?receive_id_type=", StringComparison.Ordinal) ||

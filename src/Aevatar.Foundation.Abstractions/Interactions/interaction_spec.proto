@@ -75,3 +75,8 @@ message InteractionSpec {
   repeated InteractionCard cards = 5;
   InteractionDisposition disposition = 6;
 }
+
+message InteractionTemplateSpec {
+  string template_id = 1;
+  map<string, string> template_variable = 2;
+}

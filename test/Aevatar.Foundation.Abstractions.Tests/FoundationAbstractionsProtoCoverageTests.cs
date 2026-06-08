@@ -178,6 +178,25 @@ public class FoundationAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void InteractionTemplateSpec_ShouldRoundtripTypedContract()
+    {
+        var spec = new InteractionTemplateSpec
+        {
+            TemplateId = "tpl-1",
+        };
+        spec.TemplateVariable["title"] = "Deploy";
+        spec.TemplateVariable["run"] = "run-1";
+
+        var parsed = InteractionTemplateSpec.Parser.ParseFrom(spec.ToByteArray());
+
+        parsed.ShouldBe(spec);
+        parsed.TemplateId.ShouldBe("tpl-1");
+        parsed.TemplateVariable["title"].ShouldBe("Deploy");
+        InteractionSpecReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(InteractionTemplateSpec));
+    }
+
+    [Fact]
     public void ChildEvents_ShouldPreserveUnknownFieldsAndCoverEmptyBranches()
     {
         // tag=1 (child_id), then an unknown varint field (field=99, wire=0).

@@ -133,6 +133,16 @@ message WorkflowExecutionStateClearedEvent  { string scope_key = 1; }
 message WorkflowStoppedEvent { string workflow_name = 1; string run_id = 2; string reason = 3; }
 message WorkflowCompletedEvent { string workflow_name = 1; bool success = 2; string output = 3; string error = 4; string run_id = 5; }
 
+message WorkflowInteractionNotificationEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string delivery_target_id = 3;
+  oneof payload {
+    aevatar.foundation.interactions.InteractionSpec interaction = 4;
+    aevatar.foundation.interactions.InteractionTemplateSpec interaction_template = 5;
+  }
+}
+
 enum AgreementRuleMode {
   AGREEMENT_RULE_MODE_UNSPECIFIED = 0;
   AGREEMENT_RULE_MODE_ALL = 1;
@@ -222,6 +232,7 @@ message WorkflowStepParameters
   VoteAgreementCandidateSet vote_agreement_candidates = 2;
   VoteAgreementRule vote_agreement_rule = 3;
   aevatar.foundation.interactions.InteractionSpec interaction_spec = 4;
+  aevatar.foundation.interactions.InteractionTemplateSpec interaction_template_spec = 5;
 }
 message StepRequestEvent
 {

@@ -17,4 +17,13 @@ public sealed class WorkflowPrimitiveCatalogTests
     {
         WorkflowPrimitiveCatalog.ToCanonicalType("schedule_workflow").Should().Be("self_reschedule");
     }
+
+    [Fact]
+    public void BuiltInCanonicalTypes_ShouldIncludeNotifyWithoutEmitOrPublishAlias()
+    {
+        WorkflowPrimitiveCatalog.ToCanonicalType("notify").Should().Be("notify");
+        WorkflowPrimitiveCatalog.ToCanonicalType("emit").Should().Be("emit");
+        WorkflowPrimitiveCatalog.ToCanonicalType("publish").Should().Be("emit");
+        WorkflowPrimitiveCatalog.BuiltInCanonicalTypes.Should().Contain("notify");
+    }
 }

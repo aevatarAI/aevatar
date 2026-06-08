@@ -952,6 +952,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(Substitute.For<IUserAgentDeliveryTargetReader>());
         services.AddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<ILogger<FeishuCardHumanInteractionPort>>(NullLogger<FeishuCardHumanInteractionPort>.Instance);
+        services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);
         services.AddSingleton(callerScopeResolver);
 
         services.AddLarkAgentAuthoring();
@@ -961,6 +962,7 @@ public sealed class AgentBuilderToolTests
         var source = provider.GetServices<IAgentToolSource>().Should().ContainSingle().Subject;
         source.Should().BeOfType<AgentBuilderToolSource>();
         provider.GetRequiredService<IHumanInteractionPort>().Should().BeOfType<FeishuCardHumanInteractionPort>();
+        provider.GetRequiredService<IChannelInteractionNotificationPort>().Should().BeOfType<FeishuCardNotificationPort>();
 
         var tools = await source.DiscoverToolsAsync();
 

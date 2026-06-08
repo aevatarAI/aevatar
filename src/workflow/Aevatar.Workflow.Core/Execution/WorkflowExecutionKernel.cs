@@ -1166,9 +1166,18 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 request.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
         }
 
-        ApplyInteractionSpec(request, step.Presentation, state);
+        ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
+    }
+
+    private void ApplyInteractionPresentation(
+        StepRequestEvent request,
+        StepPresentation? presentation,
+        WorkflowExecutionKernelState state)
+    {
+        ApplyInteractionSpec(request, presentation, state);
+        ApplyInteractionTemplateSpec(request, presentation, state);
     }
 
     private void ApplyInteractionSpec(
@@ -1186,6 +1195,28 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         EvaluateFields(spec.Fields, state);
         EvaluateCards(spec.Cards, state);
         (request.StepParameters ??= new WorkflowStepParameters()).InteractionSpec = spec;
+    }
+
+    private void ApplyInteractionTemplateSpec(
+        StepRequestEvent request,
+        StepPresentation? presentation,
+        WorkflowExecutionKernelState state)
+    {
+        if (!StepPresentation.HasInteractionTemplateSpec(presentation?.InteractionTemplateSpec))
+            return;
+
+        var spec = presentation!.InteractionTemplateSpec!.Clone();
+        spec.TemplateId = _expressionEvaluator.Evaluate(spec.TemplateId, state.Variables);
+        var evaluatedVariables = spec.TemplateVariable
+            .Select(pair => new KeyValuePair<string, string>(
+                pair.Key,
+                _expressionEvaluator.Evaluate(pair.Value, state.Variables)))
+            .ToArray();
+        spec.TemplateVariable.Clear();
+        foreach (var (key, value) in evaluatedVariables)
+            spec.TemplateVariable[key] = value;
+
+        (request.StepParameters ??= new WorkflowStepParameters()).InteractionTemplateSpec = spec;
     }
 
     private void EvaluateActions(

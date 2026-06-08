@@ -6,6 +6,7 @@ using Aevatar.Configuration;
 using Aevatar.Hosting;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
@@ -27,6 +28,8 @@ using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
+using Aevatar.Workflow.Presentation.AGUIAdapter;
+using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Workflows;
 using Google.Protobuf;
@@ -231,6 +234,12 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddWorkflowCapability(configuration);
 
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowChatRunInteractionPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IChannelInteractionNotificationPort) &&
+            x.ImplementationType == typeof(NullChannelInteractionNotificationPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionProjector<WorkflowExecutionProjectionContext>) &&
+            x.ImplementationType == typeof(WorkflowInteractionNotificationProjector));
         services.Should().NotContain(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowExecutionQueryApplicationService));

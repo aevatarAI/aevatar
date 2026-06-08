@@ -105,6 +105,11 @@ public class WorkflowAbstractionsProtoCoverageTests
             Label = "Approve",
             Style = InteractionActionStyle.Primary,
         });
+        request.StepParameters.InteractionTemplateSpec = new InteractionTemplateSpec
+        {
+            TemplateId = "tpl-review",
+        };
+        request.StepParameters.InteractionTemplateSpec.TemplateVariable["run"] = "run-1";
 
         var completed = new StepCompletedEvent
         {
@@ -122,6 +127,8 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsedRequest.StepParameters.Parameters["temperature"].Should().Be("0.1");
         parsedRequest.StepParameters.InteractionSpec.Title.Should().Be("Review");
         parsedRequest.StepParameters.InteractionSpec.Actions[0].Style.Should().Be(InteractionActionStyle.Primary);
+        parsedRequest.StepParameters.InteractionTemplateSpec.TemplateId.Should().Be("tpl-review");
+        parsedRequest.StepParameters.InteractionTemplateSpec.TemplateVariable["run"].Should().Be("run-1");
 
         var parsedCompleted = StepCompletedEvent.Parser.ParseFrom(completed.ToByteArray());
         parsedCompleted.WorkerId.Should().Be("worker-1");
@@ -154,6 +161,44 @@ public class WorkflowAbstractionsProtoCoverageTests
         parsed.StepParameters.InteractionSpec.Body.Should().Be("Continue?");
         parsed.ToString().Should().Contain("stepParameters");
         ((IMessage)parsed.StepParameters).Descriptor.Name.Should().Be(nameof(WorkflowStepParameters));
+    }
+
+    [Fact]
+    public void WorkflowInteractionNotificationEvent_ShouldRoundtripTypedPayloads()
+    {
+        var interactionEvent = new WorkflowInteractionNotificationEvent
+        {
+            RunId = "run-1",
+            StepId = "notify-1",
+            DeliveryTargetId = "agent-1",
+            Interaction = new InteractionSpec
+            {
+                Title = "Status",
+                Body = "Accepted",
+            },
+        };
+        var templateEvent = new WorkflowInteractionNotificationEvent
+        {
+            RunId = "run-2",
+            StepId = "notify-2",
+            DeliveryTargetId = "agent-2",
+            InteractionTemplate = new InteractionTemplateSpec
+            {
+                TemplateId = "tpl-1",
+            },
+        };
+        templateEvent.InteractionTemplate.TemplateVariable["title"] = "Deploy";
+
+        var parsedInteraction = WorkflowInteractionNotificationEvent.Parser.ParseFrom(interactionEvent.ToByteArray());
+        var parsedTemplate = WorkflowInteractionNotificationEvent.Parser.ParseFrom(templateEvent.ToByteArray());
+
+        parsedInteraction.PayloadCase.Should().Be(WorkflowInteractionNotificationEvent.PayloadOneofCase.Interaction);
+        parsedInteraction.Interaction.Title.Should().Be("Status");
+        parsedTemplate.PayloadCase.Should().Be(WorkflowInteractionNotificationEvent.PayloadOneofCase.InteractionTemplate);
+        parsedTemplate.InteractionTemplate.TemplateId.Should().Be("tpl-1");
+        parsedTemplate.InteractionTemplate.TemplateVariable["title"].Should().Be("Deploy");
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .Should().Contain(nameof(WorkflowInteractionNotificationEvent));
     }
 
     [Fact]
