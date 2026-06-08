@@ -41,6 +41,20 @@ export default [
     menuGroupKey: "teams",
   },
   {
+    path: "/teams/:scopeId/:teamId/members/new/workflow",
+    name: "Team Member Workflow Studio",
+    component: "./team-member-workflow-studio",
+    hideInMenu: true,
+    parentKeys: ["/teams"],
+  },
+  {
+    path: "/teams/:scopeId/:teamId/members/:memberId/workflow",
+    name: "Team Member Workflow Studio",
+    component: "./team-member-workflow-studio",
+    hideInMenu: true,
+    parentKeys: ["/teams"],
+  },
+  {
     path: "/teams/:scopeId/:teamId",
     name: "Team Details",
     component: "./teams/detail",

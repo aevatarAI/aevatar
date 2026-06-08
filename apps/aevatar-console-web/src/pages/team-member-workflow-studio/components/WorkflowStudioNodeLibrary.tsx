@@ -1,0 +1,159 @@
+import { SearchOutlined } from "@ant-design/icons";
+import { Button, Empty, Input, Space, Tag, Typography } from "antd";
+import React from "react";
+import {
+  getStudioGraphCategory,
+  STUDIO_GRAPH_CATEGORIES,
+} from "@/shared/studio/graph";
+
+type WorkflowStudioNodeLibraryProps = {
+  readonly onClose: () => void;
+  readonly onInsertNode: (stepType: string) => void;
+  readonly open: boolean;
+};
+
+function formatStepType(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
+  onClose,
+  onInsertNode,
+  open,
+}) => {
+  const [query, setQuery] = React.useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredCategories = React.useMemo(
+    () =>
+      STUDIO_GRAPH_CATEGORIES.map((category) => ({
+        ...category,
+        items: category.items.filter((stepType) => {
+          if (!normalizedQuery) {
+            return true;
+          }
+
+          return (
+            stepType.toLowerCase().includes(normalizedQuery) ||
+            formatStepType(stepType).toLowerCase().includes(normalizedQuery) ||
+            category.label.toLowerCase().includes(normalizedQuery)
+          );
+        }),
+      })).filter((category) => category.items.length > 0),
+    [normalizedQuery],
+  );
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <aside
+      aria-label="Node library"
+      style={{
+        background: "#ffffff",
+        borderRight: "1px solid #e5e7eb",
+        bottom: 0,
+        boxShadow: "10px 0 30px rgba(15, 23, 42, 0.08)",
+        left: 0,
+        overflow: "auto",
+        padding: 20,
+        position: "fixed",
+        top: 0,
+        width: 380,
+        zIndex: 40,
+      }}
+    >
+      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Space
+          align="center"
+          style={{ justifyContent: "space-between", width: "100%" }}
+        >
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            Node library
+          </Typography.Title>
+          <Button onClick={onClose} size="small">
+            Close
+          </Button>
+        </Space>
+        <Input
+          allowClear
+          aria-label="Search nodes"
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search nodes"
+          prefix={<SearchOutlined />}
+          value={query}
+        />
+        {filteredCategories.length === 0 ? (
+          <Empty description="No nodes match this search." image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          filteredCategories.map((category) => (
+            <section key={category.key}>
+              <Space
+                align="center"
+                style={{ justifyContent: "space-between", width: "100%" }}
+              >
+                <Typography.Text strong>{category.label}</Typography.Text>
+                <Tag color={category.color}>{category.items.length}</Tag>
+              </Space>
+              <div
+                style={{
+                  display: "grid",
+                  gap: 8,
+                  marginTop: 10,
+                }}
+              >
+                {category.items.map((stepType) => {
+                  const itemCategory = getStudioGraphCategory(stepType);
+                  return (
+                    <button
+                      aria-label={`Insert ${formatStepType(stepType)} node`}
+                      key={stepType}
+                      onClick={() => onInsertNode(stepType)}
+                      style={{
+                        alignItems: "center",
+                        background: "#ffffff",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        display: "flex",
+                        gap: 10,
+                        padding: "10px 12px",
+                        textAlign: "left",
+                      }}
+                      type="button"
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          background: itemCategory.color,
+                          borderRadius: 999,
+                          display: "inline-block",
+                          height: 10,
+                          width: 10,
+                        }}
+                      />
+                      <span style={{ display: "grid", gap: 2 }}>
+                        <Typography.Text strong>
+                          {formatStepType(stepType)}
+                        </Typography.Text>
+                        <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
+                          {stepType}
+                        </Typography.Text>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ))
+        )}
+      </Space>
+    </aside>
+  );
+};
+
+export default WorkflowStudioNodeLibrary;

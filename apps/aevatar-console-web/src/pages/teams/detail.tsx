@@ -17,6 +17,7 @@ import {
 import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
+  buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
   readTeamDetailRouteState,
   type TeamDetailTab,
@@ -760,21 +761,28 @@ const TeamDetailPage: React.FC = () => {
   const teamRosterRows = React.useMemo(
     () =>
       (teamMembersQuery.data?.members ?? []).map((member) => ({
-        buildStudioHref: buildTeamStudioHref({
-          memberId: member.memberId,
-          mode: "build-member",
-          returnTo: buildTeamReturnHref(member.memberId),
-          scopeId,
-          teamId: selectedTeamId,
-        }),
+        buildStudioHref:
+          trimText(member.implementationKind).toLowerCase() === "workflow"
+            ? buildTeamMemberWorkflowStudioHref({
+                memberId: member.memberId,
+                mode: "edit-member",
+                scopeId,
+                teamId: selectedTeamId,
+              })
+            : buildTeamStudioHref({
+                memberId: member.memberId,
+                mode: "build-member",
+                returnTo: buildTeamReturnHref(member.memberId),
+                scopeId,
+                teamId: selectedTeamId,
+              }),
         description: trimText(member.description),
         canInvokeAsEntry:
           normalizeStatus(member.lifecycleStage) === "bind_ready" &&
           trimText(member.publishedServiceId).length > 0,
-        editStudioHref: buildTeamStudioHref({
+        editStudioHref: buildTeamMemberWorkflowStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
-          returnTo: buildTeamReturnHref(member.memberId),
           scopeId,
           teamId: selectedTeamId,
         }),
@@ -807,6 +815,15 @@ const TeamDetailPage: React.FC = () => {
         teamId: selectedTeamId,
       }),
     [buildTeamReturnHref, scopeId, selectedTeamId],
+  );
+  const createWorkflowMemberHref = React.useMemo(
+    () =>
+      buildTeamMemberWorkflowStudioHref({
+        mode: "create-member",
+        scopeId,
+        teamId: selectedTeamId,
+      }),
+    [scopeId, selectedTeamId],
   );
   const latestVisibleUpdate =
     teamSummaryQuery.data?.updatedAt ||
@@ -1513,6 +1530,7 @@ const TeamDetailPage: React.FC = () => {
     return (
       <TeamMembersTab
         createMemberHref={createMemberHref}
+        createWorkflowMemberHref={createWorkflowMemberHref}
         entryActionBusyMemberId={entryActionBusyMemberId}
         onClearEntry={
           teamSummaryQuery.data && !isTeamArchived && entryMemberId

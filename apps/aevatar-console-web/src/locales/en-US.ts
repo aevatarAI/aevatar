@@ -314,6 +314,7 @@ const enUSMessages = {
   'teams.members.actions.build': 'Build',
   'teams.members.actions.clearEntry': 'Clear entry member',
   'teams.members.actions.createFirst': 'Create first member',
+  'teams.members.actions.createWorkflowMember': 'Create workflow member',
   'teams.members.actions.editInStudio': 'Edit in Studio',
   'teams.members.actions.setEntry': 'Set as entry member',
   'teams.members.columns.actions': 'Actions',

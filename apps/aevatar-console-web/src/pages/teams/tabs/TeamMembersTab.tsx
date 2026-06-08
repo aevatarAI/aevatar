@@ -37,6 +37,7 @@ type TeamMembersTabProps = {
   readonly rosterSyncing?: boolean;
   readonly rosterTeamId?: string;
   readonly createMemberHref?: string;
+  readonly createWorkflowMemberHref?: string;
   readonly entryActionBusyMemberId?: string;
   readonly onClearEntry?: () => void;
   readonly onNavigate?: (href: string) => void;
@@ -76,6 +77,7 @@ const EllipsisText: React.FC<{
 
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   createMemberHref = "",
+  createWorkflowMemberHref = "",
   entryActionBusyMemberId = "",
   onClearEntry,
   onNavigate,
@@ -322,15 +324,34 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                 id: "teams.members.empty.description",
               })}
             />
-            {createMemberHref ? (
-              <div style={{ display: "flex", justifyContent: "center" }}>
-                <Button
-                  href={createMemberHref}
-                  onClick={handleNavigate(createMemberHref)}
-                  type="primary"
-                >
-                  {intl.formatMessage({ id: "teams.members.actions.createFirst" })}
-                </Button>
+            {createMemberHref || createWorkflowMemberHref ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  justifyContent: "center",
+                }}
+              >
+                {createWorkflowMemberHref ? (
+                  <Button
+                    href={createWorkflowMemberHref}
+                    onClick={handleNavigate(createWorkflowMemberHref)}
+                    type="primary"
+                  >
+                    {intl.formatMessage({
+                      id: "teams.members.actions.createWorkflowMember",
+                    })}
+                  </Button>
+                ) : null}
+                {createMemberHref ? (
+                  <Button
+                    href={createMemberHref}
+                    onClick={handleNavigate(createMemberHref)}
+                  >
+                    {intl.formatMessage({ id: "teams.members.actions.createFirst" })}
+                  </Button>
+                ) : null}
               </div>
             ) : null}
           </div>

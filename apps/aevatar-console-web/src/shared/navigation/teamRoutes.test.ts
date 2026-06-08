@@ -1,6 +1,7 @@
 import {
   buildTeamCreateHref,
   buildTeamDetailHref,
+  buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
   buildTeamsHref,
   readTeamDetailRouteState,
@@ -66,6 +67,36 @@ describe("teamRoutes", () => {
     ).toBe(
       "/studio?scopeId=scope-alpha&teamId=t-alpha&member=member%3Amember-alpha&step=build&returnTo=%2Fteams%2Fscope-alpha%2Ft-alpha%3FmemberId%3Dmember-alpha%26tab%3Dmembers",
     );
+  });
+
+  it("builds explicit Team member workflow studio routes", () => {
+    expect(
+      buildTeamMemberWorkflowStudioHref({
+        mode: "create-member",
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe("/teams/scope-alpha/t-alpha/members/new/workflow");
+
+    expect(
+      buildTeamMemberWorkflowStudioHref({
+        memberId: " member-alpha ",
+        mode: "edit-member",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe("/teams/scope-alpha/t-alpha/members/member-alpha/workflow");
+  });
+
+  it("keeps old Studio helpers on /studio", () => {
+    expect(
+      buildTeamStudioHref({
+        memberId: "member-alpha",
+        mode: "edit-member",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }).startsWith("/studio?"),
+    ).toBe(true);
   });
 
   it("preserves draft team names when returning to the create page", () => {

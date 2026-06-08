@@ -55,6 +55,18 @@ describe("console routes", () => {
     expect(findRoute(routes, "/teams").component).toBe("./teams");
     expect(findRoute(routes, "/teams/new").name).toBe("Create Team");
     expect(findRoute(routes, "/teams/new").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/teams/:scopeId/:teamId/members/new/workflow").component).toBe(
+      "./team-member-workflow-studio",
+    );
+    expect(findRoute(routes, "/teams/:scopeId/:teamId/members/:memberId/workflow").component).toBe(
+      "./team-member-workflow-studio",
+    );
+    expect(
+      findRouteIndex(routes, "/teams/:scopeId/:teamId/members/new/workflow"),
+    ).toBeLessThan(findRouteIndex(routes, "/teams/:scopeId/:teamId"));
+    expect(
+      findRouteIndex(routes, "/teams/:scopeId/:teamId/members/:memberId/workflow"),
+    ).toBeLessThan(findRouteIndex(routes, "/teams/:scopeId/:teamId"));
     expect(findRoute(routes, "/teams/:scopeId").component).toBe("./teams/detail");
     expect(findRoute(routes, "/runtime/gagents").name).toBe("Members");
     expect(findRoute(routes, "/scopes/assets").name).toBeUndefined();

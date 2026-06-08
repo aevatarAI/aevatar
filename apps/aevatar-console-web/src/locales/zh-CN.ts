@@ -299,6 +299,7 @@ const zhCNMessages = {
   'teams.members.actions.build': '构建',
   'teams.members.actions.clearEntry': '清除入口成员',
   'teams.members.actions.createFirst': '创建第一个成员',
+  'teams.members.actions.createWorkflowMember': '创建工作流成员',
   'teams.members.actions.editInStudio': '在 Studio 中编辑',
   'teams.members.actions.setEntry': '设为入口成员',
   'teams.members.columns.actions': '操作',

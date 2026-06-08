@@ -52,10 +52,18 @@ import {
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
-const STUDIO_HOST_ROUTES = new Set(["/studio"]);
+const STUDIO_HOST_ROUTES = new Set([
+  "/studio",
+  "/teams/:scopeId/:teamId/members/new/workflow",
+  "/teams/:scopeId/:teamId/members/:memberId/workflow",
+]);
 
 function isStudioHostRoute(pathname: string): boolean {
-  return STUDIO_HOST_ROUTES.has(pathname);
+  if (STUDIO_HOST_ROUTES.has(pathname)) {
+    return true;
+  }
+
+  return /^\/teams\/[^/]+\/[^/]+\/members\/(?:new|[^/]+)\/workflow$/.test(pathname);
 }
 
 function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {

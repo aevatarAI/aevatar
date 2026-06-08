@@ -161,6 +161,34 @@ export function buildTeamStudioHref(options: {
   });
 }
 
+export function buildTeamMemberWorkflowStudioHref(options: {
+  memberId?: string;
+  mode: 'create-member' | 'edit-member';
+  scopeId: string;
+  teamId: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+
+  if (options.mode === 'create-member') {
+    return `/teams/${encodeURIComponent(scopeId)}/${encodeURIComponent(teamId)}/members/new/workflow`;
+  }
+
+  const memberId = trimOptional(options.memberId);
+  if (!memberId) {
+    return buildTeamDetailHref({
+      scopeId,
+      tab: 'members',
+      teamId,
+    });
+  }
+
+  return `/teams/${encodeURIComponent(scopeId)}/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/workflow`;
+}
+
 export function readTeamDetailRouteState(
   search = typeof window === 'undefined' ? '' : window.location.search,
   pathname = typeof window === 'undefined' ? '' : window.location.pathname,

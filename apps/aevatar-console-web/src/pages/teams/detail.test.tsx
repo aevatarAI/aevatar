@@ -1561,26 +1561,69 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText("后端暂不支持团队测试")).toBeNull();
   });
 
-  it("routes member build actions into Studio with Team context", async () => {
+  it("routes workflow member build actions into the new workflow studio", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "构建" }));
 
-    expect(window.location.pathname).toBe("/studio");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("member")).toBe("member:member-team-alpha");
-    expect(params.get("step")).toBe("build");
-    expect(params.get("tab")).toBeNull();
-    expect(params.get("returnTo")).toBe(
-      "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
+    expect(window.location.pathname).toBe(
+      "/teams/scope-1/t-alpha/members/member-team-alpha/workflow",
     );
   });
 
-  it("opens Studio create-member mode from an empty Team roster", async () => {
+  it("routes Edit in Studio actions into the new workflow studio for every Team member", async () => {
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-agent-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Agent Alpha",
+          description: "Agent member",
+          implementationKind: "gagent",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "agent-service",
+          lastBoundRevisionId: "rev-agent",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "在 Studio 中编辑" }));
+
+    expect(window.location.pathname).toBe(
+      "/teams/scope-1/t-alpha/members/member-agent-alpha/workflow",
+    );
+  });
+
+  it("offers workflow creation on the new workflow studio route from an empty Team roster", async () => {
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "创建工作流成员" }));
+
+    expect(window.location.pathname).toBe(
+      "/teams/scope-1/t-alpha/members/new/workflow",
+    );
+  });
+
+  it("keeps the generic create-member action on the old Studio flow", async () => {
     (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",
       members: [],
