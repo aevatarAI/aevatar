@@ -208,6 +208,7 @@ public sealed record WorkflowScheduleConfigurationHttpRequest
     public bool Enabled { get; init; } = true;
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
     public string? ScopeId { get; init; }
+    public WorkflowScheduleAuthHttpRequest? Auth { get; init; }
 
     public WorkflowScheduleConfiguration ToConfiguration(string? fallbackScheduleId) =>
         new(
@@ -219,7 +220,35 @@ public sealed record WorkflowScheduleConfigurationHttpRequest
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
             Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            ScopeId: ScopeId);
+            ScopeId: ScopeId,
+            Auth: Auth?.ToAuth());
+}
+
+public sealed record WorkflowScheduleAuthHttpRequest
+{
+    public WorkflowScheduleNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
+
+    public WorkflowScheduleAuth ToAuth() =>
+        new(SenderNyxId?.ToSource());
+}
+
+public sealed record WorkflowScheduleNyxIdCredentialSourceHttpRequest
+{
+    public required WorkflowScheduleNyxIdSubjectRefHttpRequest Subject { get; init; }
+    public required string Scope { get; init; }
+
+    public WorkflowScheduleNyxIdCredentialSource ToSource() =>
+        new(Subject.ToSubject(), Scope);
+}
+
+public sealed record WorkflowScheduleNyxIdSubjectRefHttpRequest
+{
+    public required string Platform { get; init; }
+    public required string Tenant { get; init; }
+    public required string ExternalUserId { get; init; }
+
+    public WorkflowScheduleNyxIdSubjectRef ToSubject() =>
+        new(Platform.Trim().ToLowerInvariant(), Tenant.Trim(), ExternalUserId.Trim());
 }
 
 public sealed record WorkflowSchedulePreviewHttpRequest

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -18,14 +19,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private const int MaxFireRecordCount = 128;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
+    private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
 
     public ScheduledDispatchGAgent(
         IActorDispatchPort dispatchPort,
-        IScheduledServiceInvocationDispatchPort serviceInvocationDispatchPort)
+        IScheduledServiceInvocationDispatchPort serviceInvocationDispatchPort,
+        IScheduledServiceInvocationCredentialExchangePort credentialExchangePort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _serviceInvocationDispatchPort = serviceInvocationDispatchPort
             ?? throw new ArgumentNullException(nameof(serviceInvocationDispatchPort));
+        _credentialExchangePort = credentialExchangePort
+            ?? throw new ArgumentNullException(nameof(credentialExchangePort));
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -307,7 +312,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         var headers = BuildFireHeaders(scheduledFireAtUtc, idempotencyKey);
         if (ResolveTargetKind() == ScheduledDispatchTargetKindState.ServiceInvocation)
-            return BuildServiceInvocationDispatchEnvelope(headers, idempotencyKey);
+            return await BuildServiceInvocationDispatchEnvelopeAsync(headers, idempotencyKey, ct);
 
         var envelope = State.TriggerEnvelope?.Clone()
             ?? throw new InvalidOperationException("Scheduled dispatch trigger envelope is not configured.");
@@ -349,17 +354,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             envelope);
     }
 
-    private ScheduledDispatchEnvelope BuildServiceInvocationDispatchEnvelope(
+    private async Task<ScheduledDispatchEnvelope> BuildServiceInvocationDispatchEnvelopeAsync(
         IReadOnlyDictionary<string, string> headers,
-        string idempotencyKey)
+        string idempotencyKey,
+        CancellationToken ct)
     {
         var target = State.Target?.ServiceInvocation
             ?? throw new InvalidOperationException("Scheduled service invocation target is not configured.");
+        var token = await IssueSenderNyxIdTokenAsync(target.Auth?.SenderNyxId, ct);
         var request = new ServiceInvocationRequest
         {
             Identity = target.Identity?.Clone(),
             EndpointId = target.EndpointId ?? string.Empty,
-            Payload = EnrichServiceInvocationPayload(target.Payload, headers),
+            Payload = EnrichServiceInvocationPayload(target.Payload, headers, token),
             CommandId = idempotencyKey,
             CorrelationId = idempotencyKey,
             RevisionId = target.RevisionId ?? string.Empty,
@@ -389,7 +396,33 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             envelope);
     }
 
-    private static Any EnrichServiceInvocationPayload(Any? payload, IReadOnlyDictionary<string, string> headers)
+    private async Task<string?> IssueSenderNyxIdTokenAsync(
+        ScheduledServiceInvocationNyxIdCredentialSourceState? source,
+        CancellationToken ct)
+    {
+        if (source == null)
+            return null;
+
+        var exchange = await _credentialExchangePort.IssueSenderNyxIdAsync(
+            new ScheduledServiceInvocationNyxIdCredentialSource(
+                new ScheduledServiceInvocationNyxIdSubjectRef(
+                    source.Subject?.Platform ?? string.Empty,
+                    source.Subject?.Tenant ?? string.Empty,
+                    source.Subject?.ExternalUserId ?? string.Empty),
+                source.Scope ?? string.Empty),
+            ct);
+        if (exchange.Succeeded && !string.IsNullOrWhiteSpace(exchange.AccessToken))
+            return exchange.AccessToken.Trim();
+
+        throw new InvalidOperationException(string.IsNullOrWhiteSpace(exchange.Error)
+            ? "Scheduled service invocation sender NyxID credential exchange failed."
+            : exchange.Error.Trim());
+    }
+
+    private static Any EnrichServiceInvocationPayload(
+        Any? payload,
+        IReadOnlyDictionary<string, string> headers,
+        string? senderNyxIdAccessToken)
     {
         if (payload == null)
             throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
@@ -398,6 +431,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         foreach (var (key, value) in headers)
             chatRequest.Metadata[key] = value;
+        if (!string.IsNullOrWhiteSpace(senderNyxIdAccessToken))
+        {
+            var control = LLMControlContextMapper.FromPayload(chatRequest.LlmControl) with
+            {
+                SenderNyxIdAccessToken = senderNyxIdAccessToken.Trim(),
+            };
+            chatRequest.LlmControl = control.ToPayload();
+        }
+
         return Any.Pack(chatRequest);
     }
 
@@ -615,6 +657,28 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Payload = serviceInvocation.Payload?.Clone(),
             RevisionId = NormalizeOptional(serviceInvocation.RevisionId),
             Caller = serviceInvocation.Caller?.Clone(),
+            Auth = NormalizeServiceInvocationAuth(serviceInvocation.Auth),
+        };
+    }
+
+    private static ScheduledServiceInvocationAuthState? NormalizeServiceInvocationAuth(
+        ScheduledServiceInvocationAuthState? auth)
+    {
+        if (auth?.SenderNyxId == null)
+            return null;
+
+        return new ScheduledServiceInvocationAuthState
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                {
+                    Platform = NormalizeOptional(auth.SenderNyxId.Subject?.Platform),
+                    Tenant = NormalizeOptional(auth.SenderNyxId.Subject?.Tenant),
+                    ExternalUserId = NormalizeOptional(auth.SenderNyxId.Subject?.ExternalUserId),
+                },
+                Scope = NormalizeOptional(auth.SenderNyxId.Scope),
+            },
         };
     }
 

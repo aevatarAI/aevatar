@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Schedules;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
@@ -588,6 +589,184 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_ForServiceInvocationAuth_ShouldExchangeSenderNyxIdTokenAtFireTime()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch,
+            credentialExchange: credentialExchange);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                        LlmControl = new LLMControlContext(
+                            NyxIdAccessToken: null,
+                            NyxIdOrgToken: null,
+                            SenderNyxIdAccessToken: null,
+                            ModelOverride: "sonnet",
+                            NyxIdRoutePreference: null,
+                            MaxToolRoundsOverride: null,
+                            UserMemoryPrompt: null).ToPayload(),
+                    }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-1",
+                                ExternalUserId = "ou-user-1",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        credentialExchange.Sources.Should().ContainSingle()
+            .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
+        var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
+        var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-1");
+        chatRequest.LlmControl.ModelOverride.Should().Be("sonnet");
+        chatRequest.Metadata.Should().NotContainValue("sender-token-1");
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForServiceInvocationAuthFailure_ShouldRecordFailureBeforeDispatch()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(error: "exchange failed");
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch,
+            credentialExchange: credentialExchange);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-1",
+                                ExternalUserId = "ou-user-1",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        credentialExchange.Sources.Should().ContainSingle();
+        serviceInvocationDispatch.Requests.Should().BeEmpty();
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Be("exchange failed");
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForDuplicateServiceInvocationAuth_ShouldNotExchangeAgain()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch,
+            credentialExchange: credentialExchange);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-1",
+                                ExternalUserId = "ou-user-1",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        credentialExchange.Sources.Should().ContainSingle();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task HandleFireAsync_ShouldRecordFailure_WhenDispatchIsNotAccepted()
     {
         var eventStore = new TestEventStore();
@@ -898,11 +1077,13 @@ public sealed class ScheduledDispatchGAgentTests
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
         RecordingRuntimeCallbackScheduler? callbackScheduler = null,
-        RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null)
+        RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null,
+        RecordingScheduledServiceInvocationCredentialExchangePort? credentialExchange = null)
     {
         var agent = new ScheduledDispatchGAgent(
             dispatch,
-            serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort())
+            serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort(),
+            credentialExchange ?? new RecordingScheduledServiceInvocationCredentialExchangePort())
         {
             Services = new TestServiceProvider(callbackScheduler),
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(eventStore),
@@ -1052,6 +1233,24 @@ public sealed class ScheduledDispatchGAgentTests
                 throw DispatchException;
 
             return Task.FromResult(ReceiptFactory(request));
+        }
+    }
+
+    private sealed class RecordingScheduledServiceInvocationCredentialExchangePort(
+        string? accessToken = null,
+        string? error = null) : IScheduledServiceInvocationCredentialExchangePort
+    {
+        public List<ScheduledServiceInvocationNyxIdCredentialSource> Sources { get; } = [];
+
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+            ScheduledServiceInvocationNyxIdCredentialSource source,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Sources.Add(source);
+            return Task.FromResult(error == null
+                ? ScheduledServiceInvocationCredentialExchangeResult.Success(accessToken ?? "sender-token")
+                : ScheduledServiceInvocationCredentialExchangeResult.Failure(error));
         }
     }
 

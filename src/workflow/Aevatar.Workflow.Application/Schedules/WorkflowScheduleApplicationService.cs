@@ -123,7 +123,8 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
                     BuildWorkflowServiceIdentity(configuration),
                     "chat",
                     Any.Pack(BuildWorkflowChatRequest(configuration)),
-                    configuration.RevisionId)),
+                    configuration.RevisionId,
+                    Auth: BuildWorkflowServiceInvocationAuth(configuration))),
             configuration.CronExpression,
             configuration.Timezone,
             configuration.Enabled,
@@ -155,6 +156,24 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             request.Metadata[key] = value;
 
         return request;
+    }
+
+    private static ScheduledServiceInvocationAuth? BuildWorkflowServiceInvocationAuth(
+        WorkflowScheduleConfiguration configuration)
+    {
+        if (configuration.Auth?.SenderNyxId == null)
+            return null;
+
+        var senderNyxId = configuration.Auth.SenderNyxId;
+        if (senderNyxId.Subject == null)
+            throw new ArgumentException("Sender NyxID subject is required.", nameof(configuration.Auth));
+
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef(
+                NormalizeRequired(senderNyxId.Subject.Platform, nameof(senderNyxId.Subject.Platform)),
+                NormalizeRequired(senderNyxId.Subject.Tenant, nameof(senderNyxId.Subject.Tenant)),
+                NormalizeRequired(senderNyxId.Subject.ExternalUserId, nameof(senderNyxId.Subject.ExternalUserId))),
+            NormalizeRequired(senderNyxId.Scope, nameof(senderNyxId.Scope))));
     }
 
     private static IReadOnlyDictionary<string, string> BuildWorkflowScheduleHeaders(

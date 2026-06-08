@@ -252,6 +252,7 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
     public required Any Payload { get; init; }
     public string? RevisionId { get; init; }
     public ServiceInvocationCaller? Caller { get; init; }
+    public ScheduledServiceInvocationAuthHttpRequest? Auth { get; init; }
 
     public ScheduledDispatchTargetDescriptor ToTarget() =>
         new(
@@ -261,7 +262,35 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
                 EndpointId,
                 Payload,
                 RevisionId,
-                Caller));
+                Caller,
+                Auth?.ToAuth()));
+}
+
+public sealed record ScheduledServiceInvocationAuthHttpRequest
+{
+    public ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
+
+    public ScheduledServiceInvocationAuth ToAuth() =>
+        new(SenderNyxId?.ToSource());
+}
+
+public sealed record ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+{
+    public required ScheduledServiceInvocationNyxIdSubjectRefHttpRequest Subject { get; init; }
+    public required string Scope { get; init; }
+
+    public ScheduledServiceInvocationNyxIdCredentialSource ToSource() =>
+        new(Subject.ToSubject(), Scope);
+}
+
+public sealed record ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+{
+    public required string Platform { get; init; }
+    public required string Tenant { get; init; }
+    public required string ExternalUserId { get; init; }
+
+    public ScheduledServiceInvocationNyxIdSubjectRef ToSubject() =>
+        new(Platform.Trim().ToLowerInvariant(), Tenant.Trim(), ExternalUserId.Trim());
 }
 
 public sealed record ScheduledDispatchPreviewHttpRequest
