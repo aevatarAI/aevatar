@@ -21,5 +21,6 @@
   <ItemGroup>
     <Protobuf Include="Queries/workflow_projection_query_models.proto" GrpcServices="None" />
     <Protobuf Include="Runs/workflow_run_events.proto" GrpcServices="None" />
+    <Protobuf Include="Schedules/workflow_schedule_events.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

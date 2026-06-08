@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package aevatar.workflow.schedules;
+
+option csharp_namespace = "Aevatar.Workflow.Application.Abstractions.Schedules";
+
+message WorkflowScheduleDueEvent {
+  string schedule_id = 1;
+  int64 scheduled_fire_at_unix_time_ms = 2;
+}

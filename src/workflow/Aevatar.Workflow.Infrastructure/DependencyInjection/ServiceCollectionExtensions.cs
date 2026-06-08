@@ -2,8 +2,11 @@ using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Schedules;
+using Aevatar.Workflow.Core.Schedules;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
+using Aevatar.Workflow.Infrastructure.Schedules;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Projection.Workflows;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +35,34 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowDefinitionParser>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
+        return services;
+    }
+
+    public static IServiceCollection AddWorkflowScheduleInfrastructure(
+        this IServiceCollection services,
+        Action<WorkflowScheduleStoreOptions>? configureStore = null,
+        Action<WorkflowScheduleWakeupOptions>? configureWakeup = null)
+    {
+        services.AddOptions<WorkflowScheduleStoreOptions>();
+        if (configureStore != null)
+            services.Configure(configureStore);
+
+        services.AddOptions<WorkflowScheduleWakeupOptions>();
+        if (configureWakeup != null)
+            services.Configure(configureWakeup);
+
+        services.TryAddSingleton<IWorkflowScheduleStore, FileWorkflowScheduleStore>();
+        services.Replace(ServiceDescriptor.Singleton<IWorkflowScheduleDueEventHandlerPort, WorkflowScheduleDueEventHandlerPort>());
+        services.Replace(ServiceDescriptor.Singleton<IWorkflowScheduleWakeupScheduler>(sp =>
+        {
+            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkflowScheduleWakeupOptions>>().Value;
+            var callbacks = sp.GetService<Aevatar.Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>();
+            var runtime = sp.GetService<Aevatar.Foundation.Abstractions.IActorRuntime>();
+            return options.UseOrleansReminders && callbacks != null && runtime != null
+                ? ActivatorUtilities.CreateInstance<OrleansReminderWorkflowScheduleWakeupScheduler>(sp)
+                : new NoopWorkflowScheduleWakeupScheduler();
+        }));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowScheduleDispatcherHostedService>());
         return services;
     }
 
