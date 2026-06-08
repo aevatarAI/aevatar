@@ -38,7 +38,7 @@ public sealed class AgentToolReceiptRenderer : IAgentToolReceiptRenderer
         var status = receipt.Status switch
         {
             AgentToolReceiptStatus.Success => "Completed",
-            AgentToolReceiptStatus.ApprovalRequired => "Approval required",
+            AgentToolReceiptStatus.ApprovalRequired => "Approval pending",
             AgentToolReceiptStatus.Denied => "Denied",
             AgentToolReceiptStatus.Error => "Failed",
             _ => string.Empty,
@@ -101,7 +101,7 @@ public sealed class AgentToolReceiptRenderer : IAgentToolReceiptRenderer
         if (!string.IsNullOrWhiteSpace(receipt.ApprovalRequestId) &&
             receipt.Status == AgentToolReceiptStatus.ApprovalRequired)
         {
-            parts.Add($"approval={receipt.ApprovalRequestId.Trim()}");
+            parts.Add($"local_request={receipt.ApprovalRequestId.Trim()}");
         }
 
         return string.Join(", ", parts);

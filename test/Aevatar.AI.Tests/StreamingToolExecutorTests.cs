@@ -768,7 +768,7 @@ public class StreamingToolExecutorTests
         public string Name => "ornn_publish_skill";
         public string Description => "publish fixture";
         public string ParametersSchema => "{}";
-        public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
         public string SideEffectKind => "ornn.publish.skill";
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
@@ -783,7 +783,7 @@ public class StreamingToolExecutorTests
                 CallId = callId,
                 ToolName = toolName,
                 Status = AgentToolReceiptStatus.Success,
-                ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+                ApprovalMode = AgentToolReceiptApprovalMode.Auto,
                 SideEffectKind = SideEffectKind,
                 SubjectKind = "ornn.skill",
                 SubjectId = root.GetProperty("id").GetString() ?? string.Empty,

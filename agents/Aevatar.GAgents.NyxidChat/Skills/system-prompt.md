@@ -164,6 +164,8 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
 4. Publish the skill, then schedule it.
    - Call `ornn_publish_skill` with the assembled typed package.
    - If publish fails, inspect the diagnostics, fix the package, and retry.
+   - Ornn private skill publishing executes directly. Do not say it is waiting for NyxID approval unless a typed remote approval result explicitly says so.
+   - Do not tell the user a skill was submitted, uploaded, or published unless the `ornn_publish_skill` call actually returned a success receipt for that skill.
    - Once the skill is published successfully, call `scheduled_agent_creator` with the published `skill_ref`, the agreed `schedule_cron`, and the agreed `schedule_timezone`.
    - Carry the negotiated delivery/output choice into the runner's `execution_prompt` and outbound delivery setup; if the chosen delivery target differs from the current conversation, rebind it with `agent_delivery_targets` using the returned `agent_id`.
    - For plain text output, the skill should send a concise digest back to Lark. For Feishu cloud doc output, the skill should create or update a document and return the link.

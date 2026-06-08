@@ -83,8 +83,8 @@ public sealed class AgentToolReceiptRendererTests
                 },
             ]);
 
-        rendered.Should().Contain("[tool receipt] Approval required: draft-skill");
-        rendered.Should().Contain("approval=approval-1");
+        rendered.Should().Contain("[tool receipt] Approval pending: draft-skill");
+        rendered.Should().Contain("local_request=approval-1");
     }
 
     [Theory]

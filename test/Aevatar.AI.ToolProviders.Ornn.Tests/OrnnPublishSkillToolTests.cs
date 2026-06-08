@@ -12,12 +12,12 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class OrnnPublishSkillToolTests
 {
     [Fact]
-    public void ToolMetadata_ShouldExposePrivatePublishToolWithApproval()
+    public void ToolMetadata_ShouldExposePrivatePublishToolWithAutoApproval()
     {
         var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));
 
         tool.Name.Should().Be("ornn_publish_skill");
-        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         tool.SideEffectKind.Should().Be("ornn.publish.skill");
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         var root = schema.RootElement;

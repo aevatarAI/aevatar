@@ -28,10 +28,11 @@ public sealed class OrnnPublishSkillTool : IAgentTool
 
     public string Description =>
         "Publish a new private Ornn skill package for the current NyxID caller. " +
+        "Private publishing executes directly and does not require NyxID approval. " +
         "Use only after building a complete skill from typed fields; this validates workflow YAML, scripts, package format, then uploads the ZIP. " +
         "The tool never accepts credentials, service routing fields, raw file maps, metadata bags, public visibility, or skip-validation flags.";
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
     public string SideEffectKind => "ornn.publish.skill";
 
@@ -46,7 +47,7 @@ public sealed class OrnnPublishSkillTool : IAgentTool
             CallId = callId ?? string.Empty,
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
             Status = AgentToolReceiptStatus.Success,
-            ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+            ApprovalMode = AgentToolReceiptApprovalMode.Auto,
             IsDestructive = false,
             SideEffectKind = SideEffectKind,
             SubjectKind = "ornn.skill",
