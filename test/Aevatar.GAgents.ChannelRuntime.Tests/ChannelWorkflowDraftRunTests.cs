@@ -1,12 +1,14 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -117,6 +119,199 @@ public sealed class ChannelWorkflowDraftRunTests
         command.RunId.Should().Be("workflow-draft-run-1");
         command.Request.TargetActorId.Should().Be("conversation-actor-1");
         command.Request.ReplyToken.Should().Be("reply-token-1");
+    }
+
+    [Fact]
+    public async Task InteractionPort_ShouldBuildWorkflowRequestAndDispatchMappedSuccessFrames()
+    {
+        var workflow = new RecordingWorkflowChatRunInteractionPort
+        {
+            Frames =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        Delta = "hello",
+                    },
+                },
+                new WorkflowRunEventEnvelope
+                {
+                    RunFinished = new WorkflowRunFinishedEventPayload
+                    {
+                        Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+                    },
+                },
+            ],
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(dispatch, workflow);
+        var request = BuildWorkflowRequest();
+
+        await port.StartWorkflowInteractionAsync("channel-workflow-draft-run:workflow-draft-run-1", request, CancellationToken.None);
+
+        var workflowRequest = await workflow.WaitForRequestAsync();
+        workflowRequest.Prompt.Should().Be("/workflow run daily-greeting");
+        workflowRequest.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
+        workflowRequest.Source.ActorId.Should().Be("workflow-actor-1");
+        workflowRequest.Source.WorkflowName.Should().Be("daily-greeting");
+        workflowRequest.SessionId.Should().Be("workflow-draft-run-1");
+        workflowRequest.ScopeId.Should().Be("scope-1");
+        workflowRequest.CallerCredential.Should().Be(new WorkflowCallerCredential("user-token-1"));
+        workflowRequest.Headers.Should().Contain("registration_id", "reg-1");
+        workflowRequest.Metadata.Should().Contain("channel.registration_id", "reg-1");
+        workflowRequest.Metadata.Should().Contain("channel.correlation_id", "msg-1");
+        workflowRequest.CommandIdSeed.Should().Be("workflow-draft-run-1");
+        workflowRequest.CorrelationIdSeed.Should().Be("msg-1");
+
+        var envelopes = await dispatch.WaitForEnvelopeCountAsync(3);
+        envelopes.Should().OnlyContain(x => x.ActorId == "channel-workflow-draft-run:workflow-draft-run-1");
+        var text = envelopes[0].Envelope.Payload.Unpack<ChannelWorkflowDraftRunFrameObserved>();
+        text.Frame.TextMessageContent.Delta.Should().Be("hello");
+        text.Request.RunId.Should().Be("workflow-draft-run-1");
+
+        var finished = envelopes[1].Envelope.Payload.Unpack<ChannelWorkflowDraftRunFrameObserved>();
+        finished.Frame.RunFinished.ResultOutput.Should().Be("done");
+
+        var completed = envelopes[2].Envelope.Payload.Unpack<ChannelWorkflowDraftRunInteractionCompleted>();
+        completed.Succeeded.Should().BeTrue();
+        completed.Completed.Should().BeTrue();
+        completed.ErrorCode.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InteractionPort_ShouldMapWorkflowErrorAndStoppedFrames()
+    {
+        var workflow = new RecordingWorkflowChatRunInteractionPort
+        {
+            Frames =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    RunError = new WorkflowRunErrorEventPayload
+                    {
+                        Message = "boom",
+                        Code = "bad_input",
+                    },
+                },
+                new WorkflowRunEventEnvelope
+                {
+                    RunStopped = new WorkflowRunStoppedEventPayload
+                    {
+                        Reason = "user canceled",
+                    },
+                },
+            ],
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(dispatch, workflow);
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            BuildWorkflowRequest(),
+            CancellationToken.None);
+
+        await workflow.WaitForRequestAsync();
+        var envelopes = await dispatch.WaitForEnvelopeCountAsync(3);
+        var error = envelopes[0].Envelope.Payload.Unpack<ChannelWorkflowDraftRunFrameObserved>();
+        error.Frame.RunError.Message.Should().Be("boom");
+        error.Frame.RunError.Code.Should().Be("bad_input");
+
+        var stopped = envelopes[1].Envelope.Payload.Unpack<ChannelWorkflowDraftRunFrameObserved>();
+        stopped.Frame.RunStopped.Reason.Should().Be("user canceled");
+    }
+
+    [Fact]
+    public async Task InteractionPort_ShouldDispatchStartFailureCompletion()
+    {
+        var workflow = new RecordingWorkflowChatRunInteractionPort
+        {
+            Result = CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Failure(WorkflowChatRunStartError.WorkflowNotFound),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(dispatch, workflow);
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            BuildWorkflowRequest(),
+            CancellationToken.None);
+
+        await workflow.WaitForRequestAsync();
+        var completion = await dispatch.WaitForSinglePayloadAsync<ChannelWorkflowDraftRunInteractionCompleted>();
+        completion.Succeeded.Should().BeFalse();
+        completion.Completed.Should().BeFalse();
+        completion.ErrorCode.Should().Be("workflow_start_failed:WorkflowNotFound");
+        completion.ErrorSummary.Should().Be("Workflow start failed: WorkflowNotFound");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InteractionPort_ShouldDispatchUnknownCompletion_WhenFinalizeResultIsMissingOrIncomplete(
+        bool missingFinalizeResult)
+    {
+        var receipt = new WorkflowChatRunAcceptedReceipt(
+            "workflow-actor-1",
+            "daily-greeting",
+            "workflow-draft-run-1",
+            "msg-1");
+        var workflow = new RecordingWorkflowChatRunInteractionPort
+        {
+            Result = missingFinalizeResult
+                ? new CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                {
+                    Succeeded = true,
+                    Error = WorkflowChatRunStartError.None,
+                    Receipt = receipt,
+                    Completion = WorkflowProjectionCompletionStatus.Unknown,
+                    Completed = false,
+                    FinalizeResult = null,
+                }
+                : CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(
+                        receipt,
+                        new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                            WorkflowProjectionCompletionStatus.Unknown,
+                            false)),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(dispatch, workflow);
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            BuildWorkflowRequest(),
+            CancellationToken.None);
+
+        await workflow.WaitForRequestAsync();
+        var completion = await dispatch.WaitForSinglePayloadAsync<ChannelWorkflowDraftRunInteractionCompleted>();
+        completion.Succeeded.Should().BeTrue();
+        completion.Completed.Should().BeFalse();
+        completion.ErrorCode.Should().Be("workflow_completion_unknown");
+        completion.ErrorSummary.Should().Be("Workflow ended without a terminal frame.");
+    }
+
+    [Fact]
+    public async Task InteractionPort_ShouldDispatchExceptionCompletion()
+    {
+        var workflow = new RecordingWorkflowChatRunInteractionPort
+        {
+            Exception = new InvalidOperationException("workflow execution failed"),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(dispatch, workflow);
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            BuildWorkflowRequest(),
+            CancellationToken.None);
+
+        await workflow.WaitForRequestAsync();
+        var completion = await dispatch.WaitForSinglePayloadAsync<ChannelWorkflowDraftRunInteractionCompleted>();
+        completion.Succeeded.Should().BeFalse();
+        completion.Completed.Should().BeFalse();
+        completion.ErrorCode.Should().Be("workflow_draft_run_exception");
+        completion.ErrorSummary.Should().Be("Workflow draft-run failed.");
     }
 
     [Fact]
@@ -505,6 +700,16 @@ public sealed class ChannelWorkflowDraftRunTests
             ObservedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
+    private static ChannelWorkflowDraftRunInteractionPort CreateInteractionPort(
+        RecordingActorDispatchPort dispatch,
+        IWorkflowChatRunInteractionPort workflowInteractionPort) =>
+        new(
+            new RecordingActorRuntime(),
+            dispatch,
+            NullLogger<ChannelWorkflowDraftRunInteractionPort>.Instance,
+            workflowInteractionPort,
+            TimeProvider.System);
+
     private static async Task<ChannelWorkflowDraftRunGAgent> CreateWorkflowDraftRunAgentAsync(
         IActorDispatchPort dispatchPort,
         IChannelWorkflowDraftRunInteractionPort? workflowInteractionPort)
@@ -553,6 +758,53 @@ public sealed class ChannelWorkflowDraftRunTests
             ct.ThrowIfCancellationRequested();
             Started.Add((runActorId, request.Clone()));
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingWorkflowChatRunInteractionPort : IWorkflowChatRunInteractionPort
+    {
+        private readonly TaskCompletionSource<WorkflowChatRunRequest> _request =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<WorkflowRunEventEnvelope> Frames { get; init; } = [];
+
+        public Exception? Exception { get; init; }
+
+        public CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>? Result { get; init; }
+
+        public async Task<WorkflowChatRunRequest> WaitForRequestAsync() =>
+            await _request.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        public async Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+            WorkflowChatRunRequest request,
+            Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _request.TrySetResult(request);
+            if (Exception is not null)
+                throw Exception;
+
+            foreach (var frame in Frames)
+            {
+                await emitAsync(frame, ct);
+            }
+
+            if (Result is not null)
+                return Result;
+
+            var receipt = new WorkflowChatRunAcceptedReceipt(
+                request.Source.ActorId ?? "workflow-actor-1",
+                request.Source.WorkflowName ?? "daily-greeting",
+                request.CommandIdSeed ?? "workflow-draft-run-1",
+                request.CorrelationIdSeed ?? "msg-1");
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(
+                    receipt,
+                    new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                        WorkflowProjectionCompletionStatus.Completed,
+                        true));
         }
     }
 
@@ -611,13 +863,56 @@ public sealed class ChannelWorkflowDraftRunTests
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
+        private readonly object _gate = new();
+        private readonly Dictionary<int, TaskCompletionSource<IReadOnlyList<(string ActorId, EventEnvelope Envelope)>>> _countWaiters = [];
+
         public List<(string ActorId, EventEnvelope Envelope)> Envelopes { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            Envelopes.Add((actorId, envelope.Clone()));
+            ct.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                Envelopes.Add((actorId, envelope.Clone()));
+                foreach (var waiter in _countWaiters.Where(x => Envelopes.Count >= x.Key).ToArray())
+                {
+                    _countWaiters.Remove(waiter.Key);
+                    waiter.Value.TrySetResult(Envelopes.Select(CloneDispatch).ToList());
+                }
+            }
+
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
+
+        public async Task<T> WaitForSinglePayloadAsync<T>()
+            where T : IMessage<T>, new()
+        {
+            var envelopes = await WaitForEnvelopeCountAsync(1);
+            return envelopes[0].Envelope.Payload.Unpack<T>();
+        }
+
+        public async Task<IReadOnlyList<(string ActorId, EventEnvelope Envelope)>> WaitForEnvelopeCountAsync(int count)
+        {
+            Task<IReadOnlyList<(string ActorId, EventEnvelope Envelope)>> task;
+            lock (_gate)
+            {
+                if (Envelopes.Count >= count)
+                    task = Task.FromResult<IReadOnlyList<(string ActorId, EventEnvelope Envelope)>>(
+                        Envelopes.Select(CloneDispatch).ToList());
+                else
+                {
+                    var waiter = new TaskCompletionSource<IReadOnlyList<(string ActorId, EventEnvelope Envelope)>>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    _countWaiters[count] = waiter;
+                    task = waiter.Task;
+                }
+            }
+
+            return await task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        private static (string ActorId, EventEnvelope Envelope) CloneDispatch((string ActorId, EventEnvelope Envelope) value) =>
+            (value.ActorId, value.Envelope.Clone());
     }
 
     private sealed class InMemoryEventStore : IEventStore
