@@ -141,6 +141,28 @@ const mockWorkflowDocument = {
   ],
 };
 
+const mockBranchingWorkflowDocument = {
+  ...mockWorkflowDocument,
+  steps: [
+    {
+      id: "triage",
+      type: "llm_call",
+      targetRole: "assistant",
+      parameters: { prompt_prefix: "Triage the request" },
+      next: "guard",
+      branches: { urgent: "guard" },
+    },
+    {
+      id: "guard",
+      type: "guard",
+      targetRole: "",
+      parameters: { check: "not_empty", on_fail: "fail" },
+      next: null,
+      branches: {},
+    },
+  ],
+};
+
 function createSseResponse(): Response {
   return {} as Response;
 }
@@ -601,7 +623,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
-  it("opens node detail and applies parameter edits into the workflow document", async () => {
+  it("opens the floating node inspector and applies parameter edits into the workflow document", async () => {
     window.history.replaceState(
       {},
       "",
@@ -637,7 +659,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       name: "Workflow Alpha",
       workflowId: "workflow-alpha",
       yaml: "name: Workflow Alpha\nsteps: []\n",
-      document: mockWorkflowDocument,
+      document: mockBranchingWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
     });
     (studioApi.saveWorkflow as jest.Mock).mockResolvedValue({
@@ -647,14 +669,33 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     await waitFor(() => {
-      expect(screen.getByText("nodes:1")).toBeTruthy();
+      expect(screen.getByText("nodes:2")).toBeTruthy();
     });
+    expect(screen.queryByLabelText("Node inspector")).toBeNull();
+
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
-    expect(screen.getByLabelText("Node detail")).toBeTruthy();
-    expect(screen.getByText("LLM call")).toBeTruthy();
+    const inspector = screen.getByLabelText("Node inspector");
+    expect(inspector).toBeTruthy();
+    expect(inspector).toHaveStyle({
+      position: "absolute",
+      width: "420px",
+    });
+    expect(screen.getByLabelText("Resize node inspector")).toBeTruthy();
+    expect(within(inspector).getAllByText("triage").length).toBeGreaterThan(0);
+    expect(within(inspector).getAllByText("LLM call").length).toBeGreaterThan(0);
+    expect(within(inspector).getByText("Basics")).toBeTruthy();
+    expect(within(inspector).getByText("Step ID")).toBeTruthy();
+    expect(within(inspector).getByText("Type")).toBeTruthy();
+    expect(within(inspector).getByText("Target role")).toBeTruthy();
+    expect(within(inspector).getByText("assistant")).toBeTruthy();
+    expect(within(inspector).getByText("Flow")).toBeTruthy();
+    expect(within(inspector).getByText("Next step")).toBeTruthy();
+    expect(within(inspector).getByText("guard")).toBeTruthy();
+    expect(within(inspector).getByText("Branches")).toBeTruthy();
+    expect(within(inspector).getByText("urgent -> guard")).toBeTruthy();
+    expect(within(inspector).getByText("Parameters")).toBeTruthy();
     expect(screen.queryByText("llm_call")).toBeNull();
     expect(screen.queryByText("Input")).toBeNull();
-    expect(screen.getByText("Parameters")).toBeTruthy();
     expect(screen.queryByText("Output")).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Node parameters"), {
@@ -684,7 +725,68 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
-  it("shows a node detail error for invalid parameter JSON", async () => {
+  it("keeps the node inspector mounted while switching selected nodes", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha/members/member-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockBranchingWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByText("nodes:2")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    const inspector = screen.getByLabelText("Node inspector");
+    expect(within(inspector).getAllByText("triage").length).toBeGreaterThan(0);
+    expect(within(inspector).getAllByText("LLM call").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "node:step:guard" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Node inspector")).toBe(inspector);
+      expect(within(inspector).getAllByText("Guard").length).toBeGreaterThan(0);
+      expect(within(inspector).getByText("No branches")).toBeTruthy();
+    });
+    expect(within(inspector).queryByText("triage")).toBeNull();
+  });
+
+  it("shows a node inspector error for invalid parameter JSON", async () => {
     window.history.replaceState(
       {},
       "",
@@ -853,10 +955,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(runActiveMemberButton).toBeEnabled();
     });
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    expect(screen.getByLabelText("Node inspector")).toBeTruthy();
     fireEvent.click(screen.getByTestId("workflow-run-options-button"));
     expect(await screen.findByLabelText("Run options panel")).toHaveStyle({
       borderLeft: "1px solid #e5e7eb",
     });
+    expect(screen.queryByLabelText("Node inspector")).toBeNull();
     fireEvent.change(screen.getByLabelText("Run input"), {
       target: { value: "Run the workflow" },
     });
