@@ -229,7 +229,7 @@ public sealed class ScopeBindingReadinessQueryServiceTests
                 CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
             ]),
         };
-        var service = CreateService(lifecyclePort, servingPort, new FakeServiceRevisionArtifactStore());
+        var service = CreateService(lifecyclePort, servingPort, CreateRevisionCatalogReader(preparedArtifactRevisionIds: []));
 
         var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
             "scope-a",
@@ -258,11 +258,11 @@ public sealed class ScopeBindingReadinessQueryServiceTests
                 CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100, enabledEndpointIds: ["chat"]),
             ]),
         };
-        var artifactStore = new FakeServiceRevisionArtifactStore(new Dictionary<string, PreparedServiceRevisionArtifact>(StringComparer.Ordinal)
+        var revisionCatalogReader = CreateRevisionCatalogReader(preparedArtifacts: new Dictionary<string, PreparedServiceRevisionArtifact>(StringComparer.Ordinal)
         {
-            ["scope-a:default:default:service-a:rev-ready"] = CreateArtifact("rev-ready", ["command"]),
+            ["rev-ready"] = CreateArtifact("rev-ready", ["command"]),
         });
-        var service = CreateService(lifecyclePort, servingPort, artifactStore);
+        var service = CreateService(lifecyclePort, servingPort, revisionCatalogReader);
 
         var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
             "scope-a",
@@ -411,17 +411,35 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     private static ScopeBindingReadinessQueryService CreateService(
         FakeServiceLifecycleQueryPort lifecyclePort,
         FakeServiceServingQueryPort servingPort,
-        FakeServiceRevisionArtifactStore? artifactStore = null) =>
-        new(lifecyclePort, servingPort, artifactStore ?? CreateArtifactStore(), Options.Create(DefaultOptions));
+        FakeServiceRevisionCatalogQueryReader? revisionCatalogReader = null) =>
+        new(lifecyclePort, servingPort, revisionCatalogReader ?? CreateRevisionCatalogReader(), Options.Create(DefaultOptions));
 
-    private static FakeServiceRevisionArtifactStore CreateArtifactStore() =>
-        new(new Dictionary<string, PreparedServiceRevisionArtifact>(StringComparer.Ordinal)
-        {
-            ["scope-a:default:default:service-a:rev-1"] = CreateArtifact("rev-1", ["chat"]),
-            ["scope-a:default:default:service-a:rev-new"] = CreateArtifact("rev-new", ["chat"]),
-            ["scope-a:default:default:service-a:rev-ready"] = CreateArtifact("rev-ready", ["chat", "command"]),
-            ["scope-a:default:default:service-a:rev-zero"] = CreateArtifact("rev-zero", ["chat"]),
-        });
+    private static FakeServiceRevisionCatalogQueryReader CreateRevisionCatalogReader(
+        IReadOnlyDictionary<string, PreparedServiceRevisionArtifact>? preparedArtifacts = null,
+        IReadOnlyList<string>? preparedArtifactRevisionIds = null)
+    {
+        preparedArtifacts ??= (preparedArtifactRevisionIds ?? ["rev-1", "rev-new", "rev-ready", "rev-zero"])
+            .ToDictionary(
+                revisionId => revisionId,
+                revisionId => CreateArtifact(revisionId, revisionId == "rev-ready" ? ["chat", "command"] : ["chat"]),
+                StringComparer.Ordinal);
+
+        return new FakeServiceRevisionCatalogQueryReader(new ServiceRevisionCatalogSnapshot(
+            ServiceKey: "scope-a:default:default:service-a",
+            Revisions: preparedArtifacts.Select(entry => new ServiceRevisionSnapshot(
+                RevisionId: entry.Key,
+                ImplementationKind: ServiceImplementationKind.Static.ToString(),
+                Status: "Prepared",
+                ArtifactHash: $"hash-{entry.Key}",
+                FailureReason: string.Empty,
+                Endpoints: [],
+                CreatedAt: DateTimeOffset.UtcNow,
+                PreparedAt: DateTimeOffset.UtcNow,
+                PublishedAt: null,
+                RetiredAt: null,
+                PreparedArtifact: entry.Value)).ToArray(),
+            UpdatedAt: DateTimeOffset.UtcNow));
+    }
 
     private static PreparedServiceRevisionArtifact CreateArtifact(
         string revisionId,
@@ -590,31 +608,18 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             Task.FromResult(TrafficView);
     }
 
-    private sealed class FakeServiceRevisionArtifactStore : IServiceRevisionArtifactStore
+    private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
     {
-        private readonly IReadOnlyDictionary<string, PreparedServiceRevisionArtifact> _artifacts;
+        private readonly ServiceRevisionCatalogSnapshot? _catalog;
 
-        public FakeServiceRevisionArtifactStore()
-            : this(new Dictionary<string, PreparedServiceRevisionArtifact>(StringComparer.Ordinal))
+        public FakeServiceRevisionCatalogQueryReader(ServiceRevisionCatalogSnapshot? catalog)
         {
+            _catalog = catalog;
         }
 
-        public FakeServiceRevisionArtifactStore(IReadOnlyDictionary<string, PreparedServiceRevisionArtifact> artifacts)
-        {
-            _artifacts = artifacts;
-        }
-
-        public Task SaveAsync(
-            string serviceKey,
-            string revisionId,
-            PreparedServiceRevisionArtifact artifact,
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(
+            ServiceIdentity identity,
             CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(
-            string serviceKey,
-            string revisionId,
-            CancellationToken ct = default) =>
-            Task.FromResult(_artifacts.TryGetValue($"{serviceKey}:{revisionId}", out var artifact) ? artifact.Clone() : null);
+            Task.FromResult(_catalog);
     }
 }

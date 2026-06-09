@@ -182,6 +182,21 @@ public sealed class StudioTeamEntryMemberResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_ShouldNotPinReadinessToLastBoundRevision()
+    {
+        var readinessPort = new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.Ready, invokeReady: true);
+        var resolver = new StudioTeamEntryMemberResolver(
+            new TeamQueryPort(NewTeam()),
+            new MemberQueryPort(NewMember()),
+            readinessPort);
+
+        await resolver.ResolveAsync(ScopeId, TeamId);
+
+        readinessPort.LastRequest.Should().NotBeNull();
+        readinessPort.LastRequest!.ExpectedRevisionId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ResolveAsync_ShouldThrowNotReady_WhenPreparedArtifactMissing()
     {
         var resolver = new StudioTeamEntryMemberResolver(
@@ -246,10 +261,14 @@ public sealed class StudioTeamEntryMemberResolverTests
             _invokeReady = invokeReady;
         }
 
+        public ScopeBindingReadinessRequest? LastRequest { get; private set; }
+
         public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
             ScopeBindingReadinessRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ScopeBindingReadinessSnapshot(
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new ScopeBindingReadinessSnapshot(
                 request.ScopeId,
                 request.ServiceId,
                 _status,
@@ -260,6 +279,7 @@ public sealed class StudioTeamEntryMemberResolverTests
                 RevisionId: request.ExpectedRevisionId ?? "rev-1",
                 DeploymentId: "dep-1",
                 ObservedAtUtc: DateTimeOffset.UtcNow));
+        }
     }
 
     private sealed class TeamQueryPort(StudioTeamSummaryResponse? team) : IStudioTeamQueryPort

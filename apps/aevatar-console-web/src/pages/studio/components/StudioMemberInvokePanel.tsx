@@ -1453,7 +1453,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             <Alert
               showIcon
               type="warning"
-              message="成员暂不可调用"
+              message={t("pages.studio.studiomemberinvokepanel.member.not.invokable", "Member is not invokable yet")}
               description={readinessBlockMessage}
             />
           ) : null}

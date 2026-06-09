@@ -107,7 +107,7 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutQueryReader(),
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
-            new NoOpRevisionArtifactStore(),
+            new NoOpRevisionCatalogQueryReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions()));
         Action nullServingPort = () => new ScopeBindingReadinessQueryService(
             new ServiceLifecycleQueryApplicationService(
@@ -115,9 +115,9 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRevisionCatalogQueryReader(),
                 new NoOpDeploymentCatalogQueryReader()),
             null!,
-            new NoOpRevisionArtifactStore(),
+            new NoOpRevisionCatalogQueryReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions()));
-        Action nullArtifactStore = () => new ScopeBindingReadinessQueryService(
+        Action nullRevisionCatalogReader = () => new ScopeBindingReadinessQueryService(
             new ServiceLifecycleQueryApplicationService(
                 new NoOpCatalogQueryReader(),
                 new NoOpRevisionCatalogQueryReader(),
@@ -139,12 +139,12 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutQueryReader(),
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
-            new NoOpRevisionArtifactStore(),
+            new NoOpRevisionCatalogQueryReader(),
             null!);
 
         nullLifecyclePort.Should().Throw<ArgumentNullException>();
         nullServingPort.Should().Throw<ArgumentNullException>();
-        nullArtifactStore.Should().Throw<ArgumentNullException>();
+        nullRevisionCatalogReader.Should().Throw<ArgumentNullException>();
         nullOptions.Should().Throw<ArgumentNullException>();
     }
 
@@ -310,22 +310,6 @@ public sealed class ApplicationServiceGuardTests
     {
         public Task<ServiceRolloutCommandObservationSnapshot?> GetAsync(string commandId, CancellationToken ct = default) =>
             Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
-    }
-
-    private sealed class NoOpRevisionArtifactStore : IServiceRevisionArtifactStore
-    {
-        public Task SaveAsync(
-            string serviceKey,
-            string revisionId,
-            PreparedServiceRevisionArtifact artifact,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<PreparedServiceRevisionArtifact?> GetAsync(
-            string serviceKey,
-            string revisionId,
-            CancellationToken ct = default) =>
-            Task.FromResult<PreparedServiceRevisionArtifact?>(null);
     }
 
     private sealed class NoOpInvocationDispatcher : IServiceInvocationDispatcher

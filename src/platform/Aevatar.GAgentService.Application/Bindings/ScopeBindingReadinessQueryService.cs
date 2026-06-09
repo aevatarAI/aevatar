@@ -11,18 +11,18 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
 {
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IServiceServingQueryPort _serviceServingQueryPort;
-    private readonly IServiceRevisionArtifactStore _artifactStore;
+    private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeBindingReadinessQueryService(
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceServingQueryPort serviceServingQueryPort,
-        IServiceRevisionArtifactStore artifactStore,
+        IServiceRevisionCatalogQueryReader revisionCatalogQueryReader,
         IOptions<ScopeWorkflowCapabilityOptions> options)
     {
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
         _serviceServingQueryPort = serviceServingQueryPort ?? throw new ArgumentNullException(nameof(serviceServingQueryPort));
-        _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
+        _revisionCatalogQueryReader = revisionCatalogQueryReader ?? throw new ArgumentNullException(nameof(revisionCatalogQueryReader));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
     }
@@ -121,8 +121,8 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
-        var serviceKey = ServiceKeys.Build(identity);
-        var artifact = await _artifactStore.GetAsync(serviceKey, eligibleTarget.RevisionId, ct).ConfigureAwait(false);
+        var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(identity, ct).ConfigureAwait(false);
+        var artifact = FindPreparedArtifact(revisionCatalog, eligibleTarget.RevisionId);
         if (!DoesArtifactExposeEndpoints(artifact, serviceEndpointIds))
         {
             return new ScopeBindingReadinessSnapshot(
@@ -213,6 +213,12 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
         return observedEndpointViews.Count == 0 || observedEndpointViews.All(endpoint => endpoint.Targets.Any(target =>
             IsEligibleTrafficTarget(target, expectedRevisionId, expectedDeploymentId)));
     }
+
+    private static PreparedServiceRevisionArtifact? FindPreparedArtifact(
+        ServiceRevisionCatalogSnapshot? catalog,
+        string revisionId) =>
+        catalog?.Revisions.FirstOrDefault(revision =>
+            string.Equals(revision.RevisionId, revisionId, StringComparison.Ordinal))?.PreparedArtifact;
 
     private static bool DoesArtifactExposeEndpoints(
         PreparedServiceRevisionArtifact? artifact,

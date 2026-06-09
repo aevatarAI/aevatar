@@ -1157,12 +1157,13 @@ function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
         ["lastBoundRevisionId", "LastBoundRevisionId"],
         "StudioMemberSummary.lastBoundRevisionId"
       ) ?? null,
-    invocationReadiness:
-      record.invocationReadiness == null && record.InvocationReadiness == null
-        ? null
-        : decodeStudioMemberInvocationReadiness(
+    ...(record.invocationReadiness == null && record.InvocationReadiness == null
+      ? {}
+      : {
+          invocationReadiness: decodeStudioMemberInvocationReadiness(
             record.invocationReadiness ?? record.InvocationReadiness
           ),
+        }),
     teamId:
       readNullableString(
         record,

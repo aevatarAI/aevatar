@@ -96,8 +96,7 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
         var readiness = await _readinessQueryPort.GetReadinessAsync(
             new ScopeBindingReadinessRequest(
                 ScopeId: team.ScopeId,
-                ServiceId: member.Summary.PublishedServiceId,
-                ExpectedRevisionId: NormalizeOptional(member.Summary.LastBoundRevisionId)),
+                ServiceId: member.Summary.PublishedServiceId),
             ct);
         if (readiness.Status != ScopeBindingReadinessStatus.Ready || !readiness.InvokeReady)
         {
@@ -113,12 +112,6 @@ public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
             TeamId: team.TeamId,
             EntryMemberId: entryMemberId,
             PublishedServiceId: member.Summary.PublishedServiceId);
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim() ?? string.Empty;
-        return normalized.Length == 0 ? null : normalized;
     }
 
     private static string MapReadinessReason(ScopeBindingReadinessStatus status) =>

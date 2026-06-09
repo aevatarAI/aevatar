@@ -88,6 +88,15 @@ describe('StudioMemberInvokePanel', () => {
       supportsAguiFrames: false,
       supportsSse: false,
       supportsWebSocket: false,
+      invocationReadiness: {
+        canInvoke: true,
+        status: 'ready',
+        reasonCode: 'ready',
+        message: 'Member endpoint is ready for invocation.',
+        revisionId: 'contract-rev',
+        deploymentId: 'dep-2',
+        observedAtUtc: '2026-03-26T07:02:00Z',
+      },
     });
     (parseBackendSSEStream as jest.Mock).mockImplementation(
       async function* () {},
@@ -902,6 +911,15 @@ describe('StudioMemberInvokePanel', () => {
       supportsAguiFrames: false,
       supportsSse: false,
       supportsWebSocket: false,
+      invocationReadiness: {
+        canInvoke: true,
+        status: 'ready',
+        reasonCode: 'ready',
+        message: 'Member endpoint is ready for invocation.',
+        revisionId: 'contract-rev',
+        deploymentId: 'dep-2',
+        observedAtUtc: '2026-03-26T07:02:00Z',
+      },
     });
 
     render(
