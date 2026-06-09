@@ -369,9 +369,14 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.executeWorkflow': '执行 Workflow',
+  'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
   'teamMemberWorkflowStudio.header.moreActionsAria': '更多 Workflow 操作',
+  'teamMemberWorkflowStudio.header.nodeActionsAria':
+    'Workflow 草稿和节点操作',
   'teamMemberWorkflowStudio.header.optionalTestPayload': '可选测试载荷',
+  'teamMemberWorkflowStudio.header.primaryActionsAria':
+    'Workflow 主操作',
   'teamMemberWorkflowStudio.header.runInput': '运行输入',
   'teamMemberWorkflowStudio.header.runInputPlaceholder':
     '本次 Workflow 运行的可选输入',
@@ -392,6 +397,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.publishMemberShort': '发布成员',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
   'teamMemberWorkflowStudio.header.unsavedChanges': '有未保存更改',
+  'teamMemberWorkflowStudio.header.viewsAria': 'Workflow 视图',
   'teamMemberWorkflowStudio.header.workflowRun': 'Workflow 运行',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
   'teamMemberWorkflowStudio.nodeDetail.apply': '应用',

@@ -386,9 +386,14 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
   'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
   'teamMemberWorkflowStudio.header.executeWorkflow': 'Execute workflow',
+  'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
   'teamMemberWorkflowStudio.header.moreActionsAria': 'More workflow actions',
+  'teamMemberWorkflowStudio.header.nodeActionsAria':
+    'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.optionalTestPayload': 'Optional test payload',
+  'teamMemberWorkflowStudio.header.primaryActionsAria':
+    'Workflow primary actions',
   'teamMemberWorkflowStudio.header.runInput': 'Run input',
   'teamMemberWorkflowStudio.header.runInputPlaceholder':
     'Optional input for this workflow run',
@@ -409,6 +414,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
   'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
+  'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowRun': 'Workflow run',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
   'teamMemberWorkflowStudio.nodeDetail.apply': 'Apply',

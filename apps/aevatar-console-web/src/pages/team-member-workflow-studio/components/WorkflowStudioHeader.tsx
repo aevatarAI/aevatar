@@ -108,7 +108,10 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
 
   return (
     <section
-      aria-label="Workflow identity"
+      aria-label={t(
+        "teamMemberWorkflowStudio.header.identityAria",
+        "Workflow identity",
+      )}
       data-testid="workflow-header-identity"
       style={{
         display: "grid",
@@ -262,7 +265,10 @@ const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
   showPublishButton,
 }) => (
   <section
-    aria-label="Workflow primary actions"
+    aria-label={t(
+      "teamMemberWorkflowStudio.header.primaryActionsAria",
+      "Workflow primary actions",
+    )}
     data-testid="workflow-header-primary-actions"
     style={{
       alignItems: "center",
@@ -342,7 +348,7 @@ const HeaderTabs: React.FC<HeaderTabsProps> = ({
   selectedTab,
 }) => (
   <section
-    aria-label="Workflow views"
+    aria-label={t("teamMemberWorkflowStudio.header.viewsAria", "Workflow views")}
     data-testid="workflow-header-tabs"
     style={{
       alignItems: "center",
@@ -398,7 +404,10 @@ const HeaderNodeActions: React.FC<HeaderNodeActionsProps> = ({
   teamEntryPending,
 }) => (
   <section
-    aria-label="Workflow draft and node actions"
+    aria-label={t(
+      "teamMemberWorkflowStudio.header.nodeActionsAria",
+      "Workflow draft and node actions",
+    )}
     data-testid="workflow-header-node-actions"
     style={{
       alignItems: "center",
