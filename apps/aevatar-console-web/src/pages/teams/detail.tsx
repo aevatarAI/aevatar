@@ -18,7 +18,6 @@ import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
-  buildTeamStudioHref,
   readTeamDetailRouteState,
   type TeamDetailTab,
 } from "@/shared/navigation/teamRoutes";
@@ -769,31 +768,15 @@ const TeamDetailPage: React.FC = () => {
           scopeId,
           teamId: selectedTeamId,
         });
-        const legacyEditStudioHref = buildTeamStudioHref({
-          memberId: member.memberId,
-          mode: "edit-member",
-          returnTo: buildTeamReturnHref(member.memberId),
-          scopeId,
-          teamId: selectedTeamId,
-        });
 
         return {
-          buildStudioHref: isWorkflowMember
-            ? workflowStudioHref
-            : buildTeamStudioHref({
-                memberId: member.memberId,
-                mode: "build-member",
-                returnTo: buildTeamReturnHref(member.memberId),
-                scopeId,
-                teamId: selectedTeamId,
-              }),
+          buildStudioHref: isWorkflowMember ? workflowStudioHref : "",
           description: trimText(member.description),
           canInvokeAsEntry:
+            isWorkflowMember &&
             normalizeStatus(member.lifecycleStage) === "bind_ready" &&
             trimText(member.publishedServiceId).length > 0,
-          editStudioHref: isWorkflowMember
-            ? workflowStudioHref
-            : legacyEditStudioHref,
+          editStudioHref: isWorkflowMember ? workflowStudioHref : "",
           implementationKind: formatCompositionKind(member.implementationKind),
           key: member.memberId,
           lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
@@ -803,10 +786,10 @@ const TeamDetailPage: React.FC = () => {
           memberId: member.memberId,
           name: trimText(member.displayName) || member.memberId,
           serviceId: trimText(member.publishedServiceId) || "--",
+          workflowSupported: isWorkflowMember,
         };
       }),
     [
-      buildTeamReturnHref,
       entryMemberId,
       selectedRosterMemberId,
       scopeId,
@@ -817,13 +800,12 @@ const TeamDetailPage: React.FC = () => {
   );
   const createMemberHref = React.useMemo(
     () =>
-      buildTeamStudioHref({
+      buildTeamMemberWorkflowStudioHref({
         mode: "create-member",
-        returnTo: buildTeamReturnHref(),
         scopeId,
         teamId: selectedTeamId,
       }),
-    [buildTeamReturnHref, scopeId, selectedTeamId],
+    [scopeId, selectedTeamId],
   );
   const latestVisibleUpdate =
     teamSummaryQuery.data?.updatedAt ||

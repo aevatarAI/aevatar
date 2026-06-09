@@ -1151,14 +1151,14 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(
       screen.getByText(
-        /设置入口决定团队测试从哪里开始，Build \/ 在 Studio 中编辑用于补齐成员实现和绑定/,
+        /设置入口决定团队测试从哪里开始，Workflow 调试入口用于补齐成员实现和绑定/,
       ),
     ).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
     expect(screen.getByText("入口成员")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "在 Studio 中编辑" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "构建" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "编辑工作流" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "调试工作流" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Test member" })).toBeNull();
     expect(screen.queryByRole("link", { name: "View runs" })).toBeNull();
     expect(screen.queryByText("参与者结构")).toBeNull();
@@ -1566,14 +1566,14 @@ describe("TeamDetailPage", () => {
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "构建" }));
+    fireEvent.click(await screen.findByRole("link", { name: "调试工作流" }));
 
     expect(window.location.pathname).toBe(
       "/teams/scope-1/t-alpha/members/member-team-alpha/workflow",
     );
   });
 
-  it("keeps non-workflow member edit actions on the old Studio flow", async () => {
+  it("disables non-workflow member edit actions while only workflow members are supported", async () => {
     (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",
       members: [
@@ -1598,37 +1598,25 @@ describe("TeamDetailPage", () => {
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "在 Studio 中编辑" }));
 
-    expect(window.location.pathname).toBe("/studio");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("member")).toBe("member:member-agent-alpha");
-    expect(params.get("step")).toBe("build");
-    expect(params.get("tab")).toBe("studio");
-    expect(params.get("returnTo")).toBe(
-      "/teams/scope-1/t-alpha?memberId=member-agent-alpha&tab=members",
-    );
+    expect(await screen.findAllByRole("button", { name: "仅支持 Workflow" }))
+      .toHaveLength(2);
+    expect(screen.queryByRole("link", { name: "在 Studio 中编辑" })).toBeNull();
   });
 
-  it("keeps the generic create-member action on the old Studio flow", async () => {
+  it("routes create-member actions into the workflow member studio", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    fireEvent.click(await screen.findByRole("link", { name: "创建成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "创建工作流成员" }));
 
-    expect(window.location.pathname).toBe("/studio");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("tab")).toBe("studio");
-    expect(params.get("intent")).toBe("create-member");
-    expect(params.get("returnTo")).toBe("/teams/scope-1/t-alpha?tab=members");
+    expect(window.location.pathname).toBe(
+      "/teams/scope-1/t-alpha/members/new/workflow",
+    );
   });
 
-  it("keeps the generic empty-roster create-member action on the old Studio flow", async () => {
+  it("routes empty-roster create-member actions into the workflow member studio", async () => {
     (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-1",
       members: [],
@@ -1639,16 +1627,11 @@ describe("TeamDetailPage", () => {
 
     await screen.findByRole("button", { name: "编辑团队" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    expect(screen.queryByRole("link", { name: "创建工作流成员" })).toBeNull();
-    fireEvent.click(await screen.findByRole("link", { name: "创建第一个成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "创建第一个工作流成员" }));
 
-    expect(window.location.pathname).toBe("/studio");
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("tab")).toBe("studio");
-    expect(params.get("intent")).toBe("create-member");
-    expect(params.get("returnTo")).toBe("/teams/scope-1/t-alpha?tab=members");
+    expect(window.location.pathname).toBe(
+      "/teams/scope-1/t-alpha/members/new/workflow",
+    );
   });
 
   it("does not assign an unrelated scope service to a Team with no members", async () => {

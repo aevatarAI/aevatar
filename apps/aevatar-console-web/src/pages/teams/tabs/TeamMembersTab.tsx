@@ -33,6 +33,7 @@ type TeamRosterMemberRow = {
   readonly memberId: string;
   readonly name: string;
   readonly serviceId: string;
+  readonly workflowSupported: boolean;
 };
 
 type TeamMembersTabProps = {
@@ -135,7 +136,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                 }}
                 type="primary"
               >
-                {intl.formatMessage({ id: "teams.members.actions.create" })}
+                {intl.formatMessage({
+                  id: "teams.members.actions.createWorkflowMember",
+                })}
               </Button>
             ) : null}
           </Space>
@@ -336,23 +339,55 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                         </Button>
                       ) : null}
                       <Button
-                        href={row.editStudioHref}
+                        href={row.workflowSupported ? row.editStudioHref : undefined}
+                        disabled={!row.workflowSupported}
                         icon={<EditOutlined />}
-                        onClick={handleNavigate(row.editStudioHref)}
+                        onClick={
+                          row.workflowSupported
+                            ? handleNavigate(row.editStudioHref)
+                            : undefined
+                        }
                         size="small"
+                        title={
+                          row.workflowSupported
+                            ? undefined
+                            : intl.formatMessage({
+                                id: "teams.members.actions.workflowOnlyTitle",
+                              })
+                        }
                         type="text"
                       >
-                        {intl.formatMessage({ id: "teams.members.actions.editInStudio" })}
+                        {intl.formatMessage({
+                          id: row.workflowSupported
+                            ? "teams.members.actions.editWorkflow"
+                            : "teams.members.actions.workflowOnly",
+                        })}
                       </Button>
                       <Button
-                        href={row.buildStudioHref}
+                        href={row.workflowSupported ? row.buildStudioHref : undefined}
+                        disabled={!row.workflowSupported}
                         icon={<ToolOutlined />}
-                        onClick={handleNavigate(row.buildStudioHref)}
+                        onClick={
+                          row.workflowSupported
+                            ? handleNavigate(row.buildStudioHref)
+                            : undefined
+                        }
                         size="small"
                         style={{ color: token.colorPrimary }}
+                        title={
+                          row.workflowSupported
+                            ? undefined
+                            : intl.formatMessage({
+                                id: "teams.members.actions.workflowOnlyTitle",
+                              })
+                        }
                         type="text"
                       >
-                        {intl.formatMessage({ id: "teams.members.actions.build" })}
+                        {intl.formatMessage({
+                          id: row.workflowSupported
+                            ? "teams.members.actions.debugWorkflow"
+                            : "teams.members.actions.workflowOnly",
+                        })}
                       </Button>
                     </Space>
                   </div>
@@ -383,7 +418,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   onClick={handleNavigate(createMemberHref)}
                   type="primary"
                 >
-                  {intl.formatMessage({ id: "teams.members.actions.createFirst" })}
+                  {intl.formatMessage({
+                    id: "teams.members.actions.createFirstWorkflow",
+                  })}
                 </Button>
               </div>
             ) : null}
