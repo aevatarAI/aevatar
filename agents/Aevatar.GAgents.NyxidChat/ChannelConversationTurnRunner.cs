@@ -1643,8 +1643,29 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
         }
 
-        foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
+        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, ct);
+        foreach (var pair in replyMetadata)
             request.Metadata[pair.Key] = pair.Value;
+
+        // Thread the bot's registration scope + channel identity into the deferred LLM-reply tool
+        // context, mirroring the direct-reply BuildAgentBuilderToolContext. Without this, a plain
+        // (non-`::`) automation turn leaves Caller.ScopeId empty, so scope-scoped tools such as
+        // scheduled_agent_creator fail with "scope_id_unavailable". ToToolContext only overlays
+        // credentials/routing downstream, so these typed fields survive to tool execution.
+        request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            Caller = new AgentToolCallerContext(
+                inboundEvent.RegistrationScopeId,
+                null,
+                inboundEvent.MessageId),
+            Channel = new AgentToolChannelContext(
+                inboundEvent.Platform,
+                inboundEvent.SenderId,
+                inboundEvent.RegistrationScopeId,
+                inboundEvent.MessageId,
+                NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId)),
+            ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
+        }).ToPayload();
 
         if (TryBuildSkillRecoveryContext(inboundEvent.Text, inboundEvent.Platform, out var skillRecovery))
         {

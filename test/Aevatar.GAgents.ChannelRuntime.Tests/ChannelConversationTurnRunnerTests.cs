@@ -50,6 +50,27 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldThreadRegistrationScopeIntoLlmReplyToolContext()
+    {
+        // Regression: a plain (non-"::") automation turn must carry the bot's registration scope
+        // into the deferred LLM-reply tool context, otherwise scope-scoped tools such as
+        // scheduled_agent_creator fail with "scope_id_unavailable" on the relay path.
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("每天下午五点发我 deadline 概要", "msg-sched-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldIncludePlatformMessageIdInLlmMetadata_WhenAvailable()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -1403,7 +1424,9 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata.Should().NotContainKey("scope_id");
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
         var llmControl = LLMControlContextMapper.FromPayload(result.LlmReplyRequest.LlmControl);
-        toolContext.Caller.ScopeId.Should().BeNull();
+        // Scope is threaded as a typed Caller field (not via metadata — see the scope_id assertion
+        // above), so scope-scoped tools (e.g. scheduled_agent_creator) work on the bound-sender path too.
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");

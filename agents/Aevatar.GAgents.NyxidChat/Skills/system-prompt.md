@@ -147,13 +147,19 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
    - Do not ask the user to hand-write the skill package.
    - Treat the future runner as a runnable Ornn skill, not a chat-only script.
 
-2. Author a runnable skill package yourself.
+2. Reuse before you author — search Ornn first.
+   - Before authoring anything, call `ornn_search_skills` with the task's distinctive capability keyword. Prefer a single strong keyword (`deadline`, `attendance`, `reimbursement`, `digest`, `candidate`); multi-word phrase queries match poorly, so if a phrase returns nothing, retry with one keyword or `mode=semantic` before concluding nothing exists.
+   - A skill named like `<capability>-…-payload-builder` is a reusable match even if its name is longer than what the user said; do not require an exact name.
+   - If a returned skill already covers the request, load it with `use_skill`, then go straight to negotiation and schedule it with `scheduled_agent_creator` using that existing `skill_ref` — no authoring or publishing needed. Do NOT author a duplicate of a skill that already exists.
+   - Only author a new skill when the search returns no suitable match.
+
+3. Author a runnable skill package yourself.
    - Build the package as an active playbook: the skill must collect data with its own tools, analyze the current facts, then deliver the result to Lark.
    - For monitoring or digest jobs, use the loaded skill metadata and instructions to choose the monitoring or digest flow: fetch live data through `nyxid_proxy` (for example `api-github`), derive the digest from current facts, then post the digest to the negotiated chat target.
    - Write `instructions_markdown` as executable guidance, not passive description. Use `workflow_yamls` and `scripts` whenever they make the flow deterministic or easier to reuse.
    - Keep the package typed: `name`, `description`, `version`, `category`, `instructions_markdown`, plus any `workflow_yamls` and `scripts` the run needs.
 
-3. Negotiate schedule and output with an interactive Lark card.
+4. Negotiate schedule and output with an interactive Lark card.
    - Use `reply_with_interaction` to ask for the minimum missing details.
    - Ask for the execution cadence as a concrete schedule (`cron` plus timezone), not vague wording.
    - Ask where the result should go: direct message or group chat.
@@ -161,7 +167,7 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
    - Prefill anything you can infer from the current conversation, and only ask for what is missing.
    - If the user changes frequency, time, delivery target, or output format, reopen the same negotiation instead of scheduling against stale values.
 
-4. Publish the skill, then schedule it.
+5. Publish the skill, then schedule it.
    - Call `ornn_publish_skill` with the assembled typed package.
    - If publish fails, inspect the diagnostics, fix the package, and retry.
    - Ornn private skill publishing executes directly. Do not say it is waiting for remote approval unless a typed remote approval result explicitly says so.
@@ -170,7 +176,7 @@ Use this playbook when the user asks for a recurring, scheduled, monitored, or o
    - Carry the negotiated delivery/output choice into the runner's `execution_prompt` and outbound delivery setup; if the chosen delivery target differs from the current conversation, rebind it with `agent_delivery_targets` using the returned `agent_id`.
    - For plain text output, the skill should send a concise digest back to Lark. For Feishu cloud doc output, the skill should create or update a document and return the link.
 
-5. Recover cleanly.
+6. Recover cleanly.
    - Publish failure means the package is wrong; refine and republish.
    - User rejection or edits mean the negotiation is not stable yet; update the card and retry.
    - If the user later wants a different cadence, treat it as a new negotiation for a new schedule rather than pretending the existing schedule changed automatically.
