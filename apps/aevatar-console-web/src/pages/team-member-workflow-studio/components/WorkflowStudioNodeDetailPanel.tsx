@@ -17,6 +17,7 @@ type WorkflowStudioNodeDetailPanelProps = {
   readonly onClose: () => void;
   readonly onConfigurationChange: (parametersText: string) => void;
   readonly stepDraft: StudioStepInspectorDraft | null;
+  readonly width?: number;
 };
 
 const fieldStackStyle: React.CSSProperties = {
@@ -65,6 +66,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   onClose,
   onConfigurationChange,
   stepDraft,
+  width = 420,
 }) => {
   const {
     configurationValues,
@@ -156,7 +158,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
         flexDirection: "column",
         flexShrink: 0,
         minHeight: 0,
-        width: 420,
+        width,
       }}
     >
       <header
@@ -226,7 +228,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
 
           {hasSemanticFields ? (
             schema.fields.map((field) => (
-              <label key={field.name} style={fieldStackStyle}>
+              <div key={field.name} style={fieldStackStyle}>
                 <Typography.Text strong style={{ color: "#374151", fontSize: 13 }}>
                   {formatConsoleMessage(field.label)}
                 </Typography.Text>
@@ -236,7 +238,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
                     {formatConsoleMessage(field.description)}
                   </Typography.Text>
                 ) : null}
-              </label>
+              </div>
             ))
           ) : (
             <Alert

@@ -896,6 +896,80 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
+  it("resizes the node detail panel from the canvas divider", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha/members/member-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByText("nodes:1")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+
+    const detailPanel = screen.getByLabelText("Node detail");
+    const resizeHandle = screen.getByRole("separator", {
+      name: "Resize side panel",
+    });
+    expect(resizeHandle).toHaveAttribute("aria-orientation", "vertical");
+    expect(detailPanel).toHaveStyle({ width: "420px" });
+
+    fireEvent.mouseDown(resizeHandle, { clientX: 600 });
+    fireEvent.mouseMove(window, { clientX: 500 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      expect(detailPanel).toHaveStyle({ width: "520px" });
+      expect(resizeHandle).toHaveAttribute("aria-valuenow", "520");
+    });
+
+    fireEvent.keyDown(resizeHandle, { key: "ArrowRight" });
+    await waitFor(() => {
+      expect(detailPanel).toHaveStyle({ width: "496px" });
+    });
+
+    fireEvent.keyDown(resizeHandle, { key: "Home" });
+    await waitFor(() => {
+      expect(detailPanel).toHaveStyle({ width: "320px" });
+    });
+  });
+
   it("shows a node detail error for invalid parameter JSON", async () => {
     window.history.replaceState(
       {},
@@ -1271,6 +1345,25 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     fireEvent.click(runActiveMemberButton);
     const resultPanel = await screen.findByTestId("member-run-result-panel");
+    const consolePanel = screen.getByLabelText("Member run console");
+    const consoleResizeHandle = screen.getByRole("separator", {
+      name: "Resize run console",
+    });
+    expect(consoleResizeHandle).toHaveAttribute("aria-orientation", "horizontal");
+    expect(consolePanel).toHaveStyle({ flex: "0 0 210px" });
+
+    fireEvent.mouseDown(consoleResizeHandle, { clientY: 700 });
+    fireEvent.mouseMove(window, { clientY: 600 });
+    fireEvent.mouseUp(window);
+    await waitFor(() => {
+      expect(consolePanel).toHaveStyle({ flex: "0 0 310px" });
+      expect(consoleResizeHandle).toHaveAttribute("aria-valuenow", "310");
+    });
+
+    fireEvent.keyDown(consoleResizeHandle, { key: "ArrowDown" });
+    await waitFor(() => {
+      expect(consolePanel).toHaveStyle({ flex: "0 0 286px" });
+    });
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(

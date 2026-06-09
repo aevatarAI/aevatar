@@ -7,6 +7,7 @@ type WorkflowStudioRunOptionsPanelProps = {
   readonly onRunMessageChange: (message: string) => void;
   readonly open: boolean;
   readonly runMessage: string;
+  readonly width?: number;
 };
 
 const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps> = ({
@@ -14,6 +15,7 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
   onRunMessageChange,
   open,
   runMessage,
+  width = 420,
 }) => {
   if (!open) {
     return null;
@@ -32,7 +34,7 @@ const WorkflowStudioRunOptionsPanel: React.FC<WorkflowStudioRunOptionsPanelProps
         flexDirection: "column",
         flexShrink: 0,
         minHeight: 0,
-        width: 420,
+        width,
       }}
     >
       <header
