@@ -1,4 +1,4 @@
-using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -9,228 +9,260 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 public static class WorkflowScheduleEndpoints
 {
-    public static void Map(RouteGroupBuilder group)
+    public static IEndpointRouteBuilder MapWorkflowScheduleEndpoints(this IEndpointRouteBuilder app)
     {
-        group.MapPost("/workflow-schedules", Create)
-            .WithTags("Workflow schedules")
-            .Produces<WorkflowScheduleMutationReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest);
-        group.MapPut("/workflow-schedules/{scheduleId}", Update)
-            .WithTags("Workflow schedules")
-            .Produces<WorkflowScheduleMutationReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest);
-        group.MapPost("/workflow-schedules/{scheduleId}/enable", Enable)
-            .WithTags("Workflow schedules")
-            .Produces<WorkflowScheduleMutationReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/workflow-schedules/{scheduleId}/disable", Disable)
-            .WithTags("Workflow schedules")
-            .Produces<WorkflowScheduleMutationReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-        group.MapGet("/workflow-schedules", List)
-            .WithTags("Workflow schedules")
-            .Produces<WorkflowScheduleListResult>(StatusCodes.Status200OK);
-        group.MapGet("/workflow-schedules/{scheduleId}", Get)
-            .WithTags("Workflow schedules")
-            .Produces<WorkflowScheduleDetail>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/workflow-schedules/preview", Preview)
-            .WithTags("Workflow schedules")
-            .Produces<WorkflowSchedulePreview>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest);
-        group.MapPost("/workflow-schedules/{scheduleId}/run-now", RunNow)
-            .WithTags("Workflow schedules")
-            .Produces<WorkflowScheduleRunNowReceipt>(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
+        var group = app.MapGroup("/workflow-schedules").WithTags("Workflow Schedules");
+
+        group.MapPost("", HandleCreateAsync);
+        group.MapGet("", HandleListAsync);
+        group.MapGet("/{scheduleId}", HandleGetAsync);
+        group.MapPut("/{scheduleId}", HandleUpdateAsync);
+        group.MapPost("/{scheduleId}:enable", HandleEnableAsync);
+        group.MapPost("/{scheduleId}:disable", HandleDisableAsync);
+        group.MapPost("/preview", HandlePreviewAsync);
+        group.MapPost("/{scheduleId}:run-now", HandleRunNowAsync);
+
+        return app;
     }
 
-    internal static async Task<IResult> Create(
-        WorkflowScheduleConfigurationHttpRequest input,
-        IWorkflowScheduleApplicationService schedules,
+    internal static async Task<IResult> HandleCreateAsync(
+        WorkflowScheduleCreateInput input,
+        [FromServices] IWorkflowScheduleApplicationService service,
         CancellationToken ct = default)
     {
-        try
-        {
-            var receipt = await schedules.CreateAsync(input.ToConfiguration(input.ScheduleId), ct);
-            return Results.Accepted($"/api/workflow-schedules/{receipt.ScheduleId}", receipt);
-        }
-        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
-        {
-            return result;
-        }
+        var target = NormalizeTarget(input.Target);
+        if (target == null)
+            return Results.BadRequest(new { error = "Schedule target is required." });
+
+        var result = await service.CreateAsync(
+            new WorkflowScheduleCreateCommand(
+                input.ScheduleId,
+                input.Name ?? string.Empty,
+                input.Cron ?? string.Empty,
+                input.Timezone ?? "UTC",
+                target,
+                input.Enabled),
+            ct);
+        if (!result.Succeeded)
+            return MapError(result.Error);
+
+        return Results.Created(
+            $"/api/workflow-schedules/{Uri.EscapeDataString(result.Value!.ScheduleId)}",
+            result.Value);
     }
 
-    internal static async Task<IResult> Update(
+    internal static async Task<IResult> HandleUpdateAsync(
         string scheduleId,
-        WorkflowScheduleConfigurationHttpRequest input,
-        IWorkflowScheduleApplicationService schedules,
+        WorkflowScheduleUpdateInput input,
+        [FromServices] IWorkflowScheduleApplicationService service,
         CancellationToken ct = default)
     {
-        try
-        {
-            var receipt = await schedules.UpdateAsync(scheduleId, input.ToConfiguration(scheduleId), ct);
-            return Results.Accepted($"/api/workflow-schedules/{receipt.ScheduleId}", receipt);
-        }
-        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
-        {
-            return result;
-        }
-    }
-
-    internal static async Task<IResult> Enable(
-        string scheduleId,
-        WorkflowScheduleStateChangeHttpRequest? input,
-        IWorkflowScheduleApplicationService schedules,
-        CancellationToken ct = default)
-    {
-        try
-        {
-            var receipt = await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/workflow-schedules/{receipt.ScheduleId}", receipt);
-        }
-        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
-        {
-            return result;
-        }
-    }
-
-    internal static async Task<IResult> Disable(
-        string scheduleId,
-        WorkflowScheduleStateChangeHttpRequest? input,
-        IWorkflowScheduleApplicationService schedules,
-        CancellationToken ct = default)
-    {
-        try
-        {
-            var receipt = await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/workflow-schedules/{receipt.ScheduleId}", receipt);
-        }
-        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
-        {
-            return result;
-        }
-    }
-
-    internal static async Task<IResult> List(
-        IWorkflowScheduleApplicationService schedules,
-        int take = 50,
-        string? cursor = null,
-        bool includeTotalCount = false,
-        CancellationToken ct = default)
-    {
-        return Results.Ok(await schedules.ListAsync(take, cursor, includeTotalCount, ct));
-    }
-
-    internal static async Task<IResult> Get(
-        string scheduleId,
-        IWorkflowScheduleApplicationService schedules,
-        CancellationToken ct = default)
-    {
-        try
-        {
-            var schedule = await schedules.GetAsync(scheduleId, ct);
-            return schedule == null ? Results.NotFound() : Results.Ok(schedule);
-        }
-        catch (ArgumentException ex)
-        {
-            return Results.BadRequest(new { error = ex.Message });
-        }
-    }
-
-    internal static async Task<IResult> Preview(
-        WorkflowSchedulePreviewHttpRequest input,
-        IWorkflowScheduleApplicationService schedules,
-        CancellationToken ct = default)
-    {
-        try
-        {
-            return Results.Ok(await schedules.PreviewAsync(
-                input.CronExpression,
+        var result = await service.UpdateAsync(
+            scheduleId,
+            new WorkflowScheduleUpdateCommand(
+                input.Name,
+                input.Cron,
                 input.Timezone,
-                input.Count <= 0 ? 5 : input.Count,
-                input.FromUtc,
-                ct));
-        }
-        catch (ArgumentException ex)
-        {
-            return Results.BadRequest(new { error = ex.Message });
-        }
+                input.Target == null ? null : NormalizeTarget(input.Target)),
+            ct);
+        return result.Succeeded ? Results.Ok(result.Value) : MapError(result.Error);
     }
 
-    internal static async Task<IResult> RunNow(
+    internal static async Task<IResult> HandleEnableAsync(
         string scheduleId,
-        IWorkflowScheduleApplicationService schedules,
+        [FromServices] IWorkflowScheduleApplicationService service,
         CancellationToken ct = default)
     {
-        try
-        {
-            var receipt = await schedules.RunNowAsync(scheduleId, ct);
-            return Results.Accepted($"/api/workflow-schedules/{receipt.ScheduleId}", receipt);
-        }
-        catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
-        {
-            return result;
-        }
+        var result = await service.EnableAsync(scheduleId, ct);
+        return result.Succeeded ? Results.Ok(result.Value) : MapError(result.Error);
     }
 
-    private static bool TryMapScheduleMutationError(Exception ex, out IResult result)
+    internal static async Task<IResult> HandleDisableAsync(
+        string scheduleId,
+        [FromServices] IWorkflowScheduleApplicationService service,
+        CancellationToken ct = default)
     {
-        switch (ex)
-        {
-            case ArgumentException argument:
-                result = Results.BadRequest(new { error = argument.Message });
-                return true;
-            case ScheduledDispatchNotFoundException notFound:
-                result = Results.NotFound(new { error = notFound.Message });
-                return true;
-            case ScheduledDispatchConflictException conflict:
-                result = Results.Conflict(new { error = conflict.Message });
-                return true;
-            default:
-                result = Results.Empty;
-                return false;
-        }
+        var result = await service.DisableAsync(scheduleId, ct);
+        return result.Succeeded ? Results.Ok(result.Value) : MapError(result.Error);
     }
-}
 
-public sealed record WorkflowScheduleConfigurationHttpRequest
-{
-    public string? ScheduleId { get; init; }
-    public string? DisplayName { get; init; }
-    public required string WorkflowName { get; init; }
-    public required string Prompt { get; init; }
-    public required string CronExpression { get; init; }
-    public string? Timezone { get; init; }
-    public bool Enabled { get; init; } = true;
-    public IReadOnlyDictionary<string, string>? Headers { get; init; }
-    public string? ScopeId { get; init; }
+    internal static async Task<IResult> HandleGetAsync(
+        string scheduleId,
+        [FromServices] IWorkflowScheduleApplicationService service,
+        CancellationToken ct = default)
+    {
+        var result = await service.GetAsync(scheduleId, ct);
+        return result.Succeeded ? Results.Ok(result.Value) : MapError(result.Error);
+    }
 
-    public WorkflowScheduleConfiguration ToConfiguration(string? fallbackScheduleId) =>
-        new(
-            ScheduleId: string.IsNullOrWhiteSpace(ScheduleId) ? fallbackScheduleId ?? string.Empty : ScheduleId,
-            DisplayName: DisplayName ?? string.Empty,
-            WorkflowName: WorkflowName,
-            Prompt: Prompt,
-            CronExpression: CronExpression,
-            Timezone: Timezone ?? string.Empty,
-            Enabled: Enabled,
-            Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            ScopeId: ScopeId);
-}
+    internal static async Task<IResult> HandleListAsync(
+        [FromServices] IWorkflowScheduleApplicationService service,
+        [FromQuery] string? status = null,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 100,
+        CancellationToken ct = default)
+    {
+        var parsedStatus = ParseStatus(status);
+        var result = await service.ListAsync(new WorkflowScheduleListQuery(parsedStatus, skip, take), ct);
+        return Results.Ok(result);
+    }
 
-public sealed record WorkflowSchedulePreviewHttpRequest
-{
-    public required string CronExpression { get; init; }
-    public string? Timezone { get; init; }
-    public int Count { get; init; } = 5;
-    public DateTimeOffset? FromUtc { get; init; }
-}
+    internal static async Task<IResult> HandlePreviewAsync(
+        WorkflowSchedulePreviewInput input,
+        [FromServices] IWorkflowScheduleApplicationService service,
+        CancellationToken ct = default)
+    {
+        var result = await service.PreviewAsync(
+            input.Cron ?? string.Empty,
+            input.Timezone ?? "UTC",
+            input.FromUtc,
+            input.Count,
+            ct);
+        return result.Succeeded ? Results.Ok(result.Value) : MapError(result.Error);
+    }
 
-public sealed record WorkflowScheduleStateChangeHttpRequest
-{
-    public string? Reason { get; init; }
+    internal static async Task<IResult> HandleRunNowAsync(
+        string scheduleId,
+        WorkflowScheduleRunNowInput? input,
+        [FromServices] IWorkflowScheduleApplicationService service,
+        CancellationToken ct = default)
+    {
+        var result = await service.RunNowAsync(
+            new WorkflowScheduleFireRequest(
+                scheduleId,
+                input?.ScheduledFireAtUtc,
+                input?.Force ?? false),
+            ct);
+        if (!result.Succeeded)
+            return MapError(result.Error);
+
+        var value = result.Value!;
+        return value.Status == WorkflowScheduleFireStatus.Accepted
+            ? Results.Accepted(value.StatusUrl, value)
+            : Results.Ok(value);
+    }
+
+    private static WorkflowScheduleTarget? NormalizeTarget(WorkflowScheduleTargetInput? input)
+    {
+        if (input == null)
+            return null;
+
+        return new WorkflowScheduleTarget(
+            input.Prompt ?? string.Empty,
+            NormalizeSource(input.Source),
+            NormalizeOptional(input.SessionId),
+            InputParts: null,
+            Annotations: NormalizeMap(input.Annotations),
+            ScopeId: NormalizeOptional(input.ScopeId),
+            Headers: NormalizeMap(input.Headers),
+            Auth: NormalizeAuth(input.Auth));
+    }
+
+    private static WorkflowScheduleAuth? NormalizeAuth(WorkflowScheduleAuthInput? input)
+    {
+        if (input?.SenderNyxId == null)
+            return null;
+
+        return new WorkflowScheduleAuth(NormalizeSenderNyxId(input.SenderNyxId));
+    }
+
+    private static WorkflowScheduleNyxIdCredentialSource NormalizeSenderNyxId(
+        WorkflowScheduleNyxIdCredentialSourceInput input)
+    {
+        var subject = input.Subject;
+        return new WorkflowScheduleNyxIdCredentialSource(
+            new WorkflowScheduleNyxIdSubjectRef(
+                NormalizeOptional(subject?.Platform)?.ToLowerInvariant() ?? string.Empty,
+                NormalizeOptional(subject?.Tenant) ?? string.Empty,
+                NormalizeOptional(subject?.ExternalUserId) ?? string.Empty),
+            NormalizeOptional(input.Scope) ?? string.Empty);
+    }
+
+    private static WorkflowChatSource NormalizeSource(WorkflowChatSourceInput? input)
+    {
+        if (input == null)
+            return WorkflowChatSource.Direct();
+
+        var kind = NormalizeSourceKind(input.Kind);
+        var workflowName = NormalizeOptional(input.WorkflowName);
+        var actorId = NormalizeOptional(input.ActorId);
+        var workflowYamls = input.WorkflowYamls?.Where(x => !string.IsNullOrWhiteSpace(x)).ToList() ?? [];
+        return kind switch
+        {
+            WorkflowChatSourceKind.CatalogWorkflow =>
+                WorkflowChatSource.CatalogWorkflow(workflowName ?? string.Empty),
+            WorkflowChatSourceKind.DefinitionActor =>
+                WorkflowChatSource.DefinitionActor(actorId ?? string.Empty, workflowName),
+            WorkflowChatSourceKind.InlineYamlBundle =>
+                WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId),
+            WorkflowChatSourceKind.Direct =>
+                WorkflowChatSource.Direct(actorId),
+            _ => WorkflowChatSource.Direct(actorId),
+        };
+    }
+
+    private static WorkflowChatSourceKind NormalizeSourceKind(string? kind) =>
+        kind?.Trim().ToLowerInvariant() switch
+        {
+            "catalog_workflow" or "catalog-workflow" or "catalog" or "workflow" =>
+                WorkflowChatSourceKind.CatalogWorkflow,
+            "definition_actor" or "definition-actor" or "actor" =>
+                WorkflowChatSourceKind.DefinitionActor,
+            "inline_yaml_bundle" or "inline-yaml-bundle" or "inline_yaml" or "inline-yaml" =>
+                WorkflowChatSourceKind.InlineYamlBundle,
+            "direct" => WorkflowChatSourceKind.Direct,
+            _ => WorkflowChatSourceKind.Direct,
+        };
+
+    private static WorkflowScheduleStatus? ParseStatus(string? status) =>
+        System.Enum.TryParse<WorkflowScheduleStatus>(status, ignoreCase: true, out var parsed)
+            ? parsed
+            : null;
+
+    private static IReadOnlyDictionary<string, string>? NormalizeMap(IDictionary<string, string>? source)
+    {
+        if (source is not { Count: > 0 })
+            return null;
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = NormalizeOptional(key);
+            if (normalizedKey != null)
+                result[normalizedKey] = value?.Trim() ?? string.Empty;
+        }
+
+        return result.Count == 0 ? null : result;
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static IResult MapError(WorkflowScheduleError error)
+    {
+        var statusCode = error.Code switch
+        {
+            WorkflowScheduleErrorCode.InvalidScheduleId or
+                WorkflowScheduleErrorCode.InvalidName or
+                WorkflowScheduleErrorCode.InvalidCron or
+                WorkflowScheduleErrorCode.InvalidTimezone or
+                WorkflowScheduleErrorCode.InvalidTarget => StatusCodes.Status400BadRequest,
+            WorkflowScheduleErrorCode.NotFound => StatusCodes.Status404NotFound,
+            WorkflowScheduleErrorCode.AlreadyExists => StatusCodes.Status409Conflict,
+            WorkflowScheduleErrorCode.Disabled or
+                WorkflowScheduleErrorCode.DispatchRejected or
+                WorkflowScheduleErrorCode.CredentialExchangeFailed => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status500InternalServerError,
+        };
+        return Results.Json(
+            new
+            {
+                code = error.Code.ToString(),
+                message = error.Message,
+            },
+            statusCode: statusCode);
+    }
 }

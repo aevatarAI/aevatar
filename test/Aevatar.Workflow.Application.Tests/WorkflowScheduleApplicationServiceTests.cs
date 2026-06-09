@@ -1,74 +1,31 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Schedules;
-using Aevatar.GAgentService.Abstractions.Services;
-using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
-using Aevatar.Workflow.Application.Runs;
+using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Application.Schedules;
 using FluentAssertions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Application.Tests;
 
 public sealed class WorkflowScheduleApplicationServiceTests
 {
     [Fact]
-    public async Task CreateAsync_ShouldNormalizeConfigurationAndDispatchConfigure()
+    public async Task CreateAsync_ShouldValidateCronAndComputeNextFire()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
-        var preparation = new FakeScheduledDispatchPreparationService();
-        var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort(), preparation);
+        var service = CreateService();
 
-        var receipt = await service.CreateAsync(new WorkflowScheduleConfiguration(
-            ScheduleId: " daily-report ",
-            DisplayName: " Daily report ",
-            WorkflowName: " direct ",
-            Prompt: " summarize status ",
-            CronExpression: "*/15 * * * *",
-            Timezone: " UTC ",
-            Enabled: true,
-            Headers: new Dictionary<string, string>
-            {
-                [" trace "] = " enabled ",
-                [" "] = "ignored",
-            },
-            ScopeId: " scope-1 "));
+        var result = await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
+            "UTC",
+            Target()));
 
-        receipt.ScheduleId.Should().Be("daily-report");
-        receipt.ScheduleActorId.Should().Be("actor:daily-report");
-        actorPort.EnsureScheduleIds.Should().Equal("daily-report");
-        actorPort.Created.Should().ContainSingle();
-        var configured = actorPort.Created.Single();
-        configured.ActorId.Should().Be("actor:daily-report");
-        configured.Configuration.ScheduleId.Should().Be("daily-report");
-        configured.Configuration.DisplayName.Should().Be("Daily report");
-        configured.Configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
-        configured.Configuration.Target.ServiceInvocation.Should().NotBeNull();
-        configured.Configuration.Target.ServiceInvocation!.Identity.Should().BeEquivalentTo(new ServiceIdentity
-        {
-            TenantId = "scope-1",
-            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
-            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
-            ServiceId = "direct",
-        });
-        configured.Configuration.Target.ServiceInvocation.EndpointId.Should().Be("chat");
-        configured.Configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
-        configured.Configuration.Timezone.Should().Be("UTC");
-        configured.Configuration.Headers.Should().Contain(
-            new KeyValuePair<string, string>("trace", "enabled"));
-        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.workflow_name");
-        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.prompt");
-        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.scope_id");
-        configured.Configuration.Headers.Should().NotContainKey("workflow.schedule.source_actor_id");
-        configured.Dispatch.TargetActorId.Should().Be("target:daily-report");
-        configured.Dispatch.Descriptor.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
-        preparation.Configurations.Should().ContainSingle()
-            .Which.ScheduleId.Should().Be("daily-report");
+        result.Succeeded.Should().BeTrue();
+        result.Value!.ScheduleId.Should().Be("morning");
+        result.Value.Status.Should().Be(WorkflowScheduleStatus.Enabled);
+        result.Value.NextFireAtUtc.Should().Be(DateTimeOffset.Parse("2026-01-01T09:00:00+00:00"));
     }
 
     [Fact]
@@ -76,31 +33,15 @@ public sealed class WorkflowScheduleApplicationServiceTests
     {
         var service = CreateService();
 
-        var act = () => service.CreateAsync(new WorkflowScheduleConfiguration(
-            ScheduleId: "invalid",
-            DisplayName: string.Empty,
-            WorkflowName: "direct",
-            Prompt: "hello",
-            CronExpression: "not cron",
-            Timezone: "UTC",
-            Enabled: true,
-            Headers: new Dictionary<string, string>()));
+        var result = await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "bad",
+            "Bad run",
+            "bad cron",
+            "UTC",
+            Target()));
 
-        await act.Should().ThrowAsync<ArgumentException>();
-    }
-
-    [Theory]
-    [InlineData("tenant/report")]
-    [InlineData("tenant?report")]
-    [InlineData("tenant%report")]
-    public async Task CreateAsync_ShouldRejectRouteUnsafeScheduleId(string scheduleId)
-    {
-        var service = CreateService();
-
-        var act = () => service.CreateAsync(CreateConfiguration(scheduleId));
-
-        await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(WorkflowScheduleErrorCode.InvalidCron);
     }
 
     [Fact]
@@ -108,762 +49,399 @@ public sealed class WorkflowScheduleApplicationServiceTests
     {
         var service = CreateService();
 
-        var preview = await service.PreviewAsync(
+        var result = await service.PreviewAsync(
+            "*/15 * * * *",
+            "UTC",
+            DateTimeOffset.Parse("2026-01-01T00:00:00+00:00"),
+            3);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.FireTimesUtc.Should().Equal(
+            DateTimeOffset.Parse("2026-01-01T00:15:00+00:00"),
+            DateTimeOffset.Parse("2026-01-01T00:30:00+00:00"),
+            DateTimeOffset.Parse("2026-01-01T00:45:00+00:00"));
+    }
+
+    [Fact]
+    public async Task RunNowAsync_ShouldDispatchWithScheduleIdempotencyKey()
+    {
+        var dispatch = new RecordingDispatchService();
+        var service = CreateService(dispatch: dispatch);
+        await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
             "0 9 * * *",
             "UTC",
-            3,
-            new DateTimeOffset(2026, 5, 29, 8, 30, 0, TimeSpan.Zero));
+            Target()));
 
-        preview.CronExpression.Should().Be("0 9 * * *");
-        preview.Timezone.Should().Be("UTC");
-        preview.NextFireTimes.Should().Equal(
-            new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 5, 30, 9, 0, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 5, 31, 9, 0, 0, TimeSpan.Zero));
+        var scheduledFireAt = DateTimeOffset.Parse("2026-01-01T09:00:00+00:00");
+        var result = await service.RunNowAsync(new WorkflowScheduleFireRequest("morning", scheduledFireAt));
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.Status.Should().Be(WorkflowScheduleFireStatus.Accepted);
+        var expectedKey = "schedule:morning:fire:2026-01-01T09:00:00.0000000+00:00";
+        result.Value.Run.IdempotencyKey.Should().Be(expectedKey);
+        result.Value.Run.AcceptedCommandId.Should().Be(expectedKey);
+        dispatch.Requests.Should().ContainSingle();
+        dispatch.Requests[0].CommandIdSeed.Should().Be(expectedKey);
+        dispatch.Requests[0].CorrelationIdSeed.Should().Be(expectedKey);
+        dispatch.Requests[0].Prompt.Should().Be("run the morning workflow");
+        dispatch.Requests[0].Source!.Kind.Should().Be(WorkflowChatSourceKind.CatalogWorkflow);
+        dispatch.Requests[0].LlmControl.Should().BeNull();
     }
 
     [Fact]
-    public async Task RunNowAsync_ShouldDispatchManualFireWithStableIdempotencyKey()
+    public async Task RunNowAsync_ShouldReturnDuplicateForSameScheduledFire()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
-        var service = CreateService(actorPort, queryPort);
-
-        var receipt = await service.RunNowAsync("schedule-1");
-
-        receipt.ScheduleId.Should().Be("schedule-1");
-        receipt.ScheduleActorId.Should().Be("actor:schedule-1");
-        receipt.Accepted.Should().BeTrue();
-        receipt.IdempotencyKey.Should().Be(
-            ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", receipt.ScheduledFireAt));
-        receipt.IdempotencyKey.Should().StartWith("schedule:schedule-1:fire:");
-        actorPort.RunNowRequests.Should().ContainSingle()
-            .Which.ActorId.Should().Be("actor:schedule-1");
-        actorPort.EnsureScheduleIds.Should().BeEmpty();
-        actorPort.ResolveScheduleIds.Should().Equal("schedule-1");
-    }
-
-    [Fact]
-    public async Task RunNowAsync_WhenDispatchAdmissionIsRejected_ShouldReturnRejectedReceipt()
-    {
-        var actorPort = new FakeWorkflowScheduleActorPort
-        {
-            AdmissionFactory = (actorId, envelope) => new DispatchAdmission(
-                Accepted: false,
-                CommandId: envelope.Id,
-                AckedAt: DateTimeOffset.UtcNow,
-                ActorId: actorId,
-                CorrelationId: envelope.Propagation?.CorrelationId ?? envelope.Id),
-        };
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
-        var service = CreateService(actorPort, queryPort);
-
-        var receipt = await service.RunNowAsync("schedule-1");
-
-        receipt.Accepted.Should().BeFalse();
-        actorPort.RunNowRequests.Should().ContainSingle()
-            .Which.ActorId.Should().Be("actor:schedule-1");
-    }
-
-    [Fact]
-    public async Task EnableAsync_WhenDispatchAdmissionIsRejected_ShouldReturnRejectedReceipt()
-    {
-        var actorPort = new FakeWorkflowScheduleActorPort
-        {
-            AdmissionFactory = (actorId, envelope) => new DispatchAdmission(
-                Accepted: false,
-                CommandId: envelope.Id,
-                AckedAt: DateTimeOffset.UtcNow,
-                ActorId: actorId,
-                CorrelationId: envelope.Propagation?.CorrelationId ?? envelope.Id),
-        };
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
-        var service = CreateService(actorPort, queryPort);
-
-        var receipt = await service.EnableAsync("schedule-1", "resume");
-
-        receipt.Should().BeEquivalentTo(new
-        {
-            ScheduleId = "schedule-1",
-            ScheduleActorId = "actor:schedule-1",
-            Accepted = false,
-            AckStage = "accepted",
-        });
-        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
-        receipt.CorrelationId.Should().NotBeNullOrWhiteSpace();
-        receipt.AckedAt.Should().NotBe(default);
-        actorPort.Enabled.Should().ContainSingle()
-            .Which.Should().Be(("actor:schedule-1", "resume"));
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenDispatchAdmissionIsRejected_ShouldReturnRejectedReceipt()
-    {
-        var actorPort = new FakeWorkflowScheduleActorPort
-        {
-            AdmissionFactory = (actorId, envelope) => new DispatchAdmission(
-                Accepted: false,
-                CommandId: envelope.Id,
-                AckedAt: DateTimeOffset.UtcNow,
-                ActorId: actorId,
-                CorrelationId: envelope.Propagation?.CorrelationId ?? envelope.Id),
-        };
-        var service = CreateService(actorPort);
-
-        var receipt = await service.CreateAsync(CreateConfiguration("schedule-1"));
-
-        receipt.Should().BeEquivalentTo(new
-        {
-            ScheduleId = "schedule-1",
-            ScheduleActorId = "actor:schedule-1",
-            Accepted = false,
-            AckStage = "accepted",
-        });
-        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
-        receipt.CorrelationId.Should().NotBeNullOrWhiteSpace();
-        receipt.AckedAt.Should().NotBe(default);
-        actorPort.Created.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task DisableAsync_ShouldReturnNotFound_WhenScheduleActorDoesNotExist()
-    {
-        var actorPort = new FakeWorkflowScheduleActorPort
-        {
-            ResolveActorId = string.Empty,
-        };
-        var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort());
-
-        var act = () => service.DisableAsync("missing", string.Empty);
-
-        await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        actorPort.EnsureScheduleIds.Should().BeEmpty();
-        actorPort.Disabled.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ListAsync_ShouldClampTakeBeforeQueryingReadModel()
-    {
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
-
-        await service.ListAsync(500, "cursor", includeTotalCount: true);
-
-        queryPort.LastTake.Should().Be(200);
-        queryPort.LastCursor.Should().Be("cursor");
-        queryPort.LastIncludeTotalCount.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task EnableDisableAndRunNow_ShouldRejectMissingScheduleActor()
-    {
-        var actorPort = new FakeWorkflowScheduleActorPort
-        {
-            ResolveActorId = string.Empty,
-        };
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
-        var service = CreateService(actorPort, queryPort);
-
-        var enable = () => service.EnableAsync(" schedule-1 ", " resume ");
-        var runNow = () => service.RunNowAsync("schedule-1");
-
-        await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        actorPort.ResolveScheduleIds.Should().Equal("schedule-1", "schedule-1");
-        actorPort.Enabled.Should().BeEmpty();
-        actorPort.RunNowRequests.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task EnableDisable_ShouldNormalizeReasonsAndDispatchToResolvedActor()
-    {
-        var actorPort = new FakeWorkflowScheduleActorPort();
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
-        var service = CreateService(actorPort, queryPort);
-
-        var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
-        var disabled = await service.DisableAsync("schedule-1", " ");
-
-        enabled.Should().BeEquivalentTo(new
-        {
-            ScheduleId = "schedule-1",
-            ScheduleActorId = "actor:schedule-1",
-            Accepted = true,
-            AckStage = "accepted",
-        });
-        enabled.CommandId.Should().NotBeNullOrWhiteSpace();
-        enabled.CorrelationId.Should().NotBeNullOrWhiteSpace();
-        enabled.AckedAt.Should().NotBe(default);
-        disabled.Should().BeEquivalentTo(new
-        {
-            ScheduleId = "schedule-1",
-            ScheduleActorId = "actor:schedule-1",
-            Accepted = true,
-            AckStage = "accepted",
-        });
-        disabled.CommandId.Should().NotBeNullOrWhiteSpace();
-        disabled.CorrelationId.Should().NotBeNullOrWhiteSpace();
-        disabled.AckedAt.Should().NotBe(default);
-        actorPort.Enabled.Should().ContainSingle()
-            .Which.Should().Be(("actor:schedule-1", "resume"));
-        actorPort.Disabled.Should().ContainSingle()
-            .Which.Should().Be(("actor:schedule-1", string.Empty));
-    }
-
-    [Fact]
-    public async Task UpdateAsync_ShouldUseRouteScheduleIdAndScrubOptionalAdapterHeaders()
-    {
-        var actorPort = new FakeWorkflowScheduleActorPort();
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["route-schedule"] = CreateDetail("route-schedule");
-        var service = CreateService(actorPort, queryPort);
-
-        var receipt = await service.UpdateAsync(
-            " route-schedule ",
-            new WorkflowScheduleConfiguration(
-                ScheduleId: "body-schedule",
-                DisplayName: " ",
-                WorkflowName: " direct ",
-                Prompt: " hello ",
-                CronExpression: "*/20 * * * *",
-                Timezone: " ",
-                Enabled: false,
-                Headers: new Dictionary<string, string>
-                {
-                    [" x "] = " y ",
-                    ["empty"] = " ",
-                    ["workflow.schedule.scope_id"] = "caller-extension",
-                    ["workflow.schedule.source_actor_id"] = "caller-extension",
-                },
-                ScopeId: " ",
-                TenantId: "tenant-1"));
-
-        receipt.Should().BeEquivalentTo(new
-        {
-            ScheduleId = "route-schedule",
-            ScheduleActorId = "actor:route-schedule",
-            Accepted = true,
-            AckStage = "accepted",
-        });
-        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
-        receipt.CorrelationId.Should().NotBeNullOrWhiteSpace();
-        receipt.AckedAt.Should().NotBe(default);
-        actorPort.Updated.Should().ContainSingle();
-        var configuration = actorPort.Updated.Single().Configuration;
-        configuration.ScheduleId.Should().Be("route-schedule");
-        configuration.DisplayName.Should().BeEmpty();
-        configuration.Timezone.Should().Be("UTC");
-        configuration.Target.ServiceInvocation.Should().NotBeNull();
-        configuration.Target.ServiceInvocation!.Identity.TenantId.Should().Be("tenant-1");
-        configuration.Headers.Should().Contain("x", "y");
-        configuration.Headers.Should().NotContainKey("empty");
-        configuration.Headers.Should().Contain("workflow.schedule.scope_id", "caller-extension");
-        configuration.Headers.Should().Contain("workflow.schedule.source_actor_id", "caller-extension");
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData(" ")]
-    [InlineData("not cron")]
-    public void ScheduledDispatchCalculator_Validate_ShouldReturnError_ForInvalidCron(string cronExpression)
-    {
-        var result = ScheduledDispatchCalculator.Validate(
-            cronExpression,
+        var dispatch = new RecordingDispatchService();
+        var service = CreateService(dispatch: dispatch);
+        await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
             "UTC",
-            new DateTimeOffset(2026, 5, 29, 8, 30, 0, TimeSpan.Zero));
+            Target()));
+
+        var scheduledFireAt = DateTimeOffset.Parse("2026-01-01T09:00:00+00:00");
+        await service.RunNowAsync(new WorkflowScheduleFireRequest("morning", scheduledFireAt));
+        var duplicate = await service.RunNowAsync(new WorkflowScheduleFireRequest("morning", scheduledFireAt));
+
+        duplicate.Succeeded.Should().BeTrue();
+        duplicate.Value!.Status.Should().Be(WorkflowScheduleFireStatus.Duplicate);
+        dispatch.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RunNowAsync_ShouldExchangeSenderNyxIdTokenForScheduleAuth()
+    {
+        var dispatch = new RecordingDispatchService();
+        var exchange = new RecordingCredentialExchangePort("sender-token");
+        var service = CreateService(credentialExchange: exchange, dispatch: dispatch);
+        await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
+            "UTC",
+            Target(auth: Auth())));
+
+        var scheduledFireAt = DateTimeOffset.Parse("2026-01-01T09:00:00+00:00");
+        var result = await service.RunNowAsync(new WorkflowScheduleFireRequest("morning", scheduledFireAt));
+
+        result.Succeeded.Should().BeTrue();
+        exchange.Sources.Should().ContainSingle().Which.Should().BeEquivalentTo(Auth().SenderNyxId);
+        dispatch.Requests.Should().ContainSingle();
+        dispatch.Requests[0].LlmControl.Should().NotBeNull();
+        dispatch.Requests[0].LlmControl!.SenderNyxIdAccessToken.Should().Be("sender-token");
+    }
+
+    [Fact]
+    public async Task RunNowAsync_ShouldRejectWhenScheduleAuthExchangeFails()
+    {
+        var store = new MemoryStore();
+        var dispatch = new RecordingDispatchService();
+        var exchange = new RecordingCredentialExchangePort(error: "exchange failed");
+        var service = CreateService(store: store, credentialExchange: exchange, dispatch: dispatch);
+        await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
+            "UTC",
+            Target(auth: Auth())));
+
+        var scheduledFireAt = DateTimeOffset.Parse("2026-01-01T09:00:00+00:00");
+        var result = await service.RunNowAsync(new WorkflowScheduleFireRequest("morning", scheduledFireAt));
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().NotBeNullOrWhiteSpace();
+        result.Error.Code.Should().Be(WorkflowScheduleErrorCode.CredentialExchangeFailed);
+        dispatch.Requests.Should().BeEmpty();
+        var run = await store.GetRunAsync("schedule:morning:fire:2026-01-01T09:00:00.0000000+00:00");
+        run.Should().NotBeNull();
+        run!.Status.Should().Be(WorkflowScheduleFireStatus.Rejected);
+        run.Error.Should().Be("exchange failed");
     }
 
     [Fact]
-    public void ScheduledDispatchCalculator_TryResolveTimeZone_ShouldRejectInvalidTimezone()
-    {
-        var resolved = ScheduledDispatchCalculator.TryResolveTimeZone(
-            "Invalid/Zone",
-            out var timeZone,
-            out var error);
-
-        resolved.Should().BeFalse();
-        timeZone.Should().Be(TimeZoneInfo.Utc);
-        error.Should().NotBeNullOrWhiteSpace();
-    }
-
-    [Fact]
-    public void ScheduledDispatchCalculator_GetNextOccurrences_ShouldClampCountAndUseDefaultTimezone()
-    {
-        var occurrences = ScheduledDispatchCalculator.GetNextOccurrences(
-            "*/1 * * * *",
-            " ",
-            new DateTimeOffset(2026, 5, 29, 8, 30, 0, TimeSpan.Zero),
-            150);
-
-        occurrences.Should().HaveCount(100);
-        occurrences.First().Should().Be(
-            new DateTimeOffset(2026, 5, 29, 8, 31, 0, TimeSpan.Zero));
-        occurrences.Should().BeInAscendingOrder();
-    }
-
-    [Fact]
-    public void ScheduledDispatchCalculator_ComputeDueTime_ShouldFloorPastOrCurrentValues()
-    {
-        var now = new DateTimeOffset(2026, 5, 29, 8, 30, 0, TimeSpan.Zero);
-
-        ScheduledDispatchCalculator.ComputeDueTime(now, now)
-            .Should().Be(TimeSpan.FromSeconds(1));
-        ScheduledDispatchCalculator.ComputeDueTime(now.AddSeconds(-5), now)
-            .Should().Be(TimeSpan.FromSeconds(1));
-        ScheduledDispatchCalculator.ComputeDueTime(now.AddMinutes(3), now)
-            .Should().Be(TimeSpan.FromMinutes(3));
-    }
-
-    [Fact]
-    public void ScheduledDispatchCalculator_BuildIdempotencyKey_ShouldUseUtcRoundTripInstant()
-    {
-        var scheduledFireAt = new DateTimeOffset(
-            2026,
-            5,
-            29,
-            17,
-            30,
-            0,
-            TimeSpan.FromHours(8));
-
-        var key = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
-
-        key.Should().Be("schedule:schedule-1:fire:2026-05-29T09:30:00.0000000+00:00");
-    }
-
-    [Fact]
-    public void ScheduledDispatchCalculator_ShouldAdvanceCursorExclusivelyAndThrowForInvalidInputs()
-    {
-        var boundary = new DateTimeOffset(2026, 5, 29, 8, 30, 0, TimeSpan.Zero);
-
-        var occurrences = ScheduledDispatchCalculator.GetNextOccurrences(
-            "*/30 * * * *",
-            "UTC",
-            boundary,
-            -3);
-
-        occurrences.Should().ContainSingle()
-            .Which.Should().Be(new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero));
-        occurrences.Should().NotContain(boundary);
-
-        var invalidTimezone = () => ScheduledDispatchCalculator.GetNextOccurrences(
-            "* * * * *",
-            "Invalid/Zone",
-            boundary,
-            1);
-        invalidTimezone.Should().Throw<ArgumentException>()
-            .WithParameterName("timeZoneId");
-
-        var invalidCron = () => ScheduledDispatchCalculator.GetNextOccurrences(
-            "not cron",
-            "UTC",
-            boundary,
-            1);
-        invalidCron.Should().Throw<ArgumentException>()
-            .WithParameterName("cronExpression");
-
-        ScheduledDispatchValidationResult.Failed(" ")
-            .Error.Should().Be("Schedule is invalid.");
-    }
-
-    [Fact]
-    public async Task PreviewAsync_ShouldNormalizeBlankTimezoneAndClampLowCount()
+    public async Task CreateAsync_ShouldRejectInvalidScheduleAuth()
     {
         var service = CreateService();
 
-        var preview = await service.PreviewAsync(
-            " */30 * * * * ",
-            " ",
-            0,
-            new DateTimeOffset(2026, 5, 29, 8, 31, 0, TimeSpan.Zero));
+        var result = await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
+            "UTC",
+            Target(auth: new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef("", "tenant", "user"),
+                "proxy")))));
 
-        preview.CronExpression.Should().Be("*/30 * * * *");
-        preview.Timezone.Should().Be("UTC");
-        preview.NextFireTimes.Should().ContainSingle()
-            .Which.Should().Be(new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero));
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(WorkflowScheduleErrorCode.InvalidTarget);
     }
 
     [Fact]
-    public async Task GetAsync_ShouldNormalizeScheduleIdBeforeQuerying()
+    public async Task RunNowAsync_ShouldNotExchangeTokenForDuplicateScheduledFire()
     {
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["schedule-1"] = CreateDetail("schedule-1");
-        var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
+        var dispatch = new RecordingDispatchService();
+        var exchange = new RecordingCredentialExchangePort("sender-token");
+        var service = CreateService(credentialExchange: exchange, dispatch: dispatch);
+        await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
+            "UTC",
+            Target(auth: Auth())));
 
-        var detail = await service.GetAsync(" schedule-1 ");
+        var scheduledFireAt = DateTimeOffset.Parse("2026-01-01T09:00:00+00:00");
+        await service.RunNowAsync(new WorkflowScheduleFireRequest("morning", scheduledFireAt));
+        await service.RunNowAsync(new WorkflowScheduleFireRequest("morning", scheduledFireAt));
 
-        detail.Should().NotBeNull();
-        queryPort.GetScheduleIds.Should().Equal("schedule-1");
+        exchange.Sources.Should().ContainSingle();
+        dispatch.Requests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task GetAsync_ShouldReturnNullForNonWorkflowScheduledDispatch()
+    public async Task RunNowAsync_ShouldNotAdvanceScheduleByDefault()
     {
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["generic"] = CreateDetail("generic") with
-        {
-            Schedule = CreateDetail("generic").Schedule with
-            {
-                TargetKind = ScheduledDispatchTargetKind.ServiceInvocation,
-                ServiceEndpointId = "chat",
-                ServiceId = "generic-chat",
-                ScheduleKind = ScheduledDispatchScheduleKind.Generic,
-            },
-        };
-        var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
+        var store = new MemoryStore();
+        var service = CreateService(store: store);
+        await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
+            "UTC",
+            Target()));
 
-        var detail = await service.GetAsync("generic");
+        var scheduledFireAt = DateTimeOffset.Parse("2026-01-01T09:00:00+00:00");
+        await service.RunNowAsync(new WorkflowScheduleFireRequest("morning", scheduledFireAt));
 
-        detail.Should().BeNull();
+        var definition = await store.GetAsync("morning");
+        definition!.NextFireAtUtc.Should().Be(DateTimeOffset.Parse("2026-01-01T09:00:00+00:00"));
     }
 
     [Fact]
-    public async Task ListAsync_ShouldRequestWorkflowFilteredReadModelPage()
+    public async Task RunNowAsync_ShouldAdvanceScheduleWhenRequested()
     {
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.ListResult = new ScheduledDispatchListResult(
-            [CreateDetail("workflow-1").Schedule],
-            "next-workflow",
-            1);
-        var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
+        var store = new MemoryStore();
+        var service = CreateService(store: store);
+        await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
+            "UTC",
+            Target()));
 
-        var result = await service.ListAsync(25, "cursor", includeTotalCount: true);
+        var scheduledFireAt = DateTimeOffset.Parse("2026-01-01T09:00:00+00:00");
+        await service.RunNowAsync(new WorkflowScheduleFireRequest(
+            "morning",
+            scheduledFireAt,
+            AdvanceSchedule: true));
 
-        result.Items.Should().ContainSingle()
-            .Which.ScheduleId.Should().Be("workflow-1");
-        result.NextCursor.Should().Be("next-workflow");
-        result.TotalCount.Should().Be(1);
-        queryPort.LastQuery.Should().Be(new ScheduledDispatchListQuery(
-            25,
-            "cursor",
-            true,
-            ScheduleKind: ScheduledDispatchScheduleKind.Workflow));
+        var definition = await store.GetAsync("morning");
+        definition!.NextFireAtUtc.Should().Be(DateTimeOffset.Parse("2026-01-02T09:00:00+00:00"));
     }
 
     [Fact]
-    public async Task Mutations_ShouldRejectExistingNonWorkflowSchedulesWithoutDispatching()
+    public async Task CreateAsync_ShouldScheduleWakeupForEnabledSchedule()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
-        var queryPort = new FakeWorkflowScheduleQueryPort();
-        queryPort.Details["generic"] = CreateDetail("generic") with
-        {
-            Schedule = CreateDetail("generic").Schedule with
-            {
-                ScheduleKind = ScheduledDispatchScheduleKind.Generic,
-            },
-        };
-        var service = CreateService(actorPort, queryPort);
+        var wakeup = new RecordingWakeupScheduler();
+        var service = CreateService(wakeupScheduler: wakeup);
 
-        var update = () => service.UpdateAsync("generic", CreateConfiguration("generic"));
-        var enable = () => service.EnableAsync("generic", "resume");
-        var disable = () => service.DisableAsync("generic", "pause");
-        var runNow = () => service.RunNowAsync("generic");
+        await service.CreateAsync(new WorkflowScheduleCreateCommand(
+            "morning",
+            "Morning run",
+            "0 9 * * *",
+            "UTC",
+            Target()));
 
-        await update.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-        await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
-
-        actorPort.Updated.Should().BeEmpty();
-        actorPort.Enabled.Should().BeEmpty();
-        actorPort.Disabled.Should().BeEmpty();
-        actorPort.RunNowRequests.Should().BeEmpty();
-        actorPort.ResolveScheduleIds.Should().BeEmpty();
+        wakeup.Scheduled.Should().ContainSingle(x => x.ScheduleId == "morning");
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldKeepHeadersAsDispatchExtensionsOnly()
+    public void AddWorkflowApplication_ShouldRegisterScheduleApplicationService()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
-        var preparation = new FakeScheduledDispatchPreparationService();
-        var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort(), preparation);
+        var services = new ServiceCollection();
 
-        await service.CreateAsync(new WorkflowScheduleConfiguration(
-            ScheduleId: "schedule-1",
-            DisplayName: string.Empty,
-            WorkflowName: "direct",
-            Prompt: "hello",
-            CronExpression: "*/15 * * * *",
-            Timezone: "UTC",
-            Enabled: true,
-            Headers: new Dictionary<string, string>
-            {
-                ["caller"] = "kept",
-            },
-            ScopeId: "scope-1"));
+        services.AddWorkflowApplication();
 
-        var created = actorPort.Created.Single();
-        created.Configuration.Headers.Should().Contain(new KeyValuePair<string, string>("caller", "kept"));
-        created.Configuration.Headers.Should().NotContainKey("workflow.schedule.workflow_name");
-        created.Configuration.Headers.Should().NotContainKey("workflow.schedule.scope_id");
-        created.Configuration.Headers.Should().NotContainKey("workflow.schedule.source_actor_id");
-        created.Dispatch.Descriptor.ServiceInvocation.Should().NotBeNull();
-        var payload = created.Dispatch.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
-        payload.Metadata.Should().Contain("caller", "kept");
-        payload.Metadata.Should().NotContainKey("workflow.schedule.workflow_name");
-    }
-
-    private sealed class FakeWorkflowScheduleActorPort : IScheduledDispatchActorPort
-    {
-        public List<string> EnsureScheduleIds { get; } = [];
-        public List<string> ResolveScheduleIds { get; } = [];
-        public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Created { get; } = [];
-        public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Updated { get; } = [];
-        public List<(string ActorId, string Reason)> Enabled { get; } = [];
-        public List<(string ActorId, string Reason)> Disabled { get; } = [];
-        public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
-        public string? ResolveActorId { get; set; }
-        public Func<string, EventEnvelope, DispatchAdmission> AdmissionFactory { get; set; } =
-            DispatchAdmissionFactory.Create;
-
-        public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default)
-        {
-            EnsureScheduleIds.Add(scheduleId);
-            return Task.FromResult($"actor:{scheduleId}");
-        }
-
-        public Task<string?> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct = default)
-        {
-            ResolveScheduleIds.Add(scheduleId);
-            return Task.FromResult<string?>(ResolveActorId ?? $"actor:{scheduleId}");
-        }
-
-        public Task<DispatchAdmission> DispatchCreateAsync(
-            string actorId,
-            ScheduledDispatchConfiguration configuration,
-            PreparedScheduledDispatchTarget dispatch,
-            CancellationToken ct = default)
-        {
-            Created.Add((actorId, configuration, dispatch));
-            return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
-        }
-
-        public Task<DispatchAdmission> DispatchUpdateAsync(
-            string actorId,
-            ScheduledDispatchConfiguration configuration,
-            PreparedScheduledDispatchTarget dispatch,
-            CancellationToken ct = default)
-        {
-            Updated.Add((actorId, configuration, dispatch));
-            return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
-        }
-
-        public Task<DispatchAdmission> DispatchEnableAsync(
-            string actorId,
-            string reason,
-            CancellationToken ct = default)
-        {
-            Enabled.Add((actorId, reason));
-            return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
-        }
-
-        public Task<DispatchAdmission> DispatchDisableAsync(
-            string actorId,
-            string reason,
-            CancellationToken ct = default)
-        {
-            Disabled.Add((actorId, reason));
-            return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
-        }
-
-        public Task<DispatchAdmission> DispatchRunNowAsync(
-            string actorId,
-            DateTimeOffset scheduledFireAt,
-            CancellationToken ct = default)
-        {
-            RunNowRequests.Add((actorId, scheduledFireAt));
-            return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
-        }
-
-        private static EventEnvelope CreateAdmissionEnvelope() =>
-            new()
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Propagation = new EnvelopePropagation
-                {
-                    CorrelationId = Guid.NewGuid().ToString("N"),
-                },
-            };
-    }
-
-    private sealed class FakeScheduledDispatchPreparationService : IScheduledDispatchTargetPreparationService
-    {
-        public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
-
-        public Task<PreparedScheduledDispatchTarget> PrepareAsync(
-            ScheduledDispatchConfiguration configuration,
-            string commandId,
-            string correlationId,
-            CancellationToken ct = default)
-        {
-            Configurations.Add(configuration);
-            var targetActorId = $"target:{configuration.ScheduleId}";
-            return Task.FromResult(new PreparedScheduledDispatchTarget(
-                targetActorId,
-                new EventEnvelope
-                {
-                    Id = commandId,
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(new Empty()),
-                    Route = EnvelopeRouteSemantics.CreateDirect("test", targetActorId),
-                    Propagation = new EnvelopePropagation
-                    {
-                        CorrelationId = correlationId,
-                    },
-                },
-                Any.Pack(new Empty()).TypeUrl,
-                configuration.Target));
-        }
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowScheduleApplicationService) &&
+            x.ImplementationType == typeof(WorkflowScheduleApplicationService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowScheduleWakeupScheduler) &&
+            x.ImplementationType == typeof(NoopWorkflowScheduleWakeupScheduler));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowScheduleCredentialExchangePort) &&
+            x.ImplementationType == typeof(NoopWorkflowScheduleCredentialExchangePort));
     }
 
     private static WorkflowScheduleApplicationService CreateService(
-        FakeWorkflowScheduleActorPort? actorPort = null,
-        FakeWorkflowScheduleQueryPort? queryPort = null,
-        FakeScheduledDispatchPreparationService? preparation = null) =>
-        new(new ScheduledDispatchApplicationService(
-            actorPort ?? new FakeWorkflowScheduleActorPort(),
-            queryPort ?? new FakeWorkflowScheduleQueryPort(),
-            preparation ?? new FakeScheduledDispatchPreparationService()));
+        IWorkflowScheduleStore? store = null,
+        IWorkflowScheduleWakeupScheduler? wakeupScheduler = null,
+        IWorkflowScheduleCredentialExchangePort? credentialExchange = null,
+        RecordingDispatchService? dispatch = null) =>
+        new(
+            store ?? new MemoryStore(),
+            wakeupScheduler ?? new NoopWorkflowScheduleWakeupScheduler(),
+            credentialExchange ?? new NoopWorkflowScheduleCredentialExchangePort(),
+            dispatch ?? new RecordingDispatchService(),
+            new FakeTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00+00:00")));
 
-    private sealed class FakeWorkflowScheduleQueryPort : IScheduledDispatchQueryPort
+    private static WorkflowScheduleTarget Target(WorkflowScheduleAuth? auth = null) =>
+        new(
+            "run the morning workflow",
+            WorkflowChatSource.CatalogWorkflow("direct"),
+            Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["source"] = "schedule",
+            },
+            Auth: auth);
+
+    private static WorkflowScheduleAuth Auth() =>
+        new(new WorkflowScheduleNyxIdCredentialSource(
+            new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "user-1"),
+            "urn:nyxid:scope:proxy"));
+
+    private sealed class FakeTimeProvider(DateTimeOffset now) : TimeProvider
     {
-        public Dictionary<string, ScheduledDispatchDetail> Details { get; } = new(StringComparer.Ordinal);
-        public List<string> GetScheduleIds { get; } = [];
-        public int? LastTake { get; private set; }
-        public string? LastCursor { get; private set; }
-        public bool? LastIncludeTotalCount { get; private set; }
-        public ScheduledDispatchListQuery? LastQuery { get; private set; }
-        public ScheduledDispatchListResult ListResult { get; set; } = new([], null, null);
+        public override DateTimeOffset GetUtcNow() => now;
+    }
 
-        public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
-        {
-            GetScheduleIds.Add(scheduleId);
-            return Task.FromResult(Details.GetValueOrDefault(scheduleId));
-        }
+    private sealed class RecordingCredentialExchangePort(string? accessToken = null, string? error = null)
+        : IWorkflowScheduleCredentialExchangePort
+    {
+        public List<WorkflowScheduleNyxIdCredentialSource> Sources { get; } = [];
 
-        public Task<ScheduledDispatchListResult> ListAsync(
-            int take = 50,
-            string? cursor = null,
-            bool includeTotalCount = false,
-            CancellationToken ct = default) =>
-            ListAsync(new ScheduledDispatchListQuery(take, cursor, includeTotalCount), ct);
-
-        public Task<ScheduledDispatchListResult> ListAsync(
-            ScheduledDispatchListQuery query,
+        public Task<WorkflowScheduleCredentialExchangeResult> IssueSenderNyxIdAsync(
+            WorkflowScheduleNyxIdCredentialSource source,
             CancellationToken ct = default)
         {
-            LastTake = query.Take;
-            LastCursor = query.Cursor;
-            LastIncludeTotalCount = query.IncludeTotalCount;
-            LastQuery = query;
-            return Task.FromResult(ListResult);
+            ct.ThrowIfCancellationRequested();
+            Sources.Add(source);
+            return Task.FromResult(error == null
+                ? WorkflowScheduleCredentialExchangeResult.Success(accessToken ?? "token")
+                : WorkflowScheduleCredentialExchangeResult.Failure(error));
         }
     }
 
-    private sealed class FakeWorkflowRunActorResolver : IWorkflowRunActorResolver
+    private sealed class RecordingDispatchService
+        : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
     {
         public List<WorkflowChatRunRequest> Requests { get; } = [];
 
-        public WorkflowActorResolutionResult Result { get; set; } =
-            new(
-                new WorkflowRunCreationReceipt("run-actor-1", "definition-actor-1", []),
-                "daily-workflow",
-                WorkflowChatRunStartError.None);
-
-        public Task<WorkflowActorResolutionResult> ResolveOrCreateAsync(
-            WorkflowChatRunRequest request,
+        public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
+            WorkflowChatRunRequest command,
             CancellationToken ct = default)
         {
-            Requests.Add(request);
-            return Task.FromResult(Result);
+            Requests.Add(command);
+            return Task.FromResult(CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt(
+                    "actor-1",
+                    command.WorkflowName ?? "direct",
+                    command.CommandIdSeed ?? "cmd",
+                    command.CorrelationIdSeed ?? "corr")));
         }
     }
 
-    private sealed class RecordingWorkflowChatEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
+    private sealed class RecordingWakeupScheduler : IWorkflowScheduleWakeupScheduler
     {
-        public List<WorkflowChatRunRequest> Commands { get; } = [];
-        public List<CommandContext> Contexts { get; } = [];
+        public List<WorkflowScheduleDefinition> Scheduled { get; } = [];
 
-        public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
+        public List<string> Canceled { get; } = [];
+
+        public Task ScheduleAsync(
+            WorkflowScheduleDefinition definition,
+            CancellationToken ct = default)
         {
-            Commands.Add(command);
-            Contexts.Add(context);
+            ct.ThrowIfCancellationRequested();
+            Scheduled.Add(definition);
+            return Task.CompletedTask;
+        }
 
-            var chatRequest = new ChatRequestEvent
-            {
-                Prompt = command.Prompt,
-                SessionId = command.SessionId ?? context.CorrelationId,
-                ScopeId = command.ScopeId ?? string.Empty,
-            };
-            foreach (var (key, value) in command.Metadata ?? new Dictionary<string, string>())
-                chatRequest.Metadata[key] = value;
-
-            return new EventEnvelope
-            {
-                Id = context.CommandId,
-                Payload = Any.Pack(chatRequest),
-                Route = EnvelopeRouteSemantics.CreateDirect("test", context.TargetId),
-                Propagation = new EnvelopePropagation
-                {
-                    CorrelationId = context.CorrelationId,
-                },
-            };
+        public Task CancelAsync(
+            string scheduleId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Canceled.Add(scheduleId);
+            return Task.CompletedTask;
         }
     }
 
-    private static WorkflowScheduleConfiguration CreateConfiguration(string scheduleId) =>
-        new(
-            ScheduleId: scheduleId,
-            DisplayName: string.Empty,
-            WorkflowName: "direct",
-            Prompt: "hello",
-            CronExpression: "*/15 * * * *",
-            Timezone: "UTC",
-            Enabled: true,
-            Headers: new Dictionary<string, string>(),
-            ScopeId: "scope-1");
+    private sealed class MemoryStore : IWorkflowScheduleStore
+    {
+        private readonly InMemoryStoreInner _inner = new();
 
-    private static ScheduledDispatchDetail CreateDetail(
-        string scheduleId,
-        string workflowName = "direct",
-        string cronExpression = "*/15 * * * *") =>
-        new(
-            new ScheduledDispatchSummary(
-                ScheduleId: scheduleId,
-                DisplayName: string.Empty,
-                TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
-                TargetActorId: string.Empty,
-                PayloadTypeUrl: string.Empty,
-                ServiceKey: ServiceKeys.Build(
-                    "scope-1",
-                    ScopeServiceIdentityDefaults.ServiceAppId,
-                    ScopeServiceIdentityDefaults.ServiceNamespace,
-                    workflowName),
-                ServiceId: workflowName,
-                ServiceEndpointId: "chat",
-                CronExpression: cronExpression,
-                Timezone: "UTC",
-                Enabled: true,
-                CreatedAt: DateTimeOffset.UnixEpoch,
-                UpdatedAt: DateTimeOffset.UnixEpoch,
-                NextFireAt: null,
-                LastFireAt: null,
-                LastTargetActorId: string.Empty,
-                LastCommandId: string.Empty,
-                LastCorrelationId: string.Empty,
-                LastError: string.Empty,
-                FireCount: 0,
-                FailureCount: 0,
-                Headers: new Dictionary<string, string>(),
-                ScheduleActorId: string.Empty,
-                ScheduleKind: ScheduledDispatchScheduleKind.Workflow),
-            []);
+        public Task<WorkflowScheduleDefinition?> GetAsync(string scheduleId, CancellationToken ct = default) =>
+            _inner.GetAsync(scheduleId, ct);
+
+        public Task<IReadOnlyList<WorkflowScheduleDefinition>> ListAsync(CancellationToken ct = default) =>
+            _inner.ListAsync(ct);
+
+        public Task AddAsync(WorkflowScheduleDefinition definition, CancellationToken ct = default) =>
+            _inner.AddAsync(definition, ct);
+
+        public Task UpdateAsync(WorkflowScheduleDefinition definition, CancellationToken ct = default) =>
+            _inner.UpdateAsync(definition, ct);
+
+        public Task<WorkflowScheduleRunRecord?> GetRunAsync(string idempotencyKey, CancellationToken ct = default) =>
+            _inner.GetRunAsync(idempotencyKey, ct);
+
+        public Task AddRunAsync(WorkflowScheduleRunRecord run, CancellationToken ct = default) =>
+            _inner.AddRunAsync(run, ct);
+
+        public Task UpdateRunAsync(WorkflowScheduleRunRecord run, CancellationToken ct = default) =>
+            _inner.UpdateRunAsync(run, ct);
+    }
+
+    private sealed class InMemoryStoreInner
+    {
+        private readonly Dictionary<string, WorkflowScheduleDefinition> _schedules = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, WorkflowScheduleRunRecord> _runs = new(StringComparer.Ordinal);
+
+        public Task<WorkflowScheduleDefinition?> GetAsync(string scheduleId, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(_schedules.GetValueOrDefault(scheduleId));
+        }
+
+        public Task<IReadOnlyList<WorkflowScheduleDefinition>> ListAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowScheduleDefinition>>(_schedules.Values.ToList());
+        }
+
+        public Task AddAsync(WorkflowScheduleDefinition definition, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            _schedules.Add(definition.ScheduleId, definition);
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateAsync(WorkflowScheduleDefinition definition, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            _schedules[definition.ScheduleId] = definition;
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowScheduleRunRecord?> GetRunAsync(string idempotencyKey, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(_runs.GetValueOrDefault(idempotencyKey));
+        }
+
+        public Task AddRunAsync(WorkflowScheduleRunRecord run, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            _runs.Add(run.IdempotencyKey, run);
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateRunAsync(WorkflowScheduleRunRecord run, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            _runs[run.IdempotencyKey] = run;
+            return Task.CompletedTask;
+        }
+    }
 }
