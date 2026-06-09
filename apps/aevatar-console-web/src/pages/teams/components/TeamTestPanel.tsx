@@ -465,7 +465,7 @@ const TeamTestPanel: React.FC<TeamTestPanelProps> = ({
           <CompactFactValue value={entryMember?.serviceId || "--"} />
         </div>
         <Space size={8} style={{ flex: "0 1 auto" }} wrap>
-          {entryMember?.editStudioHref ? (
+          {entryMember ? (
             <Button
               href={
                 entryMember.workflowSupported ? entryMember.editStudioHref : undefined

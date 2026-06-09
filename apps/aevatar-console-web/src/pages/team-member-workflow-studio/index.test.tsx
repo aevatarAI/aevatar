@@ -104,6 +104,7 @@ jest.mock("@/shared/studio/api", () => ({
     serializeYaml: jest.fn(),
     setTeamEntryMember: jest.fn(),
     startExecution: jest.fn(),
+    createMember: jest.fn(),
   },
 }));
 
@@ -220,10 +221,17 @@ function mockTeam() {
     teamId: "t-alpha",
     updatedAt: "2026-06-08T00:00:00Z",
   });
-    (studioApi.getWorkspaceSettings as jest.Mock).mockResolvedValue({
-      directories: [],
-      runtimeBaseUrl: "https://runtime.example.test",
-    });
+  (studioApi.getWorkspaceSettings as jest.Mock).mockResolvedValue({
+    directories: [
+      {
+        directoryId: "scope:scope-1",
+        isBuiltIn: true,
+        label: "scope-1",
+        path: "scope://scope-1",
+      },
+    ],
+    runtimeBaseUrl: "https://runtime.example.test",
+  });
   (studioApi.listExecutions as jest.Mock).mockResolvedValue([]);
 }
 
@@ -251,7 +259,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     cleanupTestQueryClients();
   });
 
-  it("renders a blank new workflow member editor without backend creation", async () => {
+  it("renders a blank new workflow member editor before backend creation", async () => {
     window.history.replaceState(
       {},
       "",
@@ -269,12 +277,58 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.startExecution).not.toHaveBeenCalled();
   });
 
-  it("opens the node library and inserts a first step into a new local draft", async () => {
+  it("opens the node library, inserts a first step, and saves a new linked workflow member", async () => {
     window.history.replaceState(
       {},
       "",
       "/teams/scope-1/t-alpha/members/new/workflow",
     );
+    (studioApi.saveWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "untitled-member.yaml",
+      filePath: "scope://scope-1/untitled-member.yaml",
+      findings: [],
+      layout: null,
+      name: "Untitled member",
+      workflowId: "untitled-member",
+      yaml: "name: Untitled member\nsteps: []\n",
+      document: {
+        name: "Untitled member",
+        roles: [],
+        steps: [
+          {
+            id: "llm_call",
+            type: "llm_call",
+            targetRole: null,
+            parameters: {},
+            next: null,
+            branches: {},
+          },
+        ],
+      },
+      updatedAtUtc: "2026-06-08T00:00:01Z",
+    });
+    (studioApi.createMember as jest.Mock).mockResolvedValue({
+      createdAt: "2026-06-08T00:00:00Z",
+      description: "",
+      displayName: "Untitled member",
+      implementationKind: "workflow",
+      lastBoundRevisionId: null,
+      lifecycleStage: "created",
+      memberId: "untitled-member",
+      publishedServiceId: "",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      updatedAt: "2026-06-08T00:00:01Z",
+    });
+    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
+      bindingRunId: "binding-run-new",
+      memberId: "untitled-member",
+      scopeId: "scope-1",
+      status: "accepted",
+    });
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
@@ -297,8 +351,37 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("nodes:1")).toBeTruthy();
     });
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    expect(saveButton).toBeEnabled();
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          directoryId: "scope:scope-1",
+          scopeId: "scope-1",
+          workflowName: "Untitled member",
+          workflowId: "",
+        }),
+      );
+      expect(studioApi.createMember).toHaveBeenCalledWith({
+        description: "",
+        displayName: "Untitled member",
+        implementationKind: "workflow",
+        memberId: "untitled-member",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+      });
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith({
+        displayName: "Untitled member",
+        memberId: "untitled-member",
+        scopeId: "scope-1",
+        workflowYamls: [expect.stringContaining("name: Untitled member")],
+      });
+    });
+    expect(window.location.pathname).toBe(
+      "/teams/scope-1/t-alpha/members/untitled-member/workflow",
+    );
   });
 
   it("warns before leaving with unsaved workflow changes", async () => {

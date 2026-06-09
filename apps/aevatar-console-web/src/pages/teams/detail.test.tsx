@@ -1604,6 +1604,44 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("link", { name: "在 Studio 中编辑" })).toBeNull();
   });
 
+  it("shows workflow-only affordance for a non-workflow Team Test entry member", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValue({
+      ...mockCreateTeamSummary(),
+      entryMemberId: "member-agent-alpha",
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValue({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-agent-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Agent Alpha",
+          description: "Agent member",
+          implementationKind: "gagent",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "agent-service",
+          lastBoundRevisionId: "rev-agent",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await openTeamTestDialog();
+
+    const workflowOnlyButtons = await within(dialog).findAllByRole("button", {
+      name: "仅支持 Workflow",
+    });
+    expect(workflowOnlyButtons).toHaveLength(1);
+    expect(workflowOnlyButtons[0]).toBeDisabled();
+    expect(within(dialog).queryByRole("link", { name: "在 Studio 中编辑" }))
+      .toBeNull();
+  });
+
   it("routes create-member actions into the workflow member studio", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 

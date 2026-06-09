@@ -11,7 +11,10 @@ import {
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { history } from "@/shared/navigation/history";
-import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
+import {
+  buildTeamDetailHref,
+  buildTeamMemberWorkflowStudioHref,
+} from "@/shared/navigation/teamRoutes";
 import {
   applyStepInspectorDraft,
   connectStepToTarget,
@@ -72,6 +75,11 @@ type ActivateWorkflowVariables = {
 type ActivatedWorkflow = {
   readonly run: StudioMemberBindingRunStatusResponse | null;
   readonly savedDraft: SavedWorkflowDraft | null;
+};
+
+type CreatedWorkflowMember = {
+  readonly memberId: string;
+  readonly savedDraft: SavedWorkflowDraft;
 };
 
 type TeamMemberWorkflowStudioState = {
@@ -188,6 +196,21 @@ function buildBlankWorkflowDocument(name: string): StudioWorkflowDocument {
     roles: [],
     steps: [],
   };
+}
+
+function buildNewWorkflowDraftFileName(title: string): string {
+  const normalized = trimOptional(title) || "workflow";
+  return `${normalized}.yaml`;
+}
+
+function resolveNewWorkflowDirectoryId(input: {
+  readonly directories?: readonly { directoryId?: string | null }[] | null;
+  readonly scopeId: string;
+}): string {
+  return (
+    trimOptional(input.directories?.[0]?.directoryId) ||
+    (trimOptional(input.scopeId) ? `scope:${trimOptional(input.scopeId)}` : "")
+  );
 }
 
 function resolveWorkflowId(memberDetail: StudioMemberDetail | null | undefined): string {
@@ -674,6 +697,100 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       void message.success("Workflow draft saved.");
     },
   });
+  const createWorkflowMemberMutation = useMutation({
+    mutationFn: async ({
+      document,
+      layout,
+      title,
+    }: Omit<SaveWorkflowDraftVariables, "workflow">): Promise<CreatedWorkflowMember> => {
+      if (!route.scopeId || !route.teamId) {
+        throw new Error("Resolve a Team workspace before creating a workflow member.");
+      }
+
+      const normalizedTitle =
+        trimOptional(title) || trimOptional(document.name) || "Untitled member";
+      const directoryId = resolveNewWorkflowDirectoryId({
+        directories: workspaceSettingsQuery.data?.directories,
+        scopeId: route.scopeId,
+      });
+      if (!directoryId) {
+        throw new Error("Resolve a workflow directory before saving this member.");
+      }
+
+      const newWorkflowShell: StudioWorkflowFile = {
+        directoryId,
+        directoryLabel: "",
+        draftExists: false,
+        fileName: buildNewWorkflowDraftFileName(normalizedTitle),
+        filePath: "",
+        findings: [],
+        layout: null,
+        name: normalizedTitle,
+        updatedAtUtc: "",
+        workflowId: "",
+        yaml: "",
+      };
+      const savedDraft = await saveWorkflowDraft({
+        document,
+        layout,
+        routeScopeId: route.scopeId,
+        title: normalizedTitle,
+        workflow: newWorkflowShell,
+      });
+      const memberId = trimOptional(savedDraft.workflow.workflowId);
+      if (!memberId) {
+        throw new Error("Workflow draft save did not return a stable member id.");
+      }
+
+      const createdMember = await studioApi.createMember({
+        scopeId: route.scopeId,
+        displayName: savedDraft.title,
+        implementationKind: "workflow",
+        description: trimOptional(savedDraft.document.description),
+        memberId,
+        teamId: route.teamId,
+      });
+      const createdMemberId = trimOptional(createdMember.memberId) || memberId;
+      const serialized = await studioApi.serializeYaml({
+        document: {
+          ...savedDraft.document,
+          name: savedDraft.title,
+        },
+        availableStepTypes: AVAILABLE_STEP_TYPES,
+      });
+      await studioApi.bindMemberWorkflow({
+        scopeId: route.scopeId,
+        memberId: createdMemberId,
+        displayName: savedDraft.title,
+        workflowYamls: [serialized.yaml],
+      });
+
+      return {
+        memberId: createdMemberId,
+        savedDraft,
+      };
+    },
+    onError: (error) => {
+      void message.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to create workflow member.",
+      );
+    },
+    onSuccess: ({ memberId, savedDraft }) => {
+      applySavedDraft(savedDraft);
+      void teamQuery.refetch();
+      void message.success("Workflow member created.");
+      history.replace(
+        buildTeamMemberWorkflowStudioHref({
+          memberId,
+          mode: "edit-member",
+          scopeId: route.scopeId,
+          teamId: route.teamId,
+        }),
+      );
+    },
+  });
   const executeMutation = useMutation({
     mutationFn: async ({
       memberId,
@@ -902,8 +1019,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       (Boolean(stableWorkflowId) &&
         (workflowQuery.isLoading || parseQuery.isLoading)));
   const canSave =
-    route.mode === "existing" &&
-    Boolean(workflowQuery.data && editableDocument && dirty && !linkedWorkflowMissing);
+    route.mode === "new"
+      ? Boolean(
+          route.scopeId &&
+            route.teamId &&
+            editableDocument &&
+            dirty &&
+            !createWorkflowMemberMutation.isPending,
+        )
+      : Boolean(
+          workflowQuery.data &&
+            editableDocument &&
+            dirty &&
+            !linkedWorkflowMissing &&
+            !saveMutation.isPending,
+        );
   const workflowHasSteps = Boolean(editableDocument?.steps?.length);
   const memberIsActive =
     memberQuery.data?.summary.lifecycleStage === "bind_ready" ||
@@ -1038,7 +1168,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
                 : "Execute the active workflow member.";
   const savePlaceholderReason =
     route.mode === "new"
-      ? "New workflow-member creation is intentionally not wired in Phase 1 to avoid orphan backend data."
+      ? !editableDocument
+        ? "Load the workflow draft before creating this member."
+        : !dirty
+          ? "No changes to save."
+          : "Save creates the workflow draft, Team member, and member binding."
       : linkedWorkflowMissing
         ? "No stable workflow draft is linked to this member yet."
         : dirty
@@ -1254,7 +1388,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     dirty,
     emptyDescription:
       route.mode === "new"
-        ? "Build the draft locally first. Saving a new member stays disabled until safe member creation is wired."
+        ? "Build the draft locally first, then save it as a linked Team workflow member."
         : linkedWorkflowMissing
           ? "No workflow draft is linked to this member yet. You can sketch locally, but saving requires a stable workflow reference."
           : "Start this workflow by adding the first step.",
@@ -1313,6 +1447,17 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     openNodeLibrary: () => setNodeLibraryOpen(true),
     save: () => {
+      if (route.mode === "new" && editableDocument) {
+        createWorkflowMemberMutation.mutate({
+          document: editableDocument,
+          layout:
+            editableLayout ??
+            buildStudioWorkflowLayout(workflowTitle, graph.nodes),
+          title: workflowTitle,
+        });
+        return;
+      }
+
       if (workflowQuery.data && editableDocument) {
         saveMutation.mutate({
           document: editableDocument,
@@ -1324,7 +1469,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         });
       }
     },
-    savePending: saveMutation.isPending,
+    savePending: saveMutation.isPending || createWorkflowMemberMutation.isPending,
     savePlaceholderReason,
     selectedNodeId,
     selectedStepDraft,

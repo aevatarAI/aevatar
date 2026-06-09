@@ -591,6 +591,8 @@ function buildTeamRosterPreview(input: {
   const entryMember = entryMemberId
     ? input.members.find((member) => trimOptional(member.memberId) === entryMemberId)
     : undefined;
+  // Deferred P2: keep the current workflow-member fallback when the entry is non-workflow.
+  // A later pass should surface an explicit entry-unsupported/manage-members state.
   const preferredWorkflowMember =
     (entryMember && isWorkflowMember(entryMember) ? entryMember : undefined) ??
     sortedMembers.find(isWorkflowMember);
