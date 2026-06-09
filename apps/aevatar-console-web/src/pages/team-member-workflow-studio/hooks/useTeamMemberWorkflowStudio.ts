@@ -85,7 +85,6 @@ type TeamMemberWorkflowStudioState = {
   readonly backHref: string;
   readonly canRunActiveMember: boolean;
   readonly canSave: boolean;
-  readonly canSetTeamEntry: boolean;
   readonly closeNodeLibrary: () => void;
   readonly connectNodes: (sourceNodeId: string, targetNodeId: string) => void;
   readonly deleteSelectedNode: () => void;
@@ -126,10 +125,7 @@ type TeamMemberWorkflowStudioState = {
   readonly selectCanvas: () => void;
   readonly selectNode: (nodeId: string) => void;
   readonly setExecutionRunInput: (input: string) => void;
-  readonly setTeamEntry: () => void;
   readonly setWorkflowTitle: (title: string) => void;
-  readonly teamEntryNotice: string;
-  readonly teamEntryPending: boolean;
   readonly teamName: string;
   readonly workflowTitle: string;
 };
@@ -501,7 +497,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [publishBindingRun, setPublishBindingRun] =
     React.useState<StudioMemberBindingRunStatusResponse | null>(null);
   const [publishError, setPublishError] = React.useState("");
-  const [teamEntryNotice, setTeamEntryNotice] = React.useState("");
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [runOptionsOpen, setRunOptionsOpen] = React.useState(false);
   const [selectedNodeId, setSelectedNodeId] = React.useState("");
@@ -880,34 +875,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
     },
   });
-  const setTeamEntryMutation = useMutation({
-    mutationFn: async () => {
-      if (!route.scopeId || !route.teamId || !route.memberId) {
-        throw new Error("Resolve an existing Team member before setting Team entry.");
-      }
-
-      return studioApi.setTeamEntryMember(
-        route.scopeId,
-        route.teamId,
-        route.memberId,
-      );
-    },
-    onError: (error) => {
-      const errorMessage =
-        error instanceof Error ? error.message : "Failed to set Team entry member.";
-      setTeamEntryNotice(errorMessage);
-      void message.error(errorMessage);
-    },
-    onMutate: () => {
-      setTeamEntryNotice("");
-    },
-    onSuccess: () => {
-      void teamQuery.refetch();
-      setTeamEntryNotice("Team entry change submitted.");
-      void message.success("Team entry change submitted.");
-    },
-  });
-
   const workflowLoading =
     route.mode === "existing" &&
     (memberQuery.isLoading ||
@@ -974,25 +941,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       : memberIsPublished
         ? "Published member workflow is serviceable."
         : "Draft member workflow is not published to the active member yet.");
-  const isTeamEntryMember =
-    Boolean(route.memberId) &&
-    trimOptional(teamQuery.data?.entryMemberId) === route.memberId;
-  const canSetTeamEntry = Boolean(
-    route.mode === "existing" &&
-      route.scopeId &&
-      route.teamId &&
-      route.memberId &&
-      memberIsPublished &&
-      !isTeamEntryMember &&
-      !setTeamEntryMutation.isPending,
-  );
-  const resolvedTeamEntryNotice =
-    teamEntryNotice ||
-    (isTeamEntryMember
-      ? "Team entry"
-      : memberIsPublished
-        ? "Team entry available"
-        : "Team entry needs a published member");
   const scopedMemberRuns = React.useMemo(() => {
     const executions = executionsQuery.data ?? [];
     if (!executions.length) {
@@ -1266,7 +1214,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     backHref,
     canRunActiveMember,
     canSave,
-    canSetTeamEntry,
     closeNodeLibrary: () => setNodeLibraryOpen(false),
     connectNodes,
     deleteSelectedNode,
@@ -1365,14 +1312,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     setExecutionRunInput,
     setSelectedTab,
-    setTeamEntry: () => {
-      if (canSetTeamEntry) {
-        setTeamEntryMutation.mutate();
-      }
-    },
     setWorkflowTitle,
-    teamEntryNotice: resolvedTeamEntryNotice,
-    teamEntryPending: setTeamEntryMutation.isPending,
     teamName,
     updateSelectedStepParameters,
     workflowTitle,
