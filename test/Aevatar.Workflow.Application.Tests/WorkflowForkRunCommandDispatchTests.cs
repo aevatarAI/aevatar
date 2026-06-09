@@ -378,7 +378,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
         IReadOnlyDictionary<string, string>? variables = null,
         string scopeId = "") =>
         new WorkflowRunForkSeedView(
-            RunId: "source-run",
+            SourceRunId: "source-run",
             Status: status,
             WorkflowYaml: workflowYaml ?? WorkflowYaml("source"),
             InlineWorkflowYamls: inlineWorkflowYamls ?? new Dictionary<string, string>(StringComparer.Ordinal),

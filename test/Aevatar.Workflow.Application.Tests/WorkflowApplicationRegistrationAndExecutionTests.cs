@@ -432,6 +432,40 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
+    public void EnvelopeFactory_ShouldCarryForkSeedOnRequestLevel()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "resume-input",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ForkSeed: new WorkflowChatRunForkSeed(
+                "source-run",
+                "step-b",
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["input"] = "seed-input",
+                    ["step-a"] = "alpha",
+                },
+                Attempt: 2));
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        request.ForkSeed.SourceRunId.Should().Be("source-run");
+        request.ForkSeed.StartAtStepId.Should().Be("step-b");
+        request.ForkSeed.Attempt.Should().Be(2);
+        request.ForkSeed.Variables.Should().Contain("input", "seed-input");
+        request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
+    }
+
+    [Fact]
     public void EnvelopeFactory_ShouldMaterializeTrustedControlAsTypedProtoFields_NotMetadata()
     {
         var services = new ServiceCollection();

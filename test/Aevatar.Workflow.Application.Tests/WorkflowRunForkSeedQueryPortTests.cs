@@ -35,7 +35,7 @@ public sealed class WorkflowRunForkSeedQueryPortTests
         var document = BuildDocument(state, snapshot);
         var view = mapper.ToSeedView(document);
 
-        view.RunId.Should().Be("run-completed");
+        view.SourceRunId.Should().Be("run-completed");
         view.Status.Should().Be("completed");
         view.WorkflowYaml.Should().Be("name: demo\nsteps: []");
         view.InlineWorkflowYamls.Should().Contain("child", "name: child");

@@ -29,6 +29,7 @@ message ConversationGAgentState {
   // this snapshot as prior context and, after successful user-visible delivery,
   // appends the new turn entries through ConversationTurnCompletedEvent.
   repeated ConversationHistoryEntry retained_history = 12;
+  repeated NeedsWorkflowDraftRunEvent pending_workflow_draft_run_requests = 13;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):

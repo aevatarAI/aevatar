@@ -4,6 +4,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -21,6 +23,7 @@ using Xunit;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
+using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
@@ -28,6 +31,94 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelConversationTurnRunnerTests
 {
+    [Theory]
+    [InlineData("/workflow run daily-greeting")]
+    [InlineData("/run-workflow daily-greeting")]
+    public async Task RunInboundAsync_ShouldRequestWorkflowDraftRun_ForExplicitWorkflowIntent(string text)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var services = BuildAgentBuilderToolServices(new StubScopeWorkflowQueryPort(BuildWorkflowSummary("scope-1", "daily-greeting")));
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                text,
+                "msg-workflow-1",
+                transportExtras: new TransportExtras
+                {
+                    NyxRegistrationScopeId = "scope-1",
+                    NyxUserAccessToken = "user-token-1",
+                }),
+            RelayRuntimeContext(
+                "msg-workflow-1",
+                nyxUserAccessToken: "user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.WorkflowDraftRunRequest.Should().NotBeNull();
+        result.LlmReplyRequest.Should().BeNull();
+        result.WorkflowDraftRunRequest!.WorkflowSource.WorkflowId.Should().Be("daily-greeting");
+        result.WorkflowDraftRunRequest.WorkflowSource.DefinitionActorId.Should().Be("actor-daily-greeting");
+        result.WorkflowDraftRunRequest.RunId.Should().StartWith("workflow-draft-run-");
+        result.WorkflowDraftRunRequest.TargetActorId.Should().BeEmpty();
+        result.WorkflowDraftRunRequest.NyxUserAccessToken.Should().Be("user-token-1");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldReplyAndNotFallbackToLlm_WhenWorkflowTokenMissing()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var services = BuildAgentBuilderToolServices(new StubScopeWorkflowQueryPort(BuildWorkflowSummary("scope-1", "daily-greeting")));
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/workflow run daily-greeting",
+                "msg-workflow-token-missing",
+                transportExtras: new TransportExtras
+                {
+                    NyxRegistrationScopeId = "scope-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.WorkflowDraftRunRequest.Should().BeNull();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("NyxID");
+    }
+
+    [Theory]
+    [InlineData("aevatar_start_workflow daily-greeting")]
+    [InlineData("跑一下 daily-greeting 的 workflow")]
+    [InlineData("run daily-greeting workflow")]
+    public async Task RunInboundAsync_ShouldUseNormalLlmPath_ForUnregisteredWorkflowText(string text)
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var services = BuildAgentBuilderToolServices(new StubScopeWorkflowQueryPort(BuildWorkflowSummary("scope-1", "daily-greeting")));
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                text,
+                "msg-workflow-tool-name",
+                transportExtras: new TransportExtras
+                {
+                    NyxRegistrationScopeId = "scope-1",
+                    NyxUserAccessToken = "user-token-1",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.WorkflowDraftRunRequest.Should().BeNull();
+        result.LlmReplyRequest.Should().NotBeNull();
+        adapter.Replies.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task RunInboundAsync_ShouldRequestDeferredLlmReply_ForNormalMessage()
     {
@@ -3136,10 +3227,11 @@ public sealed class ChannelConversationTurnRunnerTests
             userLlmOptionsRenderer: services.GetService<IUserLlmOptionsRenderer<MessageContent>>(),
             userConfigQueryPort: services.GetService<IUserConfigQueryPort>(),
             replyService: services.GetService<ChannelPlatformReplyService>(),
-            workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>());
+            workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
+            workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>());
     }
 
-    private static IServiceProvider BuildAgentBuilderToolServices()
+    private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -3152,14 +3244,23 @@ public sealed class ChannelConversationTurnRunnerTests
                 "scope-1",
                 "ou_user_1")));
 
-        return new ServiceCollection()
+        var services = new ServiceCollection()
             .AddSingleton(queryPort)
             .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
             .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory())
-            .BuildServiceProvider();
+            .AddSingleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>()
+            .AddSingleton<ChannelSlashCommandRegistry>()
+            .AddSingleton<ChannelWorkflowDraftRunIntentParser>()
+            .AddSingleton(sp => new ChannelWorkflowDraftRunAdmission(
+                sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
+                sp.GetService<IScopeWorkflowQueryPort>()));
+        if (workflowQueryPort is not null)
+            services.AddSingleton(workflowQueryPort);
+
+        return services.BuildServiceProvider();
     }
 
     private static ConversationTurnRuntimeContext RelayRuntimeContext(
@@ -3274,6 +3375,47 @@ public sealed class ChannelConversationTurnRunnerTests
             ScopeId = "scope-1",
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
+
+    private static ScopeWorkflowSummary BuildWorkflowSummary(
+        string scopeId,
+        string workflowId) =>
+        new(
+            scopeId,
+            workflowId,
+            $"Display {workflowId}",
+            $"service-key-{workflowId}",
+            workflowId,
+            $"actor-{workflowId}",
+            "rev-active",
+            "deployment-1",
+            "active",
+            DateTimeOffset.Parse("2026-05-25T00:00:00Z"));
+
+    private sealed class StubScopeWorkflowQueryPort(ScopeWorkflowSummary? workflow) : IScopeWorkflowQueryPort
+    {
+        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(string scopeId, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(workflow is null ? [] : [workflow]);
+
+        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default) =>
+            Task.FromResult(workflow is not null &&
+                            string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                            string.Equals(workflow.WorkflowId, workflowId, StringComparison.Ordinal)
+                ? workflow
+                : null);
+
+        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(
+            string scopeId,
+            string actorId,
+            CancellationToken ct = default) =>
+            Task.FromResult(workflow is not null &&
+                            string.Equals(workflow.ScopeId, scopeId, StringComparison.Ordinal) &&
+                            string.Equals(workflow.ActorId, actorId, StringComparison.Ordinal)
+                ? workflow
+                : null);
+    }
 
     private sealed class RecordingPlatformAdapter : IPlatformAdapter
     {

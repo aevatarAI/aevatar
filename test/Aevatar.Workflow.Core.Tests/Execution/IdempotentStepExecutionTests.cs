@@ -100,6 +100,77 @@ public sealed class IdempotentStepExecutionTests
     }
 
     [Fact]
+    public async Task StartWorkflow_WithForkSeed_ShouldPersistHydratedSeedVariables()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+        var start = new StartWorkflowEvent
+        {
+            RunId = "run-1",
+            Input = "fresh-input",
+            ForkSeed = new WorkflowRunForkSeed
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "step-b",
+            },
+        };
+        start.ForkSeed.Variables["input"] = "seed-input";
+        start.ForkSeed.Variables["step_a_output"] = "alpha";
+        start.ForkSeed.Variables["topic"] = "seed-topic";
+
+        await kernel.HandleAsync(Wrap(start), ctx, CancellationToken.None);
+
+        var request = ctx.Published
+            .Select(p => p.Event)
+            .Where(e => e.Is(StepRequestEvent.Descriptor))
+            .Select(e => e.Unpack<StepRequestEvent>())
+            .Single();
+        request.StepId.Should().Be("step-b");
+        request.Input.Should().Be("seed-input");
+        request.Parameters["summary"].Should().Be("alpha:seed-topic:seed-input");
+        StepRequests(ctx).Should().NotContain(x => x.StepId == "step-a");
+
+        var state = host.States["workflow_execution_kernel"].Unpack<WorkflowExecutionKernelState>();
+        state.Variables["step_a_output"].Should().Be("alpha");
+        state.Variables["input"].Should().Be("seed-input");
+        state.Variables["topic"].Should().Be("seed-topic");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WithForkSeedMissingStep_ShouldPublishFailureWithoutDispatch()
+    {
+        var ctx = new RecordingEventHandlerContext();
+        var host = new RecordingStateHost();
+        var kernel = new WorkflowExecutionKernel(ThreeStepWorkflow(), host);
+
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                RunId = "run-1",
+                Input = "hello",
+                ForkSeed = new WorkflowRunForkSeed
+                {
+                    SourceRunId = "source-run",
+                    StartAtStepId = "missing-step",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(p => p.Event)
+            .Where(e => e.Is(StepRequestEvent.Descriptor))
+            .Should()
+            .BeEmpty();
+        var completed = ctx.Published.Select(p => p.Event)
+            .Where(e => e.Is(WorkflowCompletedEvent.Descriptor))
+            .Select(e => e.Unpack<WorkflowCompletedEvent>())
+            .First(e => !e.Success && e.Error.Contains("missing-step", StringComparison.Ordinal));
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("missing-step");
+    }
+
+    [Fact]
     public async Task StepCompleted_MatchingId_ShouldAccept()
     {
         var ctx = new RecordingEventHandlerContext();

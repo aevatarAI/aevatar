@@ -81,7 +81,7 @@ public sealed record WorkflowRunBindingQuery(
     int Take = 50);
 
 public sealed record WorkflowRunForkSeedView(
-    string RunId,
+    string SourceRunId,
     string Status,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,

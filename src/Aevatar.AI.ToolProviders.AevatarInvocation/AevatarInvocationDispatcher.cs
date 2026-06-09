@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -14,7 +13,6 @@ using Aevatar.AGUI.Contracts;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
-using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,15 +40,6 @@ public sealed class AevatarInvocationDispatcher
         LLMRequestMetadataKeys.ConnectedServicesContext,
         "scope_id",
     ];
-
-    private static readonly JsonFormatter ProtoJsonFormatter = new(
-        JsonFormatter.Settings.Default
-            .WithFormatDefaultValues(false)
-            .WithTypeRegistry(TypeRegistry.FromFiles(
-                AGUIEvent.Descriptor.File,
-                AnyReflection.Descriptor,
-                StructReflection.Descriptor,
-                WrappersReflection.Descriptor)));
 
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IGAgentActorRegistryQueryPort _actorRegistryQueryPort;
@@ -288,80 +277,20 @@ public sealed class AevatarInvocationDispatcher
             return AevatarInvocationJson.Error(parsed.Error);
 
         var request = parsed.Value!;
-        var error = ProtoToolArguments.Require(request.RunId, "run_id", "run_id is required.");
-        if (error != null)
-            return AevatarInvocationJson.Error(error);
-
-        var runId = request.RunId.Trim();
-        var scope = ResolveCallerScope(requireOwner: false);
-        if (scope.Error != null)
-            return AevatarInvocationJson.Error(scope.Error);
-
-        ServiceRunSnapshot? serviceRun = null;
-        if (!string.IsNullOrWhiteSpace(request.ServiceId))
+        return request.TargetCase switch
         {
-            serviceRun = await _serviceRunQueryPort.GetByRunIdAsync(
-                scope.Value!.ScopeId,
-                request.ServiceId.Trim(),
-                runId,
-                ct);
-        }
-
-        var actorId = FirstNonEmpty(request.ActorId, serviceRun?.TargetActorId, serviceRun?.ActorId);
-        if (!string.IsNullOrWhiteSpace(actorId))
-        {
-            var terminal = await _terminalQueryPort.GetByCorrelationIdAsync(actorId!, runId, ct)
-                           ?? await _terminalQueryPort.GetBySessionIdAsync(actorId!, runId, ct);
-            if (terminal != null)
-                return AevatarInvocationJson.Serialize(MapTerminal(terminal, runId));
-
-            var workflow = await _workflowQueryService.GetWorkflowActorCurrentStateAsync(actorId!, ct);
-            if (workflow != null &&
-                (string.IsNullOrWhiteSpace(workflow.LastCommandId) ||
-                 string.Equals(workflow.LastCommandId, runId, StringComparison.Ordinal)))
-            {
-                return AevatarInvocationJson.Serialize(MapWorkflowSnapshot(workflow, runId, request.Take));
-            }
-        }
-
-        if (serviceRun != null)
-            return AevatarInvocationJson.Serialize(MapServiceRun(serviceRun));
-
-        return AevatarInvocationJson.Serialize(new ObserveRunResult
-        {
-            RunId = runId,
-            Error = Error(
-                "run_not_found",
-                "No registered service run, terminal GAgent snapshot, or workflow snapshot matched the requested run_id."),
-        });
-    }
-
-    public async Task<string> QueryReadModelAsync(string argumentsJson, CancellationToken ct = default)
-    {
-        var parsed = ProtoToolArguments.Parse<QueryReadModelToolRequest>(argumentsJson);
-        if (parsed.Error != null)
-            return AevatarInvocationJson.Error(parsed.Error);
-
-        var request = parsed.Value!;
-        var error = ProtoToolArguments.Require(request.ReadmodelName, "readmodel_name", "readmodel_name is required.") ??
-                    ProtoToolArguments.RequireMessage(request.Query, "query");
-        if (error != null)
-            return AevatarInvocationJson.Error(error);
-
-        return request.ReadmodelName.Trim() switch
-        {
-            AevatarInvocationReadModels.ServiceRunCurrentState => await QueryServiceRunAsync(request.Query, ct),
-            AevatarInvocationReadModels.GAgentRunTerminal => await QueryGAgentRunTerminalAsync(request.Query, ct),
-            AevatarInvocationReadModels.WorkflowActorCurrentState => await QueryWorkflowActorSnapshotAsync(request.Query, ct),
-            AevatarInvocationReadModels.WorkflowActorTimeline => await QueryWorkflowActorTimelineAsync(request.Query, ct),
-            _ => AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = request.ReadmodelName,
-                Error = Error(
-                    "readmodel_not_registered",
-                    $"readmodel_name must be one of: {string.Join(", ", AevatarInvocationToolSchemas.ReadModelNames)}",
-                    "readmodel_name"),
-            }),
+            ObserveRunToolRequest.TargetOneofCase.ServiceRun =>
+                await ObserveServiceRunAsync(request.ServiceRun, ct),
+            ObserveRunToolRequest.TargetOneofCase.GagentTerminalCorrelation =>
+                await ObserveGAgentTerminalCorrelationAsync(request.GagentTerminalCorrelation, ct),
+            ObserveRunToolRequest.TargetOneofCase.GagentTerminalSession =>
+                await ObserveGAgentTerminalSessionAsync(request.GagentTerminalSession, ct),
+            ObserveRunToolRequest.TargetOneofCase.WorkflowCurrentState =>
+                await ObserveWorkflowCurrentStateAsync(request.WorkflowCurrentState, ct),
+            _ => AevatarInvocationJson.Error(Error(
+                "invalid_arguments",
+                "one of service_run, gagent_terminal_correlation, gagent_terminal_session, or workflow_current_state is required.",
+                "target")),
         };
     }
 
@@ -623,144 +552,125 @@ public sealed class AevatarInvocationDispatcher
         return ActorTargetResolution.Success(group.ActorIds[0]);
     }
 
-    private async Task<string> QueryServiceRunAsync(ReadModelQuery query, CancellationToken ct)
+    private async Task<string> ObserveServiceRunAsync(
+        ServiceRunObservationTarget target,
+        CancellationToken ct)
     {
         var scope = ResolveCallerScope(requireOwner: false);
         if (scope.Error != null)
             return AevatarInvocationJson.Error(scope.Error);
 
-        if (string.IsNullOrWhiteSpace(query.ServiceId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.ServiceRunCurrentState,
-                Error = Error("invalid_arguments", "query.service_id is required.", "query.service_id"),
-            });
-        }
+        var error = ProtoToolArguments.Require(
+                        target.ServiceId,
+                        "service_run.service_id",
+                        "service_run.service_id is required.") ??
+                    ProtoToolArguments.Require(
+                        target.RunId,
+                        "service_run.run_id",
+                        "service_run.run_id is required.");
+        if (error != null)
+            return AevatarInvocationJson.Error(error);
 
-        ServiceRunSnapshot? one = null;
-        if (!string.IsNullOrWhiteSpace(query.RunId))
-        {
-            one = await _serviceRunQueryPort.GetByRunIdAsync(
-                scope.Value!.ScopeId,
-                query.ServiceId.Trim(),
-                query.RunId.Trim(),
-                ct);
-        }
-        else if (!string.IsNullOrWhiteSpace(query.CommandId))
-        {
-            one = await _serviceRunQueryPort.GetByCommandIdAsync(
-                scope.Value!.ScopeId,
-                query.ServiceId.Trim(),
-                query.CommandId.Trim(),
-                ct);
-        }
-
-        if (one != null)
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.ServiceRunCurrentState,
-                ResultJson = AevatarInvocationJson.ToJson(one),
-                Count = 1,
-            });
-        }
-
-        var items = await _serviceRunQueryPort.ListAsync(
-            new ServiceRunQuery(
-                scope.Value!.ScopeId,
-                query.ServiceId.Trim(),
-                BoundTake(query.Take)),
+        var serviceRun = await _serviceRunQueryPort.GetByRunIdAsync(
+            scope.Value!.ScopeId,
+            target.ServiceId.Trim(),
+            target.RunId.Trim(),
             ct);
-        return AevatarInvocationJson.Serialize(new QueryReadModelResult
-        {
-            ReadmodelName = AevatarInvocationReadModels.ServiceRunCurrentState,
-            ResultJson = AevatarInvocationJson.ToJson(items),
-            Count = items.Count,
-        });
+        return serviceRun == null
+            ? AevatarInvocationJson.Serialize(NotFound(
+                target.RunId.Trim(),
+                "service_run_not_found",
+                "No service run current-state readmodel matched service_run.service_id and service_run.run_id."))
+            : AevatarInvocationJson.Serialize(MapServiceRun(serviceRun));
     }
 
-    private async Task<string> QueryGAgentRunTerminalAsync(ReadModelQuery query, CancellationToken ct)
+    private async Task<string> ObserveGAgentTerminalCorrelationAsync(
+        GAgentTerminalCorrelationObservationTarget target,
+        CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(query.ActorId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.GAgentRunTerminal,
-                Error = Error("invalid_arguments", "query.actor_id is required.", "query.actor_id"),
-            });
-        }
-
-        var correlationId = FirstNonEmpty(query.CommandId, query.RunId, query.Id);
-        if (string.IsNullOrWhiteSpace(correlationId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.GAgentRunTerminal,
-                Error = Error("invalid_arguments", "query.command_id, query.run_id, or query.id is required.", "query.run_id"),
-            });
-        }
+        var error = ProtoToolArguments.Require(
+                        target.ActorId,
+                        "gagent_terminal_correlation.actor_id",
+                        "gagent_terminal_correlation.actor_id is required.") ??
+                    ProtoToolArguments.Require(
+                        target.CorrelationId,
+                        "gagent_terminal_correlation.correlation_id",
+                        "gagent_terminal_correlation.correlation_id is required.");
+        if (error != null)
+            return AevatarInvocationJson.Error(error);
 
         var snapshot = await _terminalQueryPort.GetByCorrelationIdAsync(
-            query.ActorId.Trim(),
-            correlationId!,
+            target.ActorId.Trim(),
+            target.CorrelationId.Trim(),
             ct);
-        return AevatarInvocationJson.Serialize(new QueryReadModelResult
-        {
-            ReadmodelName = AevatarInvocationReadModels.GAgentRunTerminal,
-            ResultJson = snapshot == null ? "null" : AevatarInvocationJson.ToJson(snapshot),
-            Count = snapshot == null ? 0 : 1,
-        });
+        return snapshot == null
+            ? AevatarInvocationJson.Serialize(NotFound(
+                target.CorrelationId.Trim(),
+                "gagent_terminal_not_found",
+                "No GAgent terminal readmodel matched gagent_terminal_correlation.actor_id and gagent_terminal_correlation.correlation_id."))
+            : AevatarInvocationJson.Serialize(MapTerminal(snapshot, target.CorrelationId.Trim()));
     }
 
-    private async Task<string> QueryWorkflowActorSnapshotAsync(ReadModelQuery query, CancellationToken ct)
+    private async Task<string> ObserveGAgentTerminalSessionAsync(
+        GAgentTerminalSessionObservationTarget target,
+        CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(query.ActorId))
-        {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.WorkflowActorCurrentState,
-                Error = Error("invalid_arguments", "query.actor_id is required.", "query.actor_id"),
-            });
-        }
+        var error = ProtoToolArguments.Require(
+                        target.ActorId,
+                        "gagent_terminal_session.actor_id",
+                        "gagent_terminal_session.actor_id is required.") ??
+                    ProtoToolArguments.Require(
+                        target.SessionId,
+                        "gagent_terminal_session.session_id",
+                        "gagent_terminal_session.session_id is required.");
+        if (error != null)
+            return AevatarInvocationJson.Error(error);
 
-        var snapshot = await _workflowQueryService.GetWorkflowActorCurrentStateAsync(query.ActorId.Trim(), ct);
-        return AevatarInvocationJson.Serialize(new QueryReadModelResult
-        {
-            ReadmodelName = AevatarInvocationReadModels.WorkflowActorCurrentState,
-            ResultJson = snapshot == null ? "null" : ProtoJsonFormatter.Format(snapshot),
-            Count = snapshot == null ? 0 : 1,
-        });
+        var snapshot = await _terminalQueryPort.GetBySessionIdAsync(
+            target.ActorId.Trim(),
+            target.SessionId.Trim(),
+            ct);
+        return snapshot == null
+            ? AevatarInvocationJson.Serialize(NotFound(
+                target.SessionId.Trim(),
+                "gagent_terminal_not_found",
+                "No GAgent terminal readmodel matched gagent_terminal_session.actor_id and gagent_terminal_session.session_id."))
+            : AevatarInvocationJson.Serialize(MapTerminal(snapshot, target.SessionId.Trim()));
     }
 
-    private async Task<string> QueryWorkflowActorTimelineAsync(ReadModelQuery query, CancellationToken ct)
+    private async Task<string> ObserveWorkflowCurrentStateAsync(
+        WorkflowCurrentStateObservationTarget target,
+        CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(query.ActorId))
+        var error = ProtoToolArguments.Require(
+            target.ActorId,
+            "workflow_current_state.actor_id",
+            "workflow_current_state.actor_id is required.");
+        if (error != null)
+            return AevatarInvocationJson.Error(error);
+
+        var snapshot = await _workflowQueryService.GetWorkflowActorCurrentStateAsync(target.ActorId.Trim(), ct);
+        if (snapshot == null)
         {
-            return AevatarInvocationJson.Serialize(new QueryReadModelResult
-            {
-                ReadmodelName = AevatarInvocationReadModels.WorkflowActorTimeline,
-                Error = Error("invalid_arguments", "query.actor_id is required.", "query.actor_id"),
-            });
+            return AevatarInvocationJson.Serialize(NotFound(
+                target.CommandId.Trim(),
+                "workflow_current_state_not_found",
+                "No workflow current-state readmodel matched workflow_current_state.actor_id."));
         }
 
-        var items = await _workflowQueryService.ListWorkflowRunTimelineExportAsync(
-            query.ActorId.Trim(),
-            BoundTake(query.Take),
-            ct);
-        return AevatarInvocationJson.Serialize(new QueryReadModelResult
+        if (!string.IsNullOrWhiteSpace(target.CommandId) &&
+            !string.Equals(snapshot.LastCommandId, target.CommandId.Trim(), StringComparison.Ordinal))
         {
-            ReadmodelName = AevatarInvocationReadModels.WorkflowActorTimeline,
-            ResultJson = ProtoJsonFormatter.Format(new ListValue
-            {
-                Values =
-                {
-                    items.Select(item => Value.ForStruct(JsonParser.Default.Parse<Struct>(
-                        ProtoJsonFormatter.Format(item)))),
-                },
-            }),
-            Count = items.Count,
-        });
+            return AevatarInvocationJson.Serialize(NotFound(
+                target.CommandId.Trim(),
+                "workflow_current_state_not_found",
+                "Workflow current-state readmodel actor matched, but last_command_id did not match workflow_current_state.command_id."));
+        }
+
+        var observedRunId = string.IsNullOrWhiteSpace(target.CommandId)
+            ? snapshot.LastCommandId
+            : target.CommandId.Trim();
+        return AevatarInvocationJson.Serialize(MapWorkflowSnapshot(snapshot, observedRunId));
     }
 
     private static ObserveRunResult MapTerminal(GAgentRunTerminalSnapshot terminal, string runId) =>
@@ -784,13 +694,12 @@ public sealed class AevatarInvocationDispatcher
 
     private static ObserveRunResult MapWorkflowSnapshot(
         WorkflowActorSnapshot snapshot,
-        string runId,
-        int take)
+        string runId)
     {
         var result = new ObserveRunResult
         {
             RunId = runId,
-            Status = snapshot.CompletionStatusValue.ToString(),
+            Status = snapshot.CompletionStatus.ToString(),
             PartialOutput = snapshot.LastOutput,
             ActorId = snapshot.ActorId,
             CommandId = snapshot.LastCommandId,
@@ -804,6 +713,16 @@ public sealed class AevatarInvocationDispatcher
         });
         return result;
     }
+
+    private static ObserveRunResult NotFound(
+        string runId,
+        string code,
+        string message) =>
+        new()
+        {
+            RunId = runId,
+            Error = Error(code, message),
+        };
 
     private static ObserveRunResult MapServiceRun(ServiceRunSnapshot snapshot) =>
         new()
@@ -1055,8 +974,6 @@ public sealed class AevatarInvocationDispatcher
         wait == InvocationWaitMode.Unspecified
             ? InvocationWaitMode.Stream
             : wait;
-
-    private static int BoundTake(int take) => take <= 0 ? 50 : Math.Clamp(take, 1, 200);
 
     private static string ResolveCommandId() =>
         Normalize(AgentToolRequestContext.CallId)

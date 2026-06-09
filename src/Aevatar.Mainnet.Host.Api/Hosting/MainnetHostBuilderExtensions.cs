@@ -273,7 +273,6 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<InvokeTeamToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
-                    CreateToolSource<QueryReadModelToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
                     CreateToolSource<ChannelRegistrationToolSource>,

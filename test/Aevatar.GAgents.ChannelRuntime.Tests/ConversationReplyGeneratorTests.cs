@@ -445,7 +445,6 @@ public sealed class ConversationReplyGeneratorTests
                 new SingleToolSource(new FixedResultTool("aevatar_invoke_team", """{"ok":true}""")),
                 new SingleToolSource(new FixedResultTool("aevatar_start_workflow", """{"run_id":"run-1"}""")),
                 new SingleToolSource(new FixedResultTool("aevatar_observe_run", """{"status":"running"}""")),
-                new SingleToolSource(new FixedResultTool("aevatar_query_readmodel", """{"items":[]}""")),
             ]);
 
         var reply = await generator.GenerateReplyAsync(
@@ -477,7 +476,6 @@ public sealed class ConversationReplyGeneratorTests
             "aevatar_invoke_team",
             "aevatar_start_workflow",
             "aevatar_observe_run",
-            "aevatar_query_readmodel",
         ]);
         request.Tools!.Select(static tool => tool.Name).Should().NotContain("aevatar_invoke_workflow");
     }

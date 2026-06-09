@@ -59,25 +59,33 @@ message StartWorkflowToolRequest {
   repeated string workflow_yamls = 5;
 }
 
+message ServiceRunObservationTarget {
+  string service_id = 1;
+  string run_id = 2;
+}
+
+message GAgentTerminalCorrelationObservationTarget {
+  string actor_id = 1;
+  string correlation_id = 2;
+}
+
+message GAgentTerminalSessionObservationTarget {
+  string actor_id = 1;
+  string session_id = 2;
+}
+
+message WorkflowCurrentStateObservationTarget {
+  string actor_id = 1;
+  string command_id = 2;
+}
+
 message ObserveRunToolRequest {
-  string run_id = 1;
-  string actor_id = 2;
-  string service_id = 3;
-  int32 take = 4;
-}
-
-message ReadModelQuery {
-  string id = 1;
-  string actor_id = 2;
-  string run_id = 3;
-  string service_id = 4;
-  string command_id = 5;
-  int32 take = 6;
-}
-
-message QueryReadModelToolRequest {
-  string readmodel_name = 1;
-  ReadModelQuery query = 2;
+  oneof target {
+    ServiceRunObservationTarget service_run = 1;
+    GAgentTerminalCorrelationObservationTarget gagent_terminal_correlation = 2;
+    GAgentTerminalSessionObservationTarget gagent_terminal_session = 3;
+    WorkflowCurrentStateObservationTarget workflow_current_state = 4;
+  }
 }
 
 message InvocationToolError {
@@ -116,11 +124,4 @@ message ObserveRunResult {
   string actor_id = 6;
   string command_id = 7;
   int64 state_version = 8;
-}
-
-message QueryReadModelResult {
-  string readmodel_name = 1;
-  string result_json = 2;
-  InvocationToolError error = 3;
-  int32 count = 4;
 }
