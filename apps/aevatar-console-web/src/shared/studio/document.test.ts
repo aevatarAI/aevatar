@@ -3,6 +3,7 @@ import {
   applyStepInspectorDraft,
   connectStepToTarget,
   insertStepAfter,
+  insertStepByType,
   parseInspectorBranches,
   parseInspectorParameters,
   removeStep,
@@ -12,6 +13,37 @@ import {
 import type { StudioWorkflowDocument } from './models';
 
 describe('studio document helpers', () => {
+  it('creates inserted step ids from product names instead of backend step type ids', () => {
+    const document: StudioWorkflowDocument = {
+      name: 'workspace-demo',
+      roles: [{ id: 'assistant' }],
+      steps: [
+        {
+          id: 'llm_step',
+          type: 'llm_call',
+          targetRole: 'assistant',
+          parameters: {},
+          next: null,
+          branches: {},
+        },
+      ],
+    };
+
+    const result = insertStepByType(document, 'llm_call', {
+      targetRoleId: 'assistant',
+    });
+
+    expect(result.nodeId).toBe('step:llm_step_2');
+    expect(result.document.steps?.[1]).toEqual(
+      expect.objectContaining({
+        id: 'llm_step_2',
+        type: 'llm_call',
+        originalType: 'llm_call',
+        targetRole: 'assistant',
+      }),
+    );
+  });
+
   it('updates role fields and rewrites step role bindings', () => {
     const document: StudioWorkflowDocument = {
       name: 'workspace-demo',

@@ -348,11 +348,11 @@ const zhCNMessages = {
     '这个成员还没有关联 Workflow 草稿。',
   'teamMemberWorkflowStudio.common.close': '关闭',
   'teamMemberWorkflowStudio.executionPanel.consoleAria':
-    'Workflow 执行控制台',
+    '成员运行控制台',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Workflow 运行返回帧后，这里会展示执行日志。',
+    '活跃成员返回事件后，这里会展示运行日志。',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '已收到 {count} 个原始执行帧。',
+    '已收到 {count} 个运行事件，但暂时还没有步骤日志。',
   'teamMemberWorkflowStudio.executionsPanel.description':
     '这个 tab 只展示能通过稳定 Workflow 或 Service 标识安全归属到当前 Workflow 成员的执行记录。',
   'teamMemberWorkflowStudio.executionsPanel.empty':
@@ -375,21 +375,37 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.addNode': '添加节点',
   'teamMemberWorkflowStudio.header.currentTeam': '当前团队',
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
+  'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.executeWorkflow': '执行 Workflow',
+  'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
   'teamMemberWorkflowStudio.header.inputSet': '已设置输入',
   'teamMemberWorkflowStudio.header.moreActionsAria': '更多 Workflow 操作',
+  'teamMemberWorkflowStudio.header.nodeActionsAria':
+    'Workflow 草稿和节点操作',
   'teamMemberWorkflowStudio.header.optionalTestPayload': '可选测试载荷',
+  'teamMemberWorkflowStudio.header.primaryActionsAria':
+    'Workflow 主操作',
   'teamMemberWorkflowStudio.header.runInput': '运行输入',
   'teamMemberWorkflowStudio.header.runInputPlaceholder':
     '本次 Workflow 运行的可选输入',
   'teamMemberWorkflowStudio.header.runOptionsAria': '运行选项',
+  'teamMemberWorkflowStudio.header.runActiveMember': '运行活跃成员',
   'teamMemberWorkflowStudio.header.save': '保存',
   'teamMemberWorkflowStudio.header.saveDraft': '保存草稿',
   'teamMemberWorkflowStudio.header.setAsTeamEntry': '设为团队入口',
   'teamMemberWorkflowStudio.header.tabs.editor': '编辑器',
   'teamMemberWorkflowStudio.header.tabs.executions': '执行记录',
+  'teamMemberWorkflowStudio.header.tabs.runs': '运行记录',
+  'teamMemberWorkflowStudio.header.publish.binding': '绑定中',
+  'teamMemberWorkflowStudio.header.publish.draft': '草稿',
+  'teamMemberWorkflowStudio.header.publish.error': '错误',
+  'teamMemberWorkflowStudio.header.publish.published': '已发布',
+  'teamMemberWorkflowStudio.header.publish.publishing': '发布中',
+  'teamMemberWorkflowStudio.header.publishMember': '发布成员 Workflow',
+  'teamMemberWorkflowStudio.header.publishMemberShort': '发布成员',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': '团队',
   'teamMemberWorkflowStudio.header.unsavedChanges': '有未保存更改',
+  'teamMemberWorkflowStudio.header.viewsAria': 'Workflow 视图',
   'teamMemberWorkflowStudio.header.workflowRun': 'Workflow 运行',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow 标题',
   'teamMemberWorkflowStudio.nodeDetail.apply': '应用',
@@ -410,6 +426,22 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': '搜索节点',
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': '节点库',
   'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
+  'teamMemberWorkflowStudio.runOptionsPanel.inputPlaceholder':
+    '本次活跃成员运行的可选输入',
+  'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': '运行选项面板',
+  'teamMemberWorkflowStudio.runOptionsPanel.title': '运行选项',
+  'teamMemberWorkflowStudio.runsPanel.description':
+    '这个 tab 只展示明确关联到当前 Workflow 成员的运行记录。',
+  'teamMemberWorkflowStudio.runsPanel.empty':
+    '当前 Workflow 成员还没有关联运行记录。',
+  'teamMemberWorkflowStudio.runsPanel.fallbackName': '成员运行',
+  'teamMemberWorkflowStudio.runsPanel.openRun': '打开运行',
+  'teamMemberWorkflowStudio.runsPanel.preview.error': '错误',
+  'teamMemberWorkflowStudio.runsPanel.preview.input': '输入',
+  'teamMemberWorkflowStudio.runsPanel.preview.output': '输出',
+  'teamMemberWorkflowStudio.runsPanel.sectionAria': '成员运行记录',
+  'teamMemberWorkflowStudio.runsPanel.title': '成员运行记录',
+  'teamMemberWorkflowStudio.runsPanel.unknownStatus': '未知',
 };
 
 export default zhCNMessages;

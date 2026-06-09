@@ -127,6 +127,46 @@ export const STUDIO_GRAPH_CATEGORIES: readonly StudioGraphPrimitiveCategory[] = 
   },
 ];
 
+const STEP_TYPE_ACRONYM_LABELS: Record<string, string> = {
+  ai: 'AI',
+  api: 'API',
+  http: 'HTTP',
+  id: 'ID',
+  llm: 'LLM',
+  url: 'URL',
+  yaml: 'YAML',
+};
+
+const STUDIO_STEP_TYPE_LABELS: Record<string, string> = {
+  assign: 'Assign',
+  cache: 'Cache',
+  checkpoint: 'Checkpoint',
+  conditional: 'Conditional',
+  connector_call: 'Connector call',
+  delay: 'Delay',
+  dynamic_workflow: 'Dynamic workflow',
+  emit: 'Emit',
+  evaluate: 'Evaluate',
+  foreach: 'For each',
+  guard: 'Guard',
+  human_approval: 'Human approval',
+  human_input: 'Human input',
+  llm_call: 'LLM call',
+  map_reduce: 'Map reduce',
+  parallel: 'Parallel',
+  race: 'Race',
+  reflect: 'Reflect',
+  retrieve_facts: 'Retrieve facts',
+  switch: 'Switch',
+  tool_call: 'Tool call',
+  transform: 'Transform',
+  vote: 'Vote',
+  wait_signal: 'Wait for signal',
+  while: 'While',
+  workflow_call: 'Workflow call',
+  workflow_yaml_validate: 'Workflow YAML validation',
+};
+
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
 }
@@ -497,6 +537,32 @@ export function getStudioGraphCategory(
   );
 }
 
+export function formatStudioStepTypeLabel(type: string): string {
+  const normalizedType = normalizeString(type).toLowerCase();
+  const knownLabel = STUDIO_STEP_TYPE_LABELS[normalizedType];
+  if (knownLabel) {
+    return knownLabel;
+  }
+
+  const parts = normalizedType.split('_').filter(Boolean);
+  if (parts.length === 0) {
+    return 'Step';
+  }
+
+  return parts
+    .map((part, index) => {
+      const acronymLabel = STEP_TYPE_ACRONYM_LABELS[part];
+      if (acronymLabel) {
+        return acronymLabel;
+      }
+
+      return index === 0
+        ? `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`
+        : part;
+    })
+    .join(' ');
+}
+
 export function buildStudioWorkflowLayout(
   workflowName: string,
   nodes: Node<StudioGraphNodeData>[],
@@ -564,7 +630,7 @@ export function buildStudioGraphElements(
         label: step.id,
         kind: 'step',
         title: step.id,
-        subtitle: step.type,
+        subtitle: formatStudioStepTypeLabel(step.type),
         stepId: step.id,
         stepType: step.type,
         targetRole: step.targetRole,

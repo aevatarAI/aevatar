@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import GraphCanvas from './GraphCanvas';
 
 const mockReactFlowRender = jest.fn();
@@ -43,7 +43,7 @@ describe('GraphCanvas', () => {
         parametersSummary: 'No parameters configured',
         stepId: 'assert',
         stepType: 'guard',
-        subtitle: 'guard',
+        subtitle: 'Guard',
         targetRole: '',
         title: 'assert',
       },
@@ -89,5 +89,25 @@ describe('GraphCanvas', () => {
 
     expect(reactFlowProps.deleteKeyCode).toBeNull();
     expect(reactFlowProps.onBeforeDelete).toBeUndefined();
+  });
+
+  it('renders studio nodes with their product label instead of the backend step type id', () => {
+    render(<GraphCanvas edges={edges} nodes={nodes} variant="studio" />);
+
+    const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
+    const StudioNode = reactFlowProps.nodeTypes.studioWorkflowNode;
+    render(
+      <StudioNode
+        data={{
+          ...nodes[0].data,
+          stepType: 'llm_call',
+          subtitle: 'LLM call',
+        }}
+        selected={false}
+      />,
+    );
+
+    expect(screen.getByText('LLM call')).toBeTruthy();
+    expect(screen.queryByText('llm_call')).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import {
+  CloudUploadOutlined,
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
@@ -6,128 +7,498 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   SaveOutlined,
-  UpOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import {
   Breadcrumb,
   Button,
   Dropdown,
   Input,
-  Popover,
   Segmented,
   Space,
-  Switch,
   Tag,
-  Typography,
+  Tooltip,
 } from "antd";
+import type { InputRef } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
 
 type WorkflowStudioHeaderProps = {
-  readonly activationChecked: boolean;
-  readonly activationDisabled: boolean;
-  readonly activationNotice: string;
-  readonly activationPending: boolean;
-  readonly activationPlaceholderReason?: string;
-  readonly activationTone: "default" | "processing" | "success" | "warning" | "error";
-  readonly canExecute: boolean;
+  readonly memberPublished: boolean;
+  readonly publishDisabled: boolean;
+  readonly publishNotice: string;
+  readonly publishPending: boolean;
+  readonly publishPlaceholderReason?: string;
+  readonly publishTone: "default" | "processing" | "success" | "warning" | "error";
+  readonly canRunActiveMember: boolean;
   readonly canSave: boolean;
   readonly canSetTeamEntry: boolean;
   readonly dirty: boolean;
-  readonly executionRunId: string;
-  readonly executionStartedAt: string;
-  readonly executionStatus: "idle" | "running" | "succeeded" | "failed";
-  readonly executePending: boolean;
-  readonly executePlaceholderReason?: string;
-  readonly onActivate: () => void;
+  readonly activeMemberRunPending: boolean;
+  readonly activeMemberRunPlaceholderReason?: string;
+  readonly onPublishMember: () => void;
   readonly onAddNode: () => void;
   readonly onDeleteNode: () => void;
-  readonly onExecute: () => void;
+  readonly onOpenRunOptions: () => void;
+  readonly onRunActiveMember: () => void;
   readonly onNavigateBack: () => void;
-  readonly onRunInputChange: (input: string) => void;
   readonly onSave: () => void;
   readonly onSetTeamEntry: () => void;
   readonly onTitleChange: (title: string) => void;
-  readonly runInput: string;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
   readonly selectedNodeId: string;
-  readonly selectedTab: "editor" | "executions";
-  readonly onTabChange: (tab: "editor" | "executions") => void;
+  readonly selectedTab: "editor" | "runs";
+  readonly onTabChange: (tab: "editor" | "runs") => void;
   readonly teamEntryNotice: string;
   readonly teamEntryPending: boolean;
   readonly teamName: string;
   readonly workflowTitle: string;
 };
 
-function formatActivationStatusLabel(input: {
+function formatPublishStatusLabel(input: {
   readonly checked: boolean;
   readonly pending: boolean;
-  readonly tone: WorkflowStudioHeaderProps["activationTone"];
+  readonly tone: WorkflowStudioHeaderProps["publishTone"];
 }): string {
   if (input.pending) {
-    return t("teamMemberWorkflowStudio.header.activation.publishing", "Publishing");
+    return t("teamMemberWorkflowStudio.header.publish.publishing", "Publishing");
   }
 
   if (input.tone === "error") {
-    return t("teamMemberWorkflowStudio.header.activation.error", "Error");
+    return t("teamMemberWorkflowStudio.header.publish.error", "Error");
+  }
+
+  if (input.tone === "processing") {
+    return t("teamMemberWorkflowStudio.header.publish.binding", "Binding");
   }
 
   return input.checked
-    ? t("teamMemberWorkflowStudio.header.activation.ready", "Ready")
-    : t("teamMemberWorkflowStudio.header.activation.inactive", "Inactive");
+    ? t("teamMemberWorkflowStudio.header.publish.published", "Published")
+    : t("teamMemberWorkflowStudio.header.publish.draft", "Draft");
 }
 
-function formatExecutionTime(value: string | null | undefined): string {
-  if (!value) {
-    return "";
-  }
+type HeaderIdentityProps = {
+  readonly dirty: boolean;
+  readonly onNavigateBack: () => void;
+  readonly onTitleChange: (title: string) => void;
+  readonly publishStatusColor: WorkflowStudioHeaderProps["publishTone"] | "default";
+  readonly publishStatusLabel: string;
+  readonly publishStatusTitle: string;
+  readonly teamName: string;
+  readonly workflowTitle: string;
+};
 
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
-}
+const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
+  dirty,
+  onNavigateBack,
+  onTitleChange,
+  publishStatusColor,
+  publishStatusLabel,
+  publishStatusTitle,
+  teamName,
+  workflowTitle,
+}) => {
+  const titleInputRef = React.useRef<InputRef>(null);
+  const [titleFocused, setTitleFocused] = React.useState(false);
+  const workflowTitleInputWidth = Math.min(
+    300,
+    Math.max(80, workflowTitle.trim().length * 15 + 12),
+  );
 
-function readExecutionStatusColor(
-  status: WorkflowStudioHeaderProps["executionStatus"],
-): string {
-  switch (status) {
-    case "failed":
-      return "red";
-    case "running":
-      return "processing";
-    case "succeeded":
-      return "green";
-    default:
-      return "default";
-  }
-}
+  return (
+    <section
+      aria-label={t(
+        "teamMemberWorkflowStudio.header.identityAria",
+        "Workflow identity",
+      )}
+      data-testid="workflow-header-identity"
+      style={{
+        display: "grid",
+        gap: 8,
+        minWidth: 0,
+      }}
+    >
+      <Breadcrumb
+        items={[
+          {
+            title: (
+              <button
+                onClick={onNavigateBack}
+                style={{
+                  background: "transparent",
+                  border: 0,
+                  color: "#6b7280",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+                type="button"
+              >
+                {t("teamMemberWorkflowStudio.header.teamBreadcrumb", "Team")}
+              </button>
+            ),
+          },
+          {
+            title:
+              teamName ||
+              t("teamMemberWorkflowStudio.header.currentTeam", "Current team"),
+          },
+        ]}
+      />
+      <Space size={10} style={{ minWidth: 0 }} wrap>
+        <div
+          style={{
+            alignItems: "center",
+            background: titleFocused ? "#f9fafb" : "transparent",
+            border: titleFocused
+              ? "1px solid #93c5fd"
+              : "1px solid transparent",
+            borderRadius: 6,
+            display: "inline-flex",
+            gap: 2,
+            maxWidth: "100%",
+            padding: "0 2px",
+          }}
+        >
+          <Input
+            aria-label={t(
+              "teamMemberWorkflowStudio.header.workflowTitleAria",
+              "Workflow title",
+            )}
+            onBlur={() => setTitleFocused(false)}
+            onChange={(event) => onTitleChange(event.target.value)}
+            onFocus={() => setTitleFocused(true)}
+            ref={titleInputRef}
+            style={{
+              background: "transparent",
+              color: "#111827",
+              fontSize: 22,
+              fontWeight: 700,
+              height: 38,
+              lineHeight: "30px",
+              padding: 0,
+              width: workflowTitleInputWidth,
+            }}
+            title={t(
+              "teamMemberWorkflowStudio.header.editWorkflowName",
+              "Edit workflow name",
+            )}
+            value={workflowTitle}
+            variant="borderless"
+          />
+          <Tooltip
+            title={t(
+              "teamMemberWorkflowStudio.header.editWorkflowName",
+              "Edit workflow name",
+            )}
+          >
+            <Button
+              aria-label={t(
+                "teamMemberWorkflowStudio.header.editWorkflowName",
+                "Edit workflow name",
+              )}
+              icon={<EditOutlined />}
+              onClick={() => titleInputRef.current?.focus()}
+              size="small"
+              style={{
+                alignItems: "center",
+                borderColor: "#d1d5db",
+                color: "#4b5563",
+                display: "inline-flex",
+                flex: "0 0 auto",
+                height: 28,
+                justifyContent: "center",
+                width: 28,
+              }}
+            />
+          </Tooltip>
+        </div>
+        <Tag
+          color={publishStatusColor === "default" ? "default" : publishStatusColor}
+          style={{
+            alignItems: "center",
+            display: "inline-flex",
+            marginInlineEnd: 0,
+          }}
+          title={publishStatusTitle}
+        >
+          {publishStatusLabel}
+        </Tag>
+        {dirty ? (
+          <Tag color="gold">
+            {t(
+              "teamMemberWorkflowStudio.header.unsavedChanges",
+              "Unsaved changes",
+            )}
+          </Tag>
+        ) : null}
+      </Space>
+    </section>
+  );
+};
+
+type HeaderPrimaryActionsProps = {
+  readonly activeMemberRunPending: boolean;
+  readonly activeMemberRunPlaceholderReason?: string;
+  readonly canRunActiveMember: boolean;
+  readonly onAddNode: () => void;
+  readonly onOpenRunOptions: () => void;
+  readonly onPublishMember: () => void;
+  readonly onRunActiveMember: () => void;
+  readonly publishDisabled: boolean;
+  readonly publishPending: boolean;
+  readonly publishPlaceholderReason?: string;
+  readonly showPublishButton: boolean;
+};
+
+const HeaderPrimaryActions: React.FC<HeaderPrimaryActionsProps> = ({
+  activeMemberRunPending,
+  activeMemberRunPlaceholderReason,
+  canRunActiveMember,
+  onAddNode,
+  onOpenRunOptions,
+  onPublishMember,
+  onRunActiveMember,
+  publishDisabled,
+  publishPending,
+  publishPlaceholderReason,
+  showPublishButton,
+}) => (
+  <section
+    aria-label={t(
+      "teamMemberWorkflowStudio.header.primaryActionsAria",
+      "Workflow primary actions",
+    )}
+    data-testid="workflow-header-primary-actions"
+    style={{
+      alignItems: "center",
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      justifyContent: "flex-end",
+      minWidth: 0,
+    }}
+  >
+    {showPublishButton ? (
+      <Button
+        disabled={publishDisabled}
+        icon={<CloudUploadOutlined />}
+        loading={publishPending}
+        onClick={onPublishMember}
+        size="small"
+        title={
+          publishDisabled
+            ? publishPlaceholderReason
+            : t(
+                "teamMemberWorkflowStudio.header.publishMember",
+                "Publish member workflow",
+              )
+        }
+      >
+        {t("teamMemberWorkflowStudio.header.publishMemberShort", "Publish member")}
+      </Button>
+    ) : null}
+    <Space.Compact>
+      <Button
+        disabled={!canRunActiveMember}
+        icon={<PlayCircleOutlined />}
+        loading={activeMemberRunPending}
+        onClick={onRunActiveMember}
+        size="small"
+        title={
+          canRunActiveMember
+            ? t(
+                "teamMemberWorkflowStudio.header.runActiveMember",
+                "Run active member",
+              )
+            : activeMemberRunPlaceholderReason
+        }
+      >
+        {t(
+          "teamMemberWorkflowStudio.header.runActiveMember",
+          "Run active member",
+        )}
+      </Button>
+      <Tooltip title={t("teamMemberWorkflowStudio.header.runOptionsAria", "Run options")}>
+        <Button
+          aria-label={t(
+            "teamMemberWorkflowStudio.header.runOptionsAria",
+            "Run options",
+          )}
+          data-testid="workflow-run-options-button"
+          icon={<SettingOutlined />}
+          onClick={onOpenRunOptions}
+          size="small"
+        />
+      </Tooltip>
+    </Space.Compact>
+    <Button icon={<PlusOutlined />} onClick={onAddNode} size="small">
+      {t("teamMemberWorkflowStudio.header.addNode", "Add node")}
+    </Button>
+  </section>
+);
+
+type HeaderTabsProps = {
+  readonly onTabChange: (tab: "editor" | "runs") => void;
+  readonly selectedTab: "editor" | "runs";
+};
+
+const HeaderTabs: React.FC<HeaderTabsProps> = ({
+  onTabChange,
+  selectedTab,
+}) => (
+  <section
+    aria-label={t("teamMemberWorkflowStudio.header.viewsAria", "Workflow views")}
+    data-testid="workflow-header-tabs"
+    style={{
+      alignItems: "center",
+      display: "flex",
+      minWidth: 0,
+    }}
+  >
+    <Segmented
+      size="small"
+      options={[
+        {
+          label: t("teamMemberWorkflowStudio.header.tabs.editor", "Editor"),
+          value: "editor",
+        },
+        {
+          label: t("teamMemberWorkflowStudio.header.tabs.runs", "Runs"),
+          value: "runs",
+        },
+      ]}
+      onChange={(value) => {
+        if (value === "editor" || value === "runs") {
+          onTabChange(value);
+        }
+      }}
+      value={selectedTab}
+    />
+  </section>
+);
+
+type HeaderNodeActionsProps = {
+  readonly canSave: boolean;
+  readonly canSetTeamEntry: boolean;
+  readonly onDeleteNode: () => void;
+  readonly onSave: () => void;
+  readonly onSetTeamEntry: () => void;
+  readonly savePending: boolean;
+  readonly savePlaceholderReason?: string;
+  readonly selectedNodeId: string;
+  readonly teamEntryNotice: string;
+  readonly teamEntryPending: boolean;
+};
+
+const HeaderNodeActions: React.FC<HeaderNodeActionsProps> = ({
+  canSave,
+  canSetTeamEntry,
+  onDeleteNode,
+  onSave,
+  onSetTeamEntry,
+  savePending,
+  savePlaceholderReason,
+  selectedNodeId,
+  teamEntryNotice,
+  teamEntryPending,
+}) => (
+  <section
+    aria-label={t(
+      "teamMemberWorkflowStudio.header.nodeActionsAria",
+      "Workflow draft and node actions",
+    )}
+    data-testid="workflow-header-node-actions"
+    style={{
+      alignItems: "center",
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      justifyContent: "flex-end",
+      minWidth: 0,
+    }}
+  >
+    <Button
+      disabled={!selectedNodeId}
+      icon={<DeleteOutlined />}
+      onClick={onDeleteNode}
+      size="small"
+    >
+      {t("teamMemberWorkflowStudio.header.deleteNode", "Delete node")}
+    </Button>
+    <Button
+      disabled={!canSave}
+      icon={<SaveOutlined />}
+      loading={savePending}
+      onClick={onSave}
+      size="small"
+      title={
+        canSave
+          ? t("teamMemberWorkflowStudio.header.saveDraft", "Save draft")
+          : savePlaceholderReason
+      }
+      type="primary"
+    >
+      {t("teamMemberWorkflowStudio.header.save", "Save")}
+    </Button>
+    <Dropdown
+      menu={{
+        items: [
+          {
+            disabled: !canSetTeamEntry,
+            key: "set-team-entry",
+            label: t(
+              "teamMemberWorkflowStudio.header.setAsTeamEntry",
+              "Set as Team entry",
+            ),
+          },
+        ],
+        onClick: ({ key }) => {
+          if (key === "set-team-entry" && canSetTeamEntry) {
+            onSetTeamEntry();
+          }
+        },
+      }}
+      trigger={["click"]}
+    >
+      <Button
+        aria-label={t(
+          "teamMemberWorkflowStudio.header.moreActionsAria",
+          "More workflow actions",
+        )}
+        icon={<MoreOutlined />}
+        loading={teamEntryPending}
+        size="small"
+        title={teamEntryNotice}
+      >
+        <DownOutlined />
+      </Button>
+    </Dropdown>
+  </section>
+);
 
 const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
-  activationChecked,
-  activationDisabled,
-  activationNotice,
-  activationPending,
-  activationPlaceholderReason,
-  activationTone,
-  canExecute,
+  memberPublished,
+  publishDisabled,
+  publishNotice,
+  publishPending,
+  publishPlaceholderReason,
+  publishTone,
+  canRunActiveMember,
   canSave,
   canSetTeamEntry,
   dirty,
-  executionRunId,
-  executionStartedAt,
-  executionStatus,
-  executePending,
-  executePlaceholderReason,
-  onActivate,
+  activeMemberRunPending,
+  activeMemberRunPlaceholderReason,
+  onPublishMember,
   onAddNode,
   onDeleteNode,
-  onExecute,
+  onOpenRunOptions,
+  onRunActiveMember,
   onNavigateBack,
-  onRunInputChange,
   onSave,
   onSetTeamEntry,
   onTitleChange,
-  runInput,
   savePending,
   savePlaceholderReason,
   selectedNodeId,
@@ -138,329 +509,93 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   teamName,
   workflowTitle,
 }) => {
-  const [runInputExpanded, setRunInputExpanded] = React.useState(false);
-  const formattedExecutionStartedAt = formatExecutionTime(executionStartedAt);
-  const normalizedExecutionRunId = executionRunId.trim();
-  const hasRunInput = runInput.trim().length > 0;
-  const runInputEditor = (
-    <div
-      aria-label={t(
-        "teamMemberWorkflowStudio.header.runOptionsAria",
-        "Run options",
-      )}
-      style={{
-        display: "grid",
-        gap: 8,
-        width: 520,
-      }}
-    >
-      <Space align="center" size={8}>
-        <EditOutlined style={{ color: "#6b7280" }} />
-        <Typography.Text strong style={{ fontSize: 12 }}>
-          {t("teamMemberWorkflowStudio.header.runInput", "Run input")}
-        </Typography.Text>
-        <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
-          {t(
-            "teamMemberWorkflowStudio.header.optionalTestPayload",
-            "Optional test payload",
-          )}
-        </Typography.Text>
-      </Space>
-      <Input.TextArea
-        aria-label={t("teamMemberWorkflowStudio.header.runInput", "Run input")}
-        autoSize={{ minRows: 2, maxRows: 4 }}
-        onChange={(event) => onRunInputChange(event.target.value)}
-        placeholder={t(
-          "teamMemberWorkflowStudio.header.runInputPlaceholder",
-          "Optional input for this workflow run",
-        )}
-        style={{ maxHeight: 150 }}
-        value={runInput}
-      />
-    </div>
-  );
+  const publishStatusLabel = formatPublishStatusLabel({
+    checked: memberPublished,
+    pending: publishPending,
+    tone: publishTone,
+  });
+  const publishStatusTitle = [publishNotice, publishPlaceholderReason]
+    .filter(Boolean)
+    .join(" · ");
+  const showPublishButton =
+    publishPending ||
+    publishTone === "processing" ||
+    publishTone === "error" ||
+    !memberPublished ||
+    !publishDisabled;
 
   return (
     <header
       style={{
-        alignItems: "center",
         background: "#ffffff",
         borderBottom: "1px solid #e5e7eb",
-        display: "flex",
+        display: "grid",
         flex: "0 0 auto",
-        gap: 18,
-        justifyContent: "space-between",
-        minHeight: 88,
-        padding: "14px 22px",
+        gap: 12,
+        padding: "14px 22px 12px",
       }}
     >
-      <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
-        <Breadcrumb
-          items={[
-            {
-              title: (
-                <button
-                  onClick={onNavigateBack}
-                  style={{
-                    background: "transparent",
-                    border: 0,
-                    color: "#6b7280",
-                    cursor: "pointer",
-                    padding: 0,
-                  }}
-                  type="button"
-                >
-                  {t("teamMemberWorkflowStudio.header.teamBreadcrumb", "Team")}
-                </button>
-              ),
-            },
-            {
-              title:
-                teamName ||
-                t("teamMemberWorkflowStudio.header.currentTeam", "Current team"),
-            },
-          ]}
-        />
-        <Space size={10} style={{ minWidth: 0 }} wrap>
-          <Input
-            aria-label={t(
-              "teamMemberWorkflowStudio.header.workflowTitleAria",
-              "Workflow title",
-            )}
-            onChange={(event) => onTitleChange(event.target.value)}
-            style={{
-              color: "#111827",
-              fontSize: 22,
-              fontWeight: 700,
-              height: 40,
-              lineHeight: "30px",
-              maxWidth: 520,
-              minWidth: 280,
-              paddingLeft: 0,
-            }}
-            value={workflowTitle}
-            variant="borderless"
-          />
-          {dirty ? (
-            <Tag color="gold">
-              {t(
-                "teamMemberWorkflowStudio.header.unsavedChanges",
-                "Unsaved changes",
-              )}
-            </Tag>
-          ) : null}
-        </Space>
-        <div
-          style={{
-            display: "grid",
-            gap: 8,
-            minWidth: 0,
-          }}
-        >
-          <Space
-            align="center"
-            data-testid="workflow-run-summary"
-            size={8}
-            style={{ minWidth: 0 }}
-            wrap
-          >
-            <Typography.Text strong style={{ color: "#1f2937", fontSize: 13 }}>
-              {t("teamMemberWorkflowStudio.header.workflowRun", "Workflow run")}
-            </Typography.Text>
-            <Tag color={readExecutionStatusColor(executionStatus)}>
-              {executionStatus}
-            </Tag>
-            {normalizedExecutionRunId ? (
-              <Typography.Text
-                ellipsis
-                style={{ color: "#6b7280", fontSize: 12, maxWidth: 240 }}
-              >
-                {normalizedExecutionRunId}
-              </Typography.Text>
-            ) : null}
-            {formattedExecutionStartedAt ? (
-              <Typography.Text style={{ color: "#6b7280", fontSize: 12 }}>
-                {formattedExecutionStartedAt}
-              </Typography.Text>
-            ) : null}
-            {hasRunInput ? (
-              <Tag color="blue">
-                {t("teamMemberWorkflowStudio.header.inputSet", "input set")}
-              </Tag>
-            ) : null}
-            <Popover
-              content={runInputEditor}
-              onOpenChange={setRunInputExpanded}
-              open={runInputExpanded}
-              placement="bottomLeft"
-              trigger="click"
-            >
-              <Button
-                icon={
-                  runInputExpanded ? (
-                    <UpOutlined aria-hidden />
-                  ) : (
-                    <DownOutlined aria-hidden />
-                  )
-                }
-                size="small"
-                type={hasRunInput ? "default" : "text"}
-              >
-                {t("teamMemberWorkflowStudio.header.runInput", "Run input")}
-              </Button>
-            </Popover>
-          </Space>
-        </div>
-      </div>
       <div
+        data-testid="workflow-header-main-row"
         style={{
           alignItems: "center",
           display: "flex",
-          flex: "0 0 auto",
-          gap: 8,
+          flexWrap: "wrap",
+          gap: "12px 24px",
+          justifyContent: "space-between",
           minWidth: 0,
-          whiteSpace: "nowrap",
         }}
       >
-        <Segmented
-          size="small"
-          options={[
-            {
-              label: t("teamMemberWorkflowStudio.header.tabs.editor", "Editor"),
-              value: "editor",
-            },
-            {
-              label: t(
-                "teamMemberWorkflowStudio.header.tabs.executions",
-                "Executions",
-              ),
-              value: "executions",
-            },
-          ]}
-          onChange={(value) => {
-            if (value === "editor" || value === "executions") {
-              onTabChange(value);
-            }
-          }}
-          value={selectedTab}
+        <HeaderIdentity
+          dirty={dirty}
+          onNavigateBack={onNavigateBack}
+          onTitleChange={onTitleChange}
+          publishStatusColor={publishTone}
+          publishStatusLabel={publishStatusLabel}
+          publishStatusTitle={publishStatusTitle}
+          teamName={teamName}
+          workflowTitle={workflowTitle}
         />
-        <Space
-          size={6}
-          style={{ flex: "0 0 auto" }}
-          title={[activationNotice, activationPlaceholderReason]
-            .filter(Boolean)
-            .join(" · ")}
-        >
-          <Typography.Text style={{ color: "#6b7280", fontSize: 13 }}>
-            {activationChecked
-              ? t("teamMemberWorkflowStudio.header.activation.active", "Active")
-              : t(
-                  "teamMemberWorkflowStudio.header.activation.inactive",
-                  "Inactive",
-                )}
-          </Typography.Text>
-          <Switch
-            aria-label={t(
-              "teamMemberWorkflowStudio.header.activateAria",
-              "Activate workflow member",
-            )}
-            checked={activationChecked}
-            disabled={activationDisabled}
-            loading={activationPending}
-            onChange={(checked) => {
-              if (checked) {
-                onActivate();
-              }
-            }}
-            size="small"
-          />
-          <Tag
-            color={activationTone === "default" ? "default" : activationTone}
-            style={{ marginInlineEnd: 0 }}
-          >
-            {formatActivationStatusLabel({
-              checked: activationChecked,
-              pending: activationPending,
-              tone: activationTone,
-            })}
-          </Tag>
-        </Space>
-        <Button
-          disabled={!canExecute}
-          icon={<PlayCircleOutlined />}
-          loading={executePending}
-          onClick={onExecute}
-          size="small"
-          title={
-            canExecute
-              ? t(
-                  "teamMemberWorkflowStudio.header.executeWorkflow",
-                  "Execute workflow",
-                )
-              : executePlaceholderReason
-          }
-        >
-          {t("teamMemberWorkflowStudio.header.executeWorkflow", "Execute workflow")}
-        </Button>
-        <Button icon={<PlusOutlined />} onClick={onAddNode} size="small">
-          {t("teamMemberWorkflowStudio.header.addNode", "Add node")}
-        </Button>
-        <Button
-          disabled={!selectedNodeId}
-          icon={<DeleteOutlined />}
-          onClick={onDeleteNode}
-          size="small"
-        >
-          {t("teamMemberWorkflowStudio.header.deleteNode", "Delete node")}
-        </Button>
-        <Button
-          disabled={!canSave}
-          icon={<SaveOutlined />}
-          loading={savePending}
-          onClick={onSave}
-          size="small"
-          title={
-            canSave
-              ? t("teamMemberWorkflowStudio.header.saveDraft", "Save draft")
-              : savePlaceholderReason
-          }
-          type="primary"
-        >
-          {t("teamMemberWorkflowStudio.header.save", "Save")}
-        </Button>
-        <Dropdown
-          menu={{
-            items: [
-              {
-                disabled: !canSetTeamEntry,
-                key: "set-team-entry",
-                label: t(
-                  "teamMemberWorkflowStudio.header.setAsTeamEntry",
-                  "Set as Team entry",
-                ),
-              },
-            ],
-            onClick: ({ key }) => {
-              if (key === "set-team-entry" && canSetTeamEntry) {
-                onSetTeamEntry();
-              }
-            },
-          }}
-          trigger={["click"]}
-        >
-          <Button
-            aria-label={t(
-              "teamMemberWorkflowStudio.header.moreActionsAria",
-              "More workflow actions",
-            )}
-            icon={<MoreOutlined />}
-            loading={teamEntryPending}
-            size="small"
-            title={teamEntryNotice}
-          >
-            <DownOutlined />
-          </Button>
-        </Dropdown>
+        <HeaderPrimaryActions
+          activeMemberRunPending={activeMemberRunPending}
+          activeMemberRunPlaceholderReason={activeMemberRunPlaceholderReason}
+          canRunActiveMember={canRunActiveMember}
+          onAddNode={onAddNode}
+          onOpenRunOptions={onOpenRunOptions}
+          onPublishMember={onPublishMember}
+          onRunActiveMember={onRunActiveMember}
+          publishDisabled={publishDisabled}
+          publishPending={publishPending}
+          publishPlaceholderReason={publishPlaceholderReason}
+          showPublishButton={showPublishButton}
+        />
+      </div>
+      <div
+        data-testid="workflow-header-context-row"
+        style={{
+          alignItems: "center",
+          borderTop: "1px solid #f3f4f6",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "10px 16px",
+          justifyContent: "space-between",
+          minWidth: 0,
+          paddingTop: 10,
+        }}
+      >
+        <HeaderTabs onTabChange={onTabChange} selectedTab={selectedTab} />
+        <HeaderNodeActions
+          canSave={canSave}
+          canSetTeamEntry={canSetTeamEntry}
+          onDeleteNode={onDeleteNode}
+          onSave={onSave}
+          onSetTeamEntry={onSetTeamEntry}
+          savePending={savePending}
+          savePlaceholderReason={savePlaceholderReason}
+          selectedNodeId={selectedNodeId}
+          teamEntryNotice={teamEntryNotice}
+          teamEntryPending={teamEntryPending}
+        />
       </div>
     </header>
   );

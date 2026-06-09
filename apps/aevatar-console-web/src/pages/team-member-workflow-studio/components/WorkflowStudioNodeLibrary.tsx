@@ -3,6 +3,7 @@ import { Button, Empty, Input, Space, Tag, Typography } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
 import {
+  formatStudioStepTypeLabel,
   getStudioGraphCategory,
   STUDIO_GRAPH_CATEGORIES,
 } from "@/shared/studio/graph";
@@ -12,14 +13,6 @@ type WorkflowStudioNodeLibraryProps = {
   readonly onInsertNode: (stepType: string) => void;
   readonly open: boolean;
 };
-
-function formatStepType(value: string): string {
-  return value
-    .split("_")
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
-}
 
 const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
   onClose,
@@ -39,7 +32,9 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
 
           return (
             stepType.toLowerCase().includes(normalizedQuery) ||
-            formatStepType(stepType).toLowerCase().includes(normalizedQuery) ||
+            formatStudioStepTypeLabel(stepType)
+              .toLowerCase()
+              .includes(normalizedQuery) ||
             category.label.toLowerCase().includes(normalizedQuery)
           );
         }),
@@ -154,12 +149,13 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
                 >
                   {category.items.map((stepType) => {
                     const itemCategory = getStudioGraphCategory(stepType);
+                    const stepTypeLabel = formatStudioStepTypeLabel(stepType);
                     return (
                       <button
                         aria-label={t(
                           "teamMemberWorkflowStudio.nodeLibrary.insertNodeAria",
                           "Insert {nodeName} node",
-                          { nodeName: formatStepType(stepType) },
+                          { nodeName: stepTypeLabel },
                         )}
                         key={stepType}
                         onClick={() => onInsertNode(stepType)}
@@ -188,12 +184,12 @@ const WorkflowStudioNodeLibrary: React.FC<WorkflowStudioNodeLibraryProps> = ({
                         />
                         <span style={{ display: "grid", gap: 2 }}>
                           <Typography.Text strong>
-                            {formatStepType(stepType)}
+                            {stepTypeLabel}
                           </Typography.Text>
                           <Typography.Text
                             style={{ color: "#6b7280", fontSize: 12 }}
                           >
-                            {stepType}
+                            {itemCategory.label}
                           </Typography.Text>
                         </span>
                       </button>

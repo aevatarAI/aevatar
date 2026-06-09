@@ -1172,7 +1172,7 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /llm_call/i }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Step ID')).toHaveValue('llm_call');
+      expect(screen.getByLabelText('Step ID')).toHaveValue('llm_step');
     });
 
     fireEvent.change(screen.getByLabelText('Step ID'), {

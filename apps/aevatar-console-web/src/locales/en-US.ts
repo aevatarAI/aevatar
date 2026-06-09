@@ -366,11 +366,11 @@ const enUSMessages = {
     'No workflow draft is linked to this member yet.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria':
-    'Workflow execution console',
+    'Member run console',
   'teamMemberWorkflowStudio.executionPanel.emptyLogs':
-    'Execution logs will appear here after a workflow run returns frames.',
+    'Run logs will appear here after the active member returns events.',
   'teamMemberWorkflowStudio.executionPanel.rawFrames':
-    '{count} raw execution frame(s) received.',
+    '{count} run event(s) received, but no step logs are available yet.',
   'teamMemberWorkflowStudio.executionsPanel.description':
     'This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.',
   'teamMemberWorkflowStudio.executionsPanel.empty':
@@ -393,21 +393,37 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.addNode': 'Add node',
   'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
   'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
+  'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
   'teamMemberWorkflowStudio.header.executeWorkflow': 'Execute workflow',
+  'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
   'teamMemberWorkflowStudio.header.inputSet': 'input set',
   'teamMemberWorkflowStudio.header.moreActionsAria': 'More workflow actions',
+  'teamMemberWorkflowStudio.header.nodeActionsAria':
+    'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.optionalTestPayload': 'Optional test payload',
+  'teamMemberWorkflowStudio.header.primaryActionsAria':
+    'Workflow primary actions',
   'teamMemberWorkflowStudio.header.runInput': 'Run input',
   'teamMemberWorkflowStudio.header.runInputPlaceholder':
     'Optional input for this workflow run',
   'teamMemberWorkflowStudio.header.runOptionsAria': 'Run options',
+  'teamMemberWorkflowStudio.header.runActiveMember': 'Run active member',
   'teamMemberWorkflowStudio.header.save': 'Save',
   'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
   'teamMemberWorkflowStudio.header.setAsTeamEntry': 'Set as Team entry',
   'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',
   'teamMemberWorkflowStudio.header.tabs.executions': 'Executions',
+  'teamMemberWorkflowStudio.header.tabs.runs': 'Runs',
+  'teamMemberWorkflowStudio.header.publish.binding': 'Binding',
+  'teamMemberWorkflowStudio.header.publish.draft': 'Draft',
+  'teamMemberWorkflowStudio.header.publish.error': 'Error',
+  'teamMemberWorkflowStudio.header.publish.published': 'Published',
+  'teamMemberWorkflowStudio.header.publish.publishing': 'Publishing',
+  'teamMemberWorkflowStudio.header.publishMember': 'Publish member workflow',
+  'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
   'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
+  'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowRun': 'Workflow run',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
   'teamMemberWorkflowStudio.nodeDetail.apply': 'Apply',
@@ -428,6 +444,22 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': 'Search nodes',
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': 'Node library',
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
+  'teamMemberWorkflowStudio.runOptionsPanel.inputPlaceholder':
+    'Optional input for this active member run',
+  'teamMemberWorkflowStudio.runOptionsPanel.sectionAria': 'Run options panel',
+  'teamMemberWorkflowStudio.runOptionsPanel.title': 'Run options',
+  'teamMemberWorkflowStudio.runsPanel.description':
+    'This tab only shows runs with an explicit link to the current workflow member.',
+  'teamMemberWorkflowStudio.runsPanel.empty':
+    'No runs are linked to this workflow member yet.',
+  'teamMemberWorkflowStudio.runsPanel.fallbackName': 'Member run',
+  'teamMemberWorkflowStudio.runsPanel.openRun': 'Open run',
+  'teamMemberWorkflowStudio.runsPanel.preview.error': 'Error',
+  'teamMemberWorkflowStudio.runsPanel.preview.input': 'Input',
+  'teamMemberWorkflowStudio.runsPanel.preview.output': 'Output',
+  'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
+  'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
+  'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
 };
 
 export default enUSMessages;
